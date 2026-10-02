@@ -22,6 +22,7 @@ use core::future::Future;
 
 use pos_proto::display::GridPosition;
 use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, TenantId};
+use pos_proto::printing::ReceiptLanguage;
 use pos_proto::ulid::Ulid;
 
 use crate::registry::EntityStatus;
@@ -241,6 +242,10 @@ pub struct Station {
     /// How long a ticket at this station waits, in seconds, before the kitchen display marks it
     /// late, or `None` for the default the edge reads (ADR-0160 decision 2).
     pub late_after_seconds: Option<u32>,
+    /// The language its kitchen tickets print in, as the `RECEIPT_LANGUAGE_…` token it was saved
+    /// with, or `None` for the store's display language (ADR-0160 decision 2). Kept as the token so
+    /// the publish carries it as stored.
+    pub ticket_language: Option<String>,
     /// Active or archived.
     pub status: EntityStatus,
 }
@@ -262,9 +267,12 @@ pub struct NewStation {
     pub is_default: bool,
     /// When its tickets are late, in seconds, or `None` for the default.
     pub late_after_seconds: Option<u32>,
+    /// The language its kitchen tickets print in, or `None` for the store's display language.
+    pub ticket_language: Option<ReceiptLanguage>,
 }
 
-/// An update to a station's name, backup, default flag, late threshold, and/or status.
+/// An update to a station's name, backup, default flag, late threshold, ticket language, and/or
+/// status.
 #[derive(Debug, Clone)]
 pub struct StationUpdate {
     /// The station to change.
@@ -279,6 +287,8 @@ pub struct StationUpdate {
     pub is_default: bool,
     /// When its tickets are now late, in seconds, or `None` for the default.
     pub late_after_seconds: Option<u32>,
+    /// The language its kitchen tickets now print in, or `None` for the store's display language.
+    pub ticket_language: Option<ReceiptLanguage>,
     /// The new status (archiving retires the station without deleting it).
     pub status: EntityStatus,
 }
@@ -382,8 +392,8 @@ pub trait StationStore {
         station_id: StationId,
     ) -> impl Future<Output = Result<Option<Versioned<Station>>, FloorStoreError>> + Send;
 
-    /// Updates a station's name, backup, default flag, late threshold, and status. Applies only at
-    /// `expected`.
+    /// Updates a station's name, backup, default flag, late threshold, ticket language, and status.
+    /// Applies only at `expected`.
     ///
     /// # Errors
     ///

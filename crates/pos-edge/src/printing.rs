@@ -58,7 +58,7 @@ use pos_ports::printer::{
 };
 use pos_ports::{PortError, PortName};
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
-use pos_proto::floor::StationPlan;
+use pos_proto::floor::{KitchenStation, StationPlan};
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StationId, StoreId};
 use pos_proto::locale::NumberFormat;
 use pos_proto::money::Money;
@@ -91,28 +91,32 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
         .find(|device| device.station_id.is_none() && is_printer(device))
 }
 
-/// The printer serving `station`, falling back to the station plan's declared backup.
+/// The printer serving `station`, falling back to the station plan's declared backup, and the
+/// station whose printer it is: `station` itself, or its backup.
 ///
 /// The failover target is the *plan's*, not this module's guess: `KitchenStation::backup_station_id`
 /// is what an operator authored and `pos_core::floor` already validates (it must name a different
 /// station in the same plan). One hop only — a backup chain that looped would print a ticket
 /// somewhere nobody expected, and a ticket printed in the wrong kitchen is worse than one not
 /// printed at all, because nobody goes looking for it.
+///
+/// The station comes back with the printer because a ticket prints in the language of the station
+/// whose cooks read it ([`ticket_language`]), and on a failover those are the backup's.
 #[must_use]
 pub fn station_printer<'a>(
     devices: &'a PublishedDevices,
     plan: &StationPlan,
     station: StationId,
-) -> Option<&'a PublishedDevice> {
+) -> Option<(StationId, &'a PublishedDevice)> {
     if let Some(direct) = printer_for_station(devices, station) {
-        return Some(direct);
+        return Some((station, direct));
     }
     let backup = plan
         .stations()
         .iter()
         .find(|entry| entry.station_id == station)
         .and_then(|entry| entry.backup_station_id)?;
-    printer_for_station(devices, backup)
+    printer_for_station(devices, backup).map(|device| (backup, device))
 }
 
 fn printer_for_station(devices: &PublishedDevices, station: StationId) -> Option<&PublishedDevice> {
@@ -859,20 +863,26 @@ pub fn ticket_document(reference: &str, line: &TicketLine, labels: &PaperLabels)
 /// still match a ticket to a screen, and a silently empty line is how the wrong dish gets made. The
 /// same rule applies to each modifier.
 ///
+/// `language` is the ticket's ([`ticket_language`]). In a language other than the display language
+/// each item and modifier prints the menu's translation for it, and the name the menu publishes
+/// where it has none; in the display language, or with none, the names are the ones every ticket
+/// printed before a station could choose.
+///
 /// `note` is the guest note the edge holds for the line, if it still holds one (ADR-0157).
 #[must_use]
 pub fn ticket_line(
     session: &EdgeSession,
     fired: &FiredLine,
     note: Option<&NoteText>,
+    language: Option<&str>,
 ) -> TicketLine {
     TicketLine {
-        item: item_name(session, fired.menu_item_id),
+        item: item_name(session, fired.menu_item_id, language),
         quantity: format_quantity(fired.quantity),
         modifiers: fired
             .modifier_menu_item_ids
             .iter()
-            .map(|modifier| item_name(session, *modifier))
+            .map(|modifier| item_name(session, *modifier, language))
             .collect(),
         note: match note {
             Some(note) => TicketNote::Text(note.as_str().to_owned()),
@@ -880,6 +890,30 @@ pub fn ticket_line(
             None => TicketNote::None,
         },
     }
+}
+
+/// The ticket `fired` prints at `printing`, the station whose printer prints it
+/// ([`station_printer`]): its labels and its names in that station's language ([`ticket_language`],
+/// ADR-0160 decision 2).
+///
+/// The labels fall back to English on a box that cannot draw the language's, as all of a store's
+/// paper does. A station that sets no language prints in the display language, so its ticket is the
+/// one every station printed before a station could choose.
+#[must_use]
+pub fn ticket_at(
+    session: &EdgeSession,
+    can_rasterise: bool,
+    printing: StationId,
+    reference: &str,
+    fired: &FiredLine,
+    note: Option<&NoteText>,
+) -> PrintDocument {
+    let language = ticket_language(session, printing);
+    ticket_document(
+        reference,
+        &ticket_line(session, fired, note, language.as_deref()),
+        PaperLabels::for_store(language.as_deref(), can_rasterise),
+    )
 }
 
 /// Renders a quantity the way a ticket reads it: `2`, or `0.5` for one half of a split item.
@@ -902,16 +936,39 @@ fn format_quantity(quantity: Quantity) -> String {
     }
 }
 
-/// The language a receipt, its copy and a pre-bill print in, from the `printing` node (ADR-0160).
-///
-/// `RECEIPT_LANGUAGE_DISPLAY`, the default, is the store's display language, which is what every
-/// receipt printed in before the setting existed. `RECEIPT_LANGUAGE_COUNTRY` is the language of the
-/// store's country where the edge has labels in it, and otherwise the display language: a receipt
-/// whose labels and dish names were in two languages would be worse than either. `None` is a store
-/// with no language at all, whose paper prints English labels as it always did.
+/// The language a receipt, its copy and a pre-bill print in, from the `printing` node (ADR-0160),
+/// resolved by [`paper_language`].
 #[must_use]
 pub fn receipt_language(session: &EdgeSession) -> Option<String> {
-    match session.printing.receipt_language() {
+    paper_language(session, session.printing.receipt_language())
+}
+
+/// The language a kitchen ticket printed at `station` prints in: the station's `ticket_language` on
+/// the `stations` node (ADR-0160 decision 2), resolved by [`paper_language`] as a receipt's is.
+///
+/// `station` is the one whose printer prints the ticket ([`station_printer`]), whose cooks read it.
+/// A station that sets no language, and one the plan does not name, prints in the display language,
+/// as every kitchen ticket did before a station could say.
+#[must_use]
+pub fn ticket_language(session: &EdgeSession, station: StationId) -> Option<String> {
+    let chosen = session
+        .stations
+        .station(station)
+        .map_or(ReceiptLanguage::Display, KitchenStation::ticket_language);
+    paper_language(session, chosen)
+}
+
+/// The language `chosen` names for the store's paper: the one resolver for a receipt's language and
+/// a station's ticket language, which share the [`ReceiptLanguage`] choices.
+///
+/// `RECEIPT_LANGUAGE_DISPLAY`, the default, is the store's display language, which is what every
+/// receipt and every kitchen ticket printed in before the settings existed.
+/// `RECEIPT_LANGUAGE_COUNTRY` is the language of the store's country where the edge has labels in
+/// it, and otherwise the display language: paper whose labels and dish names were in two languages
+/// would be worse than either. `None` is a store with no language at all, whose paper prints English
+/// labels as it always did.
+fn paper_language(session: &EdgeSession, chosen: ReceiptLanguage) -> Option<String> {
+    match chosen {
         ReceiptLanguage::Unspecified | ReceiptLanguage::Display => session.display_language.clone(),
         ReceiptLanguage::Country => session
             .country_language
@@ -966,11 +1023,17 @@ fn receipt_lines_in<'a>(session: &EdgeSession, lines: &'a [ReceiptLine]) -> Cow<
         .into()
 }
 
-fn item_name(session: &EdgeSession, item: MenuItemId) -> String {
-    session.menu_entry(item).map_or_else(
-        || item.to_string(),
-        |entry| entry.display_name.as_str().to_owned(),
-    )
+fn item_name(session: &EdgeSession, item: MenuItemId, language: Option<&str>) -> String {
+    let Some(entry) = session.menu_entry(item) else {
+        return item.to_string();
+    };
+    let name = match language {
+        Some(language) if session.display_language.as_deref() != Some(language) => {
+            entry.localized_name(language)
+        }
+        _ => &entry.display_name,
+    };
+    name.as_str().to_owned()
 }
 
 /// A ticket reference short enough to read across a kitchen.
@@ -1664,9 +1727,8 @@ impl Printers {
         self.renderer.is_some()
     }
 
-    /// The words the store's own paper — a kitchen ticket, a shift report — is printed in: its
-    /// display language when this box can draw it, English when it cannot, so a label is never the
-    /// line that stops a document printing.
+    /// The words a shift report is printed in: the store's display language when this box can draw
+    /// it, English when it cannot, so a label is never the line that stops a document printing.
     fn labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
         PaperLabels::for_store(session.display_language.as_deref(), self.can_rasterise())
     }
@@ -1916,31 +1978,45 @@ impl Printers {
         .await
     }
 
-    /// Prints a kitchen ticket at `station`, or at the station plan's declared backup.
+    /// Prints the kitchen ticket for `fired` at its station, or at the station plan's declared
+    /// backup.
     ///
     /// The failover is the plan's (ADR-0072, ADR-0100): one hop, to the station an operator named.
+    /// The ticket is in the language of the station whose printer prints it ([`ticket_at`]), the
+    /// backup's on a failover, because its cooks read it.
+    ///
+    /// `note` is the guest note the edge holds for the line, if it still holds one (ADR-0157).
     pub async fn print_ticket(
         &self,
         session: &EdgeSession,
         store_id: StoreId,
         job_id: EventId,
-        station: StationId,
         reference: &str,
-        line: &TicketLine,
+        fired: &FiredLine,
+        note: Option<&NoteText>,
     ) -> PrintOutcome {
-        let Some(device) = station_printer(&session.devices, &session.stations, station) else {
+        let Some((printing, device)) =
+            station_printer(&session.devices, &session.stations, fired.station_id)
+        else {
             tracing::info!(
                 "no printer is published for that station or its backup; the kitchen display still has the order"
             );
             return PrintOutcome::NoPrinter;
         };
-        let document = ticket_document(reference, line, self.labels_for(session));
+        let document = ticket_at(
+            session,
+            self.can_rasterise(),
+            printing,
+            reference,
+            fired,
+            note,
+        );
         self.dispatch(
             device,
             PrintJob {
                 job_id,
                 store_id,
-                station_id: Some(station),
+                station_id: Some(fired.station_id),
                 document,
             },
         )
@@ -2159,7 +2235,8 @@ mod tests {
         TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
         drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
         receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
-        shift_report_document, short_reference, station_printer, ticket_document, ticket_line,
+        shift_report_document, short_reference, station_printer, ticket_at, ticket_document,
+        ticket_language, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
@@ -2463,35 +2540,16 @@ mod tests {
         // wrong dish gets made — and the KDS still shows the order. The companion test below is the
         // same ticket on a box that *has* fonts.
         let (printers, recorder) = recorder(true);
-        let oven = station(1);
-        let session = EdgeSession {
-            devices: PublishedDevices::new(vec![device(3, DeviceKind::Printer, Some(oven))]),
-            stations: StationPlan::from_parts(
-                vec![KitchenStation {
-                    station_id: oven,
-                    name: DisplayName::new("Oven"),
-                    backup_station_id: None,
-                    late_after_seconds: None,
-                }],
-                Vec::new(),
-                None,
-            ),
-            ..EdgeSession::bootstrap()
-        };
-
+        // A station that sets no language: the dish prints as the menu names it.
+        let session = a_kitchen(None, ReceiptLanguage::Display, ReceiptLanguage::Display);
         let outcome = printers
             .print_ticket(
                 &session,
                 store_id(),
                 event_id(1),
-                oven,
                 "A1",
-                &TicketLine {
-                    item: "Bún chả".to_owned(),
-                    quantity: "2".to_owned(),
-                    modifiers: Vec::new(),
-                    note: TicketNote::None,
-                },
+                &fired_at(oven(), vec![]),
+                None,
             )
             .await;
 
@@ -2561,7 +2619,7 @@ mod tests {
             modifier_menu_item_ids: Vec::new(),
             note_present: true,
         };
-        let line = ticket_line(&EdgeSession::bootstrap(), &fired, None);
+        let line = ticket_line(&EdgeSession::bootstrap(), &fired, None, None);
         assert_eq!(line.note, TicketNote::Lost);
         let english = ticket_document("A1", &line, &ENGLISH);
         assert_eq!(
@@ -2579,7 +2637,7 @@ mod tests {
             ..fired
         };
         assert_eq!(
-            ticket_line(&EdgeSession::bootstrap(), &unnoted, None).note,
+            ticket_line(&EdgeSession::bootstrap(), &unnoted, None, None).note,
             TicketNote::None
         );
     }
@@ -2610,6 +2668,7 @@ mod tests {
                 note_present: false,
             },
             None,
+            None,
         );
 
         assert_eq!(line.item, "Margherita");
@@ -2632,8 +2691,225 @@ mod tests {
                 note_present: false,
             },
             None,
+            None,
         );
         assert_eq!(half.quantity, "0.5");
+    }
+
+    /// The oven, which has a printer of its own.
+    fn oven() -> StationId {
+        station(1)
+    }
+
+    /// The grill, which has no printer and fails over to the oven.
+    fn grill() -> StationId {
+        station(2)
+    }
+
+    /// The menu's grilled pork, its herbs and its cheese.
+    fn pork() -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(11))
+    }
+    fn herbs() -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(12))
+    }
+    fn cheese() -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(13))
+    }
+
+    /// The kitchen the ticket tests print in (ADR-0160 decision 2): the oven, with its printer,
+    /// printing in `oven_language`, and the grill, printing in `grill_language`, whose tickets fail
+    /// over to the oven's printer. The menu names its dishes in Vietnamese, the store's display
+    /// language where `display` says so, and translates the pork and the herbs into English but not
+    /// the cheese.
+    fn a_kitchen(
+        display: Option<&str>,
+        oven_language: ReceiptLanguage,
+        grill_language: ReceiptLanguage,
+    ) -> EdgeSession {
+        let dish = |id: MenuItemId, name: &str, english: Option<&str>| {
+            MenuEntry::new(
+                id,
+                DisplayName::new(name),
+                Money::new(CurrencyCode::VND, 50_000),
+                EdgeSession::standard_tax_class(),
+            )
+            .with_name_translations(
+                english
+                    .map(|english| ("en".to_owned(), DisplayName::new(english)))
+                    .into_iter()
+                    .collect(),
+            )
+        };
+        let kitchen = |id: StationId, name: &str, backup, language| KitchenStation {
+            station_id: id,
+            name: DisplayName::new(name),
+            backup_station_id: backup,
+            late_after_seconds: None,
+            ticket_language: Open::from_known(language),
+        };
+        EdgeSession {
+            display_language: display.map(str::to_owned),
+            menu: MenuCatalog::new()
+                .with(dish(pork(), "Bún chả", Some("Grilled pork with noodles")))
+                .with(dish(herbs(), "Thêm rau", Some("Extra herbs")))
+                .with(dish(cheese(), "Phô mai", None)),
+            devices: PublishedDevices::new(vec![device(3, DeviceKind::Printer, Some(oven()))]),
+            stations: StationPlan::from_parts(
+                vec![
+                    kitchen(oven(), "Oven", None, oven_language),
+                    kitchen(grill(), "Grill", Some(oven()), grill_language),
+                ],
+                Vec::new(),
+                None,
+            ),
+            ..EdgeSession::bootstrap()
+        }
+    }
+
+    /// Two of the grilled pork fired at `at`, with `modifiers`.
+    fn fired_at(at: StationId, modifiers: Vec<MenuItemId>) -> FiredLine {
+        FiredLine {
+            station_id: at,
+            menu_item_id: pork(),
+            quantity: Quantity::from_milli(2_000),
+            modifier_menu_item_ids: modifiers,
+            note_present: false,
+        }
+    }
+
+    #[test]
+    fn a_station_in_english_prints_its_ticket_in_english_while_the_display_language_is_vietnamese()
+    {
+        let session = a_kitchen(
+            Some("vi"),
+            ReceiptLanguage::English,
+            ReceiptLanguage::Display,
+        );
+        let fired = FiredLine {
+            note_present: true,
+            ..fired_at(oven(), vec![herbs(), cheese()])
+        };
+
+        let english = ticket_at(&session, true, oven(), "A1", &fired, None);
+        assert_eq!(
+            lines_of(&english),
+            vec![
+                "A1",
+                "2 x Grilled pork with noodles",
+                "  + Extra herbs",
+                // The menu gives the cheese no English name, so it keeps the one it has.
+                "  + Phô mai",
+                "  ! A note was written - ask the server",
+            ]
+        );
+
+        // The same line where a station sets no language is the ticket every station printed.
+        let display = ticket_at(&session, true, grill(), "A1", &fired, None);
+        assert_eq!(
+            lines_of(&display),
+            vec![
+                "A1",
+                "2 x Bún chả",
+                "  + Thêm rau",
+                "  + Phô mai",
+                "  ! Có ghi chú - hỏi nhân viên phục vụ",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_that_fails_over_prints_in_the_backup_stations_language() {
+        // The grill reads Vietnamese and has no printer, so its ticket goes to the oven's, where the
+        // cooks read English. On a box with no fonts a Vietnamese name cannot print at all, so the
+        // ticket coming out at all says whose language it was printed in.
+        let (printers, recorder) = recorder(true);
+        let session = a_kitchen(
+            Some("vi"),
+            ReceiptLanguage::English,
+            ReceiptLanguage::Vietnamese,
+        );
+        assert_eq!(ticket_language(&session, grill()).as_deref(), Some("vi"));
+        assert_eq!(ticket_language(&session, oven()).as_deref(), Some("en"));
+
+        let outcome = printers
+            .print_ticket(
+                &session,
+                store_id(),
+                event_id(1),
+                "A1",
+                &fired_at(grill(), vec![herbs()]),
+                None,
+            )
+            .await;
+
+        assert_eq!(outcome, PrintOutcome::Printed);
+        let written = recorder.written.lock().expect("the recorder");
+        let bytes = written.first().expect("a ticket at the oven");
+        let printed = |text: &[u8]| bytes.windows(text.len()).any(|window| window == text);
+        assert!(printed(b"2 x Grilled pork with noodles"));
+        assert!(printed(b"  + Extra herbs"));
+    }
+
+    #[test]
+    fn a_stations_ticket_language_is_resolved_as_a_receipts_is() {
+        let mut session = a_kitchen(
+            Some("en"),
+            ReceiptLanguage::Country,
+            ReceiptLanguage::Display,
+        );
+        session.country_language = Some("vi".to_owned());
+        assert_eq!(ticket_language(&session, oven()).as_deref(), Some("vi"));
+        assert_eq!(ticket_language(&session, grill()).as_deref(), Some("en"));
+        // A station the plan does not name prints in the display language, as every ticket did.
+        assert_eq!(ticket_language(&session, station(9)).as_deref(), Some("en"));
+        // A country whose language the edge has no labels in prints in the display language, as a
+        // receipt does, rather than in labels and names from two languages.
+        session.country_language = Some("ja".to_owned());
+        assert_eq!(ticket_language(&session, oven()).as_deref(), Some("en"));
+        // A language from a newer release reads as the display language.
+        session.stations = StationPlan::from_parts(
+            vec![KitchenStation {
+                ticket_language: Open::parse("RECEIPT_LANGUAGE_JA"),
+                ..session.stations.stations()[0].clone()
+            }],
+            Vec::new(),
+            None,
+        );
+        assert_eq!(ticket_language(&session, oven()).as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn a_station_that_sets_no_language_prints_the_ticket_it_always_did() {
+        // What `print_ticket` printed before a station could choose: the menu's names, and the
+        // labels of the store's display language, or English on a box that cannot draw them.
+        for display in [Some("vi"), Some("en"), None] {
+            for can_rasterise in [true, false] {
+                let session =
+                    a_kitchen(display, ReceiptLanguage::Display, ReceiptLanguage::Display);
+                let fired = FiredLine {
+                    note_present: true,
+                    ..fired_at(oven(), vec![herbs(), cheese()])
+                };
+                let before = ticket_document(
+                    "A1",
+                    &TicketLine {
+                        item: "Bún chả".to_owned(),
+                        quantity: "2".to_owned(),
+                        modifiers: vec!["Thêm rau".to_owned(), "Phô mai".to_owned()],
+                        note: TicketNote::Lost,
+                    },
+                    PaperLabels::for_store(display, can_rasterise),
+                );
+                for printing in [oven(), grill()] {
+                    assert_eq!(
+                        ticket_at(&session, can_rasterise, printing, "A1", &fired, None),
+                        before,
+                        "{display:?}, fonts {can_rasterise}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2681,12 +2957,14 @@ mod tests {
                     name: DisplayName::new("Oven"),
                     backup_station_id: Some(grill),
                     late_after_seconds: None,
+                    ticket_language: Open::default(),
                 },
                 KitchenStation {
                     station_id: grill,
                     name: DisplayName::new("Grill"),
                     backup_station_id: None,
                     late_after_seconds: None,
+                    ticket_language: Open::default(),
                 },
             ],
             Vec::new(),
@@ -2694,8 +2972,15 @@ mod tests {
         );
         // Only the grill has a printer.
         let devices = PublishedDevices::new(vec![device(2, DeviceKind::Printer, Some(grill))]);
-        let chosen = station_printer(&devices, &plan, oven).expect("the backup station's printer");
+        let (printing, chosen) =
+            station_printer(&devices, &plan, oven).expect("the backup station's printer");
         assert_eq!(chosen.address, "192.0.2.2:9100");
+        assert_eq!(
+            printing, grill,
+            "the grill's printer, so the grill's cooks read it"
+        );
+        let (printing, _) = station_printer(&devices, &plan, grill).expect("its own printer");
+        assert_eq!(printing, grill);
     }
 
     #[test]
@@ -2711,12 +2996,14 @@ mod tests {
                     name: DisplayName::new("Left"),
                     backup_station_id: Some(right),
                     late_after_seconds: None,
+                    ticket_language: Open::default(),
                 },
                 KitchenStation {
                     station_id: right,
                     name: DisplayName::new("Right"),
                     backup_station_id: Some(left),
                     late_after_seconds: None,
+                    ticket_language: Open::default(),
                 },
             ],
             Vec::new(),
@@ -3963,35 +4250,16 @@ mod tests {
         let Some((printers, recorder)) = recorder_with_fonts(true) else {
             return;
         };
-        let oven = station(1);
-        let session = EdgeSession {
-            devices: PublishedDevices::new(vec![device(3, DeviceKind::Printer, Some(oven))]),
-            stations: StationPlan::from_parts(
-                vec![KitchenStation {
-                    station_id: oven,
-                    name: DisplayName::new("Oven"),
-                    backup_station_id: None,
-                    late_after_seconds: None,
-                }],
-                Vec::new(),
-                None,
-            ),
-            ..EdgeSession::bootstrap()
-        };
-
+        // A station that sets no language: the dish prints as the menu names it.
+        let session = a_kitchen(None, ReceiptLanguage::Display, ReceiptLanguage::Display);
         let outcome = printers
             .print_ticket(
                 &session,
                 store_id(),
                 event_id(1),
-                oven,
                 "A1",
-                &TicketLine {
-                    item: "Bún chả".to_owned(),
-                    quantity: "2".to_owned(),
-                    modifiers: Vec::new(),
-                    note: TicketNote::None,
-                },
+                &fired_at(oven(), vec![]),
+                None,
             )
             .await;
 

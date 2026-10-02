@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{DeviceId, StationId};
 use crate::text::DisplayName;
 use crate::wire_enum;
-use crate::wire_enum::{Open, WireEnum};
+use crate::wire_enum::{Open, is_absent};
 
 wire_enum! {
     /// What kind of device this is.
@@ -198,12 +198,6 @@ pub struct PublishedDevice {
     /// `true`, which every printer was taken to do. `false` is a printer with no cutter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cuts_paper: Option<bool>,
-}
-
-/// Whether a field holds no value at all. A token from a newer release is a value, and goes back
-/// out as it came.
-fn is_absent<E: WireEnum>(value: &Open<E>) -> bool {
-    *value == Open::default()
 }
 
 impl PublishedDevice {

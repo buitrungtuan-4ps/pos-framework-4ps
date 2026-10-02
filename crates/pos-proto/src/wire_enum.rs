@@ -139,6 +139,13 @@ impl<E: WireEnum> From<E> for Open<E> {
     }
 }
 
+/// Whether a field holds no value at all, for `skip_serializing_if` on an optional enum field that
+/// is left off the wire while absent. A token from a newer release is a value, and goes back out as
+/// it came.
+pub(crate) fn is_absent<E: WireEnum>(value: &Open<E>) -> bool {
+    *value == Open::default()
+}
+
 impl<E: WireEnum> Default for Open<E> {
     fn default() -> Self {
         Self::from_known(E::UNSPECIFIED)

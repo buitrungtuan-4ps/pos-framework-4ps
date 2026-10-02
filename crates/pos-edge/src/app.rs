@@ -8939,6 +8939,7 @@ mod tests {
                     name: DisplayName::new("Oven"),
                     backup_station_id: None,
                     late_after_seconds: None,
+                    ticket_language: Open::default(),
                 })
                 .with_rule(RoutingRule {
                     station_id: planned,
