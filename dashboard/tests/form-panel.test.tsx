@@ -14,7 +14,7 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FormPanel } from "../src/components/kit";
-import { TextField } from "../src/components/ui";
+import { TextArea, TextField } from "../src/components/ui";
 import { useEntityCrud, type EntityCrud } from "../src/lib/entity-crud";
 
 type Store = { readonly store_id: string; readonly name: string };
@@ -211,5 +211,15 @@ describe("the form shell", () => {
     mount({ crud, onSubmit: () => {} });
     crud.create();
     expect(screen.getByRole("dialog").className).toContain("h-full");
+  });
+
+  it("links TextArea hint with aria-describedby when given", () => {
+    render(() => (
+      <TextArea label="Description" value="" hint="Enter extra notes here" onInput={() => {}} />
+    ));
+    const textarea = screen.getByLabelText(/^Description/);
+    const hint = screen.getByText("Enter extra notes here");
+    expect(textarea.getAttribute("aria-describedby")).toBeTruthy();
+    expect(textarea.getAttribute("aria-describedby")).toBe(hint.id);
   });
 });
