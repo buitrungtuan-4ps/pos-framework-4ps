@@ -22,6 +22,7 @@
 //! A test reads every value of every setting back through its node's own type, so the register
 //! cannot offer a value or claim a default that the edge does not have.
 
+use crate::locale::{LocaleSettings, TaxRounding};
 use crate::people::PublishedPermissions;
 use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
@@ -464,6 +465,26 @@ pub fn register() -> Vec<Setting> {
                       its own order, as before. A table whose bill is already open or paid takes a \
                       guest's order as its own order either way.",
         },
+        Setting {
+            node: LocaleSettings::NODE,
+            field: "tax_rounding",
+            shape: SettingShape::Choice {
+                values: choices::<TaxRounding>(),
+                default: LocaleSettings::default().tax_rounding().as_wire(),
+                // No country is given a different value (ADR-0160 decision 2), so no store changes
+                // when it takes the release that brings the setting.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "How each tax amount and each fee rounds to the currency's minor unit: the \
+                      tax of each tax class, whether prices include their tax or not, the tax on a \
+                      fee, and the fee itself. `TAX_ROUNDING_HALF_UP` rounds half a unit or more \
+                      up, as before. `TAX_ROUNDING_DOWN` drops the fraction. It does not round the \
+                      total to the country's coins, which stays half-up, or a line's price. A bill \
+                      is computed with the mode in force when it is computed, so change it outside \
+                      trading hours.",
+        },
     ]
 }
 
@@ -657,6 +678,7 @@ mod tests {
         ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
         render_snapshot_of,
     };
+    use crate::locale::LocaleSettings;
     use crate::people::PublishedPermissions;
     use crate::printing::PublishedPrinting;
     use crate::qr::PublishedQr;
@@ -1013,6 +1035,13 @@ mod tests {
                 let qr: PublishedQr = serde_json::from_value(document).ok()?;
                 match field {
                     "table_order" => Some(json!(qr.table_order().as_wire())),
+                    _ => None,
+                }
+            }
+            LocaleSettings::NODE => {
+                let locale: LocaleSettings = serde_json::from_value(document).ok()?;
+                match field {
+                    "tax_rounding" => Some(json!(locale.tax_rounding().as_wire())),
                     _ => None,
                 }
             }

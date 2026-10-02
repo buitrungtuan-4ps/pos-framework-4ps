@@ -632,7 +632,8 @@ pub enum SampleBillError {
 /// the function an inbound order's lines are priced by, and the totals are [`assemble`]'s, given
 /// what the edge gives it. That is the rules in force for a bill opening on the channel
 /// ([`PublishedFees::in_force`]), no bill-level discount or service charge, the store's cash
-/// rounding and tax posture from its `locale` node, and half-up rounding, as the edge's bill does.
+/// rounding and tax posture from its `locale` node, and half-up tax rounding, which is the edge's
+/// where the store sets no `locale.tax_rounding` (ADR-0160).
 ///
 /// # Errors
 ///
@@ -714,7 +715,7 @@ pub fn sample_bill(
         rates,
         sales_channel: channel,
         cash_rounding_increment: facts.cash_rounding_increment,
-        rounding_mode: Rounding::HalfUp,
+        tax_rounding: Rounding::HalfUp,
         prices_include_tax: facts.prices_include_tax,
         fee_rules: &fee_rules,
         // A sample bill is charged every fee: a waive is an act on one real bill.

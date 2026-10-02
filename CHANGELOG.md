@@ -456,6 +456,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store chooses how its tax rounds**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 2). Every tax amount
+  and every fee rounded half-up.
+  - `locale.tax_rounding` is a new setting: `TAX_ROUNDING_HALF_UP`, the default, or
+    `TAX_ROUNDING_DOWN`, which drops the fraction of a minor unit, as many Japanese businesses do
+    with consumption tax. It is set at the tenant, a brand, a store group or one store. No country
+    and no new store is given a value.
+  - It rounds the tax of each tax class, whether prices include their tax or not, the tax of a
+    charge taxed at a class no line is in, and each fee's amount. A tax line's named parts share
+    its tax as it rounded. It does not round the total to the country's coins, which stays
+    half-up, or a line's price, a campaign or a recipe's consumption.
+  - The edge reads it from the store's `locale` node and computes every bill with it: a table's or
+    a bill's check, a pre-bill, each part of a split, a discount's answer, the settle, and the
+    lines a receipt copy computes again. The fee preview (`POST /admin/fees/preview`) does not
+    read it yet, and rounds a sample bill half-up.
+  - The setting is written on each store's Tenant layer and the locale publish keeps writing the
+    country's fields on its Store layer, so the store receives both. A `locale` node that carries
+    only the setting is not a published locale: a menu is still refused to a store whose locale
+    was never published.
+  - **Upgrade note:** a new setting on the `locale` node, with a new wire enum `TaxRounding`
+    (`pos-proto`, additive), in `docs/snapshots/settings.txt` and `docs/configuration.md`. Nothing
+    changes until a store sets it: absent, `TAX_ROUNDING_UNSPECIFIED` and a token this release does
+    not know all read as half-up, and an edge older than 0.14.1 is not offered the setting and
+    ignores it. A bill is computed with the mode in force when it is computed, so change the mode
+    outside trading hours. A bill does not keep the mode it opened with, the way it keeps its fee
+    rules; that would need an event field and an ADR of its own. In `pos-core`,
+    `BillInput::rounding_mode` is now `tax_rounding` and no longer rounds the cash rounding, which
+    is always half-up (`billing::CASH_ROUNDING`). Every caller passed half-up, so no figure
+    changes. No event, migration, permission or protocol change.
+
 - **A kitchen station prints its tickets in its own language**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). Every kitchen ticket printed in the store's display language, whoever read it.

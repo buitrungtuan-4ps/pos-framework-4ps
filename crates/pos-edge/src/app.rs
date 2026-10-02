@@ -76,7 +76,7 @@ use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
-use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable};
+use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable, TaxRounding};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
@@ -419,6 +419,15 @@ pub struct EdgeSession {
     /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
     /// unconditionally until the `locale` node could say otherwise.
     pub cash_rounding_increment: Option<i64>,
+    /// How each tax amount and each fee rounds to the minor unit: the `locale` node's
+    /// `tax_rounding`, a setting
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2), read through `LocaleSettings::tax_rounding`.
+    ///
+    /// Half-up in the bootstrap and wherever the node does not say otherwise, which is what every
+    /// bill did before the setting existed. A bill is computed with the mode the session holds when
+    /// it is computed; the cash rounding of its total is half-up whatever this says.
+    pub tax_rounding: TaxRounding,
     /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
     /// the `default_retention_days` a `LocalePack` has carried since
     /// [ADR-0027](../../../docs/adr/0027-country-modules.md) and which, until
@@ -712,6 +721,8 @@ impl EdgeSession {
             // till that has not synced yet (ADR-0105).
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            // Half-up until the `locale` node says otherwise, as every bill was before the setting.
+            tax_rounding: TaxRounding::HalfUp,
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
@@ -8026,7 +8037,7 @@ impl<S: EventStore> Edge<S> {
             // on it.
             sales_channel: order.sales_channel,
             cash_rounding_increment: session.cash_rounding_increment,
-            rounding_mode: Rounding::HalfUp,
+            tax_rounding: session.tax_rounding.rounding(),
             prices_include_tax: session.prices_include_tax,
             fee_rules,
             waived_fee_ids,
@@ -8329,7 +8340,7 @@ mod tests {
         BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId,
         StoreId, TableId,
     };
-    use pos_proto::locale::{TaxRate, TaxRateTable};
+    use pos_proto::locale::{TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
@@ -9025,6 +9036,53 @@ mod tests {
             applied_to_bill: vnd(minor),
             tip: vnd(0),
         }
+    }
+
+    /// Seats a table, sells one line at `unit_price`, opens its bill and settles it for exactly what
+    /// it comes to; the bill, settled.
+    async fn a_settled_bill_at(edge: &Edge<FakeStore>, table: TableId, unit_price: i64) -> BillId {
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        let line = LineDraft {
+            unit_price: vnd(unit_price),
+            line_total: vnd(unit_price),
+            ..a_line()
+        };
+        edge.add_line(actor(), table, line).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        let owed = edge
+            .bill_totals(opened.bill_id)
+            .expect("assembles")
+            .total_due;
+        edge.settle_bill(actor(), opened.bill_id, vec![cash(owed.amount_minor)], None)
+            .await
+            .expect("settles");
+        opened.bill_id
+    }
+
+    /// ADR-0160: a store whose `locale` sets `TAX_ROUNDING_DOWN` drops the half đồng of tax a store
+    /// on half-up rounds up, so it settles the same bill one đồng lower, and records it so.
+    #[test]
+    fn a_store_that_rounds_tax_down_settles_half_a_unit_of_tax_one_unit_lower() {
+        pos_fakes::executor::run_ready(async {
+            // 10 % of 150,005 is 15,000.5.
+            let recorded = |edge: &Edge<FakeStore>, bill_id: BillId| {
+                let projection = edge.lock_projection();
+                let receipt = projection.settled.get(&bill_id).expect("recorded");
+                (receipt.tax_total, receipt.total_due)
+            };
+            let half_up = edge();
+            let bill =
+                a_settled_bill_at(&half_up, TableId::new(Ulid::from_u128(341)), 150_005).await;
+            assert_eq!(recorded(&half_up, bill), (vnd(15_001), vnd(165_006)));
+
+            let down = edge();
+            down.apply_session(EdgeSession {
+                tax_rounding: TaxRounding::Down,
+                ..EdgeSession::bootstrap()
+            });
+            let bill = a_settled_bill_at(&down, TableId::new(Ulid::from_u128(342)), 150_005).await;
+            assert_eq!(recorded(&down, bill), (vnd(15_000), vnd(165_005)));
+        });
     }
 
     #[test]

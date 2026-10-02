@@ -33,8 +33,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
 use crate::ids::TaxClassId;
-use crate::money::CurrencyCode;
-use crate::wire_enum::Open;
+use crate::money::{CurrencyCode, Rounding};
+use crate::wire_enum;
+use crate::wire_enum::{Open, is_absent};
 
 /// An ISO 3166-1 alpha-2 country code, upper-case.
 ///
@@ -531,17 +532,90 @@ impl LocalePack {
     }
 }
 
+wire_enum! {
+    /// How a store rounds each tax amount and each fee to the currency's minor unit
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2, [ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 2).
+    ///
+    /// It rounds the tax of each tax class, the tax on a charge taxed at a class no line is in, and
+    /// each fee's amount, whether prices include their tax or not; a tax line's named parts are
+    /// shares of its rounded tax, so they follow it. It does not round the cash rounding of the
+    /// grand total, which is a fact about the country's coins and stays half-up, nor a line's price,
+    /// a campaign or a recipe's consumption, which keep their own rounding.
+    TaxRounding, prefix = "TAX_ROUNDING";
+    /// Half a minor unit or more rounds away from zero, and less rounds toward it: what every store
+    /// did before the setting existed.
+    HalfUp = "HALF_UP",
+    /// The fraction of a minor unit is dropped, toward zero: how many Japanese businesses round
+    /// consumption tax (切り捨て).
+    Down = "DOWN",
+}
+
+impl TaxRounding {
+    /// The rounding the bill's arithmetic takes for this mode: [`Rounding::HalfUp`] for
+    /// [`Self::HalfUp`], and [`Rounding::TowardZero`] for [`Self::Down`].
+    /// `TAX_ROUNDING_UNSPECIFIED` is half-up, the default.
+    #[must_use]
+    pub const fn rounding(self) -> Rounding {
+        match self {
+            Self::Unspecified | Self::HalfUp => Rounding::HalfUp,
+            Self::Down => Rounding::TowardZero,
+        }
+    }
+}
+
+/// The settings on the published `locale` node, as far as the register reads it (ADR-0160).
+///
+/// The node is older than this type: the cloud's locale publish writes the store's currency,
+/// timezone, cutoff, tax posture and cash rounding onto it from the store's country pack, and the
+/// edge reads those where it reads the node. This type carries only the fields that are settings in
+/// [`crate::settings`], which the cloud writes beside them, and leaves the rest to that reader. It
+/// has no `deny_unknown_fields`, so a node carrying the country's fields parses, and so does one
+/// carrying a field from a newer release.
+///
+/// Every default is what the edge did before the field existed, so a node without a field runs a
+/// store as it ran before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LocaleSettings {
+    /// How the store rounds each tax amount and each fee. Read it through
+    /// [`LocaleSettings::tax_rounding`], which gives an absent or unknown value its default. Left
+    /// off the wire while absent.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub tax_rounding: Open<TaxRounding>,
+}
+
+impl LocaleSettings {
+    /// The node's key in a store's configuration document.
+    pub const NODE: &'static str = "locale";
+
+    /// How the store rounds each tax amount and each fee.
+    ///
+    /// An absent value, `TAX_ROUNDING_UNSPECIFIED`, and a value this release does not know all read
+    /// as [`TaxRounding::HalfUp`], the default and what every store did before the setting existed.
+    /// A value from a newer release is never offered to a store that cannot honour it (ADR-0160
+    /// decision 5), so the default is what such a store was running anyway.
+    #[must_use]
+    pub fn tax_rounding(&self) -> TaxRounding {
+        match self.tax_rounding.known() {
+            TaxRounding::Unspecified | TaxRounding::HalfUp => TaxRounding::HalfUp,
+            TaxRounding::Down => TaxRounding::Down,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxComponent, TaxRate,
-        TaxRateTable,
+        CountryCode, CountryCodeError, LocalePack, LocaleSettings, NumberFormat, TaxComponent,
+        TaxRate, TaxRateTable, TaxRounding,
     };
     use crate::enums::SalesChannel;
     use crate::ids::TaxClassId;
     use crate::money::{CurrencyCode, Money, Rounding};
     use crate::text::TranslationKey;
     use crate::ulid::Ulid;
+    use crate::wire_enum::WireEnum;
 
     fn food() -> TaxClassId {
         TaxClassId::new(Ulid::from_u128(1))
@@ -784,6 +858,57 @@ mod tests {
             serde_json::from_str::<LocalePack>(&extended).is_ok(),
             "an unknown field must not make a locale pack unusable"
         );
+    }
+
+    #[test]
+    fn a_locale_node_that_sets_no_tax_rounding_rounds_half_up_as_before() {
+        for node in [
+            "{}",
+            r#"{ "tax_rounding": "TAX_ROUNDING_UNSPECIFIED" }"#,
+            r#"{ "tax_rounding": "TAX_ROUNDING_HALF_UP" }"#,
+            // A country pack's own fields beside it do not stop the setting being read.
+            r#"{ "currency_code": "JPY", "timezone": "Asia/Tokyo", "cutoff_hour": 4,
+                 "prices_include_tax": true, "cash_rounding_increment": 10 }"#,
+        ] {
+            let settings: LocaleSettings = serde_json::from_str(node).expect("the node parses");
+            assert_eq!(settings.tax_rounding(), TaxRounding::HalfUp, "{node}");
+            assert_eq!(
+                settings.tax_rounding().rounding(),
+                Rounding::HalfUp,
+                "{node}"
+            );
+        }
+        assert_eq!(
+            LocaleSettings::default().tax_rounding(),
+            TaxRounding::HalfUp
+        );
+    }
+
+    #[test]
+    fn a_store_set_down_drops_the_fraction_and_a_mode_from_a_newer_release_reads_as_half_up() {
+        let down: LocaleSettings =
+            serde_json::from_str(r#"{ "tax_rounding": "TAX_ROUNDING_DOWN" }"#)
+                .expect("the node parses");
+        assert_eq!(down.tax_rounding(), TaxRounding::Down);
+        assert_eq!(down.tax_rounding().rounding(), Rounding::TowardZero);
+
+        let newer = r#"{"tax_rounding":"TAX_ROUNDING_HALF_EVEN"}"#;
+        let settings: LocaleSettings =
+            serde_json::from_str(newer).expect("an unknown token parses");
+        assert!(settings.tax_rounding.is_unrecognised());
+        assert_eq!(settings.tax_rounding(), TaxRounding::HalfUp);
+        assert_eq!(
+            serde_json::to_string(&settings).expect("serialise"),
+            newer,
+            "a mode this release does not know goes back out as it came"
+        );
+        assert_eq!(
+            serde_json::to_string(&LocaleSettings::default()).expect("serialise"),
+            "{}",
+            "a node that sets nothing is written as nothing"
+        );
+        assert_eq!(TaxRounding::Down.as_wire(), "TAX_ROUNDING_DOWN");
+        assert_eq!(TaxRounding::HalfUp.as_wire(), "TAX_ROUNDING_HALF_UP");
     }
 
     #[test]

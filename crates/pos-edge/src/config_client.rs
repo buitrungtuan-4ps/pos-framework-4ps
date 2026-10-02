@@ -53,7 +53,7 @@ use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::inventory::PublishedInventory;
-use pos_proto::locale::{NumberFormat, TaxRateTable};
+use pos_proto::locale::{LocaleSettings, NumberFormat, TaxRateTable};
 use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
@@ -636,6 +636,20 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             .country_language
             .map(|language| language.trim().to_owned())
             .filter(|language| !language.is_empty());
+    }
+    // The settings on the `locale` node (ADR-0160), read as the `qr` node's are: absent puts the
+    // default back, unparseable keeps the last. Read apart from the country's fields above, so a
+    // store whose locale the cloud has not published yet still rounds as its settings say.
+    match document.get(LocaleSettings::NODE) {
+        None => session.tax_rounding = LocaleSettings::default().tax_rounding(),
+        Some(value) => {
+            if let Some(settings) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<LocaleSettings>(&text).ok())
+            {
+                session.tax_rounding = settings.tax_rounding();
+            }
+        }
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
     // itself against, and the signing keys revocation has retired. The cloud has published this node
@@ -1471,6 +1485,63 @@ mod tests {
         assert_eq!(
             session_from_config(&vietnam, &locale(Some(" "))).country_language,
             None
+        );
+    }
+
+    /// The store's tax rounding (ADR-0160) is what its `locale` node's setting says: down where it
+    /// says down, beside the country's fields or without them, and half-up where it says nothing,
+    /// says something this release does not know, or the node is gone. A node the setting cannot
+    /// be read from keeps the mode the store had.
+    #[test]
+    fn the_tax_rounding_is_what_the_locale_node_says_and_half_up_otherwise() {
+        use pos_proto::locale::TaxRounding;
+
+        let rounding = |base: &EdgeSession, locale: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "locale": locale })).tax_rounding
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.tax_rounding, TaxRounding::HalfUp);
+
+        let japan = serde_json::json!({
+            "currency_code": "JPY", "timezone": "Asia/Tokyo", "cutoff_hour": 4,
+            "prices_include_tax": true, "tax_rounding": "TAX_ROUNDING_DOWN",
+        });
+        let down = session_from_config(&base, &serde_json::json!({ "locale": japan }));
+        assert_eq!(down.tax_rounding, TaxRounding::Down);
+        assert!(
+            down.prices_include_tax,
+            "the country's fields still apply beside it"
+        );
+        // The setting alone, which a store has before its locale is first published.
+        assert_eq!(
+            rounding(
+                &base,
+                serde_json::json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })
+            ),
+            TaxRounding::Down
+        );
+
+        for half_up in [
+            serde_json::json!({ "currency_code": "JPY", "timezone": "Asia/Tokyo", "cutoff_hour": 4 }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_HALF_UP" }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_UNSPECIFIED" }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_HALF_EVEN" }),
+        ] {
+            assert_eq!(
+                rounding(&down, half_up.clone()),
+                TaxRounding::HalfUp,
+                "{half_up}"
+            );
+        }
+        assert_eq!(
+            session_from_config(&down, &serde_json::json!({})).tax_rounding,
+            TaxRounding::HalfUp,
+            "a document with no locale node carries no setting"
+        );
+        assert_eq!(
+            rounding(&down, serde_json::json!({ "tax_rounding": 5 })),
+            TaxRounding::Down,
+            "a setting that cannot be read keeps the mode the store had"
         );
     }
 
