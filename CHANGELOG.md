@@ -382,6 +382,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console can write fees, and the cloud sends each store its own**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1).
+  - `/admin/fees` lists a tenant's rules (`GET`), writes a new fee with a minted `fee_id` (`POST`)
+    or a fee at one scope (`PUT`), and removes one (`DELETE`). A rule is written at the tenant, a
+    brand or one store, and for each fee a store runs the most specific rule that reaches it: its
+    own, else its brand's, else its tenant's.
+  - Every store a write reaches is republished in the same request, with its resolved list written
+    whole as the `fees` node on its Store layer. Each store answers `FEE_PUBLISH_APPLIED`,
+    `_UNCHANGED`, `_REFUSED` or `_FAILED`.
+  - `GET /admin/fees/effective` shows what one store runs: the scope each fee's rule comes from,
+    the rule as written, the rule as the store is sent it, and anything that stops the store
+    applying it. `POST /admin/fees/publish` republishes one store or every store, after a store
+    moves to another brand or a category a rule names gains items.
+  - An include or exclude list may name item categories. The cloud compiles each one into the
+    active items it holds when it publishes the store.
+  - A write is refused (`400`) when the rule fails the node's own checks, with
+    `INVALID_ENUM_VALUE`, `OUT_OF_RANGE` or `REQUIRED` on the field, or names an item, an item
+    category or a tax class the catalog does not have (`UNKNOWN_REFERENCE`). It is refused (`422`)
+    when a store it would take effect at could not apply it: an amount in another currency
+    (`CURRENCY_MISMATCH`), or a tax class with no rate there (`TAX_RATE_NOT_CONFIGURED`), either
+    of which would fail every bill the fee applies to. It is also refused when a store already runs
+    another fee under its code (`ALREADY_EXISTS`), or when its item list names nothing on the menu
+    of any store it takes effect at (`NOT_ON_MENU`). A store that can no longer apply a rule it was
+    sent is not published to, and keeps the fees it has.
+  - Reads need `console.reports.revenue`, because a rule's rate and amount are prices, and writes
+    need `console.config.publish`. A store's configuration read now leaves the `fees` node out for
+    a role without `console.reports.revenue`, as it does `menu` and `campaigns`. The audit trail
+    records `fee.create`, `fee.update`, `fee.delete` and `fee.publish` with ids and store counts
+    only.
+  - **Upgrade note:** no migration, permission or protocol version change; the routes use the
+    `fee_rules` table of migration `0075`. No store is sent a `fees` node until a rule is written
+    for it. A store on a release from before the edge charged fees ignores the node and charges no
+    fee. Ops holds `console.config.publish` but not `console.reports.revenue`, so Ops can write a
+    rule but not read one back.
+
 - **Merging a split's parts back charges a fee per bill as the whole bill did**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 6). A merge kept the holder's share
   of a cover charge alone, so a bill split in two and merged back charged a third of it, or two

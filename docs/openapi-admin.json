@@ -608,6 +608,492 @@
         }
       }
     },
+    "/admin/fees": {
+      "get": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`GET /admin/fees` — the rules a tenant has written, at every scope.",
+        "operationId": "admin_list_fees",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose rules to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every rule the tenant has written, at every scope: the scope and the id it was written for, the rule with the item categories it names, and who last wrote it when"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`PUT /admin/fees` — writes a fee at one scope and republishes every store it reaches.",
+        "operationId": "admin_put_fee",
+        "requestBody": {
+          "description": "As a POST, with the rule's fee_id: the fee to write at this scope. Written where it is, the rule replaces it; written at a narrower scope, it overrides the broader one for the stores that scope reaches",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written, and every store it reaches republished, with the same per-store outcomes as a POST"
+          },
+          "400": {
+            "description": "As a POST, or the fee_id is absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such brand or store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "As a POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry, the catalog or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`POST /admin/fees` — writes a new fee, minting its id, and republishes every store it reaches.",
+        "operationId": "admin_create_fee",
+        "requestBody": {
+          "description": "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is for, and the rule without a fee_id: code, display_name and its translations, kind (FEE_KIND_PERCENT with a rate, or FEE_KIND_AMOUNT_PER_BILL or _PER_UNIT with an amount), channels, item_scope with menu_item_ids and item_category_ids, base_discounted, base_tax_inclusive, tax (with a tax_class_id for FEE_TAX_TAX_CLASS), waivable and active",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created with a minted fee_id, and every store it reaches republished. The body names the fee_id and lists each store with FEE_PUBLISH_APPLIED and the new config version, FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it cannot apply, or FEE_PUBLISH_FAILED"
+          },
+          "400": {
+            "description": "An id is not a ULID, the scope is not a scope, a field the rule needs is absent or out of range, a token is not one the field takes, a fee_id was sent, the rule names an item, category or tax class the catalog does not have, or a tenant-scope rule names another tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such brand or store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A store the rule takes effect at could not apply it: an amount in another currency than the store's, or a tax class it has no rate for; or the store already runs another fee with this code; or an item list names nothing on the menu of any store it takes effect at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry, the catalog or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`DELETE /admin/fees` — removes a rule at one scope and republishes every store it reached.",
+        "operationId": "admin_delete_fee",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "FEE_SCOPE_TENANT, _BRAND or _STORE",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "description": "The tenant, brand or store the rule was written for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fee_id",
+            "in": "query",
+            "description": "The fee",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed, and every store it reached republished, with the same per-store outcomes as a write. A store that ran it runs the fee's broader rule if there is one, and otherwise no longer charges it"
+          },
+          "400": {
+            "description": "An id is not a ULID or the scope is not a scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No rule is written there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A store would then run the fee's broader rule, and could not apply it, or runs another fee with its code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry, the catalog or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/fees/effective": {
+      "get": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`GET /admin/fees/effective` — the fees one store runs, and why.",
+        "operationId": "admin_effective_fees",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every fee the store runs, in the order it is sent them: the scope and id its rule was written at, the rule as written, the rule as the store is sent it with its categories compiled into items, and any reason the store cannot apply it. publishable is false when one cannot be applied, in which case a publish leaves the store as it is"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry, the catalog or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/fees/publish": {
+      "post": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`POST /admin/fees/publish` — republishes the fees of one store, or of every store of the tenant.",
+        "description": "A write republishes every store it reaches by itself. What it cannot see is a change elsewhere\nthat changes what a store is sent: a store given another brand, or an item added to or taken\nout of a category a rule names, which is compiled into items only when the fees are published,\nas a menu is compiled only when it is published.",
+        "operationId": "admin_publish_fees",
+        "requestBody": {
+          "description": "The tenant, and optionally one store. Without a store, every store of the tenant is republished",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each store's rules resolved, compiled and republished, with the same per-store outcomes as a write"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry or the catalog is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/integrations/connections": {
       "get": {
         "tags": [
@@ -3389,6 +3875,10 @@
     {
       "name": "settings",
       "description": "Every value a store may run differently (ADR-0160, `docs/configuration.md`). A value is written once, at the tenant, a brand, a store group or one store; each store runs the most specific value that reaches it, and every store a write reaches is republished in the same request. Documented because a fork's own console draws its settings screen from the catalogue here."
+    },
+    {
+      "name": "fees",
+      "description": "The charges a bill adds — a service charge, a packaging fee, a delivery fee (ADR-0159). A rule is written once, at the tenant, a brand or one store; for each fee a store runs the most specific rule that reaches it, and every store a write reaches is republished in the same request. An item list may name item categories, which are compiled into items when the store is published. Documented because a fork's own console draws its fee screen from these routes, and needs to know that a store which cannot apply a rule is left as it is rather than sent part of its list."
     },
     {
       "name": "config",

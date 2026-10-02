@@ -97,16 +97,19 @@ use pos_proto::devices::{DeviceConnection, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::fees::{
+    FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees,
+};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
-    SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
+    DisplaySubcategoryId, EventId, FeeId, IngredientId, MenuItemId, ReasonCodeId, StationId,
+    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
 };
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
 use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
-use pos_proto::money::CurrencyCode;
+use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
@@ -175,6 +178,10 @@ use crate::devices::{
     DeviceWriteOutcome, PersistedDeviceProposal,
 };
 use crate::export;
+use crate::fees::{
+    CategoryItems, FeePlacement, FeeRule, FeeRuleSlot, FeeRuleStore, FeeRuleStoreError, FeeScope,
+    StoreFacts, StoreFault,
+};
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
@@ -18445,6 +18452,1565 @@ fn settings_store_error_response(error: &crate::settings::SettingsStoreError) ->
     service_unavailable("settings")
 }
 
+// --- Fees (`/admin/fees`, ADR-0159 decision 1) ---------------------------------------------------
+
+/// The collaborators the fee routes need: the rules; the registry that says which stores a rule
+/// reaches; the catalog a rule's items, categories and tax class are checked and compiled
+/// against; the config trees each store's `fees` node is written onto; and the admin, clock and
+/// audit every route carries.
+#[derive(Clone)]
+struct FeesState<F, Rg, Cat, Cfg, A, C> {
+    fees: F,
+    registry: Rg,
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the fee sub-router ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+/// decision 1).
+///
+/// A rule is written once, at the tenant, a brand or one store, and every store it reaches is
+/// republished in the same request: each store's rules are resolved, per fee the most specific
+/// scope's ([`crate::fees::resolve_for_store`]), compiled ([`crate::fees::compile`]) and written
+/// whole as the `fees` node on its Store layer, as the `integrations` node is.
+///
+/// A rule's rate and amount are prices (T2), so the reads are behind
+/// [`ConsolePermission::ReadRevenue`], as a menu's placements are (production-readiness S5). A
+/// write publishes, so it is behind [`ConsolePermission::PublishConfig`], like every node publish.
+pub fn fees_router<F, Rg, Cat, Cfg, A, C>(
+    fees: F,
+    registry: Rg,
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/fees",
+            get(admin_list_fees::<F, Rg, Cat, Cfg, A, C>)
+                .post(admin_create_fee::<F, Rg, Cat, Cfg, A, C>)
+                .put(admin_put_fee::<F, Rg, Cat, Cfg, A, C>)
+                .delete(admin_delete_fee::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .route(
+            "/admin/fees/effective",
+            get(admin_effective_fees::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .route(
+            "/admin/fees/publish",
+            post(admin_publish_fees::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .with_state(FeesState {
+            fees,
+            registry,
+            catalog,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The tenant a fee read is for.
+#[derive(Debug, Clone, Deserialize)]
+struct FeesTenantQuery {
+    tenant_id: String,
+}
+
+/// One rule as the console lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeeRuleView {
+    /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
+    scope: &'static str,
+    /// The tenant, brand or store it was written for.
+    scope_id: String,
+    /// The rule as written: the wire rule's fields, and the categories it names.
+    rule: serde_json::Value,
+    update_time: pos_proto::Timestamp,
+    /// The console admin who last wrote it, by id.
+    updated_by: String,
+}
+
+impl FeeRuleView {
+    fn of(rule: &FeeRule) -> Option<Self> {
+        Some(Self {
+            scope: rule.scope.as_wire(),
+            scope_id: rule.scope_id.clone(),
+            rule: crate::fees::authored_json(rule).ok()?,
+            update_time: rule.update_time,
+            updated_by: rule.updated_by.clone(),
+        })
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/fees",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose rules to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every rule the tenant has written, at every scope: the scope \
+                                      and the id it was written for, the rule with the item \
+                                      categories it names, and who last wrote it when"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `GET /admin/fees` — the rules a tenant has written, at every scope.
+async fn admin_list_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FeesTenantQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: Clone + Send + Sync + 'static,
+    Cat: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    match state.fees.list(tenant_id).await {
+        Ok(rules) => {
+            let views: Vec<FeeRuleView> = rules.iter().filter_map(FeeRuleView::of).collect();
+            (StatusCode::OK, Json(serde_json::json!({ "rules": views }))).into_response()
+        }
+        Err(error) => fee_store_error_response(&error),
+    }
+}
+
+/// A `POST` or `PUT /admin/fees` body: one rule, at one scope.
+#[derive(Debug, Clone, Deserialize)]
+struct FeeRuleRequest {
+    tenant_id: String,
+    /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
+    scope: String,
+    /// The tenant, brand or store the rule is for.
+    scope_id: String,
+    rule: FeeRuleBody,
+}
+
+/// A rule as the console sends it: the wire rule's own fields, with each id as text so a malformed
+/// one is refused by name, and the item categories an include or exclude list names besides its
+/// items. A field left out takes the default the owner confirmed: after discounts, net of tax,
+/// taxed the way its lines are, not waivable, on every channel and every item, and active.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the wire rule's four independent flags, each named on the wire and each with its own \
+              default; deserialised by name and never built from positional booleans"
+)]
+#[derive(Debug, Clone, Deserialize)]
+struct FeeRuleBody {
+    /// The fee: absent on a `POST`, which mints its id, and the fee written on a `PUT`.
+    #[serde(default)]
+    fee_id: Option<String>,
+    code: String,
+    display_name: String,
+    #[serde(default)]
+    display_name_translations: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    kind: Open<FeeKind>,
+    #[serde(default)]
+    rate: Option<Ratio>,
+    #[serde(default)]
+    amount: Option<Money>,
+    #[serde(default)]
+    channels: Vec<Open<SalesChannel>>,
+    #[serde(default)]
+    item_scope: Open<FeeItems>,
+    #[serde(default)]
+    menu_item_ids: Vec<String>,
+    #[serde(default)]
+    item_category_ids: Vec<String>,
+    #[serde(default = "authored_fee_base_is_discounted")]
+    base_discounted: bool,
+    #[serde(default)]
+    base_tax_inclusive: bool,
+    #[serde(default)]
+    tax: Open<FeeTax>,
+    #[serde(default)]
+    tax_class_id: Option<String>,
+    #[serde(default)]
+    waivable: bool,
+    #[serde(default = "authored_fee_is_active")]
+    active: bool,
+}
+
+/// The default for [`FeeRuleBody::base_discounted`]: a percentage is taken after discounts and
+/// comps, as the owner confirmed.
+const fn authored_fee_base_is_discounted() -> bool {
+    true
+}
+
+/// The default for [`FeeRuleBody::active`]: a rule written is a rule that applies.
+const fn authored_fee_is_active() -> bool {
+    true
+}
+
+/// A rule as a request writes it, checked field by field: every refusal the rule alone decides,
+/// before anything is read. `fee_id` is the caller's on a `PUT` and minted on a `POST`.
+///
+/// A field the rule's kind, item scope or tax treatment ignores is dropped rather than kept, so the
+/// stored rule is the rule that takes effect: an amount on a percentage, a rate or a base on an
+/// amount, an item list on a fee for every line, a tax class on a fee not taxed at one. A token the
+/// wire tolerates is refused here, because authoring one is a mistake: an unknown channel matches
+/// nothing, and an unknown tax treatment would be read as the default.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn build_fee_rule(
+    body: &FeeRuleBody,
+    fee_id: FeeId,
+) -> Result<(PublishedFee, Vec<ItemCategoryId>), Response> {
+    check_fee_text_and_tokens(body)?;
+    let code = body.code.trim();
+    let display_name = body.display_name.trim();
+    let menu_item_ids = parse_id_list(&body.menu_item_ids, "rule.menu_item_ids", MenuItemId::new)?;
+    let item_category_ids = parse_id_list(
+        &body.item_category_ids,
+        "rule.item_category_ids",
+        ItemCategoryId::new,
+    )?;
+    let tax_class_id = match body.tax_class_id.as_deref() {
+        None => None,
+        Some(text) => match parse_ulid_fields([("rule.tax_class_id", text)]) {
+            Ok([id]) => Some(TaxClassId::new(id)),
+            Err(refusal) => return Err(refusal),
+        },
+    };
+
+    let percent = !body.kind.is_unrecognised() && body.kind.known() == FeeKind::Percent;
+    let item_scope = if body.item_scope.is_unspecified() && !body.item_scope.is_unrecognised() {
+        Open::from_known(FeeItems::All)
+    } else {
+        body.item_scope.clone()
+    };
+    let listed = !item_scope.is_unrecognised()
+        && matches!(item_scope.known(), FeeItems::Include | FeeItems::Exclude);
+    let tax = if body.tax.is_unspecified() {
+        Open::from_known(FeeTax::FollowLines)
+    } else {
+        body.tax.clone()
+    };
+    let mut channels = body.channels.clone();
+    channels.sort_by(|left, right| left.as_wire().cmp(right.as_wire()));
+    channels.dedup();
+    let rule = PublishedFee {
+        fee_id,
+        code: FeeCode::new(code),
+        display_name: DisplayName::new(display_name),
+        display_name_translations: clean_name_translations(body.display_name_translations.clone())
+            .into_iter()
+            .map(|(locale, name)| (locale, DisplayName::new(name)))
+            .collect(),
+        kind: body.kind.clone(),
+        rate: if percent { body.rate } else { None },
+        amount: if percent { None } else { body.amount },
+        channels,
+        item_scope,
+        menu_item_ids: if listed { menu_item_ids } else { Vec::new() },
+        base_discounted: !percent || body.base_discounted,
+        base_tax_inclusive: percent && body.base_tax_inclusive,
+        tax_class_id: if tax.known() == FeeTax::TaxClass {
+            tax_class_id
+        } else {
+            None
+        },
+        tax,
+        waivable: body.waivable,
+        active: body.active,
+    };
+    let item_category_ids = if listed {
+        item_category_ids
+    } else {
+        Vec::new()
+    };
+    // An include or exclude list may be categories alone, which compile into items when the rule
+    // is published, so the wire rule's own list may be empty here.
+    let refusals: Vec<FeeViolation> = rule
+        .violations()
+        .into_iter()
+        .filter(|violation| {
+            *violation != FeeViolation::EmptyItemList || item_category_ids.is_empty()
+        })
+        .collect();
+    if refusals.is_empty() {
+        Ok((rule, item_category_ids))
+    } else {
+        Err(fee_violations_refusal(&refusals))
+    }
+}
+
+/// Refuses a rule whose code or name is blank, or which names a channel or a tax treatment this
+/// cloud does not know.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn check_fee_text_and_tokens(body: &FeeRuleBody) -> Result<(), Response> {
+    if body.code.trim().is_empty() {
+        return Err(FieldRefusal::new("code is required", "rule.code", "REQUIRED").into_response());
+    }
+    if body.display_name.trim().is_empty() {
+        return Err(
+            FieldRefusal::new("display_name is required", "rule.display_name", "REQUIRED")
+                .into_response(),
+        );
+    }
+    if body.channels.iter().any(Open::is_unspecified) {
+        return Err(FieldRefusal::new(
+            "a fee names an unknown sales channel",
+            "rule.channels",
+            "INVALID_ENUM_VALUE",
+        )
+        .into_response());
+    }
+    if body.tax.is_unrecognised() {
+        return Err(enum_refusal(
+            "rule.tax",
+            FeeTax::ALL
+                .iter()
+                .filter(|tax| **tax != FeeTax::Unspecified)
+                .map(|tax| tax.as_wire()),
+        ));
+    }
+    Ok(())
+}
+
+/// The `400` for a rule whose shape pos-proto's checks refuse: every fault, each naming its field.
+fn fee_violations_refusal(violations: &[FeeViolation]) -> Response {
+    let message: Vec<String> = violations.iter().map(ToString::to_string).collect();
+    let details: Vec<(&str, &str)> = violations
+        .iter()
+        .map(|violation| fee_violation_detail(*violation))
+        .collect();
+    api_error_with_details(ErrorStatus::InvalidArgument, message.join("; "), &details)
+}
+
+/// The field a fault in a rule's shape is about, and the reason a refusal gives for it.
+const fn fee_violation_detail(violation: FeeViolation) -> (&'static str, &'static str) {
+    match violation {
+        FeeViolation::UnknownKind => ("rule.kind", "INVALID_ENUM_VALUE"),
+        FeeViolation::MissingRate => ("rule.rate", "REQUIRED"),
+        FeeViolation::RateOutOfRange => ("rule.rate", "OUT_OF_RANGE"),
+        FeeViolation::MissingAmount => ("rule.amount", "REQUIRED"),
+        FeeViolation::NegativeAmount => ("rule.amount", "OUT_OF_RANGE"),
+        FeeViolation::MissingTaxClass => ("rule.tax_class_id", "REQUIRED"),
+        FeeViolation::EmptyItemList => ("rule.menu_item_ids", "REQUIRED"),
+        FeeViolation::UnknownItemScope => ("rule.item_scope", "INVALID_ENUM_VALUE"),
+    }
+}
+
+/// Parses a list of ids sent as text, refusing the list by name if one is not a ULID. Each id is
+/// kept once, in id order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_id_list<T: Ord>(
+    texts: &[String],
+    field: &str,
+    wrap: impl Fn(Ulid) -> T,
+) -> Result<Vec<T>, Response> {
+    let mut ids = BTreeSet::new();
+    for text in texts {
+        match text.trim().parse::<Ulid>() {
+            Ok(id) => {
+                ids.insert(wrap(id));
+            }
+            Err(_ignored) => return Err(ulid_refusal(&[field])),
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+/// Reads a scope token, refusing anything but the three a rule is written at.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_fee_scope(token: &str) -> Result<FeeScope, Response> {
+    match FeeScope::from_wire(token.trim()) {
+        Some(FeeScope::Unspecified) | None => Err(enum_refusal(
+            "scope",
+            FeeScope::WRITABLE.iter().map(|scope| scope.as_wire()),
+        )),
+        Some(scope) => Ok(scope),
+    }
+}
+
+/// Where a tenant's stores sit for their fees — each store and its brand — read once per request,
+/// so one write resolves every store it reaches against the same picture.
+struct FeeLayout {
+    tenant_id: TenantId,
+    stores: Vec<StoreRecord>,
+    brand_ids: Vec<BrandId>,
+}
+
+impl FeeLayout {
+    /// Reads the tenant's stores and brands.
+    async fn load<Rg: RegistryStore>(registry: &Rg, tenant_id: TenantId) -> Result<Self, Response> {
+        let stores = records(
+            registry
+                .list_stores(tenant_id)
+                .await
+                .map_err(|error| registry_error_response(&error))?,
+        );
+        let brand_ids = registry
+            .list_brands(tenant_id)
+            .await
+            .map_err(|error| registry_error_response(&error))?
+            .into_iter()
+            .map(|brand| brand.record.brand_id)
+            .collect();
+        Ok(Self {
+            tenant_id,
+            stores,
+            brand_ids,
+        })
+    }
+
+    /// Where one store sits, or `None` if the tenant has no such store.
+    fn placement(&self, store_id: StoreId) -> Option<FeePlacement> {
+        let store = self
+            .stores
+            .iter()
+            .find(|store| store.store_id == store_id)?;
+        Some(FeePlacement {
+            tenant_id: self.tenant_id.to_string(),
+            brand_id: store.brand_id.map(|brand| brand.to_string()),
+            store_id: store_id.to_string(),
+        })
+    }
+
+    /// The canonical id a rule at `scope` is written for, refusing one the tenant does not have.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn scope_target(&self, scope: FeeScope, scope_id: &str) -> Result<String, Response> {
+        let id = match parse_ulid_fields([("scope_id", scope_id)]) {
+            Ok([id]) => id,
+            Err(refusal) => return Err(refusal),
+        };
+        match scope {
+            FeeScope::Tenant if id == self.tenant_id.as_ulid() => Ok(id.to_string()),
+            FeeScope::Tenant => Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tenant-scope rule is written for the tenant itself",
+                &[("scope_id", "MUST_BE_THE_TENANT")],
+            )),
+            FeeScope::Brand if self.brand_ids.contains(&BrandId::new(id)) => Ok(id.to_string()),
+            FeeScope::Brand => Err(not_found("brand")),
+            FeeScope::Store if self.placement(StoreId::new(id)).is_some() => Ok(id.to_string()),
+            FeeScope::Store => Err(not_found("store")),
+            FeeScope::Unspecified => Err(enum_refusal(
+                "scope",
+                FeeScope::WRITABLE.iter().map(|scope| scope.as_wire()),
+            )),
+        }
+    }
+
+    /// The stores a rule at `scope` reaches, in the registry's order.
+    fn reached_by(&self, scope: FeeScope, scope_id: &str) -> Vec<StoreId> {
+        let tenant_id = self.tenant_id.to_string();
+        self.stores
+            .iter()
+            .filter(|store| match scope {
+                FeeScope::Tenant => scope_id == tenant_id,
+                FeeScope::Brand => store
+                    .brand_id
+                    .is_some_and(|brand| brand.to_string() == scope_id),
+                FeeScope::Store => store.store_id.to_string() == scope_id,
+                FeeScope::Unspecified => false,
+            })
+            .map(|store| store.store_id)
+            .collect()
+    }
+}
+
+/// What a fee rule is checked and compiled against in the tenant's catalog.
+struct FeeCatalog {
+    item_ids: BTreeSet<MenuItemId>,
+    category_ids: BTreeSet<ItemCategoryId>,
+    tax_class_ids: BTreeSet<TaxClassId>,
+    categories: CategoryItems,
+}
+
+impl FeeCatalog {
+    /// Reads the tenant's items, item categories and tax classes.
+    async fn load<Cat: CatalogStore>(catalog: &Cat, tenant_id: TenantId) -> Result<Self, Response> {
+        let items = records(
+            catalog
+                .list_items(tenant_id)
+                .await
+                .map_err(|error| catalog_error_response(&error))?,
+        );
+        let category_ids = catalog
+            .list_item_categories(tenant_id)
+            .await
+            .map_err(|error| catalog_error_response(&error))?
+            .into_iter()
+            .map(|category| category.record.item_category_id)
+            .collect();
+        let tax_class_ids = catalog
+            .list_tax_classes(tenant_id)
+            .await
+            .map_err(|error| catalog_error_response(&error))?
+            .into_iter()
+            .map(|tax_class| tax_class.record.tax_class_id)
+            .collect();
+        Ok(Self {
+            item_ids: items.iter().map(|item| item.menu_item_id).collect(),
+            category_ids,
+            tax_class_ids,
+            categories: CategoryItems::from_catalog(&items),
+        })
+    }
+
+    /// Refuses a rule that names an item, an item category or a tax class the catalog does not
+    /// have: a list naming an item nobody can sell is a typing mistake, and a tax class no store
+    /// can have a rate for fails every bill the fee applies to.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn check_references(
+        &self,
+        rule: &PublishedFee,
+        item_category_ids: &[ItemCategoryId],
+    ) -> Result<(), Response> {
+        let refusal = |message: &'static str, field: &'static str| {
+            Err(FieldRefusal::new(message, field, "UNKNOWN_REFERENCE").into_response())
+        };
+        if rule
+            .menu_item_ids
+            .iter()
+            .any(|id| !self.item_ids.contains(id))
+        {
+            return refusal(
+                "the fee names an item the catalog does not have",
+                "rule.menu_item_ids",
+            );
+        }
+        if item_category_ids
+            .iter()
+            .any(|id| !self.category_ids.contains(id))
+        {
+            return refusal(
+                "the fee names an item category the catalog does not have",
+                "rule.item_category_ids",
+            );
+        }
+        if rule
+            .tax_class_id
+            .is_some_and(|id| !self.tax_class_ids.contains(&id))
+        {
+            return refusal(
+                "the fee names a tax class the catalog does not have",
+                "rule.tax_class_id",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/fees",
+    request_body(
+        description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
+                       for, and the rule without a fee_id: code, display_name and its \
+                       translations, kind (FEE_KIND_PERCENT with a rate, or FEE_KIND_AMOUNT_PER_BILL \
+                       or _PER_UNIT with an amount), channels, item_scope with menu_item_ids and \
+                       item_category_ids, base_discounted, base_tax_inclusive, tax (with a \
+                       tax_class_id for FEE_TAX_TAX_CLASS), waivable and active",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created with a minted fee_id, and every store it reaches \
+                                      republished. The body names the fee_id and lists each store \
+                                      with FEE_PUBLISH_APPLIED and the new config version, \
+                                      FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it \
+                                      cannot apply, or FEE_PUBLISH_FAILED"),
+        (status = 400, description = "An id is not a ULID, the scope is not a scope, a field the \
+                                      rule needs is absent or out of range, a token is not one \
+                                      the field takes, a fee_id was sent, the rule names an item, \
+                                      category or tax class the catalog does not have, or a \
+                                      tenant-scope rule names another tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such brand or store", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "A store the rule takes effect at could not apply it: an \
+                                      amount in another currency than the store's, or a tax class \
+                                      it has no rate for; or the store already runs another fee \
+                                      with this code; or an item list names nothing on the menu of \
+                                      any store it takes effect at", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `POST /admin/fees` — writes a new fee, minting its id, and republishes every store it reaches.
+async fn admin_create_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<FeeRuleRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    if request.rule.fee_id.is_some() {
+        return FieldRefusal::new(
+            "a new fee's id is minted here; write an existing fee with PUT",
+            "rule.fee_id",
+            "INVALID_VALUE",
+        )
+        .into_response();
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let Some(fee_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(FeeId::new)
+    else {
+        tracing::error!("could not read OS entropy to mint a fee id");
+        return service_unavailable("fees");
+    };
+    write_fee_rule(&state, &context, tenant_id, fee_id, &request, true).await
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/fees",
+    request_body(
+        description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
+                       where it is, the rule replaces it; written at a narrower scope, it \
+                       overrides the broader one for the stores that scope reaches",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Written, and every store it reaches republished, with the \
+                                      same per-store outcomes as a POST"),
+        (status = 400, description = "As a POST, or the fee_id is absent", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such brand or store", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "As a POST", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `PUT /admin/fees` — writes a fee at one scope and republishes every store it reaches.
+async fn admin_put_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<FeeRuleRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Some(fee_text) = request.rule.fee_id.as_deref() else {
+        return FieldRefusal::new(
+            "rule.fee_id is required: a PUT writes the fee it names",
+            "rule.fee_id",
+            "REQUIRED",
+        )
+        .into_response();
+    };
+    let (tenant_id, fee_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("rule.fee_id", fee_text)]) {
+            Ok([tenant_id, fee_id]) => (TenantId::new(tenant_id), FeeId::new(fee_id)),
+            Err(refusal) => return refusal,
+        };
+    write_fee_rule(&state, &context, tenant_id, fee_id, &request, false).await
+}
+
+/// The write `POST` and `PUT` share: checks the rule, checks it against every store it would take
+/// effect at, keeps it, republishes every store it reaches, and records it.
+async fn write_fee_rule<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    fee_id: FeeId,
+    request: &FeeRuleRequest,
+    minted: bool,
+) -> Response
+where
+    F: FeeRuleStore,
+    Rg: RegistryStore,
+    Cat: CatalogStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let scope = match parse_fee_scope(&request.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    let (rule, item_category_ids) = match build_fee_rule(&request.rule, fee_id) {
+        Ok(built) => built,
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let scope_id = match layout.scope_target(scope, &request.scope_id) {
+        Ok(scope_id) => scope_id,
+        Err(refusal) => return refusal,
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    if let Err(refusal) = catalog.check_references(&rule, &item_category_ids) {
+        return refusal;
+    }
+    let written = FeeRule {
+        scope,
+        scope_id,
+        rule,
+        item_category_ids,
+        update_time: state.clock.now(),
+        updated_by: context.admin.id.clone(),
+    };
+    let before = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    let replaced = before.iter().any(|held| held.slot() == written.slot());
+    let mut after: Vec<FeeRule> = before
+        .iter()
+        .filter(|held| held.slot() != written.slot())
+        .cloned()
+        .collect();
+    after.push(written.clone());
+    let reached = layout.reached_by(scope, &written.scope_id);
+    let write = FeeWrite {
+        before: &before,
+        after: &after,
+        written: Some(&written),
+    };
+    if let Err(refusal) =
+        check_fee_write(state, &layout, &reached, &write, &catalog.categories).await
+    {
+        return refusal;
+    }
+    if let Err(error) = state.fees.put(tenant_id, &written).await {
+        return fee_store_error_response(&error);
+    }
+    let results = publish_fees_to(state, &layout, &reached, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        if replaced && !minted {
+            "fee.update"
+        } else {
+            "fee.create"
+        },
+        "fee_rule",
+        &fee_audit_id(fee_id, scope, &written.scope_id),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        if minted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(serde_json::json!({ "fee_id": fee_id.to_string(), "stores": results })),
+    )
+        .into_response()
+}
+
+/// What a write changes: the tenant's rules before and after it, and the rule it writes, which a
+/// delete has none of.
+struct FeeWrite<'a> {
+    before: &'a [FeeRule],
+    after: &'a [FeeRule],
+    written: Option<&'a FeeRule>,
+}
+
+/// Checks what a write would change at each store it reaches, before the write is kept.
+///
+/// At each store, the rules in force before and after the write are resolved, and every rule in
+/// force after it that was not before — the rule written, or for a delete the broader rule it
+/// uncovers — must be one the store can apply ([`crate::fees::faults_at`]) and must not share its
+/// code with another fee the store runs. A written include or exclude list must also name an item
+/// on the menu of at least one store it takes effect at, where any of them has a menu: ADR-0159's
+/// check of an `items` list that names nothing on the store's menu.
+///
+/// A rule already in force that a later change to the store left unable to apply is not this
+/// write's to refuse: the publish leaves that store as it is, and says why.
+async fn check_fee_write<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    layout: &FeeLayout,
+    stores: &[StoreId],
+    write: &FeeWrite<'_>,
+    categories: &CategoryItems,
+) -> Result<(), Response>
+where
+    Cfg: ConfigTreeStore,
+{
+    let mut problems = FeeWriteProblems::default();
+    for store_id in stores {
+        let Some(placement) = layout.placement(*store_id) else {
+            continue;
+        };
+        let was = crate::fees::resolve_for_store(write.before, &placement);
+        let now = crate::fees::resolve_for_store(write.after, &placement);
+        let changed: Vec<&FeeRule> = now
+            .iter()
+            .copied()
+            .filter(|rule| !was.contains(rule))
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+        let facts = fee_store_facts(&state.config_trees, layout.tenant_id, *store_id).await?;
+        for rule in changed {
+            let published = crate::fees::compile(rule, categories);
+            problems.note(
+                *store_id,
+                &published,
+                &now,
+                &facts,
+                write.written == Some(rule),
+            );
+        }
+    }
+    problems.into_result(write.written.is_none())
+}
+
+/// What [`check_fee_write`] found, gathered across the stores a write reaches.
+#[derive(Default)]
+struct FeeWriteProblems {
+    /// Each store-and-rule fault, as a sentence naming them by id.
+    faults: Vec<String>,
+    /// The `details` the refusal carries, each once.
+    details: BTreeSet<(&'static str, &'static str)>,
+    /// Whether a store the written list takes effect at has a menu, and whether one lists an item.
+    menus: Option<bool>,
+}
+
+impl FeeWriteProblems {
+    /// The most store-and-rule sentences a refusal spells out; the rest are counted.
+    const SENTENCES: usize = 5;
+
+    /// Notes what is wrong with `published`, in force at `store_id` among `now`.
+    fn note(
+        &mut self,
+        store_id: StoreId,
+        published: &PublishedFee,
+        now: &[&FeeRule],
+        facts: &StoreFacts,
+        written: bool,
+    ) {
+        for fault in crate::fees::faults_at(published, facts) {
+            self.details.insert((fault.field(), fault.as_wire()));
+            self.faults.push(format!(
+                "fee {} cannot apply at store {store_id}: {}",
+                published.fee_id,
+                match fault {
+                    StoreFault::CurrencyMismatch => "its amount is in another currency",
+                    StoreFault::TaxClassNotRated => "its tax class has no rate there",
+                }
+            ));
+        }
+        if published.active
+            && let Some(other) = crate::fees::shares_code_with(published, now)
+        {
+            self.details.insert(("rule.code", "ALREADY_EXISTS"));
+            self.faults.push(format!(
+                "fee {} at store {store_id} has the code of fee {}, which the store also runs; \
+                 override that fee instead",
+                published.fee_id, other.rule.fee_id
+            ));
+        }
+        let listed = matches!(
+            published.item_scope(),
+            Some(FeeItems::Include | FeeItems::Exclude)
+        );
+        if written
+            && listed
+            && published.active
+            && let Some(lists) = facts.menu_lists_any(&published.menu_item_ids, &published.channels)
+        {
+            self.menus = Some(self.menus.unwrap_or(false) || lists);
+        }
+    }
+
+    /// The `422` for what was found, or nothing. A delete's refusal names `fee_id`, since the rule
+    /// it is about is not in the request.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn into_result(mut self, deleting: bool) -> Result<(), Response> {
+        if self.menus == Some(false) {
+            self.details.insert(("rule.menu_item_ids", "NOT_ON_MENU"));
+            self.faults.push(
+                "the item list names nothing on the menu of any store the fee takes effect at"
+                    .to_owned(),
+            );
+        }
+        if self.faults.is_empty() {
+            return Ok(());
+        }
+        let more = self.faults.len().saturating_sub(Self::SENTENCES);
+        let mut message: Vec<String> = self.faults.into_iter().take(Self::SENTENCES).collect();
+        if more > 0 {
+            message.push(format!("and {more} more"));
+        }
+        let details: Vec<(&str, &str)> = self
+            .details
+            .iter()
+            .map(|(field, reason)| (if deleting { "fee_id" } else { *field }, *reason))
+            .collect();
+        Err(api_error_with_details(
+            ErrorStatus::Unprocessable,
+            message.join("; "),
+            &details,
+        ))
+    }
+}
+
+/// What a store's configuration holds that a fee must agree with; nothing for a store with no
+/// configuration yet.
+async fn fee_store_facts<Cfg: ConfigTreeStore>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<StoreFacts, Response> {
+    let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
+    Ok(loaded.state.map_or_else(StoreFacts::default, |tree| {
+        StoreFacts::from_document(
+            &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
+        )
+    }))
+}
+
+/// The rule a `DELETE /admin/fees` removes.
+#[derive(Debug, Clone, Deserialize)]
+struct DeleteFeeQuery {
+    tenant_id: String,
+    scope: String,
+    scope_id: String,
+    fee_id: String,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/admin/fees",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("scope" = String, Query, description = "FEE_SCOPE_TENANT, _BRAND or _STORE"),
+        ("scope_id" = String, Query, description = "The tenant, brand or store the rule was written for"),
+        ("fee_id" = String, Query, description = "The fee"),
+    ),
+    responses(
+        (status = 200, description = "Removed, and every store it reached republished, with the \
+                                      same per-store outcomes as a write. A store that ran it runs \
+                                      the fee's broader rule if there is one, and otherwise no \
+                                      longer charges it"),
+        (status = 400, description = "An id is not a ULID or the scope is not a scope", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No rule is written there", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "A store would then run the fee's broader rule, and could not \
+                                      apply it, or runs another fee with its code", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `DELETE /admin/fees` — removes a rule at one scope and republishes every store it reached.
+async fn admin_delete_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<DeleteFeeQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, scope_id, fee_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("scope_id", &query.scope_id),
+        ("fee_id", &query.fee_id),
+    ]) {
+        Ok([tenant_id, scope_id, fee_id]) => (
+            TenantId::new(tenant_id),
+            scope_id.to_string(),
+            FeeId::new(fee_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    let scope = match parse_fee_scope(&query.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    let slot = FeeRuleSlot {
+        scope,
+        scope_id: &scope_id,
+        fee_id,
+    };
+    let before = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    if !before.iter().any(|held| held.slot() == slot) {
+        return not_found("fee rule");
+    }
+    let after: Vec<FeeRule> = before
+        .iter()
+        .filter(|held| held.slot() != slot)
+        .cloned()
+        .collect();
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let reached = layout.reached_by(scope, &scope_id);
+    let write = FeeWrite {
+        before: &before,
+        after: &after,
+        written: None,
+    };
+    if let Err(refusal) =
+        check_fee_write(&state, &layout, &reached, &write, &catalog.categories).await
+    {
+        return refusal;
+    }
+    if let Err(error) = state.fees.delete(tenant_id, slot).await {
+        return fee_store_error_response(&error);
+    }
+    let results = publish_fees_to(&state, &layout, &reached, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "fee.delete",
+        "fee_rule",
+        &fee_audit_id(fee_id, scope, &scope_id),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stores": results })),
+    )
+        .into_response()
+}
+
+/// The store whose fees to read.
+#[derive(Debug, Clone, Deserialize)]
+struct EffectiveFeesQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// One fee as one store runs it, and where its rule comes from.
+#[derive(Debug, Clone, serde::Serialize)]
+struct EffectiveFee {
+    fee_id: String,
+    /// The scope of the rule in force, and what it was written for.
+    scope: &'static str,
+    scope_id: String,
+    /// The rule as written: the wire rule's fields, and the categories it names.
+    rule: serde_json::Value,
+    /// The rule as the store is sent it, its categories compiled into items.
+    published: PublishedFee,
+    /// Why the store cannot apply it, if it cannot.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    faults: Vec<&'static str>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/fees/effective",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every fee the store runs, in the order it is sent them: the \
+                                      scope and id its rule was written at, the rule as written, \
+                                      the rule as the store is sent it with its categories \
+                                      compiled into items, and any reason the store cannot apply \
+                                      it. publishable is false when one cannot be applied, in \
+                                      which case a publish leaves the store as it is"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `GET /admin/fees/effective` — the fees one store runs, and why.
+async fn admin_effective_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<EffectiveFeesQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let Some(placement) = layout.placement(store_id) else {
+        return not_found("store");
+    };
+    let rules = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let facts = match fee_store_facts(&state.config_trees, tenant_id, store_id).await {
+        Ok(facts) => facts,
+        Err(refusal) => return refusal,
+    };
+    let fees: Vec<EffectiveFee> = crate::fees::resolve_for_store(&rules, &placement)
+        .into_iter()
+        .filter_map(|rule| {
+            let published = crate::fees::compile(rule, &catalog.categories);
+            Some(EffectiveFee {
+                fee_id: published.fee_id.to_string(),
+                scope: rule.scope.as_wire(),
+                scope_id: rule.scope_id.clone(),
+                rule: crate::fees::authored_json(rule).ok()?,
+                faults: crate::fees::faults_at(&published, &facts)
+                    .into_iter()
+                    .map(StoreFault::as_wire)
+                    .collect(),
+                published,
+            })
+        })
+        .collect();
+    let publishable = fees.iter().all(|fee| fee.faults.is_empty());
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "store_id": store_id.to_string(),
+            "fees": fees,
+            "publishable": publishable,
+        })),
+    )
+        .into_response()
+}
+
+/// A `POST /admin/fees/publish` body: the tenant, and one store or, without one, every store.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishFeesRequest {
+    tenant_id: String,
+    #[serde(default)]
+    store_id: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/fees/publish",
+    request_body(
+        description = "The tenant, and optionally one store. Without a store, every store of the \
+                       tenant is republished",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Each store's rules resolved, compiled and republished, with \
+                                      the same per-store outcomes as a write"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry or the catalog is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `POST /admin/fees/publish` — republishes the fees of one store, or of every store of the tenant.
+///
+/// A write republishes every store it reaches by itself. What it cannot see is a change elsewhere
+/// that changes what a store is sent: a store given another brand, or an item added to or taken
+/// out of a category a rule names, which is compiled into items only when the fees are published,
+/// as a menu is compiled only when it is published.
+async fn admin_publish_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishFeesRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let stores: Vec<StoreId> = match request.store_id.as_deref().map(str::trim) {
+        None | Some("") => layout.stores.iter().map(|store| store.store_id).collect(),
+        Some(text) => {
+            let store_id = match parse_ulid_fields([("store_id", text)]) {
+                Ok([store_id]) => StoreId::new(store_id),
+                Err(refusal) => return refusal,
+            };
+            if layout.placement(store_id).is_none() {
+                return not_found("store");
+            }
+            vec![store_id]
+        }
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let results = publish_fees_to(&state, &layout, &stores, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "fee.publish",
+        "tenant",
+        &tenant_id.to_string(),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stores": results })),
+    )
+        .into_response()
+}
+
+/// How one store's fee publish went.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeePublishResult {
+    store_id: String,
+    /// `FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or
+    /// `FEE_PUBLISH_FAILED`.
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
+    /// For a refused store: each rule it cannot apply, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    faults: Vec<FeeFaultView>,
+}
+
+impl FeePublishResult {
+    /// An outcome with nothing more to say.
+    fn of(store_id: StoreId, outcome: &'static str) -> Self {
+        Self {
+            store_id: store_id.to_string(),
+            outcome,
+            config_version_id: None,
+            faults: Vec::new(),
+        }
+    }
+}
+
+/// One rule a store cannot apply, as a refused publish reports it: by id, never by name.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeeFaultView {
+    fee_id: String,
+    /// `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`.
+    reason: &'static str,
+}
+
+/// Republishes each store's resolved rules as the `fees` node on its Store layer.
+///
+/// One store failing does not stop the others, and a failed one is retried with
+/// `POST /admin/fees/publish`. A store whose layer already holds what it resolves to is not given
+/// a new version, so a write that changes nothing for a store does not make its tills reload. A
+/// store that cannot apply one of its rules is not published to at all and keeps the rules it has:
+/// sending the others alone would stop charging a fee nobody removed, and sending them all would
+/// fail every bill the faulted rule applies to.
+///
+/// The rules are read once, before the stores are written, as a settings publish reads its values.
+async fn publish_fees_to<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    layout: &FeeLayout,
+    stores: &[StoreId],
+    categories: &CategoryItems,
+) -> Vec<FeePublishResult>
+where
+    F: FeeRuleStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let rules = match state.fees.list(layout.tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => {
+            tracing::error!(%error, "the fee rules could not be read for a fee publish");
+            return stores
+                .iter()
+                .map(|store_id| FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"))
+                .collect();
+        }
+    };
+    let mut results = Vec::with_capacity(stores.len());
+    for store_id in stores {
+        results.push(match layout.placement(*store_id) {
+            Some(placement) => {
+                publish_fees_to_store(
+                    state,
+                    layout.tenant_id,
+                    *store_id,
+                    &rules,
+                    &placement,
+                    categories,
+                )
+                .await
+            }
+            None => FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"),
+        });
+    }
+    results
+}
+
+/// Writes one store's resolved rules onto its Store layer, unless it already holds them or cannot
+/// apply one of them.
+async fn publish_fees_to_store<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    rules: &[FeeRule],
+    placement: &FeePlacement,
+    categories: &CategoryItems,
+) -> FeePublishResult
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
+        tracing::error!(%store_id, "a store's configuration could not be read for a fee publish");
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
+    };
+    let held = loaded.state.as_ref().and_then(|tree| {
+        tree.layer(ConfigLevel::Store)
+            .get(PublishedFees::NODE)
+            .cloned()
+    });
+    let facts = loaded.state.map_or_else(StoreFacts::default, |tree| {
+        StoreFacts::from_document(
+            &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
+        )
+    });
+    let sent = crate::fees::for_store(rules, placement, categories, &facts);
+    if !sent.faults.is_empty() {
+        tracing::warn!(
+            %store_id,
+            rules = sent.faults.len(),
+            "a store cannot apply some of its fee rules, so it keeps the ones it has"
+        );
+        return FeePublishResult {
+            faults: sent
+                .faults
+                .iter()
+                .map(|(fee_id, fault)| FeeFaultView {
+                    fee_id: fee_id.to_string(),
+                    reason: fault.as_wire(),
+                })
+                .collect(),
+            ..FeePublishResult::of(store_id, "FEE_PUBLISH_REFUSED")
+        };
+    }
+    let Ok(node) = serde_json::to_value(&sent.node) else {
+        tracing::error!("could not serialise a store's fees node");
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
+    };
+    // No node and no rule is the same answer at the edge, so it is not a change.
+    if held.map_or(sent.node.fees.is_empty(), |held| held == node) {
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_UNCHANGED");
+    }
+    match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        vec![(PublishedFees::NODE.to_owned(), node)],
+    )
+    .await
+    {
+        Ok(version) => FeePublishResult {
+            config_version_id: Some(version.to_string()),
+            ..FeePublishResult::of(store_id, "FEE_PUBLISH_APPLIED")
+        },
+        Err(_refused) => {
+            tracing::warn!(%store_id, "a store's configuration refused a fee publish");
+            FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
+        }
+    }
+}
+
+/// What the trail keeps of a fee write or publish: how many stores it reached and how each went.
+/// Counts only — never a rule's code, name, rate or amount, which the rule store keeps.
+fn fee_publish_counts(results: &[FeePublishResult]) -> serde_json::Value {
+    let count = |outcome: &str| {
+        results
+            .iter()
+            .filter(|result| result.outcome == outcome)
+            .count()
+    };
+    serde_json::json!({
+        "stores": results.len(),
+        "applied": count("FEE_PUBLISH_APPLIED"),
+        "unchanged": count("FEE_PUBLISH_UNCHANGED"),
+        "refused": count("FEE_PUBLISH_REFUSED"),
+        "failed": count("FEE_PUBLISH_FAILED"),
+    })
+}
+
+/// What the audit trail names a rule by: its fee, its scope and the id it was written for.
+fn fee_audit_id(fee_id: FeeId, scope: FeeScope, scope_id: &str) -> String {
+    format!("{fee_id} {scope} {scope_id}")
+}
+
+/// The `503` for a fee rule store that did not answer.
+fn fee_store_error_response(error: &FeeRuleStoreError) -> Response {
+    tracing::error!(%error, "the fee rule store failed");
+    service_unavailable("fees")
+}
+
 // --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
 
 /// The collaborators the inventory-publish route needs: the inventory store the ingredients, recipes,
@@ -29377,7 +30943,8 @@ fn staff_redacted_for(document: &serde_json::Value, role: AdminRole) -> serde_js
 /// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
 ///
 /// A node earns a place here by carrying a **price a competitor would want** — `Money` in the wire
-/// type the publish path writes — not merely by being commercially interesting. Today that is two:
+/// type the publish path writes — not merely by being commercially interesting. Today that is
+/// three:
 ///
 /// - **`menu`** — the compiled per-channel price book. This is the node S8 was raised for: closing
 ///   `GET /admin/catalog/menus/{id}/placements` under **S5** left the same price book readable one
@@ -29386,12 +30953,15 @@ fn staff_redacted_for(document: &serde_json::Value, role: AdminRole) -> serde_js
 ///   ([ADR-0077](../../../docs/adr/0077-campaigns.md)). Found while fixing S8, and included because a
 ///   redaction that closes one price surface and leaves its sibling open is not a fix; a promotion's
 ///   economics are the same **T2** class as a menu price.
+/// - **`fees`** — each fee's rate or amount, and which items and channels it covers
+///   ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), the same class again; the fee
+///   routes read them only with `ReadRevenue` for the same reason.
 ///
 /// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`
 /// (published rates, which a receipt shows the guest anyway) and `permissions` (whose credential is
 /// removed unconditionally by [`without_staff_credentials`], and whose names and codes go by role in
 /// [`without_staff_identities`]).
-const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns"];
+const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns", "fees"];
 
 /// Removes the priced nodes from a console read for a caller without `ReadRevenue`
 /// (production-readiness **S8**).
@@ -33264,6 +34834,7 @@ mod console_config_redaction_tests {
         json!({
             "menu": { "channels": { "dine_in": { "items": [{ "price_amount_minor": 95_000 }] } } },
             "campaigns": { "rules": [{ "amount": { "currency": "VND", "minor": 20_000 } }] },
+            "fees": { "fees": [{ "code": "SERVICE", "rate": { "numerator": 5, "denominator": 100 } }] },
             "layout": { "buttons": ["margherita"] },
             "capabilities": { "tips_enabled": true },
             "permissions": {

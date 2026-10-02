@@ -819,6 +819,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Fees (ADR-0159 decision 1): a rule written once, at the tenant, a brand or one store,
+        // and every store it reaches republished in the same request, its rules resolved per fee,
+        // compiled, and written whole as the `fees` node on its Store layer. A rule's figures are
+        // prices, so reads are console.reports.revenue; a write publishes, so
+        // console.config.publish.
+        .merge(http::fees_router(
+            store.fee_rules(),
+            store.registry(),
+            store.catalog(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
         // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned
         // through the config tree, which runs the §10 inter-flag rules.

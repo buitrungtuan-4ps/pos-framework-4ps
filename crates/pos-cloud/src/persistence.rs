@@ -66,7 +66,6 @@ use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::fees::PublishedFee;
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -2881,9 +2880,11 @@ impl FeeRuleStore for PostgresFeeRules {
 
     async fn put(&self, tenant_id: TenantId, rule: &FeeRule) -> Result<(), FeeRuleStoreError> {
         rule.check_storable()?;
-        let doc_json = serde_json::to_string(&rule.rule).map_err(|error| {
-            FeeRuleStoreError::new(format!("could not serialize a fee rule: {error}"))
-        })?;
+        let doc_json = crate::fees::authored_json(rule)
+            .map(|document| document.to_string())
+            .map_err(|error| {
+                FeeRuleStoreError::new(format!("could not serialize a fee rule: {error}"))
+            })?;
         let fee_id = rule.rule.fee_id.to_string();
         let slot = FeeRuleRowSlot {
             scope: rule.scope.as_wire(),
@@ -2918,9 +2919,9 @@ impl FeeRuleStore for PostgresFeeRules {
 }
 
 /// One stored fee rule, read back into the cloud's shape. The rule is parsed from the row's JSON
-/// text (a [`pos_proto::money::Money`] reads only from text), and a row whose scope, rule or time
-/// does not read back, or whose rule names another fee than the row's key, is an error rather than
-/// a rule quietly dropped from a store's list.
+/// text ([`crate::fees::rule_from_authored`]: a money amount reads only from text). A row whose
+/// scope, rule or time does not read back, or whose rule names another fee than the row's key, is
+/// an error rather than a rule quietly dropped from a store's list.
 fn fee_rule_from_row(row: &FeeRuleRow) -> Result<FeeRule, FeeRuleStoreError> {
     let scope = FeeScope::from_wire(&row.scope)
         .filter(|scope| FeeScope::WRITABLE.contains(scope))
@@ -2930,9 +2931,10 @@ fn fee_rule_from_row(row: &FeeRuleRow) -> Result<FeeRule, FeeRuleStoreError> {
                 row.scope
             ))
         })?;
-    let rule: PublishedFee = serde_json::from_str(&row.doc_json).map_err(|error| {
-        FeeRuleStoreError::new(format!("a stored fee rule could not be decoded: {error}"))
-    })?;
+    let (rule, item_category_ids) =
+        crate::fees::rule_from_authored(&row.doc_json).map_err(|error| {
+            FeeRuleStoreError::new(format!("a stored fee rule could not be decoded: {error}"))
+        })?;
     if rule.fee_id.to_string() != row.fee_id {
         return Err(FeeRuleStoreError::new(
             "a stored fee rule's id is not the id it is kept under",
@@ -2948,6 +2950,7 @@ fn fee_rule_from_row(row: &FeeRuleRow) -> Result<FeeRule, FeeRuleStoreError> {
         scope,
         scope_id: row.scope_id.clone(),
         rule,
+        item_category_ids,
         update_time,
         updated_by: row.updated_by.clone(),
     })
