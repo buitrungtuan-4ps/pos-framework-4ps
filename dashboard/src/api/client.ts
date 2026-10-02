@@ -90,6 +90,14 @@ import type {
   QrGuardrails,
   VendorPolicy,
   EffectiveSetting,
+  EffectiveFees,
+  FeePublishReport,
+  FeeRule,
+  FeeRuleFields,
+  FeeScope,
+  PreviewFeeRule,
+  SampleBill,
+  SampleLineInput,
   SettingDefinition,
   SettingPresetsReport,
   SettingPublishReport,
@@ -1724,6 +1732,68 @@ export const api = {
     requestJson<SettingPublishReport>("POST", "/admin/settings/publish", {
       tenant_id: tenantId,
       ...(storeId ? { store_id: storeId } : {}),
+    }),
+  // Fees (ADR-0159): a rule written once, at the tenant, a brand or one store, and every store it
+  // reaches republished in the same request — each answering how its publish went, so a `200` is
+  // not "every store charges it". A rule's rate and amount are prices, so the reads and the sample
+  // bill are behind console.reports.revenue; a write publishes, so it is console.config.publish.
+  listFees: (tenantId: string) =>
+    requestJson<{ rules: FeeRule[] }>("GET", `/admin/fees?${tenantQuery(tenantId)}`).then(
+      (body) => body.rules,
+    ),
+  // A new fee: the cloud mints its id and answers it with the publish report.
+  createFee: (tenantId: string, scope: FeeScope, scopeId: string, rule: FeeRuleFields) =>
+    requestJson<FeePublishReport>("POST", "/admin/fees", {
+      tenant_id: tenantId,
+      scope,
+      scope_id: scopeId,
+      rule,
+    }),
+  // A fee at one scope: where it is written, it replaces the rule; at a narrower scope, it
+  // overrides the broader one for the stores that scope reaches.
+  putFee: (tenantId: string, scope: FeeScope, scopeId: string, rule: FeeRuleFields) =>
+    requestJson<FeePublishReport>("PUT", "/admin/fees", {
+      tenant_id: tenantId,
+      scope,
+      scope_id: scopeId,
+      rule,
+    }),
+  deleteFee: (tenantId: string, scope: FeeScope, scopeId: string, feeId: string) =>
+    requestJson<FeePublishReport>(
+      "DELETE",
+      `/admin/fees?${new URLSearchParams({
+        tenant_id: tenantId,
+        scope,
+        scope_id: scopeId,
+        fee_id: feeId,
+      }).toString()}`,
+    ),
+  // What one store runs: each fee, where its rule comes from, and what stops the store applying it.
+  effectiveFees: (tenantId: string, storeId: string) =>
+    requestJson<EffectiveFees>(
+      "GET",
+      `/admin/fees/effective?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  // Republishes one store's fees, or every store of the tenant without `storeId`.
+  publishFees: (tenantId: string, storeId?: string) =>
+    requestJson<FeePublishReport>("POST", "/admin/fees/publish", {
+      tenant_id: tenantId,
+      ...(storeId ? { store_id: storeId } : {}),
+    }),
+  // A sample bill at one store with `rules` in place: writes and publishes nothing.
+  previewFees: (
+    tenantId: string,
+    storeId: string,
+    salesChannel: SalesChannel,
+    rules: readonly PreviewFeeRule[],
+    lines: readonly SampleLineInput[],
+  ) =>
+    requestJson<SampleBill>("POST", "/admin/fees/preview", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      sales_channel: salesChannel,
+      rules,
+      lines,
     }),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.

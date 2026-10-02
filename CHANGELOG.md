@@ -382,6 +382,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console has a Fees screen** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)), under
+  Menu & pricing, for owners and admins.
+  - It lists the rules written for every store, one brand or one store. At a brand or a store it
+    also lists the rules that reach it from a wider scope, and **Override here** writes the fee for
+    that scope under the same `fee_id`, so its stores run it in place of the wider rule.
+  - **New fee** and **Edit** open one form with every field: the code, the name and the name in
+    each language, how it charges (a percentage, an amount per bill or an amount per unit), the
+    channels, the items and categories it counts or leaves out, a percentage's base (after or
+    before discounts and comps, net of tax or including it), its tax (taxed the way its lines are,
+    not taxed, or at one tax class), whether staff can waive it, and whether it is in force. A new
+    fee starts from the owner's defaults: taxed the way its lines are, after discounts, net of tax,
+    and not waivable. A rate is typed as a percentage and sent as an exact ratio, never a float.
+  - Before saving, the form tries the fee on a sample bill at a store it reaches, from that store's
+    menu (`POST /admin/fees/preview`): each line, each fee with its tax, the tax per class and the
+    total due. Nothing is saved until **Save and publish**.
+  - A save or a delete publishes to every store the rule reaches, and the screen lists each store
+    by name as published, unchanged, refused (with the rule it cannot apply, and why) or failed,
+    with **Publish again** for the ones that did not take it. For one store it shows what the store
+    runs, where each rule comes from, and anything that stops it applying one. **Publish fees
+    again** republishes the stores a scope reaches.
+  - The console replay walks the flow in a browser: a new fee, its sample bill, and its publish.
+  - **Upgrade note:** Channels & payments moves from the nav's Menu & pricing group to Operations,
+    so that no group holds more than six screens. The screen reads rules with
+    `console.reports.revenue`, so it is not offered to Ops, which can write a rule but not read one.
+    No route, migration, permission, event or protocol change.
+
 - **A fee rule can be tried on a sample bill before it is saved**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md), its accepted consequences: "the console
   previews a sample bill before publishing").

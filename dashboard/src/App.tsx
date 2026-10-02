@@ -88,6 +88,9 @@ const Layout = lazy(() =>
 const Devices = lazy(() =>
   import("./screens/Devices").then((module) => ({ default: module.Devices })),
 );
+const Fees = lazy(() =>
+  import("./screens/Fees").then((module) => ({ default: module.Fees })),
+);
 const Fleet = lazy(() =>
   import("./screens/Fleet").then((module) => ({ default: module.Fleet })),
 );
@@ -204,6 +207,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   settings: Settings,
   storeSettings: StoreSettings,
   taxRates: TaxRates,
+  fees: Fees,
   translations: Translations,
   subjects: Subjects,
   apiKeys: ApiKeys,

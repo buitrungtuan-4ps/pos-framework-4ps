@@ -290,6 +290,18 @@ export const SCREENS = {
     icon: "settings",
   },
   taxRates: { path: "/tax-rates", key: "nav.taxRates", scope: "tenant", tenantScoped: true, icon: "percent" },
+  // Fees (ADR-0159): the service charges and other fees a bill carries, written for every store, a
+  // brand or one store. Owner and admin only, as the server's reads are: a fee's rate and amount
+  // are prices, behind console.reports.revenue.
+  fees: {
+    path: "/fees",
+    key: "nav.fees",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "receipt",
+  },
   translations: {
     path: "/translations",
     key: "nav.translations",
@@ -412,16 +424,19 @@ export const NAV_GROUPS: readonly {
   // Is the shop all right, what did it make, and what is on fire.
   { key: "nav.group.overview", items: ["storeHub", "reports", "alerts"] },
   // What is sold and for how much: the menu, how it is laid out on a till, its pictures, the
-  // channels it is sold through, the promotions on it and the tax on it.
+  // promotions on it, the tax on it and the fees a bill adds to it (ADR-0159).
   {
     key: "nav.group.menu",
-    items: ["catalog", "layout", "media", "channels", "campaigns", "taxRates"],
+    items: ["catalog", "layout", "media", "campaigns", "taxRates", "fees"],
   },
   // Running the shift: the room, the kitchen, the stock behind it, the reasons a till may be
-  // overridden and the people who do the overriding.
+  // overridden and the people who do the overriding — and which channels a store takes orders on
+  // and which payments it accepts. Channels & payments moved here from Menu & pricing when Fees
+  // filled that group's sixth place: what it publishes is whether a store serves a channel or takes
+  // a tender at all, which is how the shift runs, not what anything costs.
   {
     key: "nav.group.operations",
-    items: ["floor", "stations", "inventory", "reasonCodes", "people"],
+    items: ["floor", "stations", "inventory", "reasonCodes", "people", "channels"],
   },
   // The estate: the shops, the boxes running them, the terminals in them, and the two jobs those
   // boxes need done to them (an update, and a check that nothing was lost).
