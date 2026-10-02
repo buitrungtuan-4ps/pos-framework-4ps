@@ -1,3 +1,9 @@
+## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
+
+**Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.
+
+**Action:** When implementing or optimizing client-side array sorting over objects or strings in JS/TS tables, pre-extract sort keys before `.sort()` and reuse a single `Intl.Collator` instance for string comparisons.
+
 ## 2026-09-23 - A Test-Environment Workaround Is Not Part Of The Optimization
 
 **Learning:** The Releases memoization was sound on its own. What followed it was a third commit to an unrelated shared component — `ComboboxField` in `ui.tsx` — wrapping its click-outside listener registration in `setTimeout(…, 0)`, commented "can interfere with Playwright click actions in test environments". That changes what every picker in the console does at runtime, to settle a complaint about the harness, and it contradicts the comment directly above it explaining why the listener binds on `pointerdown` in the first place. It was also unnecessary: the console replay suite passes 9/9 with the Releases change alone, including `a picker whose options arrive late does not swallow the next click` — the very test the delay was aimed at.
