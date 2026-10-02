@@ -145,6 +145,12 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_effective_settings,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
+        crate::http::admin_list_fees,
+        crate::http::admin_create_fee,
+        crate::http::admin_put_fee,
+        crate::http::admin_delete_fee,
+        crate::http::admin_effective_fees,
+        crate::http::admin_publish_fees,
         crate::http::admin_list_releases,
         crate::http::admin_create_release,
         crate::http::admin_read_release,
@@ -221,6 +227,18 @@ pub(crate) struct ErrorResponse {
                            value that reaches it, and every store a write reaches is republished in \
                            the same request. Documented because a fork's own console draws its \
                            settings screen from the catalogue here."
+        ),
+        (
+            name = "fees",
+            description = "The charges a bill adds — a service charge, a packaging fee, a delivery \
+                           fee (ADR-0159). A rule is written once, at the tenant, a brand or one \
+                           store; for each fee a store runs the most specific rule that reaches \
+                           it, and every store a write reaches is republished in the same request. \
+                           An item list may name item categories, which are compiled into items \
+                           when the store is published. Documented because a fork's own console \
+                           draws its fee screen from these routes, and needs to know that a store \
+                           which cannot apply a rule is left as it is rather than sent part of \
+                           its list."
         ),
         (
             name = "config",

@@ -21,8 +21,8 @@
 //! computes nothing: `pos_core::billing::assemble` charges the rules, one fee line per rule applied
 //! and folded into the tax and the total (ADR-0159 decision 2). A bill keeps the rules in force
 //! when it opened, as [`FrozenFee`]s, which is the form `billing.bill.opened` records and the form
-//! the bill is computed from (decision 3). The edge installs the node; nothing in the cloud
-//! authors it yet.
+//! the bill is computed from (decision 3). The cloud resolves each store's rules and publishes
+//! this node (`pos_cloud::fees`), and the edge installs it.
 //!
 //! # Defaults, and refusing to guess
 //!
