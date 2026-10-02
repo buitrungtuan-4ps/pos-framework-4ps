@@ -651,6 +651,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::UnknownBill => "UNKNOWN_BILL",
         AppError::NothingToPrint => "NOTHING_TO_PRINT",
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
+        AppError::BillsOnDifferentOrders => "BILLS_ON_DIFFERENT_ORDERS",
         AppError::UnknownShift => "UNKNOWN_SHIFT",
         AppError::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
         AppError::OpenShiftRequired => "OPEN_SHIFT_REQUIRED",
@@ -701,6 +702,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnknownBill
         | AppError::NothingToPrint
         | AppError::BillsOnDifferentTables
+        | AppError::BillsOnDifferentOrders
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen
         | AppError::OpenShiftRequired
@@ -768,5 +770,19 @@ mod tests {
         );
         let refused = error_response(&AppError::Domain(DomainError::NegativeChange));
         assert_eq!(refused.status(), StatusCode::CONFLICT);
+    }
+
+    /// A merge across orders is the caller's to fix, so a refusal under a token of its own.
+    #[test]
+    fn a_merge_across_orders_is_a_conflict_with_its_own_token() {
+        let refused = error_response(&AppError::BillsOnDifferentOrders);
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            refused
+                .headers()
+                .get(ERROR_REASON_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("BILLS_ON_DIFFERENT_ORDERS")
+        );
     }
 }

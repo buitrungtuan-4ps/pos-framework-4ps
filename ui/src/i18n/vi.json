@@ -96,6 +96,7 @@
   "error.order_not_empty": "Bàn này đã có món. Hãy thanh toán, hoặc huỷ các món trước.",
   "error.nothing_to_bill": "Order này chưa có món nào nên không có gì để tính tiền.",
   "error.bills_on_different_tables": "Không thể gộp hoá đơn của hai bàn khác nhau.",
+  "error.bills_on_different_orders": "Không thể gộp hoá đơn của hai order khác nhau. Hãy thanh toán riêng từng order.",
   "error.capability_disabled": "Cửa hàng không bật tính năng này.",
   "error.channel_not_accepted": "Cửa hàng này không nhận đơn qua kênh đó. Kiểm tra các kênh đã xuất bản cho cửa hàng trên console.",
   "error.empty": "Chưa có gì để thực hiện — hãy thêm món hoặc thanh toán trước.",

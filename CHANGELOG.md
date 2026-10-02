@@ -275,6 +275,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A merge refuses bills on different orders**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+  `POST /api/bills/{id}/merge` checked only that the bills shared a table, and two counter bills
+  share one: none. So the bills of two counter orders merged, and the survivor charged only its own
+  order's lines, because a settle reads a bill's lines from its own order. The other order's food
+  was charged nothing, and its bill, merged, was terminal, so that order was never paid.
+  - A bill of another order is now refused `409 BILLS_ON_DIFFERENT_ORDERS` before anything is
+    written, and both bills stay open. A bill on another table still answers `409
+    BILLS_ON_DIFFERENT_TABLES`, and the parts of a split, at a table or the counter, merge back as
+    before.
+  - The till merges only to undo a split, so it never sent such a merge. It names the new refusal
+    in English and Vietnamese for any caller that does.
+  - A merge of two orders' bills that a store has already recorded replays as it was written. No
+    event, migration, permission or protocol change.
+
 - **A discount within the ceiling records no override when the till sends a manager's approval
   anyway.** `POST /api/bills/{id}/discount` checked any approval it was sent and wrote
   `security.permission.overridden` for it, so a discount under a published ceiling, sent with a
