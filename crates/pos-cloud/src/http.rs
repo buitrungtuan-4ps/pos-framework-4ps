@@ -748,6 +748,10 @@ where
             get(admin_export_revenue::<S, R, K, C, A, T, W>),
         )
         .route(
+            "/admin/stores/{store_id}/revenue/fees/export",
+            get(admin_export_revenue_fees::<S, R, K, C, A, T, W>),
+        )
+        .route(
             "/admin/webhooks",
             post(admin_register_webhook::<S, R, K, C, A, T, W>)
                 .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
@@ -31890,6 +31894,105 @@ where
     )
     .await;
     csv_download_response("revenue.csv", body)
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/fees/export",
+    params(
+        ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
+                                      is `business_date,currency_code,fee_code,fee_name,bills,\
+                                      amount,tax`, then one row per trading day per fee code the \
+                                      day's settled bills charged, oldest day first and then by \
+                                      code: the fee's name, the bills that charged it, what it \
+                                      charged and the tax on it, in the store's currency's minor \
+                                      units. A day that charged no fee has no row, and neither \
+                                      has a bill settled by an edge from before fee lines, whose \
+                                      charge is only in `revenue.csv`'s `service_charge`. Only \
+                                      the header for a window with no fees, and for a store \
+                                      whose rollup has not been projected yet"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "reports",
+)]
+/// A store's fees by code as a CSV download, one row per trading day per code
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+///
+/// Windowed as the revenue read is, and long-format: a file of its own rather than columns added to
+/// `revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,
+/// so it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,
+/// and the audit trail records how many rows were exported, never what they held.
+async fn admin_export_revenue_fees<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(error) => return window_refusal(error),
+    };
+    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(days) => days,
+        Err(error) => return rollup_error_response(&error),
+    };
+    let Ok(body) = export::revenue_fees_csv(&days) else {
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
+    };
+    let rows: usize = days.iter().map(|day| day.by_fee.len()).sum();
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        "reports.export_revenue_fees",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "revenue_fees", "rows": rows })),
+    )
+    .await;
+    csv_download_response("revenue-fees.csv", body)
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log

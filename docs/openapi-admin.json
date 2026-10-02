@@ -3761,6 +3761,119 @@
         }
       }
     },
+    "/admin/stores/{store_id}/revenue/fees/export": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A store's fees by code as a CSV download, one row per trading day per code\n([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).",
+        "description": "Windowed as the revenue read is, and long-format: a file of its own rather than columns added to\n`revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,\nso it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,\nand the audit trail records how many rows were exported, never what they held.",
+        "operationId": "admin_export_revenue_fees",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store whose fees to export (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`revenue-fees.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,fee_code,fee_name,bills,amount,tax`, then one row per trading day per fee code the day's settled bills charged, oldest day first and then by code: the fee's name, the bills that charged it, what it charged and the tax on it, in the store's currency's minor units. A day that charged no fee has no row, and neither has a bill settled by an edge from before fee lines, whose charge is only in `revenue.csv`'s `service_charge`. Only the header for a window with no fees, and for a store whose rollup has not been projected yet"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/totp": {
       "post": {
         "tags": [
@@ -3948,6 +4061,10 @@
     {
       "name": "devices",
       "description": "What a store has actually admitted (ADR-0118). Documented rather than deferred with the rest of the device surface because it is the **only** read that answers it: a store admits tablets locally and offline, and until these events the cloud's picture of a store's tills was zero rows. Note the two identity spaces — the ids here are minted by the edge at pairing, and nothing joins them to the console-minted ids of `/admin/stores/{store_id}/devices`."
+    },
+    {
+      "name": "reports",
+      "description": "A store's takings over a window of its trading days, read from the materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route here needs `console.reports.revenue`. The daily reads and the revenue export are still coverage debt; the export of fees by code (ADR-0159) is documented because a route new to this surface is."
     },
     {
       "name": "fleet",

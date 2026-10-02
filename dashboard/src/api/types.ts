@@ -173,6 +173,21 @@ export interface DailyRevenue {
   /** `total_due` summed — the headline revenue figure. */
   readonly net: number;
   readonly by_item: Record<string, ItemMix>;
+  /**
+   * The fees the day's settled bills charged, by fee code (ADR-0159). A bill settled by an edge
+   * from before fee lines is in `service_charge` and under no code.
+   */
+  readonly by_fee: Record<string, FeeTotal>;
+}
+
+/** One fee's total on a trading day, under its code (part of `DailyRevenue`). Minor units. */
+export interface FeeTotal {
+  /** The last name a settled bill recorded for the fee. */
+  readonly name: string;
+  /** Settled bills that charged it. */
+  readonly bills: number;
+  readonly amount: number;
+  readonly tax: number;
 }
 
 /** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */

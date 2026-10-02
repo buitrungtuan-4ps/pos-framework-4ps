@@ -1903,6 +1903,16 @@ export const api = {
       `/admin/stores/${encodeURIComponent(storeId)}/revenue/export?${rollupWindowQuery(tenantId, window)}`,
       "revenue.csv",
     ),
+  // The fees by code, one row per day per code (ADR-0159). T2, like the revenue export.
+  exportRevenueFeesCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/fees/export?${rollupWindowQuery(tenantId, window)}`,
+      "revenue-fees.csv",
+    ),
   // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
   dryRunTranslationsCsv: (tenantId: string, file: Blob) =>
     requestUpload<TranslationImportReport>(

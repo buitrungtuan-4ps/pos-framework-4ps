@@ -129,6 +129,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_publish_reason_codes,
         crate::http::admin_admitted_devices,
         crate::http::admin_revoke_device,
+        crate::http::admin_export_revenue_fees,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -212,6 +213,14 @@ pub(crate) struct ErrorResponse {
                            rows. Note the two identity spaces — the ids here are minted by the \
                            edge at pairing, and nothing joins them to the console-minted ids of \
                            `/admin/stores/{store_id}/devices`."
+        ),
+        (
+            name = "reports",
+            description = "A store's takings over a window of its trading days, read from the \
+                           materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route \
+                           here needs `console.reports.revenue`. The daily reads and the revenue \
+                           export are still coverage debt; the export of fees by code (ADR-0159) \
+                           is documented because a route new to this surface is."
         ),
         (
             name = "fleet",

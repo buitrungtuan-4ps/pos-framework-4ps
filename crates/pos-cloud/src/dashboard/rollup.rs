@@ -14,11 +14,11 @@ use std::collections::BTreeMap;
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
-    BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftOpened,
-    DeviceAdmissionGranted, DeviceAdmissionRevoked, SalesOrderLineAdded,
+    BillFeeLine, BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed,
+    CashShiftOpened, DeviceAdmissionGranted, DeviceAdmissionRevoked, SalesOrderLineAdded,
 };
 
-use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup};
+use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, FeeTotal};
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
 /// id ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
@@ -123,9 +123,10 @@ pub fn render(days: BTreeMap<String, DailyRollup>) -> Vec<DailyRollup> {
 }
 
 /// Folds one event's **money** into `revenue` (ADR-0081, Track O4): `billing.bill.settled` into the
-/// day's recognised revenue totals, and `sales.order_line.added` into the day's gross ordered mix.
-/// Every other event is ignored. A payload that fails to decode is skipped rather than failing the
-/// pass — these are events this system wrote, so a decode failure is a corrupt row, not the norm.
+/// day's recognised revenue totals and its fees by code ([`fold_fees`]), and
+/// `sales.order_line.added` into the day's gross ordered mix. Every other event is ignored. A
+/// payload that fails to decode is skipped rather than failing the pass — these are events this
+/// system wrote, so a decode failure is a corrupt row, not the norm.
 pub fn fold_revenue(
     revenue: &mut BTreeMap<String, DailyRevenue>,
     event: &EventEnvelope<RawPayload>,
@@ -149,6 +150,7 @@ pub fn fold_revenue(
                 .saturating_add(bill.service_charge.amount_minor);
             day.tax = day.tax.saturating_add(bill.tax_total.amount_minor);
             day.net = day.net.saturating_add(bill.total_due.amount_minor);
+            fold_fees(&mut day.by_fee, &bill.fee_lines);
         }
         "sales.order_line.added" => {
             let Ok(line) = event.data.decode::<SalesOrderLineAdded>() else {
@@ -175,6 +177,34 @@ pub fn fold_revenue(
                 .saturating_add(line.line_total.amount_minor);
         }
         _ => {}
+    }
+}
+
+/// Folds one settled bill's `fee_lines` into its day's fees by code
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): what each code
+/// charged, the tax on it, and one more bill for each code the bill charged.
+///
+/// A bill from an edge that predates fee lines records none and adds nothing here, while its
+/// `service_charge` still reaches the day's figure ([`DailyRevenue::by_fee`] says why there is no
+/// bucket for it). A line that charged nothing and taxed nothing is left out, as the receipt prints
+/// no line for it, so a fee in force that charged a bill nothing does not count that bill. The name
+/// is the last one a bill recorded, as the product mix keeps an item's.
+fn fold_fees(by_fee: &mut BTreeMap<String, FeeTotal>, lines: &[BillFeeLine]) {
+    // The codes this bill has counted already: two lines under one code are one bill charging it.
+    let mut counted: Vec<&str> = Vec::with_capacity(lines.len());
+    for line in lines {
+        if line.amount.is_zero() && line.tax.is_zero() {
+            continue;
+        }
+        let code = line.code.as_str();
+        let total = by_fee.entry(code.to_owned()).or_default();
+        total.name = line.display_name.to_string();
+        total.amount = total.amount.saturating_add(line.amount.amount_minor);
+        total.tax = total.tax.saturating_add(line.tax.amount_minor);
+        if !counted.contains(&code) {
+            counted.push(code);
+            total.bills = total.bills.saturating_add(1);
+        }
     }
 }
 
@@ -281,6 +311,7 @@ pub fn empty_revenue(business_date: &str) -> DailyRevenue {
         tax: 0,
         net: 0,
         by_item: BTreeMap::new(),
+        by_fee: BTreeMap::new(),
     }
 }
 
@@ -536,6 +567,7 @@ mod tests {
     // --- revenue fold ---
 
     use super::fold_revenue;
+    use crate::cloud::FeeTotal;
     use pos_contract_tests::fixtures;
     use pos_proto::BusinessDate;
     use pos_proto::envelope::{EventEnvelope, EventTypeRef, RawPayload};
@@ -614,6 +646,79 @@ mod tests {
         assert_eq!(mix.name, "Margherita");
         assert_eq!(mix.ordered_qty_milli, 2000);
         assert_eq!(mix.ordered_value, 100_000);
+    }
+
+    /// One fee line, in the shape `billing.bill.settled` carries it.
+    fn fee(code: &str, name: &str, amount: i64, tax: i64) -> serde_json::Value {
+        json!({
+            "fee_id": ulid(9), "code": code, "display_name": name,
+            "amount": money(amount), "tax": money(tax),
+        })
+    }
+
+    /// A bill settled on 2026-03-15 with `service_charge`, recording `fee_lines` when it has them.
+    fn settled(
+        service_charge: i64,
+        fee_lines: Option<serde_json::Value>,
+    ) -> EventEnvelope<RawPayload> {
+        let mut payload = json!({
+            "bill_id": ulid(1), "receipt_number": 7u64,
+            "subtotal": money(100_000), "reduction_total": money(0),
+            "service_charge": money(service_charge), "tax_total": money(8_000),
+            "rounding_adjustment": money(0), "total_due": money(108_000 + service_charge),
+        });
+        if let Some(lines) = fee_lines {
+            payload["fee_lines"] = lines;
+        }
+        event_with("2026-03-15", EventType::BillingBillSettled, &payload)
+    }
+
+    #[test]
+    fn fees_fold_by_code_and_a_bill_without_fee_lines_adds_to_the_service_charge_alone() {
+        let mut revenue = BTreeMap::new();
+        for bill in [
+            settled(
+                7_000,
+                Some(json!([
+                    fee("SVC", "Service", 5_000, 400),
+                    fee("PACK", "Packaging", 2_000, 0)
+                ])),
+            ),
+            settled(
+                5_000,
+                Some(json!([
+                    fee("SVC", "Service charge", 5_000, 400),
+                    fee("PACK", "Packaging", 0, 0)
+                ])),
+            ),
+            // Settled by an edge from before fee lines: the same charge, recorded only as the sum.
+            settled(5_000, None),
+        ] {
+            fold_revenue(&mut revenue, &bill);
+        }
+
+        let day = &revenue["2026-03-15"];
+        assert_eq!(
+            (day.bills, day.service_charge),
+            (3, 17_000),
+            "every bill, fee lines or none"
+        );
+        let total = |name: &str, bills, amount, tax| FeeTotal {
+            name: name.to_owned(),
+            bills,
+            amount,
+            tax,
+        };
+        assert_eq!(
+            day.by_fee,
+            BTreeMap::from([
+                ("PACK".to_owned(), total("Packaging", 1, 2_000, 0)),
+                ("SVC".to_owned(), total("Service charge", 2, 10_000, 800)),
+            ]),
+            "by code, under the last name a bill recorded; a line that charged nothing counts no \
+             bill, and the bill with no fee lines is in no entry, so 5,000 of the service charge \
+             is under no code"
+        );
     }
 
     #[test]
