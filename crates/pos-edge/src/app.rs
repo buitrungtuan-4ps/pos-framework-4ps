@@ -56,7 +56,8 @@ use pos_proto::events::{
     InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
     SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
     SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
+    SalesTableMerged, SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden,
+    StoreChainAnchored,
 };
 use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
@@ -66,6 +67,7 @@ use pos_proto::ids::{
 };
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::printing::PublishedPrinting;
+use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
@@ -529,6 +531,10 @@ pub struct EdgeSession {
     /// the receipt's language and whether a settle prints it. The defaults in the bootstrap, which
     /// are what the edge did before the node existed.
     pub printing: PublishedPrinting,
+    /// The settings on the `qr` config node (ADR-0160 item 2): what a guest's order does at a table
+    /// that already has an open order. The defaults in the bootstrap, which are what the edge did
+    /// before the node carried them.
+    pub qr: PublishedQr,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -716,6 +722,7 @@ impl EdgeSession {
             shift: PublishedShift::default(),
             session_settings: PublishedSession::default(),
             printing: PublishedPrinting::default(),
+            qr: PublishedQr::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -2340,7 +2347,8 @@ struct Projection {
     staff_decisions: HashMap<OrderId, StaffDecision>,
     /// Orders that ended owing nothing (`sales.order.closed`): a table released with nothing sold
     /// on it (ADR-0163), and a guest order staff refused. A closed order is not live, whatever lines
-    /// it still names.
+    /// it still names. A guest's order that joined the table's (`sales.table.merged`, ADR-0160
+    /// item 2) ends here too: its lines are owed on the order they joined.
     closed_orders: HashSet<OrderId>,
     /// Each settled bill's receipt as the settle recorded it, for printing a copy (ADR-0164). Folded
     /// from the log like the rest, so it holds what the log holds and no more.
@@ -2387,8 +2395,9 @@ struct Projection {
     /// Until it existed those reads filtered `lines` — every line the store had sold since it was
     /// installed — so a store got slower with age, and did it holding the lock every sale takes. At
     /// thirty thousand settled orders `GET /api/orders/live` took ~60 ms and an add-line from a
-    /// second device waited behind it for as long (finding F2). Written only by
-    /// [`Self::add_line`]; a line never changes order, so nothing else has to keep it in step.
+    /// second device waited behind it for as long (finding F2). Written by [`Self::add_line`], and
+    /// by [`Self::merge_order`], the one way a line changes order, which moves it here and on its
+    /// record together.
     ///
     /// Id order rather than insertion order because every reader sorted by id — the bill's rounding
     /// residual and the receipt's row order depend on it — and the two differ after a restart whose
@@ -2545,9 +2554,12 @@ impl Projection {
     /// Derived, never stored: origin from the log, decision from the log, policy from the current
     /// session. An order this build never saw open has no origin and is therefore not held — the
     /// safe answer, because refusing to fire an order whose provenance is unknown would strand a
-    /// pre-upgrade order nobody can release.
+    /// pre-upgrade order nobody can release. Nor is an order that has ended: there is nothing left
+    /// on it to confirm, and a guest's order that joined the table's while nobody was asked would
+    /// otherwise wait, empty, from the moment a store turned the hold on.
     fn awaits_staff_confirmation(&self, order_id: OrderId, session: &EdgeSession) -> bool {
         self.staff_decision(order_id).is_none()
+            && !self.closed_orders.contains(&order_id)
             && self.order_origin(order_id).is_some_and(|origin| {
                 session.holds_for_staff_confirmation(origin.channel, origin.table_id)
             })
@@ -2563,9 +2575,7 @@ impl Projection {
             Some(StaffDecision::Rejected) => StaffStanding::Refused,
             Some(StaffDecision::Confirmed) => StaffStanding::Fireable,
             None => {
-                if self.order_origin(order_id).is_some_and(|origin| {
-                    session.holds_for_staff_confirmation(origin.channel, origin.table_id)
-                }) {
+                if self.awaits_staff_confirmation(order_id, session) {
                     StaffStanding::Waiting
                 } else {
                     StaffStanding::Fireable
@@ -2589,12 +2599,26 @@ impl Projection {
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
         let order_id = record.order_id;
-        // Indexed only when the line is new: a rebuild can run over a projection that already holds
-        // it, and a second copy of an id would sell the line twice on the bill.
-        if self.lines.insert(line_id, record).is_none() {
+        // Indexed only when the line is new, or back on the order it was added to: a rebuild can run
+        // over a projection that already holds it, and a second copy of an id would sell the line
+        // twice on the bill. A line a merge has moved since is put back on its own order, as its
+        // event says, and the merge's own fold moves it again (`sales.table.merged`).
+        let previous = self
+            .lines
+            .insert(line_id, record)
+            .map(|previous| previous.order_id);
+        if previous != Some(order_id) {
+            if let Some(previous) = previous
+                && let Some(ids) = self.order_lines.get_mut(&previous)
+            {
+                ids.retain(|id| *id != line_id);
+            }
             let ids = self.order_lines.entry(order_id).or_default();
             if let Err(at) = ids.binary_search(&line_id) {
                 ids.insert(at, line_id);
+            }
+            if let Some(previous) = previous {
+                self.refresh_live(previous);
             }
         }
         self.refresh_live(order_id);
@@ -2611,6 +2635,98 @@ impl Projection {
             self.table_orders.remove(&table_id);
         }
         self.refresh_live(order_id);
+    }
+
+    /// Folds an order that arrived from outside the store ([`Edge::open_inbound_order`]), in the
+    /// order its events are in, as the replay folds them: seated, then its lines, then joined to
+    /// `joins` where it joined the table's order, which gives the table back to that order.
+    ///
+    /// A QR order names a table, so the floor shows it occupied and staff can open the bill; a
+    /// delivery or public-API order has none. The channel is the one the order actually came in
+    /// on, so the bill is taxed at its rate rather than the session's (B1.2), and is recorded for a
+    /// tableless order too — a delivery order has no table and still has a channel.
+    fn fold_inbound_order(
+        &mut self,
+        order_id: OrderId,
+        (channel, table_id): (Option<SalesChannel>, Option<TableId>),
+        lines: Vec<(OrderLineId, LineRecord)>,
+        joins: Option<OrderId>,
+    ) {
+        if let Some(table_id) = table_id {
+            self.seat_guest_order(table_id, order_id);
+        }
+        self.open_order_origin(order_id, channel, table_id);
+        for (line_id, record) in lines {
+            self.add_line(line_id, record);
+        }
+        if let Some(target_order_id) = joins {
+            self.merge_order(target_order_id, order_id);
+        }
+    }
+
+    /// Folds one order into another (`sales.table.merged`), live and replayed alike: every line of
+    /// `merged` moves onto `target`, a table that pointed at `merged` points at `target`, and
+    /// `merged` has ended.
+    ///
+    /// What a guest's QR order does at a table whose order it joins (ADR-0160 item 2), as it
+    /// arrives or when staff confirm it: from then on its lines are the table's order's, fired,
+    /// billed and voided there like any line added to it. Each keeps its own id and what it was
+    /// added with, and its `sales.order_line.added` still names the order it was ordered on. The
+    /// folded order has no line left and takes none, waits for nobody, and is off every list.
+    fn merge_order(&mut self, target: OrderId, merged: OrderId) {
+        if target == merged {
+            return;
+        }
+        let moved = self.order_lines.remove(&merged).unwrap_or_default();
+        for line_id in &moved {
+            if let Some(record) = self.lines.get_mut(line_id) {
+                record.order_id = target;
+            }
+        }
+        let ids = self.order_lines.entry(target).or_default();
+        for line_id in moved {
+            if let Err(at) = ids.binary_search(&line_id) {
+                ids.insert(at, line_id);
+            }
+        }
+        if let Some(table_id) = self.table_for_order(merged) {
+            self.open_order(table_id, target);
+        }
+        self.closed_orders.insert(merged);
+        self.refresh_live(merged);
+        self.refresh_live(target);
+    }
+
+    /// The order at `table_id` a guest's lines may join (ADR-0160 item 2), other than `excluding`:
+    /// the table's own order, or failing it the newest other order still owing there. `None` when
+    /// none of them can take a line ([`Self::takes_joining_lines`]), and the guest's order is then
+    /// its own order, as before.
+    fn joinable_order_at(
+        &self,
+        table_id: TableId,
+        excluding: Option<OrderId>,
+        session: &EdgeSession,
+    ) -> Option<OrderId> {
+        let at_table = |order_id: &OrderId| {
+            self.order_origin(*order_id)
+                .is_some_and(|origin| origin.table_id == Some(table_id))
+        };
+        self.order_for_table(table_id)
+            .into_iter()
+            .chain(self.live.iter().rev().copied().filter(at_table))
+            .find(|order_id| {
+                Some(*order_id) != excluding && self.takes_joining_lines(*order_id, session)
+            })
+    }
+
+    /// Whether an order can take a guest's joining lines: it has not ended, it is not a guest's
+    /// order staff refused or have still to decide on, and it is on no bill. A line rung after a
+    /// bill opens is on no bill (ADR-0128 decision 9), which is why the floor refuses one then, and
+    /// a paid order's bill is behind it.
+    fn takes_joining_lines(&self, order_id: OrderId, session: &EdgeSession) -> bool {
+        !self.closed_orders.contains(&order_id)
+            && self.staff_standing(order_id, session) == StaffStanding::Fireable
+            && self.bill_for_order(order_id).is_none()
     }
 
     /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
@@ -3684,6 +3800,18 @@ impl<S: EventStore> Edge<S> {
     /// `device_id` and no employee — the same shape [`Self::record_activation`] uses. The lines are
     /// already priced by the caller (`pos_core::menu::reprice_line`); this records what it decided.
     ///
+    /// # A guest's order that joins the table's
+    ///
+    /// Where the store sets `qr.table_order` to `TABLE_ORDER_JOIN` (ADR-0160 item 2), a QR order for
+    /// a table whose order can take a line, and that waits for no member of staff, joins that order
+    /// in the same transaction: `sales.table.merged` follows its lines, which are the table's
+    /// order's from then on. The guest's order is still opened, and its own id is the one returned
+    /// and recorded, so each line keeps the order, and through it the channel, it was ordered on,
+    /// and each submission keeps an order of its own for its retries to find. A QR order that waits
+    /// for staff joins the table's when they confirm it ([`Self::confirm_inbound_order`]). A table
+    /// whose order cannot take a line, because its bill is open or paid, keeps the guest's order
+    /// separate, as before.
+    ///
     /// # Errors
     ///
     /// [`AppError`] if the business date cannot be derived, an event cannot be encoded, or the store
@@ -3709,23 +3837,31 @@ impl<S: EventStore> Edge<S> {
         let session = self.session();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
-        let order_id = self.next_order_id();
-
-        let mut envelopes = Vec::with_capacity(lines.len() + 1);
-        let mut messages = Vec::with_capacity(lines.len() + 1);
 
         // Read the channel out before the event takes ownership: the projection needs it too, so
         // the bill is taxed at this order's rate rather than the session's (B1.2).
         let order_channel = channel.require().ok();
+
+        // Asked once, here, from the session snapshot this order was priced against — and handed
+        // back to the caller below rather than recomputed there. The caller holds its own snapshot
+        // taken microseconds earlier, and the config-pull loop can swap the session between the
+        // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
+        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
+
+        let joins =
+            self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
+
+        let order_id = self.next_order_id();
+        // Each event with the frame that announces it once it commits, in the order they are written.
+        let mut events = Vec::with_capacity(lines.len() + 2);
+
         let opened = SalesOrderOpened {
             order_id,
             channel,
             table_id,
             guest_count: None,
         };
-        let (envelope, message) = self.system_prepare(device_id, now, business_date, &opened)?;
-        envelopes.push(envelope);
-        messages.push(message);
+        events.push(self.system_prepare(device_id, now, business_date, &opened)?);
 
         let mut line_records: Vec<(OrderLineId, LineRecord)> = Vec::with_capacity(lines.len());
         let mut line_notes: Vec<(OrderLineId, NoteText)> = Vec::new();
@@ -3755,8 +3891,7 @@ impl<S: EventStore> Edge<S> {
                 attach_note(&mut message, note);
                 line_notes.push((order_line_id, note.clone()));
             }
-            envelopes.push(envelope);
-            messages.push(message);
+            events.push((envelope, message));
             // Built from the event rather than beside it. Restating the same fields in two
             // places is how the projection came to be missing `display_name` and `unit_price` in the
             // first place: the event grew them, the hand-written twin did not, and nothing noticed
@@ -3765,11 +3900,16 @@ impl<S: EventStore> Edge<S> {
             line_records.push((order_line_id, LineRecord::from(added)));
         }
 
-        // Asked once, here, from the session snapshot this order was priced against — and handed
-        // back to the caller below rather than recomputed there. The caller holds its own snapshot
-        // taken microseconds earlier, and the config-pull loop can swap the session between the
-        // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
-        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
+        // Last, so the log reads as it happened: the guest's order, its lines, and the order they
+        // moved to. The same fold replays it.
+        if let Some(target_order_id) = joins {
+            let merged = SalesTableMerged {
+                target_order_id,
+                merged_order_id: order_id,
+            };
+            events.push(self.system_prepare(device_id, now, business_date, &merged)?);
+        }
+        let (envelopes, messages): (Vec<_>, Vec<_>) = events.into_iter().unzip();
 
         // The events AND the idempotency ledger row commit in ONE transaction, so a crash between
         // opening the order and recording it is impossible — either both land or neither
@@ -3809,25 +3949,37 @@ impl<S: EventStore> Edge<S> {
             self.fanout.publish(message);
         }
 
-        {
-            let mut projection = self.lock_projection();
-            // A QR order names a table, so the floor shows it occupied and staff can open the bill;
-            // a delivery or public-API order has none.
-            if let Some(table_id) = table_id {
-                projection.seat_guest_order(table_id, order_id);
-            }
-            // The channel this order actually came in on, so the bill is taxed at its rate rather
-            // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
-            // no table and still has a channel.
-            projection.open_order_origin(order_id, order_channel, table_id);
-            for (line_id, record) in line_records {
-                projection.add_line(line_id, record);
-            }
-        }
+        self.lock_projection().fold_inbound_order(
+            order_id,
+            (order_channel, table_id),
+            line_records,
+            joins,
+        );
         Ok(InboundOrderOpened {
             order_id,
             business_date,
             awaiting_staff_confirmation: holds_for_staff,
+        })
+    }
+
+    /// The table's order a guest's order joins as it arrives (ADR-0160 item 2), if any: a QR order
+    /// at a table, at a store that sets `qr.table_order` to `TABLE_ORDER_JOIN`, that waits for no
+    /// member of staff. One that waits joins when staff confirm it
+    /// ([`Self::confirm_inbound_order`]). Read before the write, as a waiter's line reads the bill
+    /// it must not land after.
+    fn order_joined_on_arrival(
+        &self,
+        session: &EdgeSession,
+        channel: Option<SalesChannel>,
+        table_id: Option<TableId>,
+        holds_for_staff: bool,
+    ) -> Option<OrderId> {
+        let joins = channel == Some(SalesChannel::Qr)
+            && session.qr.table_order() == TableOrder::Join
+            && !holds_for_staff;
+        table_id.filter(|_| joins).and_then(|table_id| {
+            self.lock_projection()
+                .joinable_order_at(table_id, None, session)
         })
     }
 
@@ -3988,6 +4140,12 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::NotAwaitingStaffConfirmation`] rather than writing a second event, so two
     /// devices racing on the same order produce one decision and one audit entry.
     ///
+    /// Where the store sets `qr.table_order` to `TABLE_ORDER_JOIN` (ADR-0160 item 2) and the guest's
+    /// table has an order that can take a line, the confirmed order joins it in the same
+    /// transaction (`sales.table.merged`): its lines are that order's from then on, and the table
+    /// holds that order again. An order with a bill of its own, or at a table with none to join,
+    /// is only confirmed, as before.
+    ///
     /// # Errors
     ///
     /// [`AppError::NotAwaitingStaffConfirmation`] if the order is not a held guest submission or
@@ -4004,10 +4162,41 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::NotAwaitingStaffConfirmation);
         }
 
-        let payload = SalesOrderConfirmedByStaff { order_id };
-        self.commit_and_publish(&ctx, &payload).await?;
-        self.lock_projection()
-            .record_staff_decision(order_id, StaffDecision::Confirmed);
+        // The table's order the guest's lines join, read before the write as a waiter's add-line
+        // reads the bill it must not land after.
+        let session = self.session();
+        let joins = if session.qr.table_order() == TableOrder::Join {
+            let projection = self.lock_projection();
+            projection
+                .order_origin(order_id)
+                .and_then(|origin| origin.table_id)
+                .filter(|_| projection.bill_for_order(order_id).is_none())
+                .and_then(|table_id| {
+                    projection.joinable_order_at(table_id, Some(order_id), &session)
+                })
+        } else {
+            None
+        };
+
+        let confirmed = SalesOrderConfirmedByStaff { order_id };
+        let (envelope, message) = self.prepare(&ctx, &confirmed)?;
+        let mut envelopes = vec![envelope];
+        let mut messages = vec![message];
+        if let Some(target_order_id) = joins {
+            let merged = SalesTableMerged {
+                target_order_id,
+                merged_order_id: order_id,
+            };
+            let (envelope, message) = self.prepare(&ctx, &merged)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+        let mut projection = self.lock_projection();
+        projection.record_staff_decision(order_id, StaffDecision::Confirmed);
+        if let Some(target_order_id) = joins {
+            projection.merge_order(target_order_id, order_id);
+        }
         Ok(())
     }
 
@@ -7446,6 +7635,10 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
+            EventType::SalesTableMerged => {
+                let event: SalesTableMerged = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.merge_order(event.target_order_id, event.merged_order_id);
+            }
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
                     envelope.data.decode().map_err(AppError::Encode)?;
@@ -7866,11 +8059,13 @@ impl<S: EventStore> Edge<S> {
         }
         let gone: Vec<OrderLineId> = {
             let projection = self.lock_projection();
+            // Each line's order as the projection holds it now, rather than the one its note was
+            // held under: a guest's line that joined the table's order is on that order now.
             held.into_iter()
-                .filter(|(order_line_id, order_id)| {
+                .filter(|(order_line_id, _held_under)| {
                     projection.line(*order_line_id).is_some_and(|record| {
                         record.state == OrderLineState::Voided
-                            || (!projection.live.contains(order_id)
+                            || (!projection.live.contains(&record.order_id)
                                 && !projection.still_cooking(*order_line_id, &record))
                     })
                 })

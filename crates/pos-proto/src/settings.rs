@@ -24,6 +24,7 @@
 
 use crate::people::PublishedPermissions;
 use crate::printing::{PublishedPrinting, ReceiptLanguage};
+use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
 use crate::shift::{NoShiftSelling, PublishedShift};
 use crate::wire_enum;
@@ -382,6 +383,27 @@ pub fn register() -> Vec<Setting> {
             summary: "Whether settling a bill prints the guest's receipt. Off, a settle prints \
                       nothing, and the till's print button prints a copy.",
         },
+        Setting {
+            node: PublishedQr::NODE,
+            field: "table_order",
+            shape: SettingShape::Choice {
+                values: choices::<TableOrder>(),
+                default: PublishedQr::default().table_order().as_wire(),
+                // Confirmed by the owner on 2026-10-01 (ADR-0160 item 2): a new store's guest orders
+                // join the table's order. An existing store keeps a separate order until someone
+                // sets it.
+                preset: Some(TableOrder::Join.as_wire()),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "What a guest's QR order does at a table that already has an open order. \
+                      `TABLE_ORDER_JOIN` adds its lines to that order, so the table has one order \
+                      and one bill; where staff confirm a guest's order, its lines join once they \
+                      do. A line that joins keeps the price the guest was shown, and the table's \
+                      order sets its tax and fees. `TABLE_ORDER_SEPARATE` gives the guest's order \
+                      its own order, as before. A table whose bill is already open or paid takes a \
+                      guest's order as its own order either way.",
+        },
     ]
 }
 
@@ -576,6 +598,7 @@ mod tests {
     };
     use crate::people::PublishedPermissions;
     use crate::printing::PublishedPrinting;
+    use crate::qr::PublishedQr;
     use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
     use crate::wire_enum::WireEnum;
@@ -917,6 +940,13 @@ mod tests {
                     "receipt_printed_on_settle" => {
                         Some(json!(printing.receipt_printed_on_settle()))
                     }
+                    _ => None,
+                }
+            }
+            PublishedQr::NODE => {
+                let qr: PublishedQr = serde_json::from_value(document).ok()?;
+                match field {
+                    "table_order" => Some(json!(qr.table_order().as_wire())),
                     _ => None,
                 }
             }

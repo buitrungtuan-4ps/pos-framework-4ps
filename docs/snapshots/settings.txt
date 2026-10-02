@@ -38,6 +38,17 @@ printing.receipt_printed_on_settle	scope=SETTING_SCOPE_TENANT
 printing.receipt_printed_on_settle	since=0.14.1
 printing.receipt_printed_on_settle	value=false
 printing.receipt_printed_on_settle	value=true
+qr.table_order
+qr.table_order	default=TABLE_ORDER_SEPARATE
+qr.table_order	kind=SETTING_KIND_CHOICE
+qr.table_order	preset=TABLE_ORDER_JOIN
+qr.table_order	scope=SETTING_SCOPE_BRAND
+qr.table_order	scope=SETTING_SCOPE_STORE
+qr.table_order	scope=SETTING_SCOPE_STORE_GROUP
+qr.table_order	scope=SETTING_SCOPE_TENANT
+qr.table_order	since=0.14.1
+qr.table_order	value=TABLE_ORDER_JOIN
+qr.table_order	value=TABLE_ORDER_SEPARATE
 session.idle_lock_seconds
 session.idle_lock_seconds	default=0
 session.idle_lock_seconds	kind=SETTING_KIND_INT

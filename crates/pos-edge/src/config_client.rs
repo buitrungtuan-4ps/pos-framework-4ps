@@ -59,6 +59,7 @@ use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
 use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
 use pos_proto::printing::PublishedPrinting;
+use pos_proto::qr::PublishedQr;
 use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
@@ -423,6 +424,20 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 .and_then(|text| serde_json::from_str::<PublishedPrinting>(&text).ok())
             {
                 session.printing = printing;
+            }
+        }
+    }
+    // The settings on the `qr` node (ADR-0160 item 2), read as the `shift` node is: absent puts the
+    // defaults back, unparseable keeps the last. The node's guardrails are read below, field by
+    // field, as they always were.
+    match document.get(PublishedQr::NODE) {
+        None => session.qr = PublishedQr::default(),
+        Some(value) => {
+            if let Some(qr) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedQr>(&text).ok())
+            {
+                session.qr = qr;
             }
         }
     }
@@ -1369,6 +1384,37 @@ mod tests {
         // A document without the node is one in which nothing sets these settings any more.
         let cleared = session_from_config(&strict, &serde_json::json!({ "other": true }));
         assert_eq!(cleared.session_settings, PublishedSession::default());
+    }
+
+    #[test]
+    fn a_qr_node_s_table_order_is_read_beside_its_guardrails_and_an_absent_node_resets_it() {
+        use pos_proto::qr::{PublishedQr, TableOrder};
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.qr.table_order(),
+            TableOrder::Separate,
+            "a guest's order is its own order, as it always was"
+        );
+        let joining = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": {
+                "enabled": true,
+                "staff_confirmation_required": false,
+                "table_order": "TABLE_ORDER_JOIN",
+            } }),
+        );
+        assert_eq!(joining.qr.table_order(), TableOrder::Join);
+        assert!(
+            !joining.qr_staff_confirmation_required,
+            "the guardrail beside it is read as before"
+        );
+
+        let broken = serde_json::json!({ "qr": { "table_order": 7 } });
+        assert_eq!(session_from_config(&joining, &broken).qr, joining.qr);
+
+        let cleared = session_from_config(&joining, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.qr, PublishedQr::default());
     }
 
     #[test]
