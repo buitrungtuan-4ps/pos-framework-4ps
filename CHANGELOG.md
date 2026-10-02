@@ -400,6 +400,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - **Upgrade note:** no event, route, migration, permission or protocol change. No store charges
     a fee yet, so no bill changes.
 
+- **The cloud keeps each tenant's fee rules**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1). A fee rule is written for the
+  tenant, a brand or one store. It is kept in a new table, `fee_rules`, one row per rule and scope,
+  keyed by the rule's `fee_id` and holding the rule in the shape a store is sent it.
+  - `pos_cloud::fees` holds the seam, `FeeRuleStore`, with a bounded in-memory store and the
+    PostgreSQL adapter in `store-postgres`. A contract suite holds the in-memory store to the
+    seam's rules, and the adapter's integration tests hold it to the same ones on a real database.
+  - A row is pricing configuration and carries no personal data. Who last wrote a rule is recorded
+    as a console admin's id.
+  - **Upgrade note:** migration `0075` adds `fee_rules`, isolated by tenant with row-level security
+    like the other configuration tables. It is additive, with no backfill. Nothing reads or writes
+    it until the console's fee routes land, so no store is sent a `fees` node yet. No route, event,
+    permission or protocol version change.
+
 - **A settled bill records each fee and its tax per class**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4, roadmap-v3 B4.1).
   `billing.bill.settled` carries `tax_lines`, one per tax class with its base, rate and tax, and

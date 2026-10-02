@@ -283,6 +283,10 @@ const MIGRATION_0073: &str = include_str!("../migrations/0073_roles_keep_every_t
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4).
 const MIGRATION_0074: &str = include_str!("../migrations/0074_role_permissions_with_approval.sql");
 
+/// The fee rules a tenant writes, at tenant, brand or store scope, merged by fee id down the tree
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+const MIGRATION_0075: &str = include_str!("../migrations/0075_fee_rules.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -638,6 +642,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0074)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0075)
+            .await
             .map_err(unavailable)
     }
 
@@ -895,6 +903,15 @@ impl PostgresStore {
     #[must_use]
     pub fn settings(&self) -> crate::settings::PostgresSettings {
         crate::settings::PostgresSettings::new(self.pool.clone())
+    }
+
+    /// A tenant's fee rules over this pool
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `FeeRuleStore` seam over it.
+    #[must_use]
+    pub fn fee_rules(&self) -> crate::fee_rules::PostgresFeeRules {
+        crate::fee_rules::PostgresFeeRules::new(self.pool.clone())
     }
 
     /// The reason-code authoring store over this pool

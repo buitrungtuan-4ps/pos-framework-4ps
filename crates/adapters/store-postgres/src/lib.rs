@@ -33,6 +33,7 @@ mod config_releases;
 mod config_trees;
 mod connections;
 mod devices;
+mod fee_rules;
 mod fleet;
 mod floor;
 mod inventory;
@@ -79,6 +80,7 @@ pub use config_trees::{
 };
 pub use connections::{ConnectionRow, PostgresConnections};
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
+pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};
 pub use fleet::{FleetStoreRow, PostgresFleet};
 pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
 pub use inventory::{InventoryRow, PostgresInventory};
