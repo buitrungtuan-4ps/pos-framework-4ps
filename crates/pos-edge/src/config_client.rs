@@ -55,7 +55,7 @@ use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::inventory::PublishedInventory;
-use pos_proto::locale::{LocaleSettings, NumberFormat, TaxRateTable};
+use pos_proto::locale::{LocaleSettings, PublishedLocale, PublishedNumberFormat, TaxRateTable};
 use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
@@ -77,85 +77,6 @@ use crate::origins::Origins;
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
-
-/// The published `locale` node: the store's currency, IANA timezone, and business-date cutoff hour
-/// (ADR-0074, Track M4). Each field is applied only if it parses, so a bad value leaves that setting
-/// as the base has it rather than blanking it.
-#[derive(serde::Deserialize)]
-struct PublishedLocale {
-    currency_code: String,
-    /// How many decimal places the currency has (ADR-0134). `#[serde(default)]` because a cloud
-    /// that predates the field must still publish a locale node this edge can apply, and `None`
-    /// then means "leave what the session has" — not zero, which would be the very silent default
-    /// that record is about.
-    #[serde(default)]
-    currency_exponent: Option<u8>,
-    timezone: String,
-    cutoff_hour: u8,
-    /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
-    /// node published before this field existed still applies, as the exclusive posture it meant.
-    #[serde(default)]
-    prices_include_tax: bool,
-    /// What the grand total is rounded to in cash, in minor units (ADR-0105). Absent means no
-    /// rounding, which is what every store did before the field existed.
-    #[serde(default)]
-    cash_rounding_increment: Option<i64>,
-    /// The notes the till offers as quick-cash keys, in minor units. Absent means the exact amount
-    /// only, which is the front end's own fallback, so an older publish changes nothing.
-    #[serde(default)]
-    cash_denominations: Vec<i64>,
-    /// How many days the store keeps a personal record before its own sweep scrubs it (ADR-0107).
-    /// Absent leaves the session's current figure — the country pack's default — rather than zero,
-    /// which would scrub a buyer the moment the invoice was printed.
-    #[serde(default)]
-    default_retention_days: Option<u16>,
-    /// How this store's country writes a number
-    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Absent for a
-    /// cloud that predates the field, which leaves the session's own — the `en-US`-shaped default
-    /// every surface used before the node could say otherwise.
-    #[serde(default)]
-    number_format: Option<PublishedNumberFormat>,
-    /// The language of the store's country, from the cloud's pack for it (ADR-0105), which a receipt
-    /// set to `RECEIPT_LANGUAGE_COUNTRY` prints in (ADR-0160). Absent for a cloud that predates the
-    /// field, and such a receipt prints in the display language.
-    #[serde(default)]
-    country_language: Option<String>,
-}
-
-/// A published number format, in the permissive shape the rest of this struct uses.
-///
-/// Separators are `String` rather than `char` and are narrowed on the way in, for the reason
-/// `currency_code` is a `String` here and a `CurrencyCode` after: a value this struct cannot
-/// deserialize takes the **whole** locale node down with it, and a store that loses its currency and
-/// its timezone because somebody published a two-character group separator is a worse outcome than
-/// one that keeps the format it had.
-#[derive(Debug, Clone, serde::Deserialize)]
-struct PublishedNumberFormat {
-    decimal_separator: String,
-    group_separator: String,
-    digits_per_group: u8,
-}
-
-impl PublishedNumberFormat {
-    /// The domain form, or `None` when the publish does not describe one.
-    ///
-    /// A separator has to be exactly one character — not zero, which would run the digits together,
-    /// and not two, which no formatter here can place. A group of zero digits would loop forever in
-    /// any grouping routine that trusted it.
-    fn validate(&self) -> Option<NumberFormat> {
-        let mut decimal = self.decimal_separator.chars();
-        let mut group = self.group_separator.chars();
-        let (decimal_separator, group_separator) = (decimal.next()?, group.next()?);
-        if decimal.next().is_some() || group.next().is_some() || self.digits_per_group == 0 {
-            return None;
-        }
-        Some(NumberFormat {
-            decimal_separator,
-            group_separator,
-            digits_per_group: self.digits_per_group,
-        })
-    }
-}
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
 /// `pos-core` catalogue (§9) does not know — an older edge simply ignores a permission it predates
@@ -632,6 +553,8 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
     // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
     // rather than resetting the store's business date to UTC (the never-blank rule, per field).
+    // Read through the country's view of the node ([`PublishedLocale`]), whose required fields keep a
+    // node carrying only settings out of this branch.
     if let Some(locale) = document
         .get("locale")
         .and_then(|value| serde_json::to_string(value).ok())
@@ -2411,6 +2334,100 @@ mod tests {
         assert_eq!(beside.qr, base.qr, "the setting keeps what it had");
     }
 
+    /// The `locale` node, read through the country's view of it in `pos-proto` (`PublishedLocale`),
+    /// leaves the session's value where a field is absent or malformed, as the edge's own struct did:
+    /// whole, and then field by field, with the four fields the node states outright still applied
+    /// as stated.
+    #[test]
+    fn a_typed_locale_node_leaves_the_sessions_value_where_its_field_is_absent_or_malformed() {
+        // A node that does not parse as the country's view, whether it lacks a required field,
+        // carries only settings, or holds a value of the wrong kind, leaves every field the session
+        // has.
+        let store = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "INR",
+                "currency_exponent": 2,
+                "timezone": "Asia/Kolkata",
+                "cutoff_hour": 6,
+                "prices_include_tax": true,
+                "cash_rounding_increment": 100,
+                "cash_denominations": [1_000, 2_000],
+                "default_retention_days": 180,
+                "number_format": {
+                    "decimal_separator": ",",
+                    "group_separator": " ",
+                    "digits_per_group": 2,
+                },
+                "country_language": "hi",
+            }}),
+        );
+        let country = |session: &EdgeSession| {
+            (
+                session.currency,
+                session.currency_exponent,
+                session.timezone.iana_name().map(str::to_owned),
+                session.cutoff,
+                session.prices_include_tax,
+                session.cash_rounding_increment,
+                session.cash_denominations.clone(),
+                session.retention_days,
+                session.number_format.clone(),
+                session.country_language.clone(),
+            )
+        };
+        for document in [
+            serde_json::json!({ "locale": { "tax_rounding": "TAX_ROUNDING_DOWN" } }),
+            serde_json::json!({ "locale": { "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" } }),
+            serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": "4",
+            }}),
+            serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+                "cash_rounding_increment": "1000",
+            }}),
+            serde_json::json!({ "locale": null }),
+        ] {
+            assert_eq!(
+                country(&session_from_config(&store, &document)),
+                country(&store),
+                "{document}"
+            );
+        }
+
+        // A node that parses applies field by field: a field it leaves out, or one that does not
+        // narrow to the session's type, leaves the session's value...
+        let partial = session_from_config(
+            &store,
+            &serde_json::json!({ "locale": {
+                "currency_code": "dong",
+                "timezone": "Mars/Olympus_Mons",
+                "cutoff_hour": 24,
+                "default_retention_days": 0,
+                "number_format": {
+                    "decimal_separator": "",
+                    "group_separator": ".",
+                    "digits_per_group": 3,
+                },
+            }}),
+        );
+        assert_eq!(partial.currency, store.currency);
+        assert_eq!(partial.currency_exponent, store.currency_exponent);
+        assert_eq!(partial.timezone.iana_name(), store.timezone.iana_name());
+        assert_eq!(partial.cutoff, store.cutoff);
+        assert_eq!(partial.retention_days, store.retention_days);
+        assert_eq!(partial.number_format, store.number_format);
+        // ...and the four it states outright apply as stated, absent included, as before the type.
+        assert!(!partial.prices_include_tax);
+        assert_eq!(partial.cash_rounding_increment, None);
+        assert!(partial.cash_denominations.is_empty());
+        assert_eq!(partial.country_language, None);
+    }
+
     #[test]
     fn the_edge_bounds_event_retention_as_the_cloud_does() {
         // Both sides take the bounds from the `retention` node's type in `pos-proto`; this pins the
@@ -2524,14 +2541,13 @@ mod tests {
 
     /// Every field a published `locale` node carries lands somewhere on the session.
     ///
-    /// The edge half of the pair. `pos-cloud` has a test asserting its node carries exactly the keys
-    /// on a written-down list; this asserts that each of those keys actually *does* something here.
-    ///
-    /// Two lists rather than one, because no crate depends on both and adding a dependency to make a
-    /// test possible is the wrong trade. What each list buys is that its own side is checked against
-    /// real behaviour instead of against nothing: a key the cloud stopped sending fails there, and a
-    /// key this struct stopped applying fails here. What neither can catch is a field added to both
-    /// lists and to neither implementation — which is what the per-field tests above are for.
+    /// The edge half of the pair. `pos-cloud` has a test asserting its node parses as
+    /// `pos_proto::locale::PublishedLocale`, the type this branch reads, states every field the type
+    /// reads, and sends nothing else but the cloud's own; this asserts that each of those fields
+    /// actually *does* something here. Each side is checked against real behaviour instead of
+    /// against nothing: a key the cloud stopped sending fails there, and a field this branch stopped
+    /// applying fails here. What neither can catch is a field added to the type that this branch
+    /// never applies and this test never names — which is what the per-field tests above are for.
     ///
     /// Every value below differs from `EdgeSession::bootstrap`, deliberately: a field that silently
     /// stopped applying would still match a bootstrap this test had copied.
