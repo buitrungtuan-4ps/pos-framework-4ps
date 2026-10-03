@@ -130,6 +130,7 @@ fn session(table_order: TableOrder, hold: bool) -> EdgeSession {
         .with_tax_rates(rates);
     session.qr = PublishedQr {
         table_order: Open::from_known(table_order),
+        ..PublishedQr::default()
     };
     session.qr_staff_confirmation_required = hold;
     session

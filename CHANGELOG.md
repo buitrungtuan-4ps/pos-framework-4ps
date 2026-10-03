@@ -107,6 +107,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The cloud and the edge read the `qr` and `retention` nodes through one definition**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
+  consequences accepted). Each side read these nodes with code of its own, and a test on each side
+  pinned the numbers the other used.
+  - `pos_proto::qr::PublishedQr` carries the guardrails the console's QR form writes beside
+    `table_order`: `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`
+    and `business_hours`. Each is read field by field, as before: a field holding anything but its
+    JSON type reads as absent and takes no other field down, and the guardrails are read apart from
+    `table_order`, so a malformed setting does not stop them. The edge's guardrails and the cloud's
+    guest intake and QR switch read through it.
+  - `pos_proto::retention::PublishedRetention` is the `retention` node, and `EVENT_LOG_DAYS`
+    (30 to 3650 days) is one constant both sides use; `pos_edge::EVENT_LOG_DAYS` and
+    `pos_cloud::http::EVENT_LOG_DAYS` re-export it. `PUT /admin/config/retention` keeps its body,
+    its `400` and its message.
+  - **Upgrade note:** no wire change. The cloud builds and publishes these nodes as before, so no
+    store's configuration version or checksum changes, and a v0.14.0 edge reads them as it did. One
+    intended difference: a `qr` node that is not an object no longer sets `table_order`; earlier
+    releases read a single-value array positionally. No writer produces such a node. A crate that
+    builds a `PublishedQr` field by field adds `..PublishedQr::default()`.
+
 - **The console offers only the capability switches a release reads**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 5). The Config screen offered `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` and

@@ -346,12 +346,11 @@ impl StaffRoster {
 }
 
 /// The range a store's [`EdgeSession::event_log_days`] may take
-/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
-///
-/// Thirty days at least, so a typo cannot have a store forget last month; ten years at most, so a
-/// stray zero cannot keep a log forever. The cloud refuses a publish outside it, and the edge
-/// ignores one that arrives anyway, keeping what it had.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u16> = 30..=3650;
+/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): the
+/// one the cloud refuses a publish outside, from the `retention` node's own type
+/// ([`pos_proto::retention`]). The edge ignores a value outside it that arrives anyway, keeping what
+/// it had.
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine

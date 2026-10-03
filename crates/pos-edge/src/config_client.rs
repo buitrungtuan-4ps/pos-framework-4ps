@@ -63,6 +63,7 @@ use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
 use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::PublishedQr;
 use pos_proto::reason_codes::PublishedReasonCodes;
+use pos_proto::retention::PublishedRetention;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
@@ -435,7 +436,7 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // field, as they always were.
     match document.get(PublishedQr::NODE) {
         None => session.qr = PublishedQr::default(),
-        Some(value) => {
+        Some(value) if value.is_object() => {
             if let Some(qr) = serde_json::to_string(value)
                 .ok()
                 .and_then(|text| serde_json::from_str::<PublishedQr>(&text).ok())
@@ -443,6 +444,10 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 session.qr = qr;
             }
         }
+        // A node that is not an object keeps the last too, as it carries no guardrail either
+        // ([`PublishedQr::guardrails`]): the whole node is read only as an object, where serde alone
+        // would read an array positionally into the node's fields.
+        Some(_) => {}
     }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
@@ -598,29 +603,28 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // read with the capabilities above (ADR-0160 decision 5), with `qr.enabled` below to tell it
     // from the flag as it was before the switch. An absent field leaves the base value (default
     // `true`, ADR-0057), so a store that never published the node still holds guest orders for
-    // staff.
-    if let Some(required) = document
-        .get("qr")
-        .and_then(|node| node.get("staff_confirmation_required"))
-        .and_then(serde_json::Value::as_bool)
+    // staff. Read field by field, apart from the node's setting above
+    // ([`PublishedQr::guardrails`]), so one malformed field takes no other down.
+    let guardrails = document
+        .get(PublishedQr::NODE)
+        .and_then(PublishedQr::guardrails);
+    if let Some(required) = guardrails
+        .as_ref()
+        .and_then(|qr| qr.staff_confirmation_required)
     {
         session.qr_staff_confirmation_required = required;
     }
     // `qr.enabled` as this document sets it, read only beside QR ordering's switch: a cloud that
     // knows the switch publishes it equal to the switch, so a `false` switch beside a `qr.enabled`
     // that is not `false` is the flag from before the switch (`EdgeSession::qr_ordering_switched_off`).
-    session.qr_enabled_published = document
-        .get("qr")
-        .and_then(|node| node.get("enabled"))
-        .and_then(serde_json::Value::as_bool);
+    session.qr_enabled_published = guardrails.and_then(|qr| qr.enabled);
     // The `retention` node (ADR-0145): how many days this store keeps a synced event. Outside the
-    // range, or absent, leaves the value it had, so a malformed publish never shortens a log.
+    // range, or absent, leaves the value it had, so a malformed publish never shortens a log
+    // ([`PublishedRetention::event_log_days`]).
     if let Some(days) = document
-        .get("retention")
-        .and_then(|node| node.get("event_log_days"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|days| u16::try_from(days).ok())
-        .filter(|days| crate::app::EVENT_LOG_DAYS.contains(days))
+        .get(PublishedRetention::NODE)
+        .and_then(PublishedRetention::read)
+        .and_then(|retention| retention.event_log_days())
     {
         session.event_log_days = days;
     }
@@ -2364,9 +2368,53 @@ mod tests {
         assert!(!unchanged.qr_staff_confirmation_required);
     }
 
+    /// The `qr` guardrails and the `retention` node, read through their types in `pos-proto`, leave
+    /// the session's value wherever a field is absent or malformed, as their field-by-field
+    /// reading did before the types; a malformed setting beside the guardrails still does not stop
+    /// them being read; and a `qr` node that is not an object sets nothing, its setting included.
+    #[test]
+    fn a_typed_node_leaves_the_sessions_value_where_its_field_is_absent_or_malformed() {
+        let mut base = EdgeSession::bootstrap();
+        base.qr_staff_confirmation_required = false;
+        base.event_log_days = 45;
+        for document in [
+            serde_json::json!({ "other": true }),
+            serde_json::json!({ "qr": {}, "retention": {} }),
+            serde_json::json!({
+                "qr": { "staff_confirmation_required": "no", "enabled": 1 },
+                "retention": { "event_log_days": "90" },
+            }),
+            serde_json::json!({ "qr": [true], "retention": [90] }),
+            serde_json::json!({ "qr": null, "retention": { "event_log_days": 4_000 } }),
+            serde_json::json!({ "qr": "on", "retention": { "event_log_days": 90.0 } }),
+            // An array is not an object, whatever it holds: serde would read one positionally.
+            serde_json::json!({ "qr": ["TABLE_ORDER_JOIN", true] }),
+            serde_json::json!({ "qr": ["TABLE_ORDER_JOIN"] }),
+        ] {
+            let kept = session_from_config(&base, &document);
+            assert!(!kept.qr_staff_confirmation_required, "{document}");
+            assert_eq!(kept.qr_enabled_published, None, "{document}");
+            assert_eq!(kept.qr, base.qr, "{document}");
+            assert_eq!(kept.event_log_days, 45, "{document}");
+        }
+
+        let beside = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": {
+                "table_order": 7,
+                "staff_confirmation_required": true,
+                "enabled": false,
+            } }),
+        );
+        assert!(beside.qr_staff_confirmation_required);
+        assert_eq!(beside.qr_enabled_published, Some(false));
+        assert_eq!(beside.qr, base.qr, "the setting keeps what it had");
+    }
+
     #[test]
     fn the_edge_bounds_event_retention_as_the_cloud_does() {
-        // `pos_cloud::http::EVENT_LOG_DAYS` holds the same numbers, pinned by its own test.
+        // Both sides take the bounds from the `retention` node's type in `pos-proto`; this pins the
+        // numbers, as `pos_cloud`'s own test does.
         assert_eq!(crate::app::EVENT_LOG_DAYS, 30..=3650);
     }
 
