@@ -255,6 +255,11 @@ export interface MenuResponse {
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.
   accepted_tender: string[] | null;
+  // The tip keys the pay screen offers, each a whole percentage of the bill, in the store's order,
+  // without a key set to 0 or to a percentage an earlier key offers (ADR-0160 decision 2). Empty when
+  // no key is left, and the pay screen then shows no tip row. Absent from an edge older than the
+  // setting, and the till then offers the three keys it always did.
+  tip_percents?: number[];
 }
 
 // One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display

@@ -143,6 +143,18 @@ fn kitchen_stations() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("kitchen-stations"))
 }
 
+/// Whether this demo store sets its own tip keys — `POS_DEMO_PROFILE=tender-keys`.
+///
+/// That profile publishes the `tender_keys` node [`demo_tender_keys`] builds
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2), so the browser gate can see the pay screen offer a store's own keys. Every other
+/// profile publishes no `tender_keys` node, which is what a store that predates the settings runs:
+/// five, ten and fifteen percent.
+fn tender_keys() -> bool {
+    std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("tender-keys"))
+}
+
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
 ///
 /// That profile publishes no `permissions` node, which is what a store the console has not staffed
@@ -295,6 +307,11 @@ fn demo_menu() -> MenuBook {
 /// `POS_DEMO_PROFILE=kitchen-stations` publishes the same store with a kitchen and a bar, whose
 /// tickets are late after two minutes and ten. See [`kitchen_stations`].
 ///
+/// # The tender-keys profile
+///
+/// `POS_DEMO_PROFILE=tender-keys` publishes the same store with a `tender_keys` node that sets its
+/// own tip keys. See [`tender_keys`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -366,6 +383,13 @@ pub fn config_document() -> Option<serde_json::Value> {
     {
         object.insert("stations".to_owned(), demo_stations());
     }
+    // Published only on its own profile, so every other flow offers five, ten and fifteen percent,
+    // as a store that predates the settings does.
+    if tender_keys()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("tender_keys".to_owned(), demo_tender_keys());
+    }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
     if !staffed()
@@ -397,6 +421,15 @@ fn demo_stations() -> serde_json::Value {
             },
         ],
         "default_station_id": kitchen,
+    })
+}
+
+/// A store's own tip keys, ten and twenty percent with the middle key hidden (ADR-0160 decision 2).
+fn demo_tender_keys() -> serde_json::Value {
+    serde_json::json!({
+        "first_tip_percent": 10,
+        "second_tip_percent": 0,
+        "third_tip_percent": 20,
     })
 }
 
@@ -490,7 +523,9 @@ mod tests {
     use pos_proto::ids::MenuItemId;
     use pos_proto::ulid::Ulid;
 
-    use super::{DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_stations};
+    use super::{
+        DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_stations, demo_tender_keys,
+    };
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
 
@@ -636,5 +671,13 @@ mod tests {
         let bar = session.stations.stations()[1].station_id;
         assert_eq!(session.resolve_station(menu_item(103), None), Some(bar));
         assert_eq!(session.resolve_station(menu_item(102), None), Some(kitchen));
+    }
+
+    /// The tender-keys profile's node offers the store's own two tip keys, without the one it hid.
+    #[test]
+    fn the_tender_keys_node_offers_the_stores_two_tip_keys() {
+        let document = serde_json::json!({ "tender_keys": demo_tender_keys() });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(session.tender_keys.tip_percents(), vec![10, 20]);
     }
 }

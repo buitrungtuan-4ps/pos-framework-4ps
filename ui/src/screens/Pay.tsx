@@ -39,6 +39,7 @@ import {
   settle,
   splitBill,
   tenderAccepted,
+  tipPercents,
   tipsEnabled,
   voidBill,
   waiveFee,
@@ -62,11 +63,6 @@ const DISCOUNT = "REASON_ACTION_DISCOUNT";
 // service charge is not necessarily one for taking money off the food.
 const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 
-// The shares of the bill the tip row offers. Three, because the row has four columns and one of
-// them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
-// makes by tapping the nearest of three.
-const TIP_PERCENTS = [5, 10, 15] as const;
-
 // The guest counts an even split offers, two to six, in one row like the tips. A second row for the
 // rarer larger party would push the tenders below the fold on a phone for every bill, split or not;
 // splitting more ways than six is left for when a store asks for it.
@@ -84,16 +80,16 @@ function methodKey(method: string): MessageKey {
   }
 }
 
-// Whether a set of tip keys is still worth offering: every key positive, and every key larger than
-// the one before it.
+// Whether a set of tip keys is still worth offering: every key positive, and no two the same.
 //
 // The guard on the cash snap below. On a bill of 8,000₫ a 1,000₫ increment turns 5/10/15% into 0,
 // 1,000 and 1,000 — a dead button and a duplicate, on a row whose buttons carry an amount and
 // nothing else, so a cashier cannot tell which is which or why one of them does nothing. The exact
 // figures are less tidy and strictly more useful, so the snap stands down rather than degrading the
-// row it was meant to improve.
+// row it was meant to improve. Asked of the keys in the store's order, which need not be ascending
+// (ADR-0160), so it compares each key with every other rather than with the one before it.
 function distinctAndSpendable(keys: readonly number[]): boolean {
-  return keys.every((amount, index) => amount > (index === 0 ? 0 : (keys[index - 1] ?? 0)));
+  return keys.every((amount, index) => amount > 0 && keys.indexOf(amount) === index);
 }
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
@@ -323,7 +319,10 @@ export function Pay() {
   const typeTender = () => setTyping(true);
 
   // Tip keys as a share of the bill, plus a clear. Percentages rather than fixed amounts so they
-  // scale with the check.
+  // scale with the check. The store's own keys, in its order: five, ten and fifteen percent until it
+  // sets its own (ADR-0160 decision 2). At most three, because the row has four columns and one of
+  // them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
+  // makes by tapping the nearest of three.
   //
   // `(total * percent) / 100` is what this line used to say, and it is a float division wearing an
   // integer's clothes. It was invisible for as long as every figure on the check was a round
@@ -346,7 +345,7 @@ export function Pay() {
   // and the exact figures are used instead. Better a key of 400₫ a cashier rounds in their head
   // than three identical buttons they cannot choose between.
   const tipKeys = () => {
-    const exact = TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+    const exact = tipPercents().map((percent) => percentOf(total(), percent));
     const increment = cashRoundingIncrement();
     if (increment === null) {
       return exact;
@@ -1164,7 +1163,11 @@ export function Pay() {
 
             {/* The tip, the buyer and the tenders are taking payment (ADR-0158). */}
             <Show when={can("billing.payment.take")}>
-            <Show when={tipsEnabled() && ways() === null}>
+            {/*
+              No tip key left to offer, and the row is not drawn: with no amount to type, a lone
+              "No tip" would offer nothing (ADR-0160 decision 2).
+            */}
+            <Show when={tipsEnabled() && ways() === null && tipPercents().length > 0}>
               <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
               <div class="grid grid-cols-4 gap-2">
                 <button

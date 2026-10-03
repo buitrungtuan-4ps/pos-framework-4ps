@@ -64,6 +64,7 @@ use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::tender_keys::PublishedTenderKeys;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 use crate::device_revocations::DeviceRevocations;
@@ -542,6 +543,21 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<PublishedTender>(&text).ok())
     {
         session.accepted_tender = Some(accepted_tender(&published));
+    }
+    // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
+    // settings like `shift`, so absent puts the defaults back and a node that is not an object keeps
+    // the last; a field it carries that nobody can read is that field's default
+    // ([`PublishedTenderKeys`]).
+    match document.get(PublishedTenderKeys::NODE) {
+        None => session.tender_keys = PublishedTenderKeys::default(),
+        Some(value) => {
+            if let Some(keys) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedTenderKeys>(&text).ok())
+            {
+                session.tender_keys = keys;
+            }
+        }
     }
     // The `qr` guardrail node (P11b, authored via ADR-0080, Track M7): the edge reads only
     // `staff_confirmation_required` — whether a table-bearing QR order waits for staff before the
@@ -2107,6 +2123,74 @@ mod tests {
         let unchanged = session_from_config(&rebuilt, &serde_json::json!({ "other": true }));
         assert!(!unchanged.channel_enabled(SalesChannel::Delivery));
         assert!(!unchanged.tender_accepted(PaymentMethod::Card));
+    }
+
+    /// The tip keys are what the `tender_keys` node sets: the defaults where it sets nothing or the
+    /// node is gone, each key as set, once, a key at `0` left out, and a value out of range or
+    /// unreadable read as its default. A node that is not an object keeps the keys the store had.
+    #[test]
+    fn the_tip_keys_are_what_the_tender_keys_node_sets_and_today_s_keys_otherwise() {
+        let keys = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "tender_keys": node }))
+                .tender_keys
+                .tip_percents()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.tender_keys.tip_percents(), vec![5, 10, 15]);
+        assert_eq!(keys(&base, serde_json::json!({})), vec![5, 10, 15]);
+
+        let set = serde_json::json!({
+            "first_tip_percent": 10, "second_tip_percent": 0, "third_tip_percent": 20,
+        });
+        let store = session_from_config(&base, &serde_json::json!({ "tender_keys": set }));
+        assert_eq!(store.tender_keys.tip_percents(), vec![10, 20]);
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 10, "second_tip_percent": 10, "third_tip_percent": 15,
+                })
+            ),
+            vec![10, 15],
+            "a percentage an earlier key offers is offered once"
+        );
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 0, "second_tip_percent": 0, "third_tip_percent": 0,
+                })
+            ),
+            Vec::<u8>::new(),
+            "every key hidden"
+        );
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 101, "second_tip_percent": "ten", "third_tip_percent": -5,
+                })
+            ),
+            vec![5, 10, 15],
+            "out of range or unreadable reads as the default"
+        );
+
+        assert_eq!(
+            session_from_config(&store, &serde_json::json!({}))
+                .tender_keys
+                .tip_percents(),
+            vec![5, 10, 15],
+            "a document with no tender_keys node carries no setting"
+        );
+        assert_eq!(
+            keys(&store, serde_json::json!("not a node")),
+            vec![10, 20],
+            "a node that cannot be read keeps the keys the store had"
+        );
+        assert_eq!(
+            store.accepted_tender, None,
+            "the keys say nothing about the tender a store takes"
+        );
     }
 
     #[test]

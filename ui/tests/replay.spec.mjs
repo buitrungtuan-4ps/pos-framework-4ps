@@ -1826,6 +1826,91 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
   }
 });
 
+// A store's own tip keys (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=tender-keys` publishes keys of ten, nothing and twenty percent, so the row offers
+// two keys in the store's order, without the one it hid: 9,790₫ and 19,580₫ of the salad's 97,900₫.
+// Then the edge says the store hides every key, and the row is not drawn at all — with no amount to
+// type, a lone "No tip" would offer nothing — while the cash tender still takes the money.
+test("a store's own tip keys are offered in its order, and a store that hides them all has no tip row", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["9,790₫", "19,580₫"]);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toBeVisible();
+
+    let hidden = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.tip_percents = [];
+      hidden += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]').first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toHaveCount(0);
+    expect(hidden, "the price book the till read hid every key").toBeGreaterThan(0);
+
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no tip keys, and an edge too old to send them, both offer the keys the till
+// always offered: five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the salad's 97,900₫.
+//
+// The second half is the one only a browser can see. An edge from before the settings sends no
+// `tip_percents`, and the till must fall back to its own three rather than offer none. The price book
+// is read from the real edge and the field taken out on the way, which is what an older edge's
+// answer is.
+test("a store that sets no tip keys, and an edge too old to send them, offer today's three", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    const today = ["4,895₫", "9,790₫", "14,685₫"];
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.tip_percents;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A bill larger than the largest note takes any amount the guest hands over.
 //
 // The quick-cash keys were "every note at least as large as the bill". That is the same answer while

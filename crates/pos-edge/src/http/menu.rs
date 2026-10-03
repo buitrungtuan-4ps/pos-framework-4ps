@@ -51,6 +51,10 @@
 //! table-service application. It landed every store on a floor plan and offered every store a
 //! kitchen board, including the ones that have neither.
 //!
+//! `tip_percents` is a published setting rather than a flag, and arrived under the same rule: the pay
+//! screen's tip row reads it in the change that added it
+//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+//!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 //!
 //! # A channel may be named
@@ -137,6 +141,17 @@ pub(crate) struct MenuResponse {
     /// restriction that happens to allow everything" — and so a method added to the enum later is
     /// accepted by an unrestricted store without a config change.
     accepted_tender: Option<Vec<&'static str>>,
+    /// The tip keys the pay screen offers, each a whole percentage of the bill, in the order the
+    /// store's `tender_keys` node names them: a key set to `0`, or to a percentage an earlier key
+    /// offers, is left out
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2). `[5, 10, 15]` until a store sets its own, and empty when no key is left, which
+    /// the till takes as no tip row at all.
+    ///
+    /// Beside `tips_enabled`, which still decides whether the till asks for a tip at all. A till
+    /// older than the field ignores it, and a till reading an edge older than the field offers the
+    /// three keys it always did.
+    tip_percents: Vec<u8>,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -342,6 +357,7 @@ where
                 .accepted_tender
                 .as_ref()
                 .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
+            tip_percents: session.tender_keys.tip_percents(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu

@@ -72,6 +72,7 @@ use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
@@ -580,6 +581,11 @@ pub struct EdgeSession {
     /// The payment methods this store accepts, from the `tender` config node (ADR-0080, M7). `None`
     /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
+    /// The keys the pay screen offers, from the `tender_keys` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): its tip keys. The defaults, five, ten and fifteen percent, in the bootstrap and
+    /// wherever the node sets none.
+    pub tender_keys: PublishedTenderKeys,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
@@ -752,6 +758,7 @@ impl EdgeSession {
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
+            tender_keys: PublishedTenderKeys::default(),
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,
