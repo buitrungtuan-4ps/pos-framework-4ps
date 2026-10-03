@@ -115,6 +115,7 @@ use pos_proto::printing::ReceiptLanguage;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
+use pos_proto::session::PublishedSession;
 use pos_proto::settings::{SettingScope, ValueRefusal};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
@@ -241,7 +242,7 @@ use crate::releases::{
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
-use crate::settings::SettingsStore;
+use crate::settings::{SettingsStore, SettingsStoreError};
 use crate::starting_roles::StartingRoles;
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
@@ -5995,6 +5996,8 @@ struct PeopleState<P, R, Cfg, A, C> {
     registry: R,
     /// The tenant's store groups, through which a group assignment reaches its stores (ADR-0122).
     groups: Arc<dyn GroupMembership>,
+    /// The fewest digits the tenant lets a PIN have, which the PIN route applies (ADR-0160).
+    pin_minimum: Arc<dyn PinMinimum>,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -6047,6 +6050,42 @@ where
                 status: group.record.status,
                 store_ids,
             }))
+        })
+    }
+}
+
+/// What the PIN route reads of a tenant's settings: the fewest digits a PIN may have,
+/// `session.pin_min_length`
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2). A trait object rather than another type parameter on [`PeopleState`], for the reason
+/// [`GroupMembership`] gives: one handler reads it.
+trait PinMinimum: Send + Sync {
+    /// The fewest digits a PIN set now may have at `tenant_id`: the value the tenant wrote for every
+    /// store, read through [`PublishedSession::pin_min_length`] so its bounds and its default, four,
+    /// are the register's.
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>>;
+}
+
+/// The register key the PIN route reads.
+const PIN_MIN_LENGTH_KEY: &str = "session.pin_min_length";
+
+impl<S> PinMinimum for S
+where
+    S: SettingsStore + Send + Sync,
+{
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>> {
+        Box::pin(async move {
+            let tenant = tenant_id.as_ulid().to_string();
+            let written = self.list(tenant_id).await?.into_iter().find(|value| {
+                value.setting_key == PIN_MIN_LENGTH_KEY
+                    && value.scope.known() == SettingScope::Tenant
+                    && value.scope_id == tenant
+            });
+            let session = PublishedSession {
+                pin_min_length: written.and_then(|value| value.value.as_i64()),
+                ..PublishedSession::default()
+            };
+            Ok(session.pin_min_length())
         })
     }
 }
@@ -6326,10 +6365,16 @@ struct CreateAssignmentRequest {
     role_template_id: String,
 }
 
-/// A PIN must be 4–8 digits. Its defence is the Argon2id cost plus the edge's attempt rate-limit, not
-/// length (ADR-0030/0070); this only rejects the obviously-wrong (non-digits, too short/long).
-fn pin_is_well_formed(pin: &str) -> bool {
-    (4..=8).contains(&pin.len()) && pin.bytes().all(|byte| byte.is_ascii_digit())
+/// The most digits a PIN may have.
+const PIN_MAX_DIGITS: u32 = 8;
+
+/// A PIN must be digits, from `fewest` to [`PIN_MAX_DIGITS`] of them: four to eight until the tenant
+/// sets a minimum of its own (`session.pin_min_length`, ADR-0160). Its defence is the Argon2id cost
+/// plus the edge's attempt lockout, not its length (ADR-0030/0070); the minimum is the tenant's
+/// policy, and this otherwise only rejects the obviously wrong.
+fn pin_is_well_formed(pin: &str, fewest: u32) -> bool {
+    u32::try_from(pin.len()).is_ok_and(|digits| (fewest..=PIN_MAX_DIGITS).contains(&digits))
+        && pin.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Hashes a PIN with Argon2id under a fresh 16-byte CSPRNG salt — the same primitive and shape as
@@ -6381,10 +6426,13 @@ fn people_entropy_unavailable() -> Response {
 /// assignment to a group or every store publish the `permissions` node to every store the change
 /// reaches before they answer, and answer with each store's outcome; every other write publishes as
 /// before, when someone presses publish.
-pub fn people_router<P, R, G, Cfg, A, C>(
+///
+/// Setting a PIN reads the tenant's `settings` for the fewest digits a PIN may have (ADR-0160).
+pub fn people_router<P, R, G, St, Cfg, A, C>(
     people: P,
     registry: R,
     groups: G,
+    settings: St,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -6394,6 +6442,7 @@ where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
     G: StoreGroupStore + Send + Sync + 'static,
+    St: SettingsStore + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6438,6 +6487,7 @@ where
             people,
             registry,
             groups: Arc::new(groups),
+            pin_minimum: Arc::new(settings),
             config_trees,
             admin,
             clock,
@@ -6834,6 +6884,11 @@ where
 /// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
 /// returned, stored raw, or **audited** — the entry records only that a PIN was set, by whom
 /// (ADR-0070).
+///
+/// A PIN has at least the digits the tenant's `session.pin_min_length` asks for, four where it asks
+/// for none, and at most eight (ADR-0160). This is the one place the minimum is applied: the edge
+/// holds only a PIN's hash. Raising the minimum leaves a PIN already set as it is. If the tenant's
+/// settings cannot be read, the PIN is refused rather than held to four.
 async fn admin_set_employee_pin<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6865,10 +6920,14 @@ where
         Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
         Err(refusal) => return refusal,
     };
-    if !pin_is_well_formed(&request.pin) {
+    let fewest = match state.pin_minimum.fewest_digits(tenant_id).await {
+        Ok(fewest) => fewest,
+        Err(error) => return people_error_response(&error),
+    };
+    if !pin_is_well_formed(&request.pin, fewest) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
-            "the PIN must be 4 to 8 digits",
+            format!("the PIN must be {fewest} to {PIN_MAX_DIGITS} digits"),
             &[("pin", "OUT_OF_RANGE")],
         );
     }
@@ -19269,7 +19328,7 @@ fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Respon
 }
 
 /// The `503` for a settings store that did not answer.
-fn settings_store_error_response(error: &crate::settings::SettingsStoreError) -> Response {
+fn settings_store_error_response(error: &SettingsStoreError) -> Response {
     tracing::error!(%error, "the settings store failed");
     service_unavailable("settings")
 }

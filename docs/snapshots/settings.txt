@@ -115,6 +115,14 @@ session.lockout_minutes	scope=SETTING_SCOPE_STORE_GROUP
 session.lockout_minutes	scope=SETTING_SCOPE_TENANT
 session.lockout_minutes	since=0.14.1
 session.lockout_minutes	unit=SETTING_UNIT_MINUTES
+session.pin_min_length
+session.pin_min_length	default=4
+session.pin_min_length	kind=SETTING_KIND_INT
+session.pin_min_length	max=8
+session.pin_min_length	min=4
+session.pin_min_length	scope=SETTING_SCOPE_TENANT
+session.pin_min_length	since=0.0.0
+session.pin_min_length	unit=SETTING_UNIT_COUNT
 session.sign_in_idle_timeout_minutes
 session.sign_in_idle_timeout_minutes	default=30
 session.sign_in_idle_timeout_minutes	kind=SETTING_KIND_INT

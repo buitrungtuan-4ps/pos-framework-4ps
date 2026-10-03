@@ -24,6 +24,7 @@ import type {
   PermissionsPublishReport,
   RoleTemplate,
   StoreGroup,
+  WrittenSetting,
 } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -63,6 +64,28 @@ import {
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
+/** The most digits a PIN may have, and the fewest while the tenant asks for no more (ADR-0160). */
+const PIN_MOST_DIGITS = 8;
+const PIN_FEWEST_DIGITS = 4;
+
+/**
+ * The fewest digits the tenant lets a PIN have, as the cloud reads it: the number written for
+ * `session.pin_min_length` when it is a whole number from 4 to 8, else 4. The setting is written
+ * for the whole tenant and nowhere narrower, and `values` is the tenant's own list, so its one
+ * tenant-scope row is the value.
+ */
+function pinFewestOf(values: readonly WrittenSetting[]): number {
+  const fewest = values.find(
+    (row) => row.setting_key === "session.pin_min_length" && row.scope === "SETTING_SCOPE_TENANT",
+  )?.value;
+  return typeof fewest === "number" &&
+    Number.isInteger(fewest) &&
+    fewest >= PIN_FEWEST_DIGITS &&
+    fewest <= PIN_MOST_DIGITS
+    ? fewest
+    : PIN_FEWEST_DIGITS;
+}
+
 export function People() {
   // One page of the roster, not the whole thing (ADR-0098, #299). The table below is the only reader
   // now: an assignment row carries the person it names, and the assign picker searches the server.
@@ -101,6 +124,13 @@ export function People() {
   // PIN reset (a Modal over one employee).
   const [pinFor, setPinFor] = createSignal<Employee | null>(null);
   const [pinValue, setPinValue] = createSignal("");
+  // The fewest digits the tenant lets a PIN have, read each time the modal opens so a minimum raised
+  // a moment ago is the one it names. Four until the read answers, and if it fails: the cloud holds
+  // every PIN to the tenant's minimum whatever this says, so a failed read costs the operator a
+  // refusal from the cloud, never a PIN shorter than the tenant asks for.
+  const [pinFewest, setPinFewest] = createSignal(PIN_FEWEST_DIGITS);
+  let pinReadSeq = 0;
+  const pinRange = () => ({ min: pinFewest(), max: PIN_MOST_DIGITS });
 
   // Archive/restore.
   const [pendingArchive, setPendingArchive] = createSignal<Employee | null>(null);
@@ -288,14 +318,29 @@ export function People() {
     });
   };
 
+  const openPin = (employee: Employee) => {
+    setPinFor(employee);
+    setPinValue("");
+    setPinFewest(PIN_FEWEST_DIGITS);
+    const seq = ++pinReadSeq;
+    void api.listSettingValues(tenantId()).then(
+      (values) => {
+        if (seq === pinReadSeq) {
+          setPinFewest(pinFewestOf(values));
+        }
+      },
+      () => undefined,
+    );
+  };
+
   const savePin = async () => {
     const employee = pinFor();
     if (!employee) {
       return;
     }
     const pin = pinValue().trim();
-    if (!/^\d{4,8}$/.test(pin)) {
-      setError(t("people.pinInvalid"));
+    if (!/^\d+$/.test(pin) || pin.length < pinFewest() || pin.length > PIN_MOST_DIGITS) {
+      setError(t("people.pinInvalid", pinRange()));
       return;
     }
     setBusy(true);
@@ -787,10 +832,7 @@ export function People() {
                         <Button
                           variant="secondary"
                           disabled={busy()}
-                          onClick={() => {
-                            setPinFor(row);
-                            setPinValue("");
-                          }}
+                          onClick={() => openPin(row)}
                         >
                           {t("people.setPin")}
                         </Button>
@@ -1055,13 +1097,13 @@ export function People() {
           }
         >
           <div class="flex flex-col gap-3">
-            <p class="text-sm text-ink-muted">{t("people.pinHint")}</p>
+            <p class="text-sm text-ink-muted">{t("people.pinHint", pinRange())}</p>
             <TextField
               label={t("people.pin")}
               type="password"
               value={pinValue()}
               onInput={setPinValue}
-              placeholder={t("people.pinPlaceholder")}
+              placeholder={t("people.pinPlaceholder", pinRange())}
             />
           </div>
         </Modal>

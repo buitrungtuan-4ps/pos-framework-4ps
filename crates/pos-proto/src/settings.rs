@@ -243,9 +243,18 @@ const STORE_WIDE: &[SettingScope] = &[
     SettingScope::Store,
 ];
 
+/// The scope of a setting about a tenant's people rather than about a store: the tenant alone. A
+/// person may work at every store of the tenant, so a value for one store could not be applied to
+/// what is theirs.
+const TENANT_ONLY: &[SettingScope] = &[SettingScope::Tenant];
+
 /// The first release after 0.14.0. Tags are cut from `main`, so the next release carries everything
 /// merged before it, whatever number it is given.
 const NEXT_RELEASE: &str = "0.14.1";
+
+/// The `since` of a setting the cloud applies itself rather than a store's edge: every release
+/// honours it, because the release a store runs does not decide it (ADR-0160 decision 5).
+const EVERY_RELEASE: &str = "0.0.0";
 
 /// Every setting, in the order the register lists them.
 #[must_use]
@@ -376,6 +385,25 @@ pub fn register() -> Vec<Setting> {
             summary: "A security setting: how long a person stays locked out after too many wrong \
                       PINs. A lockout already running keeps the end it was given. No value \
                       switches the lockout off.",
+        },
+        Setting {
+            node: PublishedSession::NODE,
+            field: "pin_min_length",
+            shape: SettingShape::Int {
+                min: *session::PIN_MIN_LENGTH.start(),
+                max: *session::PIN_MIN_LENGTH.end(),
+                unit: SettingUnit::Count,
+                default: i64::from(unset.pin_min_length()),
+                preset: None,
+            },
+            // A PIN belongs to a person, who may work at every store of the tenant.
+            scopes: TENANT_ONLY,
+            since: EVERY_RELEASE,
+            summary: "A security setting: the fewest digits a staff PIN may have, from 4 to 8. It \
+                      applies to PINs set or reset from now on, and PINs already set keep working. \
+                      It is set for the whole tenant, because a person may work at every store, and \
+                      the cloud applies it whatever release a store runs. It is a policy choice \
+                      rather than a defence, which is the PIN's hashing and the lockout.",
         },
         Setting {
             node: PublishedPermissions::NODE,
@@ -1099,6 +1127,7 @@ mod tests {
                     )),
                     "lockout_attempts" => Some(json!(session.lockout_attempts())),
                     "lockout_minutes" => Some(json!(session.lockout_minutes())),
+                    "pin_min_length" => Some(json!(session.pin_min_length())),
                     _ => None,
                 }
             }

@@ -2,14 +2,14 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The published `session` config node: when an attended till locks, how long a sign-in lasts on an
-//! idle device, and how many wrong PINs lock a person out
+//! idle device, how many wrong PINs lock a person out, and the fewest digits a PIN may have
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2).
 //!
-//! Every field is a setting in [`crate::settings`], and every default is what the edge did before the
-//! field existed: a till never locks on its own, a sign-in lapses after thirty idle minutes, and five
-//! wrong PINs in a row lock a person out for five minutes. So a document with no `session` node, or a
-//! node without a field, runs a store exactly as it ran before.
+//! Every field is a setting in [`crate::settings`], and every default is what was done before the
+//! field existed: a till never locks on its own, a sign-in lapses after thirty idle minutes, five
+//! wrong PINs in a row lock a person out for five minutes, and a PIN has at least four digits. So a
+//! document with no `session` node, or a node without a field, runs a store exactly as it ran before.
 //!
 //! # Security settings
 //!
@@ -21,8 +21,9 @@
 //! the bounds when it is written ([`Setting::check`](crate::settings::Setting::check)). An edge that
 //! is sent one anyway reads it as the default, not as what it says.
 //!
-//! The PIN's length is not on this node. The cloud checks it when a PIN is set, and the edge only
-//! ever holds a PIN's hash, so it has no PIN to measure.
+//! The fewest digits a PIN may have is on this node because it is a setting like the others, written
+//! once for the whole tenant. The cloud is what applies it, when a PIN is set, because the edge only
+//! ever holds a PIN's hash and so has no PIN to measure. The edge reads nothing from it.
 
 use core::ops::RangeInclusive;
 
@@ -45,6 +46,11 @@ pub const LOCKOUT_ATTEMPTS: RangeInclusive<i64> = 3..=10;
 /// the lockout off. An hour at the most, because a person locked out mid-service waits it out.
 pub const LOCKOUT_MINUTES: RangeInclusive<i64> = 1..=60;
 
+/// The fewest digits a PIN may have, both bounds included: four, the fewest a PIN has ever had, to
+/// eight, the most it may have. A tenant's policy choice rather than a defence: a PIN's defence is
+/// its Argon2id cost and the lockout, never its digit count.
+pub const PIN_MIN_LENGTH: RangeInclusive<i64> = 4..=8;
+
 /// The idle lock when nothing sets one: `0`, never, as every till ran before the setting.
 pub const DEFAULT_IDLE_LOCK_SECONDS: u32 = 0;
 
@@ -57,6 +63,9 @@ pub const DEFAULT_LOCKOUT_ATTEMPTS: u32 = 5;
 
 /// The minutes a lockout lasts when nothing sets them: five, as before.
 pub const DEFAULT_LOCKOUT_MINUTES: u32 = 5;
+
+/// The fewest digits a PIN may have when nothing sets a number: four, as before.
+pub const DEFAULT_PIN_MIN_LENGTH: u32 = 4;
 
 /// The `session` node.
 ///
@@ -82,6 +91,9 @@ pub struct PublishedSession {
     /// How many minutes a lockout lasts. Read it through [`PublishedSession::lockout_minutes`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lockout_minutes: Option<i64>,
+    /// The fewest digits a PIN may have. Read it through [`PublishedSession::pin_min_length`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_min_length: Option<i64>,
 }
 
 impl PublishedSession {
@@ -126,6 +138,16 @@ impl PublishedSession {
     pub fn lockout_minutes(&self) -> u32 {
         within(self.lockout_minutes, &LOCKOUT_MINUTES).unwrap_or(DEFAULT_LOCKOUT_MINUTES)
     }
+
+    /// The fewest digits a PIN set from now on may have: the node's number when it is within
+    /// [`PIN_MIN_LENGTH`], and [`DEFAULT_PIN_MIN_LENGTH`], four, otherwise.
+    ///
+    /// The cloud applies it when a PIN is set or reset, to the tenant's value. A PIN already set
+    /// keeps working, whatever its length. The edge reads nothing from it.
+    #[must_use]
+    pub fn pin_min_length(&self) -> u32 {
+        within(self.pin_min_length, &PIN_MIN_LENGTH).unwrap_or(DEFAULT_PIN_MIN_LENGTH)
+    }
 }
 
 /// `value` when the node carries one within `bounds`, as the unsigned number every bound here is.
@@ -138,8 +160,8 @@ fn within(value: Option<i64>, bounds: &RangeInclusive<i64>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_LOCKOUT_ATTEMPTS, DEFAULT_LOCKOUT_MINUTES, LOCKOUT_ATTEMPTS, LOCKOUT_MINUTES,
-        PublishedSession, SIGN_IN_IDLE_TIMEOUT_MINUTES,
+        DEFAULT_LOCKOUT_ATTEMPTS, DEFAULT_LOCKOUT_MINUTES, DEFAULT_PIN_MIN_LENGTH,
+        LOCKOUT_ATTEMPTS, LOCKOUT_MINUTES, PublishedSession, SIGN_IN_IDLE_TIMEOUT_MINUTES,
     };
 
     fn node(text: &str) -> PublishedSession {
@@ -157,7 +179,21 @@ mod tests {
             assert_eq!(empty.sign_in_idle_timeout_minutes(), None);
             assert_eq!(empty.lockout_attempts(), 5);
             assert_eq!(empty.lockout_minutes(), 5);
+            assert_eq!(empty.pin_min_length(), 4, "a PIN of four digits, as before");
         }
+    }
+
+    /// A tenant's minimum from 4 to 8 is read as set; anything else reads as four, today's rule.
+    #[test]
+    fn a_pin_minimum_is_read_within_its_bounds_and_otherwise_as_four() {
+        for (published, read) in [(4, 4), (6, 6), (8, 8), (3, 4), (9, 4), (0, 4), (-6, 4)] {
+            let set = node(&format!(r#"{{ "pin_min_length": {published} }}"#));
+            assert_eq!(set.pin_min_length(), read, "{published}");
+        }
+        assert_eq!(
+            PublishedSession::default().pin_min_length(),
+            DEFAULT_PIN_MIN_LENGTH
+        );
     }
 
     #[test]
