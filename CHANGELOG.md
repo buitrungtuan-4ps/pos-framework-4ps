@@ -18,6 +18,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
+  text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return as a formula, and the
+  exports wrote names as they were authored or imported. So an item named
+  `=HYPERLINK("http://evil","click")` was a live link in the file of whoever exported and opened it,
+  and older Excel could be made to run a command (OWASP, CSV injection).
+  - Each free-text cell of the exports that starts with one of those characters is written with
+    one leading `'`: an item's name in `items.csv`; a translation's key, locale and string in
+    `translations.csv`; and a fee's code and name in `revenue-fees.csv`. A cell that already starts
+    with `'`s and then one of them gets one more `'`. Ids, tokens, dates and numbers are written as
+    they are, so a negative amount stays a number. `rollups.csv` and `revenue.csv` carry no free
+    text and do not change.
+  - The item and translation imports take that `'` back off, after trimming a cell as they always
+    have, so an exported file imports as what it was made from.
+  - **Upgrade note:** an exported text cell that starts with a formula character now begins with
+    `'`, so a spreadsheet shows the text instead of running it, and importing the same file gives
+    back the original. An imported cell that starts with `'`s and then one of those characters now
+    loses one `'`, so a name typed as `'=Special` into a file of the operator's own imports as
+    `=Special`. Headers, columns, quoting, file names and the audit records do not change; no route,
+    migration, permission or protocol change.
+
 - **Retiring a device needs a signed-in manager**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8).
   `POST /api/pair/revoke` needed only a paired device, so any tablet in the shop could retire

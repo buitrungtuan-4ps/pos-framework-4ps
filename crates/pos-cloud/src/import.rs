@@ -15,6 +15,11 @@
 //! which the item export has never carried and this import does not accept — so the row-by-row report
 //! an operator reads, and anything that logs it, cannot carry a price in clear text. That is a
 //! property of the format rather than a redaction rule somebody has to remember to apply.
+//!
+//! **A free-text cell is read through [`unescape_formula`]**, after it is trimmed as it always was.
+//! The export writes a cell that would start a spreadsheet formula with one more leading `'`
+//! ([`crate::export::escape_formula`]), and this takes exactly that `'` back off, so an exported
+//! file imports as the names, keys and strings it was made from.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +27,7 @@ use pos_proto::ids::{TaxClassId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use crate::catalog::{CatalogItem, ItemCategoryId, ItemSubcategoryId};
+use crate::export::unescape_formula;
 use crate::media::MediaId;
 use crate::registry::EntityStatus;
 use crate::translations::{FALLBACK_LOCALE, TranslationGrid};
@@ -106,7 +112,7 @@ pub fn parse_translations_csv(
     let locales: Vec<String> = headers
         .iter()
         .skip(1)
-        .map(|header| header.trim().to_owned())
+        .map(|header| unescape_formula(header.trim()).to_owned())
         .collect();
 
     let mut merged = existing.as_map().clone();
@@ -115,7 +121,7 @@ pub fn parse_translations_csv(
 
     for record in reader.records() {
         let record = record.map_err(|error| ImportError::Malformed(error.to_string()))?;
-        let key = record.get(0).unwrap_or("").trim().to_owned();
+        let key = unescape_formula(record.get(0).unwrap_or("").trim()).to_owned();
         if key.is_empty() {
             rows.push(ImportRow {
                 key,
@@ -131,7 +137,7 @@ pub fn parse_translations_csv(
             if locale.is_empty() {
                 continue;
             }
-            let value = record.get(index + 1).unwrap_or("").trim();
+            let value = unescape_formula(record.get(index + 1).unwrap_or("").trim());
             if !value.is_empty() {
                 values.insert(locale.clone(), value.to_owned());
             }
@@ -287,7 +293,7 @@ pub fn parse_items_csv(
         // What names the row in the report: the id it claims, or its name when it claims none. A row
         // with neither is reported under an empty key, exactly as the translation rail does.
         let key = if id.is_empty() {
-            record.get(1).unwrap_or("").trim().to_owned()
+            unescape_formula(record.get(1).unwrap_or("").trim()).to_owned()
         } else {
             id.clone()
         };
@@ -383,7 +389,8 @@ fn read_item_fields(
     subcategories: &[ItemSubcategoryId],
 ) -> Result<ItemFields, String> {
     let cell = |index: usize| record.get(index).unwrap_or("").trim().to_owned();
-    let name = cell(1);
+    // The one free-text cell: the export may have put a `'` before it.
+    let name = unescape_formula(&cell(1)).to_owned();
     if name.is_empty() {
         return Err("missing name".to_owned());
     }
@@ -500,6 +507,29 @@ mod tests {
     fn a_bad_header_is_an_error_not_a_row() {
         let csv = "name,en\nmenu.pho,Pho\n";
         assert!(parse_translations_csv(csv.as_bytes(), &existing()).is_err());
+    }
+
+    #[test]
+    fn an_escaped_key_locale_and_string_are_read_without_the_quote_the_export_added() {
+        // As the export writes `=k`, a locale `@xx`, `=1+1` and `'=x`; a `'` before anything that
+        // is not a trigger is the operator's own and stays.
+        let csv = "key,en,'@xx\n\
+                   '=k,'=1+1,''=x\n\
+                   menu.tea,'Tea,\n";
+        let (merged, report) =
+            parse_translations_csv(csv.as_bytes(), &TranslationGrid::default()).expect("parse");
+        assert_eq!(report.create_count, 2);
+        assert_eq!(
+            merged.as_map().get("=k"),
+            Some(&BTreeMap::from([
+                ("en".to_owned(), "=1+1".to_owned()),
+                ("@xx".to_owned(), "'=x".to_owned()),
+            ]))
+        );
+        assert_eq!(
+            merged.as_map().get("menu.tea"),
+            Some(&BTreeMap::from([("en".to_owned(), "'Tea".to_owned())]))
+        );
     }
 }
 
@@ -665,6 +695,40 @@ mod item_tests {
     }
 
     #[test]
+    fn an_escaped_name_is_read_without_the_quote_the_export_added() {
+        let csv = format!(
+            "{HEADER}{id},'-5 Pho,active,{tax},,,\n\
+             ,'@Tra,active,{tax},,,\n\
+             ,'Pho,active,{tax},,,\n",
+            id = item_id(),
+            tax = tax_class(),
+        );
+        let (upserts, report) = parse_items_csv(
+            csv.as_bytes(),
+            tenant(),
+            &stored(),
+            &[tax_class()],
+            &[],
+            &[],
+        )
+        .expect("parse");
+        assert_eq!((report.update_count, report.create_count), (1, 2));
+        let names: Vec<&str> = upserts
+            .iter()
+            .map(|upsert| match upsert {
+                ItemUpsert::Update { item, .. } => item.name.as_str(),
+                ItemUpsert::Create(new) => new.name.as_str(),
+            })
+            .collect();
+        // A `'` before a trigger is the export's; one before anything else is the name's own.
+        assert_eq!(names, ["-5 Pho", "@Tra", "'Pho"]);
+        assert_eq!(
+            report.rows[1].key, "@Tra",
+            "the report names the row as it will be named"
+        );
+    }
+
+    #[test]
     fn a_header_that_is_not_the_export_s_is_an_error() {
         // The import accepts exactly what the export writes, so the pair round-trips. A file with
         // its own columns is a different format, and guessing at it is how a price column would
@@ -681,5 +745,190 @@ mod item_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod round_trip_tests {
+    //! Export then import gives back what was exported, for every string: the formula escape and
+    //! the import's undoing of it are each other's inverse, through the `csv` crate's quoting and
+    //! through both import paths.
+    //!
+    //! No property-testing crate, which `pos-cloud` does not depend on: every string of up to four
+    //! characters from an alphabet that holds each trigger, and a fixed-seed run of longer ones, so
+    //! a failure names an input that fails again.
+
+    use std::collections::BTreeMap;
+
+    use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
+    use pos_proto::ulid::Ulid;
+
+    use super::{ItemUpsert, parse_items_csv, parse_translations_csv};
+    use crate::catalog::CatalogItem;
+    use crate::export::{escape_formula, items_csv, translations_csv, unescape_formula};
+    use crate::registry::EntityStatus;
+    use crate::translations::TranslationGrid;
+    use crate::version::{Version, Versioned};
+
+    /// Each formula trigger, the quote the escape adds, and what else a cell may hold around them:
+    /// a double quote, a comma, a line feed, a space, a letter, a digit and a letter outside ASCII.
+    const ALPHABET: [char; 14] = [
+        '=', '+', '-', '@', '\t', '\r', '\'', '"', ',', '\n', ' ', 'a', '1', 'đ',
+    ];
+
+    /// Every string of at most `longest` characters from [`ALPHABET`], the empty one included:
+    /// 41,371 of them at four.
+    fn every_string(longest: usize) -> Vec<String> {
+        let mut all = vec![String::new()];
+        let mut previous = vec![String::new()];
+        for _ in 0..longest {
+            previous = previous
+                .iter()
+                .flat_map(|prefix| {
+                    ALPHABET.iter().map(move |next| {
+                        let mut longer = prefix.clone();
+                        longer.push(*next);
+                        longer
+                    })
+                })
+                .collect();
+            all.extend(previous.iter().cloned());
+        }
+        all
+    }
+
+    /// `count` strings of 5 to 40 characters from [`ALPHABET`], from a xorshift64 with a fixed
+    /// seed: the same strings on every run.
+    fn longer_strings(count: usize) -> Vec<String> {
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            usize::try_from(state % u64::try_from(bound).unwrap_or(1)).unwrap_or(0)
+        };
+        (0..count)
+            .map(|_| {
+                let length = 5 + next(36);
+                (0..length)
+                    .map(|_| ALPHABET.get(next(ALPHABET.len())).copied().unwrap_or('a'))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The strings every property here is checked over.
+    fn inputs() -> Vec<String> {
+        let mut inputs = every_string(4);
+        inputs.extend(longer_strings(20_000));
+        inputs
+    }
+
+    /// Whether the import keeps `text` once it has taken back the escape. It trims a cell and
+    /// refuses an empty one, as it always has, so a text that ends in whitespace, starts with
+    /// whitespace other than the tab or return the escape keeps, or holds nothing else, is not one
+    /// it gives back.
+    fn kept_by_the_import(text: &str) -> bool {
+        !text.trim().is_empty()
+            && text.trim_end() == text
+            && (text.trim_start() == text || text.starts_with(['\t', '\r']))
+    }
+
+    #[test]
+    fn every_string_survives_the_escape_and_a_csv_cell_and_comes_back_as_it_was() {
+        let inputs = inputs();
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        for text in &inputs {
+            let written = escape_formula(text);
+            assert!(
+                !written.starts_with(['=', '+', '-', '@', '\t', '\r']),
+                "{text:?} is written as {written:?}, which a spreadsheet would run"
+            );
+            writer
+                .write_record([written.as_ref(), "end"])
+                .expect("write the cell");
+        }
+        let bytes = writer.into_inner().expect("flush the file");
+        let read: Vec<String> = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(bytes.as_slice())
+            .records()
+            .map(|record| {
+                let record = record.expect("a record");
+                unescape_formula(record.get(0).expect("the cell")).to_owned()
+            })
+            .collect();
+        assert_eq!(read.len(), inputs.len(), "one record per string");
+        for (text, back) in inputs.iter().zip(&read) {
+            assert_eq!(back, text);
+        }
+    }
+
+    #[test]
+    fn an_exported_item_master_imports_as_the_names_it_was_made_from() {
+        let names: Vec<String> = inputs()
+            .into_iter()
+            .filter(|name| kept_by_the_import(name))
+            .collect();
+        let tenant = TenantId::new(Ulid::from_u128(1));
+        let tax_class = TaxClassId::new(Ulid::from_u128(2));
+        let items: Vec<CatalogItem> = (1_000..)
+            .zip(&names)
+            .map(|(seed, name)| CatalogItem {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(seed)),
+                tenant_id: tenant,
+                name: name.clone(),
+                name_translations: BTreeMap::new(),
+                tax_class_id: tax_class,
+                item_category_id: None,
+                item_subcategory_id: None,
+                course_id: None,
+                image_ref: None,
+                status: EntityStatus::Active,
+            })
+            .collect();
+        let stored: Vec<Versioned<CatalogItem>> = items
+            .iter()
+            .map(|item| Versioned::new(item.clone(), Version::new("v1")))
+            .collect();
+
+        let exported = items_csv(&items).expect("export");
+        let (upserts, report) =
+            parse_items_csv(&exported, tenant, &stored, &[tax_class], &[], &[]).expect("import");
+        assert_eq!(report.reject_count, 0);
+        assert_eq!(upserts.len(), names.len());
+        for (name, upsert) in names.iter().zip(&upserts) {
+            let ItemUpsert::Update { item, .. } = upsert else {
+                panic!("{name:?} names a stored item, so it updates it");
+            };
+            assert_eq!(&item.name, name);
+        }
+    }
+
+    #[test]
+    fn an_exported_translation_grid_imports_as_the_keys_locales_and_strings_it_was_made_from() {
+        // A locale that would start a formula, beside the fallback every key needs.
+        let grid = TranslationGrid::new(
+            inputs()
+                .into_iter()
+                .filter(|text| kept_by_the_import(text))
+                .map(|text| {
+                    let strings = BTreeMap::from([
+                        ("en".to_owned(), text.clone()),
+                        ("=xx".to_owned(), text.clone()),
+                    ]);
+                    (text, strings)
+                })
+                .collect(),
+        );
+
+        let exported = translations_csv(&grid).expect("export");
+        let (merged, report) =
+            parse_translations_csv(&exported, &TranslationGrid::default()).expect("import");
+        assert_eq!(report.reject_count, 0);
+        assert_eq!(merged.as_map().len(), grid.as_map().len());
+        for (key, strings) in grid.as_map() {
+            assert_eq!(merged.as_map().get(key), Some(strings), "{key:?}");
+        }
     }
 }

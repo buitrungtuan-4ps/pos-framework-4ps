@@ -181,6 +181,11 @@ reach it.
   session unchanged rather than blanking a trading store's menu.
 - **Every ULID field parse in the cloud goes through one helper** (177 sites), so a malformed id is a
   named `400`, never a panic and never a silent default.
+- **A CSV export hands a spreadsheet no formula.** An item's name, a translation and a fee's code and
+  name are free text that whoever may author or import them chose, and a spreadsheet runs a cell
+  that starts with `=`, `+`, `-`, `@`, a tab or a carriage return. Each export writes such a cell with
+  one leading `'` (`pos_cloud::export::escape_formula`), and the CSV import takes exactly that `'`
+  back off, so a file exported and imported again is unchanged.
 
 ## 8. Open items
 
