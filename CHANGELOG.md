@@ -470,8 +470,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     half-up, or a line's price, a campaign or a recipe's consumption.
   - The edge reads it from the store's `locale` node and computes every bill with it: a table's or
     a bill's check, a pre-bill, each part of a split, a discount's answer, the settle, and the
-    lines a receipt copy computes again. The fee preview (`POST /admin/fees/preview`) does not
-    read it yet, and rounds a sample bill half-up.
+    lines a receipt copy computes again.
+  - The fee preview (`POST /admin/fees/preview`) rounds a store's sample bill the same way, so the
+    console shows the fee and tax the store's till will charge. The console's Settings screen
+    offers the setting, in English and Vietnamese.
   - The setting is written on each store's Tenant layer and the locale publish keeps writing the
     country's fields on its Store layer, so the store receives both. A `locale` node that carries
     only the setting is not a published locale: a menu is still refused to a store whose locale

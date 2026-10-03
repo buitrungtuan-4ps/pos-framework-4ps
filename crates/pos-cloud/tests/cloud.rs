@@ -32084,11 +32084,8 @@ fn seed_fee_stores(config_trees: &FakeConfigTrees) {
     );
 }
 
-/// The fee routes over fakes. The brand's first store bills in đồng with a menu and a tax table,
-/// its second bills in yen, and the third has nothing published yet.
-fn fees_app() -> (axum::Router, FakeConfigTrees, FakeAudit, FakeAdmin) {
-    let admin = provisioned_admin();
-    let config_trees = FakeConfigTrees::default();
+/// The brand and its three stores, the third held by no brand.
+fn fees_registry() -> FakeRegistry {
     let registry = FakeRegistry::default();
     let [first, second, third] = fees_stores();
     registry.brands.lock().expect("lock").push(Versioned::new(
@@ -32116,6 +32113,15 @@ fn fees_app() -> (axum::Router, FakeConfigTrees, FakeAudit, FakeAdmin) {
             Version::new("1"),
         ));
     }
+    registry
+}
+
+/// The fee routes over fakes. The brand's first store bills in đồng with a menu and a tax table,
+/// its second bills in yen, and the third has nothing published yet.
+fn fees_app() -> (axum::Router, FakeConfigTrees, FakeAudit, FakeAdmin) {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let registry = fees_registry();
     let catalog = fee_catalog();
     seed_fee_stores(&config_trees);
     let audit = FakeAudit::default();
@@ -32850,4 +32856,168 @@ async fn a_sample_bill_shows_a_rule_before_it_is_written_and_writes_nothing() {
         .await
         .expect("route the preview");
     assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+}
+
+/// The fee routes, the settings routes and the locale publish over one config tree, as the cloud
+/// serves them, so what a setting writes is what a sample bill reads.
+fn fees_and_settings_app() -> (axum::Router, FakeConfigTrees) {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let registry = fees_registry();
+    seed_fee_stores(&config_trees);
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app)
+        .merge(http::fees_router(
+            InMemoryFeeRules::new(),
+            registry.clone(),
+            fee_catalog(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::settings_router(
+            FakeSettings::default(),
+            registry,
+            FakeStoreGroups::default(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::config_locale_router(
+            &pos_cloud::countries::registry(),
+            config_trees.clone(),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ));
+    (router, config_trees)
+}
+
+/// The fee, the tax and the total of a sample bill of one Margherita at a 5.05 % fee.
+async fn sampled(router: &axum::Router, cookie: &str, store_id: StoreId) -> [Option<i64>; 3] {
+    let body = serde_json::json!({
+        "tenant_id": tenant_scope_id(),
+        "store_id": store_id.to_string(),
+        "rules": [{
+            "scope": "FEE_SCOPE_TENANT",
+            "scope_id": tenant_scope_id(),
+            "rule": {
+                "code": "SERVICE",
+                "display_name": "Service charge",
+                "kind": "FEE_KIND_PERCENT",
+                "rate": { "numerator": 505, "denominator": 10_000 },
+            },
+        }],
+        "lines": [{ "menu_item_id": fee_item(1).to_string(), "quantity": 1 }],
+    });
+    let previewed = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/fees/preview", &body, cookie))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let bill = json_body(previewed).await;
+    [
+        bill["fee_lines"][0]["amount"]["amount_minor"].as_i64(),
+        bill["tax_total"]["amount_minor"].as_i64(),
+        bill["total_due"]["amount_minor"].as_i64(),
+    ]
+}
+
+/// A store's tax rounding (ADR-0160) is a setting on its `locale` node, written on its Tenant
+/// layer, while a locale publish writes the country's fields on its Store layer. The node the
+/// store receives carries both, whichever was written last, and a sample bill at the store rounds
+/// its fee and its tax as the store's edge will: 5.05 % of 95,000 is 4,797.5, and 8 % of the line
+/// and the fee is 7,983.84 at half-up or 7,983.76 rounded down.
+#[tokio::test]
+async fn a_store_set_to_round_tax_down_keeps_its_country_and_is_shown_the_tax_it_will_charge() {
+    let (router, config_trees) = fees_and_settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = fees_stores();
+    assert_eq!(
+        sampled(&router, &cookie, first).await,
+        [Some(4_798), Some(7_984), Some(107_782)],
+        "half-up while the store sets nothing"
+    );
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "setting_key": "locale.tax_rounding",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "TAX_ROUNDING_DOWN",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["locale"],
+        serde_json::json!({ "tax_rounding": "TAX_ROUNDING_DOWN" }),
+        "the setting alone, on the Tenant layer"
+    );
+    assert_eq!(
+        tree.record.layers[2]["locale"],
+        serde_json::json!({ "currency_code": "VND" }),
+        "the store's own locale is not touched"
+    );
+    let down = [Some(4_797), Some(7_983), Some(107_780)];
+    assert_eq!(sampled(&router, &cookie, first).await, down);
+
+    // The store's locale published again, as when its country is set: the setting stays.
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "store_id": first.to_string(),
+                "country_code": "VN",
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/stores/{}/config?tenant_id={}",
+                    first.as_ulid(),
+                    tenant().as_ulid()
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(effective["locale"]["tax_rounding"], "TAX_ROUNDING_DOWN");
+    assert_eq!(effective["locale"]["country_code"], "VN");
+    assert_eq!(effective["locale"]["timezone"], "Asia/Ho_Chi_Minh");
+    assert_eq!(sampled(&router, &cookie, first).await, down);
 }
