@@ -1761,6 +1761,12 @@ export interface CapabilityFlag {
   readonly key: string;
   readonly default_on: boolean;
   readonly description: string;
+  /**
+   * Whether the console offers the flag as a switch (ADR-0160 decision 5). `false` for a flag no
+   * release reads yet, so turning it on would change nothing at any store. Absent from a cloud older
+   * than the field, which offered every flag.
+   */
+  readonly offered?: boolean;
 }
 
 /** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */

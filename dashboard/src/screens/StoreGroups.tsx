@@ -95,6 +95,10 @@ interface NodeKind {
  */
 const MENU_NODE: NodeKind = { key: "menu", label: "storeGroups.node.menu", source: "menu" };
 
+// The two flags of the one rule a switch the console does not offer takes part in.
+const PAY_FIRST = "pay_first_enabled";
+const TABLES = "tables_enabled";
+
 const NODE_KINDS: readonly NodeKind[] = [
   MENU_NODE,
   { key: "tax", label: "storeGroups.node.tax", source: "authored" },
@@ -205,6 +209,14 @@ async function copyArguments(
   }
   if (Object.keys(flags).length === 0) {
     return null;
+  }
+  // Table service excludes pay-first (§10), and the console no longer offers pay-first (ADR-0160
+  // decision 5). A copy that turns tables on therefore carries pay-first off with it, which is the
+  // source's own value, since no store holds both: a member with pay-first on would otherwise be
+  // refused, and nothing here could clear it. Nothing reads pay-first, so no member behaves
+  // differently.
+  if (flags[TABLES] === true && flags[PAY_FIRST] === undefined) {
+    flags[PAY_FIRST] = false;
   }
   return { flags };
 }
