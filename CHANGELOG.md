@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Keypad component accessibility and focus behavior enhanced.**
+  Added `role="group"` and `aria-label` to `Keypad` in `ui/src/components/Keypad.tsx` for screen reader context, prevented pointerdown events from stealing focus from input fields, and added explicit `focus-visible` ring styling to keypad buttons. Added `keypad.aria_label` translations in `ui/src/i18n/en.json` and `ui/src/i18n/vi.json`.
+
 ### Security
 
 - **Retiring a device needs a signed-in manager**
