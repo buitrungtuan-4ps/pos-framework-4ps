@@ -26,7 +26,7 @@ use crate::backup::{self, PublishedBackup};
 use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::people::PublishedPermissions;
-use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
+use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
 use crate::shift::{self, NoShiftSelling, PublishedShift};
@@ -480,6 +480,29 @@ pub fn register() -> Vec<Setting> {
                       nothing, and the till's print button prints a copy.",
         },
         Setting {
+            node: PublishedPrinting::NODE,
+            field: "font_size_dots",
+            shape: SettingShape::Int {
+                min: *printing::FONT_SIZE_DOTS.start(),
+                max: *printing::FONT_SIZE_DOTS.end(),
+                unit: SettingUnit::Count,
+                default: i64::from(printing::DEFAULT_FONT_SIZE_DOTS),
+                // No store is given another value: a new store prints at 24, as every store did
+                // before the setting.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "How large a line the printer cannot draw in its own characters is printed, \
+                      in printer dots per em, from 16 to 48: 24 is a comfortable receipt body at \
+                      the 203 dpi most thermal printers run at. The store server draws only such \
+                      lines, Vietnamese ones among them; a line the printer's own character set \
+                      covers prints in the printer's font, which this does not change. Double-size \
+                      text is drawn at twice it. A change applies from the next print. A box whose \
+                      config.toml sets font_size_dots keeps it until this is set, and this then \
+                      wins.",
+        },
+        Setting {
             node: PublishedQr::NODE,
             field: "table_order",
             shape: SettingShape::Choice {
@@ -824,7 +847,7 @@ mod tests {
     use crate::counter::PublishedCounter;
     use crate::locale::LocaleSettings;
     use crate::people::PublishedPermissions;
-    use crate::printing::PublishedPrinting;
+    use crate::printing::{DEFAULT_FONT_SIZE_DOTS, PublishedPrinting};
     use crate::qr::PublishedQr;
     use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
@@ -1174,6 +1197,11 @@ mod tests {
                     "receipt_printed_on_settle" => {
                         Some(json!(printing.receipt_printed_on_settle()))
                     }
+                    // A node that sets no size leaves the edge on its deprecated local file and
+                    // then on this default, so the default is what a store with neither runs.
+                    "font_size_dots" => Some(json!(
+                        printing.font_size_dots().unwrap_or(DEFAULT_FONT_SIZE_DOTS)
+                    )),
                     _ => None,
                 }
             }

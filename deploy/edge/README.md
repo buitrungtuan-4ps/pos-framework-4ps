@@ -510,6 +510,24 @@ archiving off, and none switches it back on.
 | `INFO backup.interval_hours in force` (`value`, `from`) | The interval in force, in hours, and where it comes from. Logged when the archive loop starts and whenever the interval changes. | Nothing. |
 | `WARN backup_interval_hours = 0: this store ships no off-box archive of its database, so a failed disk loses everything since the last one taken by hand` | Archiving is off in this box's file. Logged at every start. | Nothing, if that is intended. Otherwise remove the line, and the store archives at the interval its configuration sets, or once a day. |
 
+### `font_size_dots` is deprecated
+
+How large the edge draws a line a printer cannot print in its own characters
+([ADR-0102](../../docs/adr/0102-printing-any-script.md)) is a setting of the store's configuration
+now, `printing.font_size_dots`, from 16 to 48 printer dots per em, written in the console's shared
+settings ([`docs/configuration.md`](../../docs/configuration.md),
+[ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 6). The key in `config.toml` is still read, so a box that sets it keeps its size, but only
+while the store's configuration sets none. Once the console sets one, it applies from the next print
+and the key is ignored. Remove the key then. A box that sets neither draws at 24. A line the
+printer's own character set covers prints in the printer's font either way.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN config.toml sets font_size_dots, which is deprecated, and it is the value in use because the store's configuration sets no printing.font_size_dots` (`value`) | Logged at start-up, and at the first print after the size changes, while the file's size is the one in use. | Set `printing.font_size_dots` for the store in the console's shared settings, then remove the key. |
+| `INFO printing.font_size_dots is set by the store's configuration, which overrides config.toml's deprecated font_size_dots` (`value`) | The published size is in force, and the file's is ignored. | Remove the key. |
+| `INFO printing.font_size_dots in force` (`value`, `from`) | The size in force and where it comes from, at start-up and at the first print after it changes. Not logged on a box with no fonts, which draws nothing. | Nothing. |
+
 ### The clock is measured against a time server
 
 Every fifteen minutes the edge asks a time server what time it is, over SNTP (outbound UDP 123), and
@@ -563,8 +581,11 @@ somewhere else — a font kept with the application, say — with:
 
 ```toml
 font_directories = ["/opt/pos-edge/fonts"]
-font_size_dots   = 24   # printer dots per em; 24 is a comfortable receipt body at 203 dpi
 ```
+
+How large a line is drawn is the store's `printing.font_size_dots` setting, 24 printer dots per em
+unless the console sets 16 to 48; the file's `font_size_dots` is deprecated (see "`font_size_dots`
+is deprecated" above).
 
 Directories are scanned recursively, in order, and that order is the fallback order. Within a
 directory the plain sans-serif families (DejaVu Sans, Noto Sans, Arial, Segoe UI, Tahoma, Liberation

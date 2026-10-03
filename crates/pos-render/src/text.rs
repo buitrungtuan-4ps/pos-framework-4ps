@@ -131,13 +131,32 @@ impl TextRenderer {
         style: TextStyle,
         dots: NonZeroU16,
     ) -> Result<RenderedLine, RenderError> {
+        self.render_at(text, style, dots, self.size)
+    }
+
+    /// [`Self::render`] at `size` pixels per em for ordinary text rather than [`Self::size`], and
+    /// twice it for double-size text.
+    ///
+    /// The size a store prints at can change while it trades: taking it per line lets a change apply
+    /// from the next line drawn, with the faces already loaded.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::render`].
+    pub fn render_at(
+        &self,
+        text: &str,
+        style: TextStyle,
+        dots: NonZeroU16,
+        size: NonZeroU16,
+    ) -> Result<RenderedLine, RenderError> {
         if self.library.is_empty() {
             return Err(RenderError::NoFonts);
         }
         let size = if style.double_size {
-            self.size.get().saturating_mul(2)
+            size.get().saturating_mul(2)
         } else {
-            self.size.get()
+            size.get()
         };
 
         let mut substituted = Vec::new();
@@ -665,6 +684,48 @@ mod tests {
                 .unwrap_or(u16::MAX)
         };
         assert!(leftmost(&centred.bitmap) > leftmost(&left.bitmap));
+    }
+
+    #[test]
+    fn a_line_drawn_at_a_larger_size_is_taller_and_the_renderers_own_size_is_the_default() {
+        let Some(renderer) = on_dejavu() else { return };
+        let plain = TextStyle::default();
+        let at_24 = renderer
+            .render("Phở bò", plain, dots(EIGHTY_MM))
+            .expect("renders");
+        let at_32 = renderer
+            .render_at("Phở bò", plain, dots(EIGHTY_MM), dots(32))
+            .expect("renders");
+        assert!(
+            at_32.bitmap.height() > at_24.bitmap.height(),
+            "32 dots per em is taller than 24 ({} vs {} rows)",
+            at_32.bitmap.height(),
+            at_24.bitmap.height()
+        );
+        assert_eq!(
+            renderer
+                .render_at("Phở bò", plain, dots(EIGHTY_MM), renderer.size())
+                .expect("renders")
+                .bitmap,
+            at_24.bitmap,
+            "the size the renderer was built with is the one `render` draws at"
+        );
+
+        // Double size doubles whatever size is in force.
+        let double = TextStyle {
+            double_size: true,
+            ..TextStyle::default()
+        };
+        assert_eq!(
+            renderer
+                .render_at("Phở bò", double, dots(EIGHTY_MM), dots(16))
+                .expect("renders")
+                .bitmap,
+            renderer
+                .render_at("Phở bò", plain, dots(EIGHTY_MM), dots(32))
+                .expect("renders")
+                .bitmap,
+        );
     }
 
     #[test]

@@ -31648,26 +31648,43 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     assert_eq!(second["kind"], "SETTING_KIND_CHOICE");
     assert_eq!(second["default"], "RECEIPT_SECOND_LANGUAGE_NONE");
     assert!(second["preset"].is_null(), "{second}");
+    // The size a line the printer cannot draw is drawn at, in printer dots (ADR-0160 decision 6).
+    let size = listed("printing.font_size_dots");
+    assert_eq!(size["kind"], "SETTING_KIND_INT");
+    assert_eq!(size["unit"], "SETTING_UNIT_COUNT");
+    assert_eq!(size["min"], 16);
+    assert_eq!(size["max"], 48);
+    assert_eq!(size["default"], 24);
+    assert!(size["preset"].is_null(), "{size}");
 
-    // A store that turns the switch off has it on its `printing` node.
-    let written = router
-        .oneshot(put_with_cookie(
-            "/admin/settings",
-            &serde_json::json!({
-                "tenant_id": tenant().as_ulid().to_string(),
-                "setting_key": "printing.receipt_printed_on_settle",
-                "scope": "SETTING_SCOPE_STORE",
-                "scope_id": first.to_string(),
-                "value": false,
-            }),
-            &cookie,
-        ))
-        .await
-        .expect("route the write");
-    assert_eq!(written.status(), StatusCode::OK);
+    // A store that turns the switch off and sets a size has both on its `printing` node.
+    for (setting_key, value) in [
+        (
+            "printing.receipt_printed_on_settle",
+            serde_json::json!(false),
+        ),
+        ("printing.font_size_dots", serde_json::json!(32)),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": setting_key,
+                    "scope": "SETTING_SCOPE_STORE",
+                    "scope_id": first.to_string(),
+                    "value": value,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{setting_key}");
+    }
     assert_eq!(
         tenant_layer_node(&config_trees, first, "printing").await,
-        Some(serde_json::json!({ "receipt_printed_on_settle": false }))
+        Some(serde_json::json!({ "receipt_printed_on_settle": false, "font_size_dots": 32 }))
     );
 }
 

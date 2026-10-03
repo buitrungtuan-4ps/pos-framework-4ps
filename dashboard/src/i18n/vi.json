@@ -1900,6 +1900,8 @@
   "settings.item.locale.tax_rounding.title": "Làm tròn thuế",
   "settings.item.permissions.enforced.help": "Khi bật, mọi thao tác trên máy POS được quyết định theo quyền riêng của người đang đăng nhập, và việc gì vai trò của họ không cấp sẽ bị từ chối. Hãy kiểm tra mỗi vai trò đã có đủ quyền cho nhân viên trước khi bật.",
   "settings.item.permissions.enforced.title": "Quyền riêng của từng người",
+  "settings.item.printing.font_size_dots.help": "Cỡ chữ máy chủ cửa hàng dùng để vẽ dòng mà máy in không in được bằng ký tự của chính nó, như tên món tiếng Việt, tính bằng điểm in: 24 là cỡ dễ đọc cho hóa đơn. Dòng in được bằng ký tự của máy in vẫn dùng phông chữ của máy in. Chữ cỡ đôi được vẽ lớn gấp đôi. Thay đổi áp dụng từ lần in tiếp theo.",
+  "settings.item.printing.font_size_dots.title": "Cỡ chữ được vẽ",
   "settings.item.printing.receipt_language.help": "Ngôn ngữ in nhãn và tên món trên hóa đơn, bản sao và phiếu tạm tính. Món chưa được dịch trong thực đơn giữ tên gốc. Khi cửa hàng chưa được đặt quốc gia, hoặc hóa đơn chưa có nhãn bằng ngôn ngữ của quốc gia đó, lựa chọn ngôn ngữ của quốc gia sẽ in bằng ngôn ngữ hiển thị.",
   "settings.item.printing.receipt_language.title": "Ngôn ngữ hóa đơn",
   "settings.item.printing.receipt_printed_on_settle.help": "Có in hóa đơn cho khách khi thanh toán hay không. Khi tắt, nút in trên máy POS sẽ in bản sao.",
