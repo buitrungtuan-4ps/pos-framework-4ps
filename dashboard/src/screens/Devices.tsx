@@ -10,17 +10,24 @@
 //
 // The printers card also carries each printer's paper (ADR-0160), the cash drawer mark (ADR-0165)
 // and the publish. Nothing decided on this page reaches a store until its devices are published: not
-// an approval, not an agent, not a paper, not a drawer. So the page offers the publish rather than
-// leaving it to a route nobody can see.
+// an approval, not an agent, not a paper, not a drawer, not a till's receipts. So the page offers the
+// publish rather than leaving it to a route nobody can see.
+//
+// The terminals card carries each till's receipts (ADR-0160 decision 4): the printer its receipts,
+// receipt copies and pre-bills go to, and the languages they print in, each the store's until
+// somebody says. A store on a release older than the one that honours them ignores them, so for that
+// store they are hidden and one line says why (decision 5, honour or hide), from the release the
+// fleet read says the store runs; a store whose release is unknown is shown them with a note.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import { PAPER_WIDTHS } from "../api/types";
 import type { DeviceProposalSummary, PaperWidth, Station, Store } from "../api/types";
-import { type MessageKey, t } from "../i18n";
+import { type MessageKey, t, tFromServer } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { storeId, tenantId } from "../state/session";
+import { type ReleaseStanding, releaseStanding } from "../lib/semver";
+import { storeId, storeName as chosenStoreName, tenantId } from "../state/session";
 import {
   Banner,
   Button,
@@ -54,6 +61,29 @@ const PAPER_LABELS: Record<PaperWidth, MessageKey> = {
 const UNSET_PAPER: PaperWidth = "PAPER_WIDTH_MILLIMETRES_80";
 const paperLabel = (paper: PaperWidth | null) =>
   t(PAPER_LABELS[paper ?? UNSET_PAPER] ?? PAPER_LABELS[UNSET_PAPER]);
+
+// The first release whose edge prints a till's receipts at its own printer and in its own languages
+// (ADR-0160 decision 4). An older edge ignores both.
+const TILL_RECEIPTS_SINCE = "0.14.1";
+
+// A till's receipt languages: the receipt language setting's own choices, and the second
+// language's, each beside "the store's", which is the empty choice.
+const RECEIPT_LANGUAGES = [
+  "RECEIPT_LANGUAGE_DISPLAY",
+  "RECEIPT_LANGUAGE_COUNTRY",
+  "RECEIPT_LANGUAGE_VI",
+  "RECEIPT_LANGUAGE_EN",
+];
+const RECEIPT_SECOND_LANGUAGES = [
+  "RECEIPT_SECOND_LANGUAGE_NONE",
+  "RECEIPT_SECOND_LANGUAGE_VI",
+  "RECEIPT_SECOND_LANGUAGE_EN",
+];
+
+// A language token in words: the store's when nobody has said, and the token itself for one a newer
+// cloud knows and this console does not.
+const languageLabel = (token: string | null) =>
+  token === null ? t("devices.receiptLanguageStore") : tFromServer(`settings.value.${token}`, token);
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
@@ -94,6 +124,15 @@ export function Devices() {
   const paperDraft = useEntityCrud<DeviceProposalSummary>();
   const [paperChoice, setPaperChoice] = createSignal<PaperWidth>(UNSET_PAPER);
   const [cutsChoice, setCutsChoice] = createSignal(true);
+  // The terminal whose receipts are being said, under the same conditional write (ADR-0160 decision
+  // 4). Each picker's empty choice is the store's.
+  const receiptDraft = useEntityCrud<DeviceProposalSummary>();
+  const [receiptPrinterChoice, setReceiptPrinterChoice] = createSignal("");
+  const [receiptLanguageChoice, setReceiptLanguageChoice] = createSignal("");
+  const [secondLanguageChoice, setSecondLanguageChoice] = createSignal("");
+  // The release the chosen store last reported (ADR-0078), from the fleet read: `undefined` while
+  // the read is out, `null` when the store never said or the read failed.
+  const [installed, setInstalled] = createSignal<string | null | undefined>(undefined);
   const [publishing, setPublishing] = createSignal(false);
 
   // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
@@ -126,10 +165,41 @@ export function Devices() {
     }
   };
 
+  // Which release the chosen store runs. A fleet that cannot be read costs the release note and not
+  // the screen: the store then reads as unknown, which hides nothing, as on Settings.
+  const loadRelease = async () => {
+    const store = storeId();
+    setInstalled(undefined);
+    let release: string | null = null;
+    try {
+      release = (await api.fleetStore(tenantId(), store)).installed_version;
+    } catch {
+      release = null;
+    }
+    if (storeId() === store) {
+      setInstalled(release);
+    }
+  };
+
   // The two cards below follow the *store* in the top bar, not the tenant: an agent may only be a
   // terminal standing in the same shop, so a tenant-wide list would offer picks the publish gate
   // will refuse.
-  onScopedContext("store", () => void loadFleet());
+  onScopedContext("store", () => {
+    void loadFleet();
+    void loadRelease();
+  });
+
+  /**
+   * Whether the chosen store honours a device's field honoured from release `since` (ADR-0160
+   * decision 5, honour or hide), from the release it last reported. `loading` until the fleet read
+   * settles, which shows nothing, so a field is never shown and then taken away from an old store.
+   */
+  const deviceFieldStanding = (since: string): ReleaseStanding | "loading" => {
+    const release = installed();
+    return release === undefined ? "loading" : releaseStanding(release, since);
+  };
+  const tillReceipts = () => deviceFieldStanding(TILL_RECEIPTS_SINCE);
+  const offersTillReceipts = () => tillReceipts() === "honours" || tillReceipts() === "unknown";
 
   // Binding a printer to an agent is a conditional write — it sends the version the row was read at
   // (ADR-0094) — so it owes the reader a reload and a sentence when somebody else got there first.
@@ -143,6 +213,8 @@ export function Devices() {
   const terminalMap = createMemo(
     () => new Map(terminals().map((device) => [device.id, device.name])),
   );
+  // A till's receipts go to a printer that serves the bill, never a station's.
+  const receiptPrinters = createMemo(() => printers().filter((device) => device.station_id === null));
 
   // A printer names its agent by id; the operator reads the terminal's name. A pick that no longer
   // resolves — the terminal was created in another store, or archived — shows the raw id rather than
@@ -152,6 +224,16 @@ export function Devices() {
       return t("devices.agentNone");
     }
     return terminalMap().get(agentId) ?? agentId;
+  };
+
+  // A till's receipt printer by name. One that no longer resolves shows its raw id, as an agent
+  // does: the store's receipt printer is a different answer, and the publish prints that till at the
+  // store's until somebody chooses again.
+  const receiptPrinterLabel = (printerId: string | null) => {
+    if (!printerId) {
+      return t("devices.receiptPrinterStore");
+    }
+    return printers().find((device) => device.id === printerId)?.name ?? printerId;
   };
 
   const createTerminal = () => {
@@ -223,6 +305,34 @@ export function Devices() {
       .then((saved) => {
         if (saved) {
           toast.ok(t("devices.paperSaved"));
+          void loadFleet();
+        }
+      });
+  };
+
+  const saveReceipt = () => {
+    const terminal = receiptDraft.subject();
+    if (!terminal) {
+      return;
+    }
+    void receiptDraft
+      .run(() =>
+        conditionalFleet(() =>
+          api.setTerminalReceipt(
+            tenantId(),
+            terminal.id,
+            {
+              printerId: receiptPrinterChoice() || null,
+              language: receiptLanguageChoice() || null,
+              secondLanguage: secondLanguageChoice() || null,
+            },
+            terminal.version,
+          ),
+        ),
+      )
+      .then((saved) => {
+        if (saved) {
+          toast.ok(t("devices.receiptSaved"));
           void loadFleet();
         }
       });
@@ -335,6 +445,7 @@ export function Devices() {
       cell: (row) => <span class="text-ink">{row.name}</span>,
       sortValue: (row) => row.name,
     },
+    ...(offersTillReceipts() ? receiptColumns() : []),
     {
       key: "id",
       header: t("devices.id"),
@@ -342,6 +453,37 @@ export function Devices() {
         <TechnicalDetails label={t("common.technicalDetails")}>
           <div>{row.id}</div>
         </TechnicalDetails>
+      ),
+    },
+  ];
+
+  // A till's receipts, offered only where the store's release honours them or cannot say.
+  const receiptColumns = (): Column<DeviceProposalSummary>[] => [
+    {
+      key: "receiptPrinter",
+      header: t("devices.receiptPrinter"),
+      cell: (row) => (
+        <span class={row.receipt_printer_id ? "text-ink" : "text-ink-muted"}>
+          {receiptPrinterLabel(row.receipt_printer_id)}
+        </span>
+      ),
+    },
+    {
+      key: "receiptLanguage",
+      header: t("devices.receiptLanguage"),
+      cell: (row) => (
+        <span class={row.receipt_language ? "text-ink" : "text-ink-muted"}>
+          {languageLabel(row.receipt_language)}
+        </span>
+      ),
+    },
+    {
+      key: "secondLanguage",
+      header: t("devices.receiptSecondLanguage"),
+      cell: (row) => (
+        <span class={row.receipt_second_language ? "text-ink" : "text-ink-muted"}>
+          {languageLabel(row.receipt_second_language)}
+        </span>
       ),
     },
   ];
@@ -441,11 +583,46 @@ export function Devices() {
           >
             <p class="mb-3 text-sm text-ink-muted">{t("devices.terminalsHint")}</p>
             <Show when={storeId()} fallback={<p class="text-sm text-ink-muted">{t("context.storeRequired")}</p>}>
+              <Show when={tillReceipts() === "older"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.receiptHidden", {
+                    store: chosenStoreName() || storeId(),
+                    installed: installed() ?? "",
+                    since: TILL_RECEIPTS_SINCE,
+                  })}
+                </p>
+              </Show>
+              <Show when={tillReceipts() === "unknown"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.receiptUnknown", {
+                    store: chosenStoreName() || storeId(),
+                    since: TILL_RECEIPTS_SINCE,
+                  })}
+                </p>
+              </Show>
               <DataTable
                 columns={terminalColumns()}
                 rows={terminals()}
                 pageSize={8}
                 empty={<EmptyState title={t("devices.terminalsEmpty")} />}
+                actionsHeader={offersTillReceipts() ? t("common.actions") : undefined}
+                actions={
+                  offersTillReceipts()
+                    ? (row) => (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setReceiptPrinterChoice(row.receipt_printer_id ?? "");
+                            setReceiptLanguageChoice(row.receipt_language ?? "");
+                            setSecondLanguageChoice(row.receipt_second_language ?? "");
+                            receiptDraft.edit(row);
+                          }}
+                        >
+                          {t("devices.chooseReceipt")}
+                        </Button>
+                      )
+                    : undefined
+                }
               />
             </Show>
           </Card>
@@ -618,6 +795,42 @@ export function Devices() {
             checked={cutsChoice()}
             onChange={setCutsChoice}
             hint={t("devices.cutsPaperHint")}
+          />
+        </FormPanel>
+
+        <FormPanel
+          crud={receiptDraft}
+          createTitle={t("devices.receiptTitle")}
+          editTitle={t("devices.receiptTitle")}
+          submitLabel={t("action.save")}
+          onSubmit={saveReceipt}
+          as="modal"
+        >
+          <p class="text-sm text-ink-muted">{t("devices.receiptHint")}</p>
+          <SelectField
+            label={t("devices.receiptPrinter")}
+            value={receiptPrinterChoice()}
+            options={receiptPrinters().map((entry) => ({ value: entry.id, label: entry.name }))}
+            onChange={setReceiptPrinterChoice}
+            placeholder={t("devices.receiptPrinterStore")}
+          />
+          <SelectField
+            label={t("devices.receiptLanguage")}
+            value={receiptLanguageChoice()}
+            options={RECEIPT_LANGUAGES.map((token) => ({ value: token, label: languageLabel(token) }))}
+            onChange={setReceiptLanguageChoice}
+            placeholder={t("devices.receiptLanguageStore")}
+          />
+          <SelectField
+            label={t("devices.receiptSecondLanguage")}
+            value={secondLanguageChoice()}
+            options={RECEIPT_SECOND_LANGUAGES.map((token) => ({
+              value: token,
+              label: languageLabel(token),
+            }))}
+            onChange={setSecondLanguageChoice}
+            placeholder={t("devices.receiptLanguageStore")}
+            hint={t("devices.receiptSecondLanguageHint")}
           />
         </FormPanel>
 

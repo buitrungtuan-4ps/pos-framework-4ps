@@ -31,6 +31,9 @@ const PRINTER: DeviceProposalSummary = {
   drawer_attached: false,
   paper_width: null,
   cuts_paper: null,
+  receipt_printer_id: null,
+  receipt_language: null,
+  receipt_second_language: null,
   status: "approved",
   version: "7",
 };

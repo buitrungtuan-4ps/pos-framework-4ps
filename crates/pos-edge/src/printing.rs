@@ -2408,6 +2408,9 @@ mod tests {
             drawer_attached: false,
             paper_width: Open::default(),
             cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: Open::default(),
+            receipt_second_language: Open::default(),
         }
     }
 
