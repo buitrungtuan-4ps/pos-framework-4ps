@@ -2830,6 +2830,90 @@ test("a counter tip on a bill that is not a round number still settles", async (
   }
 });
 
+// The counter's pay pad offers the store's own tip keys, in its order, and no tip row where the store
+// hides every key (ADR-0160 decision 2), as the table pay screen does.
+//
+// It offered five, ten and fifteen percent at every store after the table pay screen took the
+// store's keys. `POS_DEMO_PROFILE=tender-keys` publishes keys of ten, nothing and twenty percent, so a
+// walk-in's salad, 97,900₫, offers 9,790₫ and 19,580₫ and settles in cash with the first. Then the
+// edge says the store hides every key: the next walk-in's pad draws no tip row, and the cash tender
+// still takes the money.
+test("the counter's pay pad offers the store's own tip keys, and no tip row where it hides them all", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["9,790₫", "19,580₫"]);
+    await page.locator('[data-step="setTip"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    let hidden = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.tip_percents = [];
+      hidden += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]').first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toHaveCount(0);
+    expect(hidden, "the price book the till read hid every key").toBeGreaterThan(0);
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no tip keys, and an edge too old to send them, offer the counter's guest what it
+// always offered: five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the salad's 97,900₫.
+// The second half is the price book read with `tip_percents` taken out, which is an older edge's
+// answer, and the same order's pad is opened again.
+test("a store that sets no tip keys, and an edge too old to send them, offer today's keys at the counter", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    const today = ["4,895₫", "9,790₫", "14,685₫"];
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.tip_percents;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 /** Adds the garden salad to the walk-in on screen, after seeing the counter offer it at `price`. */
 async function sellTheSalad(page, price) {
   await page.locator("#menu-search").fill("salad");
