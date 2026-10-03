@@ -379,6 +379,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **After a rollback, revoking a device no longer un-revokes the devices retired before it, and
+  the OTA kill switch halts the store's rollout.** A rollback restores a version onto the store's
+  Tenant layer and empties its other layers. A revocation read the deny-list from the Store layer
+  alone, so after a rollback it wrote a list holding only the new device; a list replaces when
+  layers merge, so the store stopped refusing every device retired before the rollback, and a
+  stolen tablet could trade again. The kill switch read the rollout from the Store layer too, and
+  refused a rolled-back store as having no rollout to halt. Both now read the node as the store
+  runs it, its layers composed, and write it where they always did with the change applied. The
+  rollout and placement reads and the fleet row's country read the same way.
+  - **Upgrade note:** no stored data changes. A store that was rolled back and then had a device
+    revoked should be checked: re-revoke any device missing from its list. The console shows the
+    list.
+
 - **After a rollback, the console reads a store's nodes as the store runs them.** A rollback
   restores a version onto the store's Tenant layer and empties its Store layer, and the console's
   node forms and three of its checks read a node from the Store layer alone. Until each node was

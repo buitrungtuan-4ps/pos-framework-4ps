@@ -1188,9 +1188,7 @@ impl FakeConfigTrees {
     }
 
     /// Puts a store-layer document in the tree, as a publish would, so a read has something to
-    /// find. Only the Store layer is written: the console's country comparison reads exactly
-    /// `store.locale.country_code`, and a helper that also filled the layers above it would let a
-    /// test pass on inheritance the real read does not perform.
+    /// find. Only the Store layer is written, which is where the console's node publishes write.
     fn seed_store_layer(&self, tenant: TenantId, store: StoreId, layer: serde_json::Value) {
         let version = self.mint();
         let state = ConfigTreeState {
@@ -30139,6 +30137,244 @@ async fn a_form_read_leaves_out_the_settings_on_its_node() {
         guardrails,
         "and the form does not show it"
     );
+}
+
+// --- Revocations, the kill switch and the fleet row after a rollback ------------------------------
+
+/// The two devices a store had retired before its rollback.
+fn retired_before_the_rollback() -> [String; 2] {
+    [
+        Ulid::from_u128(0x21).to_string(),
+        Ulid::from_u128(0x22).to_string(),
+    ]
+}
+
+/// The rollout a store ran before its rollback, as `PUT /admin/config/ota` writes one.
+fn restored_rollout() -> serde_json::Value {
+    serde_json::json!({
+        "target_version": "1.4.0",
+        "min_ring": "fleet",
+        "rollout_percent": 40,
+        "signing_key_id": "a1a1a1a1a1a1a1a1",
+        "revoked_key_ids": [],
+    })
+}
+
+/// Gives a store a tree as a rollback leaves it: a deny-list of [`retired_before_the_rollback`], a
+/// rollout and a published country on the Store layer, a placement on the Device layer, then a
+/// publish that dropped them, rolled back ([`ConfigTree::restore`], the rollback route's own
+/// restore). What the store runs is on the Tenant layer; the Store and Device layers are empty.
+fn seed_rolled_back_with_retirements(
+    config_trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) {
+    let version = |n: u128| ConfigVersionId::new(Ulid::from_u128(n));
+    let mut tree = ConfigTree::new(store_id, CapabilityValidator);
+    tree.publish(
+        ConfigLevel::Store,
+        serde_json::json!({
+            "revoked_devices": { "device_ids": retired_before_the_rollback() },
+            "fleet_update": restored_rollout(),
+            "locale": { "country_code": "VN", "currency_code": "VND" },
+        }),
+        version(1),
+        Vec::new(),
+    )
+    .expect("the store's publish");
+    tree.publish(
+        ConfigLevel::Device,
+        serde_json::json!({ "device_ota": { "ring": "fleet", "canary_bucket": 10 } }),
+        version(2),
+        Vec::new(),
+    )
+    .expect("the placement");
+    tree.publish(
+        ConfigLevel::Store,
+        serde_json::json!({}),
+        version(3),
+        Vec::new(),
+    )
+    .expect("the publish rolled back");
+    tree.restore(version(2), version(4)).expect("the rollback");
+    let state = tree.state();
+    assert_eq!(
+        (&state.layers[2], &state.layers[3]),
+        (&serde_json::json!({}), &serde_json::json!({})),
+        "a rollback empties the Store and Device layers"
+    );
+    let version = config_trees.mint();
+    config_trees
+        .rows
+        .lock()
+        .expect("lock")
+        .insert((tenant_id, store_id), Versioned::new(state, version));
+}
+
+/// A revocation after a rollback keeps every device the store had retired: the store runs the
+/// restored list with the new device on it, rather than a list of the new device alone.
+#[tokio::test]
+async fn after_a_rollback_a_revocation_keeps_every_device_the_store_had_retired() {
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store_id());
+    let router = device_revoke_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let uri = format!("/admin/stores/{}/devices/revoke", store_id().as_ulid());
+    let revoke = |device: String| {
+        router.clone().oneshot(post_with_cookie(
+            &uri,
+            &serde_json::json!({ "tenant_id": tenant_ulid, "local_device_id": device }),
+            &cookie,
+        ))
+    };
+    let [first, second] = retired_before_the_rollback();
+    let third = Ulid::from_u128(0x23).to_string();
+    let every_one = vec![first.clone(), second, third.clone()];
+
+    let response = revoke(third).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        running_document(&config, tenant(), store_id())["revoked_devices"]["device_ids"],
+        serde_json::json!(every_one),
+        "the two retired before the rollback stay retired"
+    );
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        every_one,
+        "written on the Store layer, as before, holding the whole list"
+    );
+
+    // Idempotent as before: a device the rollback restored adds nothing.
+    let response = revoke(first).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        every_one
+    );
+}
+
+/// After a rollback the OTA reads answer the rollout and the placement the store runs, and the kill
+/// switch halts that rollout, keeping the rest of it.
+#[tokio::test]
+async fn after_a_rollback_the_kill_switch_halts_the_rollout_the_store_runs() {
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store_id());
+    let router = ota_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let read = |path: &str| {
+        router.clone().oneshot(get_with_cookie(
+            &format!("{path}?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+    };
+
+    let rollout = read("/admin/config/ota")
+        .await
+        .expect("route the rollout read");
+    assert_eq!(json_body(rollout).await, restored_rollout());
+    let placement = read("/admin/config/ota/placement")
+        .await
+        .expect("route the placement read");
+    assert_eq!(
+        json_body(placement).await,
+        serde_json::json!({ "ring": "fleet", "canary_bucket": 10 })
+    );
+
+    let halted = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/ota/halt",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "halted": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the halt");
+    assert_eq!(halted.status(), StatusCode::OK);
+    let mut expected = restored_rollout();
+    expected["halted"] = serde_json::json!(true);
+    assert_eq!(
+        running_document(&config, tenant(), store_id())["fleet_update"],
+        expected,
+        "the restored rollout, halted, the rest of it kept"
+    );
+}
+
+/// The kill switch on a store never rolled back halts its published rollout and resumes it, keeping
+/// the rest of the rollout either way.
+#[tokio::test]
+async fn the_kill_switch_halts_and_resumes_a_published_rollout() {
+    let config = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let mut body = restored_rollout();
+    body["tenant_id"] = serde_json::json!(tenant_ulid);
+    body["store_id"] = serde_json::json!(store_ulid);
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie("/admin/config/ota", &body, &cookie))
+        .await
+        .expect("route the rollout publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    for halted in [true, false] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/config/ota/halt",
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "store_id": store_ulid,
+                    "halted": halted,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the halt");
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut expected = restored_rollout();
+        expected["halted"] = serde_json::json!(halted);
+        let tree = config
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a tree");
+        assert_eq!(tree.record.layers[2]["fleet_update"], expected, "{halted}");
+    }
+}
+
+/// After a rollback the fleet row compares the store's region against the country the store runs,
+/// which the rollback restored, rather than reporting no country.
+#[tokio::test]
+async fn after_a_rollback_the_fleet_row_shows_the_restored_country() {
+    let store = store_id();
+    let mut row = store_in_handover(store, Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let fleet = FakeFleet::default().with_row(tenant(), row);
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store);
+    let router = fleet_app_with_config(provisioned_admin(), fleet, config);
+    let cookie = admin_cookie(&router).await;
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{store}?tenant_id={}", tenant().as_ulid()),
+            &cookie,
+        ))
+        .await
+        .expect("route the single-store read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["profile_country"], "VN");
+    assert_eq!(body["region_agreement"], "differs");
 }
 
 // --- The anchor ledger (ADR-0131 decision 4) -----------------------------------------------------
