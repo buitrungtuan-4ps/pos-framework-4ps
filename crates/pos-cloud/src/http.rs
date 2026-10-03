@@ -21517,6 +21517,9 @@ where
 ///
 /// The refusal names the node and what it is waiting for, because "the configuration is invalid" is
 /// the message that sent the operator to the logs.
+///
+/// A node that carries nothing but settings is not held ([`only_settings`]): the settings compile
+/// writes `locale.tax_rounding` on the Tenant layer of a store whose locale was never published.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
@@ -21526,9 +21529,10 @@ fn check_prerequisites(
     publishing: &[String],
 ) -> Result<(), Response> {
     let held = |key: &str| {
-        effective_before
-            .as_object()
-            .is_some_and(|map| map.get(key).is_some_and(|value| !value.is_null()))
+        effective_before.as_object().is_some_and(|map| {
+            map.get(key)
+                .is_some_and(|value| !value.is_null() && !only_settings(key, value))
+        })
     };
     for node in publishing {
         for need in prerequisites_for(node) {
@@ -21545,6 +21549,23 @@ fn check_prerequisites(
         }
     }
     Ok(())
+}
+
+/// Whether `value`, the store's `node`, carries only fields the settings register writes there
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+///
+/// Such a node is the settings and nothing else: a `locale` holding `tax_rounding` alone has no
+/// currency, timezone or cutoff, so it is not the locale a menu waits for.
+fn only_settings(node: &str, value: &serde_json::Value) -> bool {
+    let register = pos_proto::settings::register();
+    value.as_object().is_some_and(|fields| {
+        !fields.is_empty()
+            && fields.keys().all(|field| {
+                register
+                    .iter()
+                    .any(|setting| setting.node == node && setting.field == field)
+            })
+    })
 }
 
 /// Sets `nodes` on the layer at `level`, preserving every other key.
@@ -35507,6 +35528,22 @@ mod preview_diff_tests {
         let before = json!({"locale": {"currency": "VND"}, "tax": Value::Null});
         super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect_err("a null tax node is no tax node");
+    }
+
+    #[test]
+    fn a_locale_that_carries_only_its_settings_is_not_the_locale_a_menu_needs() {
+        // ADR-0160: a tenant's tax rounding reaches the Tenant layer of every store it covers,
+        // including one whose locale was never published. That store still has no locale.
+        let setting = json!({"tax_rounding": "TAX_ROUNDING_DOWN"});
+        let before = json!({"locale": setting, "tax": {"rates": []}});
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect_err("a setting alone is no locale");
+        let before = json!({
+            "locale": {"currency": "VND", "tax_rounding": "TAX_ROUNDING_DOWN"},
+            "tax": {"rates": []},
+        });
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect("a published locale with the setting beside it");
     }
 
     #[test]

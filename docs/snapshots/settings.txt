@@ -4,6 +4,16 @@
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
 # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+locale.tax_rounding
+locale.tax_rounding	default=TAX_ROUNDING_HALF_UP
+locale.tax_rounding	kind=SETTING_KIND_CHOICE
+locale.tax_rounding	scope=SETTING_SCOPE_BRAND
+locale.tax_rounding	scope=SETTING_SCOPE_STORE
+locale.tax_rounding	scope=SETTING_SCOPE_STORE_GROUP
+locale.tax_rounding	scope=SETTING_SCOPE_TENANT
+locale.tax_rounding	since=0.14.1
+locale.tax_rounding	value=TAX_ROUNDING_DOWN
+locale.tax_rounding	value=TAX_ROUNDING_HALF_UP
 permissions.enforced
 permissions.enforced	default=false
 permissions.enforced	kind=SETTING_KIND_BOOL

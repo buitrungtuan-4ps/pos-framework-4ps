@@ -17,6 +17,7 @@
 //!   construction sums to [`BillTotals::tax_total`].
 //! - **Cash rounding is an explicit line.** [`BillTotals::rounding_adjustment`] is the difference
 //!   between the rounded and unrounded totals, so the printed lines reconcile to the printed total.
+//!   It is always half-up ([`CASH_ROUNDING`]): it is about the coins a country has, not its tax.
 //! - **Tips are not part of the total.** [`settle`] takes them separately and they appear only in
 //!   the change identity, never in `total_due`.
 //!
@@ -33,9 +34,10 @@
 //! A fee is a published rule ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), and
 //! [`assemble`] charges every rule that applies to the bill as one [`FeeLine`]. A percentage is
 //! taken of the lines it counts, after their share of the bill's discount and comps, and never of
-//! another fee, so fees do not compound. Each fee rounds once, by the bill's rounding mode. Its
-//! taxed parts join their classes' bases before each class's tax is rounded, so tax still rounds
-//! once per class (ADR-0028); each part then carries its share of that class's tax.
+//! another fee, so fees do not compound. Each fee rounds once, by the store's tax rounding
+//! ([`BillInput::tax_rounding`]). Its taxed parts join their classes' bases before each class's tax
+//! is rounded, so tax still rounds once per class (ADR-0028); each part then carries its share of
+//! that class's tax.
 //! [`BillTotals::service_charge`] carries the sum of every fee, so the readers of that one figure
 //! stay right (ADR-0159 decision 4).
 //!
@@ -51,6 +53,14 @@ use pos_proto::text::DisplayName;
 use pos_proto::{CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId};
 
 use crate::error::DomainError;
+
+/// How the grand total rounds to the store's cash increment: half-up, whatever the store's tax
+/// rounding ([`BillInput::tax_rounding`]).
+///
+/// Cash rounding is about the coins a guest can hand over, not about tax
+/// (`pos_proto::locale::LocalePack::cash_rounding_increment`), so a store that drops the fraction of
+/// its tax still rounds what it is paid to the nearest coin, as every store always has.
+pub const CASH_ROUNDING: Rounding = Rounding::HalfUp;
 
 /// One line of tax on the bill: a class, the base it was charged on, and the tax itself.
 ///
@@ -175,7 +185,8 @@ pub struct FeeLine {
     pub code: FeeCode,
     /// The rule's own name, as the bill froze it: what the bill prints the fee under.
     pub display_name: DisplayName,
-    /// What it charged, rounded once to the minor unit by the bill's rounding mode.
+    /// What it charged, rounded once to the minor unit by the store's tax rounding
+    /// ([`BillInput::tax_rounding`]).
     pub amount: Money,
     /// The parts of `amount` taxed at each class, which sum to it. There are none for a fee that is
     /// not taxed, one for a fee taxed at a named class, and for a fee that follows its lines one
@@ -212,10 +223,20 @@ pub struct BillInput<'a> {
     /// The channel this bill's order came in on, which selects the tax rate.
     pub sales_channel: SalesChannel,
     /// The cash-rounding increment in minor units (500 for VND rounding to the nearest 500), or
-    /// `None` for no rounding. Applied to the grand total, materialised as an explicit adjustment.
+    /// `None` for no rounding. Applied to the grand total, half-up ([`CASH_ROUNDING`]), and
+    /// materialised as an explicit adjustment.
     pub cash_rounding_increment: Option<i64>,
-    /// The rounding mode for tax and for cash rounding.
-    pub rounding_mode: Rounding,
+    /// How each tax amount and each fee rounds to the minor unit: the store's `locale.tax_rounding`
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2), half-up unless it says otherwise.
+    ///
+    /// It rounds the tax of each class and of each charge taxed at a class no line is in, extracted
+    /// or added on top as [`Self::prices_include_tax`] says, and each fee's amount (ADR-0159
+    /// decision 2). A tax line's named parts and a fee's share of a class's tax are shares of that
+    /// rounded tax, so they follow it. It does not round the cash rounding of the grand total, which
+    /// is always [`CASH_ROUNDING`], nor anything the caller priced before the bill, such as a line's
+    /// net or a campaign's reduction.
+    pub tax_rounding: Rounding,
     /// Whether the class bases already contain their tax — the store's `locale.prices_include_tax`
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     ///
@@ -372,7 +393,7 @@ fn extra_class_lines(
                 .rates
                 .components_for(charge.tax_class_id, input.sales_channel),
             input.prices_include_tax,
-            input.rounding_mode,
+            input.tax_rounding,
         )?;
         lines.push(TaxLine {
             tax_class_id: charge.tax_class_id,
@@ -465,7 +486,7 @@ fn fee_line(
                 Money::zero(input.currency_code)
             };
             let counted_net = sum_nets(&counted, input.currency_code)?;
-            percent_of(counted_net, subtotal, reductions, rate, input.rounding_mode)?
+            percent_of(counted_net, subtotal, reductions, rate, input.tax_rounding)?
         }
         FeeKind::AmountPerBill | FeeKind::AmountPerUnit => {
             let Some(amount) = rule.amount else {
@@ -475,7 +496,7 @@ fn fee_line(
                 let units = counted
                     .iter()
                     .try_fold(Quantity::ZERO, |sum, line| sum.checked_add(line.quantity))?;
-                amount.mul_quantity(units, input.rounding_mode)?
+                amount.mul_quantity(units, input.tax_rounding)?
             } else {
                 amount
             }
@@ -780,7 +801,7 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
                 .rates
                 .components_for(base.tax_class_id, input.sales_channel),
             input.prices_include_tax,
-            input.rounding_mode,
+            input.tax_rounding,
         )?;
         tax_total = tax_total.checked_add(tax)?;
         tax_lines.push(TaxLine {
@@ -821,11 +842,12 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         .checked_add(service_charge)?
         .checked_add(tax_total)?;
 
-    // Cash rounding, materialised as an explicit adjustment so the receipt reconciles.
+    // Cash rounding, materialised as an explicit adjustment so the receipt reconciles. Half-up
+    // whatever the tax rounding: it is about coins, not tax.
     let (total_due, rounding_adjustment) = match input.cash_rounding_increment {
         Some(increment) => match core::num::NonZeroI64::new(increment) {
             Some(step) => {
-                let rounded = unrounded.round_to_increment(step, input.rounding_mode)?;
+                let rounded = unrounded.round_to_increment(step, CASH_ROUNDING)?;
                 (rounded, rounded.checked_sub(unrounded)?)
             }
             None => (unrounded, Money::zero(currency)),
@@ -1244,9 +1266,11 @@ mod tests {
         MergingBill, Payment, assemble, fee_wholes, merge_fee_rules, settle, split_by_weights,
         split_evenly, split_fee_rules, waivable_fee,
     };
+    use core::num::NonZeroI64;
+
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
-    use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
+    use pos_proto::locale::{LocaleSettings, TaxComponent, TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::money::{Money, Ratio, Rounding};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
@@ -1289,7 +1313,7 @@ mod tests {
             rates,
             sales_channel: SalesChannel::DineIn,
             cash_rounding_increment: None,
-            rounding_mode: Rounding::HalfUp,
+            tax_rounding: Rounding::HalfUp,
             prices_include_tax: false,
             fee_rules: &[],
             waived_fee_ids: &[],
@@ -1994,7 +2018,7 @@ mod tests {
         let rates = rates();
         let charge = |lines: &[BillLine], rule: FrozenFee, mode: Rounding, discount: i64| {
             let set = |input: &mut BillInput<'_>| {
-                input.rounding_mode = mode;
+                input.tax_rounding = mode;
                 input.bill_discount = vnd(discount);
             };
             let rules = [untaxed(rule)];
@@ -2019,6 +2043,131 @@ mod tests {
         let tiny = [line(0, 1, 1, food()), line(1, 1, 2, food())];
         let first = only(FeeItems::Include, 0, fee(1, FeeKind::Percent, 7_500));
         assert_eq!(charge(&tiny, first, Rounding::HalfEven, 1), vnd(0));
+    }
+
+    // ---- ADR-0160: the store's tax rounding ---------------------------------------------------
+
+    /// One line of `net` đồng of food at 10 %, its tax rounded by `mode`, its price including that
+    /// tax where `inclusive` says so.
+    fn food_at_ten_percent(net: i64, mode: Rounding, inclusive: bool) -> BillTotals {
+        assemble_with(&[line(0, 1, net, food())], &[], &rates(), |input| {
+            input.tax_rounding = mode;
+            input.prices_include_tax = inclusive;
+        })
+        .expect("assembles")
+    }
+
+    #[test]
+    fn a_store_that_rounds_tax_down_drops_the_fraction_on_a_tie_and_off_one() {
+        // 10 % of 25 is 2.5, a tie; of 27, 2.7; of 21, 2.1; of 30, exactly 3.
+        for (net, half_up, down) in [(25, 3, 2), (27, 3, 2), (21, 2, 2), (30, 3, 3)] {
+            let up = food_at_ten_percent(net, Rounding::HalfUp, false);
+            let dropped = food_at_ten_percent(net, Rounding::TowardZero, false);
+            assert_eq!(up.tax_total, vnd(half_up), "{net}");
+            assert_eq!(dropped.tax_total, vnd(down), "{net}");
+            assert_eq!(dropped.total_due, vnd(net + down), "{net}");
+            assert_reconciles(&dropped);
+        }
+    }
+
+    #[test]
+    fn a_tax_inside_the_price_drops_its_fraction_and_the_guest_still_pays_the_price() {
+        // 10 % inside 1,000 is 90.9…: 91 half-up, 90 down. The guest pays 1,000 either way, and the
+        // base the invoice prints keeps what the tax does not.
+        let up = food_at_ten_percent(1_000, Rounding::HalfUp, true);
+        let down = food_at_ten_percent(1_000, Rounding::TowardZero, true);
+        assert_eq!((up.tax_total, down.tax_total), (vnd(91), vnd(90)));
+        assert_eq!((up.total_due, down.total_due), (vnd(1_000), vnd(1_000)));
+        let base = |totals: &BillTotals| totals.tax_lines.first().map(|line| line.taxable_base);
+        assert_eq!((base(&up), base(&down)), (Some(vnd(909)), Some(vnd(910))));
+        assert_reconciles(&down);
+    }
+
+    #[test]
+    fn a_tax_lines_named_parts_share_the_tax_as_it_rounded() {
+        // Two halves of 18 %. On 105 the tax is 18.9: 19 half-up and 18 down, and the parts share
+        // whichever it is.
+        let halves = TaxRateTable::new().with_components(
+            food(),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        let parts = |mode: Rounding| -> Vec<Money> {
+            let totals = assemble_with(&[line(0, 1, 105, food())], &[], &halves, |input| {
+                input.tax_rounding = mode;
+            })
+            .expect("assembles");
+            totals
+                .tax_lines
+                .iter()
+                .flat_map(|line| line.components.iter().map(|part| part.tax))
+                .collect()
+        };
+        assert_eq!(parts(Rounding::HalfUp), [vnd(9), vnd(10)]);
+        assert_eq!(parts(Rounding::TowardZero), [vnd(9), vnd(9)]);
+    }
+
+    #[test]
+    fn a_fee_and_the_tax_on_it_drop_their_fractions_at_a_store_that_rounds_down() {
+        let rates = rates();
+        let charged = |lines: &[BillLine], rule: FrozenFee, mode: Rounding| {
+            let rules = [rule];
+            assemble_with(lines, &rules, &rates, |input| input.tax_rounding = mode)
+                .expect("assembles")
+        };
+        // 10 % of 27 is 2.7: 3 half-up, 2 down.
+        let small = [line(0, 1, 27, food())];
+        let ten = || untaxed(fee(1, FeeKind::Percent, 1_000));
+        assert_eq!(
+            charged(&small, ten(), Rounding::HalfUp).service_charge,
+            vnd(3)
+        );
+        assert_eq!(
+            charged(&small, ten(), Rounding::TowardZero).service_charge,
+            vnd(2)
+        );
+        // Half a unit at 3,001 is 1,500.5.
+        let half = [BillLine {
+            quantity: Quantity::HALF,
+            ..line(0, 1, 40_000, food())
+        }];
+        let box_fee = untaxed(fee(1, FeeKind::AmountPerUnit, 3_001));
+        assert_eq!(
+            charged(&half, box_fee, Rounding::TowardZero).service_charge,
+            vnd(1_500)
+        );
+        // A fee of 25 taxed at alcohol, 15 %, on a bill with no alcohol is taxed 3.75 on a line of
+        // its own: 4 half-up, 3 down.
+        let food_only = [line(0, 1, 100, food())];
+        let cover = || taxed_at(alcohol(), fee(1, FeeKind::AmountPerBill, 25));
+        let fee_tax = |mode: Rounding| {
+            charged(&food_only, cover(), mode)
+                .fee_lines
+                .first()
+                .map(|line| line.tax)
+        };
+        assert_eq!(fee_tax(Rounding::HalfUp), Some(vnd(4)));
+        assert_eq!(fee_tax(Rounding::TowardZero), Some(vnd(3)));
+    }
+
+    #[test]
+    fn the_total_still_rounds_half_up_to_the_coins_at_a_store_that_rounds_tax_down() {
+        // 10 % of 100,228 is 10,022.8, which is 10,022 down. The total, 110,250, is half way between
+        // two 500-đồng steps and rounds up to 110,500, as every store's total does: the coins decide
+        // it, not the tax.
+        let totals = assemble_with(&[line(0, 1, 100_228, food())], &[], &rates(), |input| {
+            input.tax_rounding = Rounding::TowardZero;
+            input.cash_rounding_increment = Some(500);
+        })
+        .expect("assembles");
+        assert_eq!(totals.tax_total, vnd(10_022));
+        assert_eq!(totals.rounding_adjustment, vnd(250));
+        assert_eq!(totals.total_due, vnd(110_500));
+        assert_reconciles(&totals);
     }
 
     #[test]
@@ -2355,6 +2504,16 @@ mod tests {
         assert!(none.waived_fee_ids.is_empty());
     }
 
+    /// The modes a bill's tax and fees may round by in a property test: the two a store chooses
+    /// between (ADR-0160), and half-even, which the arithmetic takes as well.
+    fn modes() -> impl Strategy<Value = Rounding> {
+        prop_oneof![
+            Just(Rounding::HalfUp),
+            Just(Rounding::TowardZero),
+            Just(Rounding::HalfEven),
+        ]
+    }
+
     /// A rule from a property test's choices of kind, tax treatment, item scope and value.
     fn chosen(id: u128, kind: u8, tax: u8, scope: u8, value: i64) -> FrozenFee {
         let kind = match kind {
@@ -2439,7 +2598,7 @@ mod tests {
             discount_percent in 0_i64..=50,
             service_charge in prop_oneof![Just(0_i64), 1_i64..=50_000],
             choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=3),
-            half_even in any::<bool>(),
+            mode in modes(),
             cash_rounding in any::<bool>(),
         ) {
             let class = |is_food: bool| if is_food { food() } else { alcohol() };
@@ -2457,7 +2616,7 @@ mod tests {
             let totals = assemble_with(&lines, &rules, &rates, |input| {
                 input.bill_discount = vnd(discount);
                 input.service_charge = vnd(service_charge);
-                input.rounding_mode = if half_even { Rounding::HalfEven } else { Rounding::HalfUp };
+                input.tax_rounding = mode;
                 input.cash_rounding_increment = cash_rounding.then_some(500);
             })
             .expect("assembles");
@@ -2573,7 +2732,7 @@ mod tests {
                 1..=8,
             ),
             choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
-            half_even in any::<bool>(),
+            mode in modes(),
             merging in prop::collection::vec(any::<bool>(), 3),
             holding in 0_usize..3,
         ) {
@@ -2593,8 +2752,7 @@ mod tests {
                 .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
                 .collect();
             let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
-            let mode = if half_even { Rounding::HalfEven } else { Rounding::HalfUp };
-            let round = |input: &mut BillInput<'_>| input.rounding_mode = mode;
+            let round = |input: &mut BillInput<'_>| input.tax_rounding = mode;
 
             let whole = assemble_with(&lines, &rules, &rates, round).expect("assembles");
             let kept = split_fee_rules(&rules, &parts).expect("splits");
@@ -2657,6 +2815,77 @@ mod tests {
                 if picked.len() == parts.len() {
                     prop_assert_eq!(charged, *whole, "every part back together is the whole");
                 }
+            }
+        }
+
+        /// ADR-0160 (the tax rounding on `locale`): a store whose `locale` node sets no mode, sets
+        /// `TAX_ROUNDING_HALF_UP`, or carries `TAX_ROUNDING_UNSPECIFIED` or a mode from a newer
+        /// release assembles every bill exactly as before the setting existed. Every caller passed
+        /// [`Rounding::HalfUp`] as the one mode for the tax, the fees and the cash rounding, so the
+        /// figures through the setting are the figures with that mode, and the grand total is the
+        /// unrounded total rounded half-up to the increment, as that one mode rounded it.
+        #[test]
+        fn a_store_on_half_up_assembles_every_bill_as_before(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            comps_percent in 0_i64..=20,
+            service_charge in prop_oneof![Just(0_i64), 1_i64..=50_000],
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=3),
+            inclusive in any::<bool>(),
+            cash_increment in prop_oneof![Just(None), Just(Some(500_i64)), Just(Some(1_000_i64))],
+            node in 0_usize..4,
+        ) {
+            let settings = LocaleSettings {
+                tax_rounding: match node {
+                    0 => Open::default(),
+                    1 => Open::from_known(TaxRounding::HalfUp),
+                    2 => Open::from_known(TaxRounding::Unspecified),
+                    _ => Open::parse("TAX_ROUNDING_HALF_EVEN"),
+                },
+            };
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let comps = (sold_total - discount) * comps_percent / 100;
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let bill = |mode: Rounding| {
+                assemble_with(&lines, &rules, &rates, |input| {
+                    input.bill_discount = vnd(discount);
+                    input.comps = vnd(comps);
+                    input.service_charge = vnd(service_charge);
+                    input.prices_include_tax = inclusive;
+                    input.cash_rounding_increment = cash_increment;
+                    input.tax_rounding = mode;
+                })
+            };
+
+            let through_the_setting = bill(settings.tax_rounding().rounding());
+            let with_the_one_mode = bill(Rounding::HalfUp);
+            prop_assert_eq!(&through_the_setting, &with_the_one_mode);
+            if let Ok(totals) = with_the_one_mode {
+                assert_reconciles(&totals);
+                let unrounded = totals
+                    .total_due
+                    .checked_sub(totals.rounding_adjustment)
+                    .expect("one currency");
+                let rounded = match cash_increment.and_then(NonZeroI64::new) {
+                    Some(step) => unrounded
+                        .round_to_increment(step, Rounding::HalfUp)
+                        .expect("in range"),
+                    None => unrounded,
+                };
+                prop_assert_eq!(totals.total_due, rounded);
             }
         }
     }
