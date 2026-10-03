@@ -209,6 +209,11 @@ interface StoreShape {
   // server who has not said whose dish it is has not said.
   seatForTable: Record<string, number>;
   acceptedTender: string[] | null;
+  // The store's tip keys, whole percentages in its order, from the same read (ADR-0160 decision 2).
+  // `null` until the read lands, and from an edge older than the setting: the till then offers the
+  // three keys it always did. An empty array is a real answer: the store offers no tip key, and the
+  // pay screen shows no tip row.
+  tipPercents: number[] | null;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
@@ -308,6 +313,7 @@ const [state, setState] = createStore<StoreShape>({
   kdsEnabled: true,
   seatForTable: {},
   acceptedTender: null,
+  tipPercents: null,
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
@@ -1459,6 +1465,29 @@ export function tipsEnabled(): boolean {
   return state.tipsEnabled;
 }
 
+// The tip keys the pay screen offered before a store could set its own: five, ten and fifteen
+// percent of the bill.
+const DEFAULT_TIP_PERCENTS: readonly number[] = [5, 10, 15];
+
+// The tip keys the pay screen offers, as whole percentages of the bill in the store's order: what
+// the edge sent, or the three it always offered where it sent nothing.
+export function tipPercents(): readonly number[] {
+  return state.tipPercents ?? DEFAULT_TIP_PERCENTS;
+}
+
+// The keys an edge sent, or `null` where it sent none the till can use: at most three, the most the
+// row has room for, each a whole percentage from 1 to 100. Anything else and the till offers its
+// own three.
+function readTipPercents(sent: unknown): number[] | null {
+  if (!Array.isArray(sent) || sent.length > DEFAULT_TIP_PERCENTS.length) {
+    return null;
+  }
+  const keys = sent.filter(
+    (percent): percent is number => Number.isInteger(percent) && percent > 0 && percent <= 100,
+  );
+  return keys.length === sent.length ? keys : null;
+}
+
 // Whether the store accepts `method` (a `PAYMENT_METHOD_*` wire name).
 //
 // An unloaded or unrestricted store accepts everything, which is why both are `true` rather than
@@ -1493,6 +1522,7 @@ export async function loadMenu(): Promise<void> {
     setState("tablesEnabled", response.tables_enabled);
     setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
+    setState("tipPercents", readTipPercents(response.tip_percents));
     setState("coursesEnabled", response.courses_enabled);
     setState("courses", response.courses);
   }

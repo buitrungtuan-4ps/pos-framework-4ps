@@ -1876,6 +1876,26 @@ async fn a_store_with_tips_off_tells_the_till_not_to_ask_for_one() {
     );
 }
 
+/// The till is told the store's tip keys (ADR-0160 decision 2): five, ten and fifteen percent until
+/// the store sets its own, and then its own, in order, with a key it set to `0` left out.
+#[tokio::test]
+async fn the_till_is_told_the_stores_tip_keys_in_order_without_the_ones_it_hid() {
+    let unset = read(&a_store().await, "/api/menu").await;
+    assert_eq!(unset["tip_percents"], json!([5, 10, 15]));
+
+    let store = a_store_where(|mut session| {
+        session.tender_keys.first_tip_percent = Some(10);
+        session.tender_keys.second_tip_percent = Some(0);
+        session.tender_keys.third_tip_percent = Some(20);
+        session
+    })
+    .await;
+    assert_eq!(
+        read(&store, "/api/menu").await["tip_percents"],
+        json!([10, 20])
+    );
+}
+
 /// The till reads a channel's own price book by naming it (ADR-0066), so the counter's buttons
 /// show the takeaway price its lines are charged at. With no channel named the route serves the
 /// store's own, as it always has, and a channel the edge does not know is refused.

@@ -58,6 +58,7 @@ pub mod settings;
 pub mod shift;
 pub mod snapshot;
 pub mod store_profile;
+pub mod tender_keys;
 pub mod text;
 pub mod time;
 pub mod ulid;

@@ -1950,9 +1950,9 @@ export interface SettingDefinition {
   /** For a whole number, the largest value it takes. */
   readonly max?: number;
   /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_COUNT` or
-   * `_MINOR_UNITS`, an amount in the store currency's smallest unit — which the console names in the
-   * operator's language.
+   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_COUNT`,
+   * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
+   * percentage — which the console names in the operator's language.
    */
   readonly unit?: string;
   /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */

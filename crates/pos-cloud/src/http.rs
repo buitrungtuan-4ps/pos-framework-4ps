@@ -35547,6 +35547,16 @@ mod preview_diff_tests {
     }
 
     #[test]
+    fn nothing_waits_on_the_tender_keys_node() {
+        // ADR-0160: the node holds settings and nothing else, which the rule above counts as no node.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"tender_keys"))
+        );
+    }
+
+    #[test]
     fn a_changed_node_diffs_to_only_that_node_and_leaves_the_others_alone() {
         let state = state_with(json!({
             "tax": {"rate": 8},

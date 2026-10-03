@@ -28,6 +28,7 @@ use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage}
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
 use crate::shift::{self, NoShiftSelling, PublishedShift};
+use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
@@ -77,6 +78,8 @@ wire_enum! {
     /// (`docs/naming-and-api.md` §3.2). A setting at the tenant may reach stores in more than one
     /// currency, so the number is the store's own currency's, whichever that is.
     MinorUnits = "MINOR_UNITS",
+    /// A whole percentage: `10` is ten percent.
+    Percent = "PERCENT",
 }
 
 /// What a setting's value is, and what the register holds it to.
@@ -485,6 +488,53 @@ pub fn register() -> Vec<Setting> {
                       is computed with the mode in force when it is computed, so change it outside \
                       trading hours.",
         },
+        Setting {
+            node: PublishedTenderKeys::NODE,
+            field: "first_tip_percent",
+            shape: SettingShape::Int {
+                min: *tender_keys::TIP_PERCENT.start(),
+                max: *tender_keys::TIP_PERCENT.end(),
+                unit: SettingUnit::Percent,
+                default: i64::from(PublishedTenderKeys::default().first_tip_percent()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The first tip key the pay screen offers, as a whole percentage of the bill: \
+                      `10` is ten percent. `0` hides the key. The pay screen offers its keys in \
+                      order, after the key for no tip, wherever the store takes tips.",
+        },
+        Setting {
+            node: PublishedTenderKeys::NODE,
+            field: "second_tip_percent",
+            shape: SettingShape::Int {
+                min: *tender_keys::TIP_PERCENT.start(),
+                max: *tender_keys::TIP_PERCENT.end(),
+                unit: SettingUnit::Percent,
+                default: i64::from(PublishedTenderKeys::default().second_tip_percent()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The second tip key the pay screen offers, as a whole percentage of the \
+                      bill. `0` hides the key, and so does a percentage the first key offers.",
+        },
+        Setting {
+            node: PublishedTenderKeys::NODE,
+            field: "third_tip_percent",
+            shape: SettingShape::Int {
+                min: *tender_keys::TIP_PERCENT.start(),
+                max: *tender_keys::TIP_PERCENT.end(),
+                unit: SettingUnit::Percent,
+                default: i64::from(PublishedTenderKeys::default().third_tip_percent()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The third tip key the pay screen offers, as a whole percentage of the bill. \
+                      `0` hides the key, and so does a percentage an earlier key offers. With no key \
+                      left to offer, the pay screen shows no tip row.",
+        },
     ]
 }
 
@@ -652,6 +702,7 @@ fn unit_phrase(unit: SettingUnit) -> &'static str {
         SettingUnit::Minutes => "a whole number of minutes",
         SettingUnit::Count => "a count",
         SettingUnit::MinorUnits => "an amount in the store currency's minor unit",
+        SettingUnit::Percent => "a whole percentage",
     }
 }
 
@@ -684,6 +735,7 @@ mod tests {
     use crate::qr::PublishedQr;
     use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
+    use crate::tender_keys::PublishedTenderKeys;
     use crate::wire_enum::WireEnum;
 
     fn committed(path: &str) -> PathBuf {
@@ -1042,6 +1094,15 @@ mod tests {
                 let locale: LocaleSettings = serde_json::from_value(document).ok()?;
                 match field {
                     "tax_rounding" => Some(json!(locale.tax_rounding().as_wire())),
+                    _ => None,
+                }
+            }
+            PublishedTenderKeys::NODE => {
+                let keys: PublishedTenderKeys = serde_json::from_value(document).ok()?;
+                match field {
+                    "first_tip_percent" => Some(json!(keys.first_tip_percent())),
+                    "second_tip_percent" => Some(json!(keys.second_tip_percent())),
+                    "third_tip_percent" => Some(json!(keys.third_tip_percent())),
                     _ => None,
                 }
             }

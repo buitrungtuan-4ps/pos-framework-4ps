@@ -456,6 +456,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store sets its own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered 5, 10 and 15 percent at every store.
+  - Three new settings on a new `tender_keys` node, `first_tip_percent`, `second_tip_percent` and
+    `third_tip_percent`: each a whole percentage of the bill from 0 to 100, defaulting to 5, 10 and
+    15, set at the tenant, a brand, a store group or one store. `0` hides that key. The register
+    gains the unit `SETTING_UNIT_PERCENT`, which the console names "10%".
+  - The edge reads them from the `tender_keys` node, a value out of range or unreadable as its
+    default, and sends the till the keys to offer as `tip_percents` beside `tips_enabled`: each that
+    is not `0` and does not repeat an earlier key's percentage, in order. The pay screen offers
+    **No tip** and those keys, rounded to the cash increment as before, in any order the store sets
+    them, and shows no tip row when no key is left.
+  - **Upgrade note:** nothing changes until a store sets a key: the defaults are today's keys, a
+    till reading an older edge offers them too, and an older till ignores the field. The keys live
+    on a node of their own, not on `tender`, so an edge older than this release ignores them and
+    keeps today's keys, and the `tender` node and the tender a store accepts are unchanged. The
+    settings snapshot and `docs/configuration.md` gain the three settings; no route, event,
+    migration, permission or protocol change.
+
 - **A store chooses how its tax rounds**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2, [ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 2). Every tax amount

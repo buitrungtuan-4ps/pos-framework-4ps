@@ -31087,15 +31087,23 @@ fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
         config_trees.clone(),
         FakeWebhooks::default(),
     );
-    let router = http::router(app).merge(http::settings_router(
-        FakeSettings::default(),
-        registry,
-        groups.clone(),
-        config_trees.clone(),
-        admin,
-        clock(),
-        Arc::new(NoopAuditRecorder),
-    ));
+    let router = http::router(app)
+        .merge(http::settings_router(
+            FakeSettings::default(),
+            registry,
+            groups.clone(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        // The tender publish, whose node the tip keys share (ADR-0160).
+        .merge(http::config_channels_router(
+            config_trees.clone(),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ));
     (router, config_trees, groups)
 }
 
@@ -31952,6 +31960,96 @@ async fn a_number_outside_its_bounds_or_not_whole_is_refused_and_reaches_no_stor
     for store_id in settings_stores() {
         assert_eq!(tenant_layer_session(&config_trees, store_id).await, None);
     }
+}
+
+/// The tip keys are settings on a `tender_keys` node of their own (ADR-0160 decision 2), written on
+/// each store's Tenant layer. The `tender` node the tender publish writes on the Store layer is left
+/// as it was, and a store whose tender was never published receives the keys and no `tender` node.
+#[tokio::test]
+async fn the_tip_keys_reach_a_store_on_their_own_node_and_leave_its_tender_alone() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, third] = settings_stores();
+    let accepted =
+        serde_json::json!({ "accepted": ["PAYMENT_METHOD_CASH", "PAYMENT_METHOD_CARD"] });
+    let effective = |store_id: StoreId| {
+        get_with_cookie(
+            &format!(
+                "/admin/stores/{}/config?tenant_id={}",
+                store_id.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &cookie,
+        )
+    };
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/tender",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": first.to_string(),
+                "accepted": accepted["accepted"],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the tender publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    for (key, value) in [
+        ("tender_keys.first_tip_percent", 10),
+        ("tender_keys.second_tip_percent", 0),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": key,
+                    "scope": "SETTING_SCOPE_TENANT",
+                    "scope_id": tenant().as_ulid().to_string(),
+                    "value": value,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{key}");
+    }
+    let keys = serde_json::json!({ "first_tip_percent": 10, "second_tip_percent": 0 });
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["tender_keys"], keys,
+        "on the Tenant layer"
+    );
+    assert!(tree.record.layers[0].get("tender").is_none());
+    assert_eq!(
+        tree.record.layers[2]["tender"], accepted,
+        "the store's tender as published"
+    );
+
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(effective(first))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(listed["tender"], accepted);
+    assert_eq!(listed["tender_keys"], keys);
+    let unlisted = json_body(router.oneshot(effective(third)).await.expect("route")).await;
+    assert_eq!(unlisted["tender_keys"], keys);
+    assert!(
+        unlisted.get("tender").is_none(),
+        "no tender node, so the store takes every tender as before"
+    );
 }
 
 // --- Fees (ADR-0159 decision 1) -----------------------------------------------------------------
