@@ -399,6 +399,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Retiring a device, and sending a guest's order to the kitchen or refusing it, no longer say the
+  store did not respond.** The edge answers each with `204` and no body, and the till read every
+  answer as JSON. So a retirement that had worked said "The store did not respond." and left the
+  device on the list, and a guest's order that had been sent stayed on screen under the same
+  sentence until the queue next refreshed. The till now reads a `204` as done, which the new
+  **Release** on the Devices screen relies on too.
+
 - **The console offers a printer's paper only to a store whose release reads it**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 5). Only an edge from 0.14.1 reads the paper and cutter the Devices screen sets, and an
@@ -566,6 +573,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager makes a device one of the store's tills on the till's Devices screen**
+  ([ADR-0112](docs/adr/0112-print-agents.md)). A paired device is a till through the print-agent
+  binding, `POST /api/print/agent`, and nothing on a screen called it, so a till's own receipt
+  printer and a terminal's print agent could be set up only by calling the edge by hand.
+  - **Devices → This device** says which till this device is, or that it is not one of the store's
+    tills yet, and lists the store's terminals, marking the one another device is. **Bind** makes
+    this device the chosen one and says what came of it: bound; another device is already that
+    till, so release it there first; or this device is already another till, so release that
+    first. **Release** asks first, then stops this device being its till, and the card reads the
+    list again after either. A store that publishes no terminal is told they are created in the
+    console under **Devices → Terminals**. The card is drawn for a person who may manage devices,
+    and not for one the edge refuses the list to.
+  - `GET /api/print/agent` (new) lists the published terminals in the node's order, each with
+    `agent_device_id`, `name` and `held`: `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`. It never
+    names another device, a person or when an agent last asked for work. It sits behind the claim's
+    two gates: a paired device, and a signed-in person whose own role grants `admin.device.manage`,
+    whether or not the store enforces each person's own set. The `403` from all three binding
+    routes now carries `pos-error-reason: PERMISSION_DENIED`.
+  - `POS_DEMO_PROFILE=tills` publishes two terminals in `examples/minimal-edge`, which the browser
+    gate binds.
+
+  **Upgrade note:** `GET /api/print/agent` is new and additive (`docs/snapshots/routes.txt`,
+  `ROUTE_PERMISSIONS`). No event, migration, permission, setting or protocol change. An edge older
+  than this release has no such read, and none is asked for one: the till that reads it is the
+  bundle its own edge serves, and POS Station loads the till from the edge's address
+  ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md)).
+
 - **A till can have its own receipt printer and receipt languages**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 4). Every till's receipts printed at the store's one receipt printer, in the store's
@@ -593,8 +627,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     does not answer is reported as `PRINTER_UNAVAILABLE`, and nothing prints at the counter
     instead. Kitchen tickets, the shift report and the cash drawer are unchanged: a cash payment
     at the bar till opens the store's drawer.
-  - The till has no screen for the binding yet: a manager signed in on the till binds it with
-    `POST /api/print/agent`.
   - The console's **Terminals** card shows each till's **Receipt printer**, **Receipt language**
     and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
     offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and

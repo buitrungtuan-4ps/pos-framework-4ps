@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
 use pos_proto::ids::{
-    AreaId, CourseId, EmployeeId, MenuItemId, ModifierGroupId, StationId, TableId,
+    AreaId, CourseId, DeviceId, EmployeeId, MenuItemId, ModifierGroupId, StationId, TableId,
 };
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuCourse, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money};
@@ -170,6 +170,16 @@ fn walk_in_profile() -> Option<String> {
         .ok()
         .map(|profile| profile.to_ascii_lowercase())
         .filter(|profile| profile.starts_with("walk-in-"))
+}
+
+/// Whether this demo store publishes tills a device can be bound to — `POS_DEMO_PROFILE=tills`.
+///
+/// That profile publishes the `devices` node [`demo_tills`] builds: two terminals and no printer, so
+/// the browser gate can bind a device to one on the Devices screen
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Every other profile publishes no `devices`
+/// node, which is what a store with nothing approved receives.
+fn tills() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("tills"))
 }
 
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
@@ -341,6 +351,11 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 /// `POS_DEMO_PROFILE=tender-keys` publishes the same store with a `tender_keys` node that sets its
 /// own tip keys and the most ways it splits a bill. See [`tender_keys`].
 ///
+/// # The tills profile
+///
+/// `POS_DEMO_PROFILE=tills` publishes the same store with a `devices` node naming two tills and no
+/// printer, which a manager binds a device to on the Devices screen. See [`tills`].
+///
 /// # The walk-in profiles
 ///
 /// `POS_DEMO_PROFILE=walk-in-takeaway`, `walk-in-dine-in` and `walk-in-ask` publish the same store
@@ -433,6 +448,13 @@ pub fn config_document() -> Option<serde_json::Value> {
     {
         object.insert("counter".to_owned(), counter);
     }
+    // Published only on its own profile, so every other flow runs on a store with nothing approved,
+    // whose Devices screen says where tills are created.
+    if tills()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("devices".to_owned(), demo_tills());
+    }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
     if !staffed()
@@ -465,6 +487,23 @@ fn demo_stations() -> serde_json::Value {
         ],
         "default_station_id": kitchen,
     })
+}
+
+/// Two tills a device can be bound to, and no printer
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Nothing dials a terminal, so each has no
+/// address and no connection. Published as JSON, as the floor is, so it goes through the
+/// deserialisation a cloud's node does.
+fn demo_tills() -> serde_json::Value {
+    let till = |id: u128, name: &str| {
+        serde_json::json!({
+            "device_id": DeviceId::new(Ulid::from_u128(id)).to_string(),
+            "kind": "DEVICE_KIND_TERMINAL",
+            "connection": "DEVICE_CONNECTION_UNSPECIFIED",
+            "address": "",
+            "name": name,
+        })
+    };
+    serde_json::json!({ "devices": [till(401, "Counter till"), till(402, "Bar till")] })
 }
 
 /// A store's own tip keys, ten and twenty percent with the middle key hidden, and an even split of up
@@ -583,10 +622,11 @@ mod tests {
 
     use super::{
         DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_counter, demo_menu, demo_stations,
-        demo_tender_keys,
+        demo_tender_keys, demo_tills,
     };
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
+    use crate::printing::{published_printers, published_terminals};
 
     /// The same numbering the fixture above mints its items from, so an assertion names the item it
     /// means rather than a ULID nobody can read.
@@ -730,6 +770,19 @@ mod tests {
         let bar = session.stations.stations()[1].station_id;
         assert_eq!(session.resolve_station(menu_item(103), None), Some(bar));
         assert_eq!(session.resolve_station(menu_item(102), None), Some(kitchen));
+    }
+
+    /// The tills profile's node arrives as two tills a device can be bound to, in its order, and
+    /// nothing a receipt prints at.
+    #[test]
+    fn the_tills_node_publishes_two_terminals_and_no_printer() {
+        let document = serde_json::json!({ "devices": demo_tills() });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        let tills: Vec<&str> = published_terminals(&session.devices)
+            .map(|till| till.name.as_str())
+            .collect();
+        assert_eq!(tills, ["Counter till", "Bar till"]);
+        assert!(published_printers(&session.devices).is_empty());
     }
 
     /// The tender-keys profile's node offers the store's own two tip keys, without the one it hid.

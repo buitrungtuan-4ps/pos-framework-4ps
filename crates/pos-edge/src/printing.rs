@@ -165,10 +165,7 @@ impl TillPrinting {
 
 /// Whether a terminal in `devices` names anything of its own to print with.
 fn a_till_prints_its_own(devices: &PublishedDevices) -> bool {
-    devices.devices().iter().any(|device| {
-        device.kind.known() == DeviceKind::Terminal
-            && TillPrinting::of(device) != TillPrinting::STORE
-    })
+    published_terminals(devices).any(|terminal| TillPrinting::of(terminal) != TillPrinting::STORE)
 }
 
 /// The printer a guest's paper for `till` goes to, or what the till is told instead.
@@ -341,6 +338,19 @@ pub fn published_printers(devices: &PublishedDevices) -> Vec<&PublishedDevice> {
         .iter()
         .filter(|device| is_printer(device))
         .collect()
+}
+
+/// The published terminals, in publication order: the tills a paired device can be bound to
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), and what the till's **This device** card
+/// lists.
+///
+/// A kind this build does not know is not a terminal here, as it is not a printer either: the edge
+/// acts on a device only for a kind it can read.
+pub fn published_terminals(devices: &PublishedDevices) -> impl Iterator<Item = &PublishedDevice> {
+    devices
+        .devices()
+        .iter()
+        .filter(|device| device.kind.known() == DeviceKind::Terminal)
 }
 
 /// A `label            amount` line, which is how every figure on a receipt is read.
@@ -2009,9 +2019,7 @@ impl Printers {
         match lane.terminal_of(device).await {
             Ok(terminal) => terminal
                 .and_then(|terminal| {
-                    session.devices.devices().iter().find(|entry| {
-                        entry.device_id == terminal && entry.kind.known() == DeviceKind::Terminal
-                    })
+                    published_terminals(&session.devices).find(|entry| entry.device_id == terminal)
                 })
                 .map_or(TillPrinting::STORE, TillPrinting::of),
             Err(error) => {

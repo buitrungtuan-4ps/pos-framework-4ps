@@ -753,6 +753,28 @@ export interface TestPrintResponse {
   print: string;
 }
 
+/**
+ * One of the store's tills, from `GET /api/print/agent`
+ * ([ADR-0112](../../../docs/adr/0112-print-agents.md)): a `TERMINAL` entry the console created, and
+ * who holds it. `held` is `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`, and never says which other
+ * device.
+ */
+export interface TerminalEntry {
+  agent_device_id: string;
+  name: string;
+  held: string;
+}
+
+/** The store's tills, in the order the store published them. */
+export interface TerminalsResponse {
+  terminals: TerminalEntry[];
+}
+
+/** What a bind came to: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`. */
+export interface BindResponse {
+  outcome: string;
+}
+
 /** What printing pre-bills came to: one outcome per document, in the order they were sent. */
 export interface PrintResponse {
   prints: string[];
