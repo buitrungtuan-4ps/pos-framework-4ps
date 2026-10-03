@@ -1743,6 +1743,128 @@ async fn a_walk_in_is_started_priced_and_charged_at_the_counter() {
     );
 }
 
+/// What the store's one item comes to eaten in, at 10%, and taken away, at 8%, on
+/// [`a_counter_whose_node_is`].
+const EATEN_IN: i64 = 165_000;
+const TAKEN_AWAY: i64 = 162_000;
+
+/// A store that taxes a meal eaten in at 10% and one taken away at 8%, as Japan does, so what a
+/// walk-in owes says which channel it opened on; its `counter` node is `node` (ADR-0160 decision 2).
+async fn a_counter_whose_node_is(node: Value) -> Store {
+    a_store_where(|session| {
+        let class = EdgeSession::standard_tax_class();
+        let mut session = session.with_tax_rates(
+            TaxRateTable::new()
+                .with(class, SalesChannel::DineIn, TaxRate::from_percent(10))
+                .with(class, SalesChannel::Takeaway, TaxRate::from_percent(8)),
+        );
+        session.counter = serde_json::from_value(node).expect("a counter node");
+        session
+    })
+    .await
+}
+
+/// Opens a walk-in at the counter with `body`, adds the store's one item, and answers what the
+/// counter list says the walk-in owes.
+async fn a_walk_in_owes(store: &Store, body: Value) -> Value {
+    let (status, opened) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/orders",
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let order_id = opened["order_id"].clone();
+    let (status, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{}/lines", order_id.as_str().expect("an id")),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    let listed = read(store, "/api/orders/open").await;
+    listed
+        .as_array()
+        .and_then(|orders| orders.iter().find(|order| order["order_id"] == order_id))
+        .map(|order| order["total_due"]["amount_minor"].clone())
+        .expect("the walk-in is on the counter list")
+}
+
+/// A store that sets no walk-in channel opens a walk-in for takeaway, as every counter did, and
+/// tells the till so with its price book (ADR-0160 decision 2).
+#[tokio::test]
+async fn a_walk_in_is_taken_away_where_the_store_sets_no_walk_in_channel() {
+    let store = a_counter_whose_node_is(json!({})).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, TAKEN_AWAY);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_TAKEAWAY"
+    );
+}
+
+/// A store whose walk-ins are eaten in opens them dine-in, and taxes them at the dine-in rate.
+#[tokio::test]
+async fn a_store_whose_walk_ins_are_eaten_in_opens_them_dine_in_and_taxes_them_so() {
+    let store =
+        a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" })).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, EATEN_IN);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_DINE_IN"
+    );
+}
+
+/// A store that asks each guest opens a walk-in the till names no channel for as takeaway. The till
+/// names the guest's answer there, so only a till from before the setting names none, and it gets
+/// the takeaway order it always opened.
+#[tokio::test]
+async fn a_store_that_asks_opens_a_walk_in_named_no_channel_for_takeaway() {
+    let store = a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_ASK" })).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, TAKEN_AWAY);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_ASK"
+    );
+}
+
+/// A channel the till names wins over the store's walk-in channel, whichever way round.
+#[tokio::test]
+async fn a_channel_the_till_names_wins_over_the_stores_walk_in_channel() {
+    let eats_in =
+        a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" })).await;
+    let named = json!({ "channel": "SALES_CHANNEL_TAKEAWAY" });
+    assert_eq!(a_walk_in_owes(&eats_in, named).await, TAKEN_AWAY);
+    let asks = a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_ASK" })).await;
+    let named = json!({ "channel": "SALES_CHANNEL_DINE_IN" });
+    assert_eq!(a_walk_in_owes(&asks, named).await, EATEN_IN);
+}
+
+/// A walk-in channel nobody can read, from a newer release or not a token at all, is takeaway.
+#[tokio::test]
+async fn a_walk_in_channel_nobody_can_read_is_takeaway() {
+    for node in [
+        json!({ "walk_in_channel": "WALK_IN_CHANNEL_DRIVE_THROUGH" }),
+        json!({ "walk_in_channel": 1 }),
+    ] {
+        let store = a_counter_whose_node_is(node.clone()).await;
+        assert_eq!(
+            a_walk_in_owes(&store, json!({})).await,
+            TAKEN_AWAY,
+            "{node}"
+        );
+        assert_eq!(
+            read(&store, "/api/menu").await["walk_in_channel"],
+            "WALK_IN_CHANNEL_TAKEAWAY",
+            "{node}"
+        );
+    }
+}
+
 /// The cash shift, over the composed router: open with a float, count blind, close with the variance.
 #[tokio::test]
 async fn a_cash_shift_opens_counts_and_closes_on_the_composed_edge() {

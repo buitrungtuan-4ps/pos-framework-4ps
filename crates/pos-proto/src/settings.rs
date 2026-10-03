@@ -22,6 +22,7 @@
 //! A test reads every value of every setting back through its node's own type, so the register
 //! cannot offer a value or claim a default that the edge does not have.
 
+use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::people::PublishedPermissions;
 use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
@@ -552,6 +553,26 @@ pub fn register() -> Vec<Setting> {
                       above it the row scrolls sideways on a narrow screen rather than wrapping, so \
                       the tenders below it stay where they are.",
         },
+        Setting {
+            node: PublishedCounter::NODE,
+            field: "walk_in_channel",
+            shape: SettingShape::Choice {
+                values: choices::<WalkInChannel>(),
+                default: PublishedCounter::default().walk_in_channel().as_wire(),
+                // No store is given another value (ADR-0160 decision 2), so a counter opens its
+                // walk-ins for takeaway, as before, until someone sets it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The channel an order the counter starts for a walk-in guest takes, which \
+                      decides the price book it is sold from and its tax. \
+                      `WALK_IN_CHANNEL_TAKEAWAY` takes every walk-in away, as before. \
+                      `WALK_IN_CHANNEL_DINE_IN` has every walk-in eaten in. `WALK_IN_CHANNEL_ASK` \
+                      has the cashier choose Eat in or Take away for each walk-in. A store that \
+                      publishes the channels it accepts must accept the one a walk-in takes, or \
+                      the order is refused.",
+        },
     ]
 }
 
@@ -746,6 +767,7 @@ mod tests {
         ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
         render_snapshot_of,
     };
+    use crate::counter::PublishedCounter;
     use crate::locale::LocaleSettings;
     use crate::people::PublishedPermissions;
     use crate::printing::PublishedPrinting;
@@ -1121,6 +1143,13 @@ mod tests {
                     "second_tip_percent" => Some(json!(keys.second_tip_percent())),
                     "third_tip_percent" => Some(json!(keys.third_tip_percent())),
                     "split_ways_max" => Some(json!(keys.split_ways_max())),
+                    _ => None,
+                }
+            }
+            PublishedCounter::NODE => {
+                let counter: PublishedCounter = serde_json::from_value(document).ok()?;
+                match field {
+                    "walk_in_channel" => Some(json!(counter.walk_in_channel().as_wire())),
                     _ => None,
                 }
             }

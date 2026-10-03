@@ -21,6 +21,7 @@ import type {
   OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
+  MenuResponse,
   ModifierGroup,
   PaymentRequest,
   DrawerOutcome,
@@ -179,12 +180,14 @@ interface StoreShape {
   // Empty until it lands and on every store that has published none, which is every store today —
   // and the till then asks nothing, exactly as it did before the field existed.
   modifierGroups: ModifierGroup[];
-  // The walk-in channel's own price book and groups, from `GET /api/menu?channel=` (ADR-0066). A
-  // walk-in is priced by the edge at its order's channel, and a store may price takeaway apart from
-  // the dining room, so the counter shows this book rather than `menu`. Where the store prices only
-  // the dining room the edge serves that book here too, and the two are the same.
-  walkInMenu: MenuItemResponse[];
-  walkInModifierGroups: ModifierGroup[];
+  // The counter's price books and their groups, from `GET /api/menu?channel=` (ADR-0066), keyed by
+  // the sales channel each is read for. A walk-in is priced by the edge at its order's channel, and a
+  // store may price takeaway apart from the dining room, so the counter shows the book of the
+  // channel its walk-ins open on rather than `menu`: takeaway's, always read, and the dining room's,
+  // read where the store's walk-ins are eaten in. Where the store prices only the dining room the
+  // edge serves that book for every channel, and they are the same.
+  walkInMenu: Record<string, MenuItemResponse[]>;
+  walkInModifierGroups: Record<string, ModifierGroup[]>;
   // What kind of shop this is, from the same read. `docs/ui-ux.md` §3: the store profile decides the
   // starting screen and the flow — *"same components, different assembly, not three applications"*.
   //
@@ -217,6 +220,10 @@ interface StoreShape {
   // The most guests the pay screen's even split offers, from the same read (ADR-0160 decision 2).
   // `null` until the read lands, and from an edge older than the setting: two to six, as always.
   splitWaysMax: number | null;
+  // The channel the counter opens a walk-in on, from the same read (ADR-0160 decision 2):
+  // `WALK_IN_CHANNEL_TAKEAWAY`, `_DINE_IN` or `_ASK`. `null` until the read lands, and from an edge
+  // older than the setting, which opens every walk-in for takeaway.
+  walkInChannel: string | null;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
@@ -310,14 +317,15 @@ const [state, setState] = createStore<StoreShape>({
   coursesEnabled: false,
   courses: [],
   modifierGroups: [],
-  walkInMenu: [],
-  walkInModifierGroups: [],
+  walkInMenu: {},
+  walkInModifierGroups: {},
   tablesEnabled: true,
   kdsEnabled: true,
   seatForTable: {},
   acceptedTender: null,
   tipPercents: null,
   splitWaysMax: null,
+  walkInChannel: null,
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
@@ -972,7 +980,9 @@ export function modifierNames(line: OrderLine): string[] {
   const named = (id: string) =>
     (
       state.menu.find((item) => item.menu_item_id === id) ??
-      state.walkInMenu.find((item) => item.menu_item_id === id)
+      Object.values(state.walkInMenu)
+        .flat()
+        .find((item) => item.menu_item_id === id)
     )?.display_name;
   return line.modifierMenuItemIds.map((id) => named(id) ?? id);
 }
@@ -1159,10 +1169,12 @@ function setSoldOut(menuItemId: string, soldOut: boolean): void {
   if (index >= 0) {
     setState("menu", index, { sold_out: soldOut, available: !soldOut });
   }
-  // A mark is the store's, whatever channel the dish sells on: the counter's book follows it.
-  const walkIn = state.walkInMenu.findIndex((item) => item.menu_item_id === menuItemId);
-  if (walkIn >= 0) {
-    setState("walkInMenu", walkIn, { sold_out: soldOut, available: !soldOut });
+  // A mark is the store's, whatever channel the dish sells on: the counter's books follow it.
+  for (const [channel, book] of Object.entries(state.walkInMenu)) {
+    const walkIn = book.findIndex((item) => item.menu_item_id === menuItemId);
+    if (walkIn >= 0) {
+      setState("walkInMenu", channel, walkIn, { sold_out: soldOut, available: !soldOut });
+    }
   }
 }
 
@@ -1355,8 +1367,8 @@ export async function startWalkIn(): Promise<string> {
 
 // A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
-// edge's figure; the counter shows the walk-in channel's own book (`walkInMenu`), the one the edge
-// prices a walk-in from, so the two agree.
+// edge's figure; the counter shows the book of the channel its walk-ins open on (`walkInMenu`), the
+// one the edge prices a walk-in from, so the two agree.
 async function addItemToWalkIn(
   orderId: string,
   key: string,
@@ -1521,17 +1533,50 @@ export function tenderAccepted(method: string): boolean {
   return accepted === null || accepted.includes(method);
 }
 
+// The channels the counter reads a book for (ADR-0146): takeaway, the channel every walk-in took
+// before a store could choose, and the dining room, for a store whose walk-ins are eaten in.
+const TAKEAWAY = "SALES_CHANNEL_TAKEAWAY";
+const DINE_IN = "SALES_CHANNEL_DINE_IN";
+
+// What a store may set its walk-ins to (ADR-0160 decision 2).
+const WALK_IN_CHANNELS: readonly string[] = [
+  "WALK_IN_CHANNEL_TAKEAWAY",
+  "WALK_IN_CHANNEL_DINE_IN",
+  "WALK_IN_CHANNEL_ASK",
+];
+
+// The channel the counter opens a walk-in on, as the edge sent it with the price book (ADR-0160
+// decision 2), and takeaway where it sent none: an edge older than the setting opens every walk-in
+// for takeaway.
+export function walkInChannel(): string {
+  return state.walkInChannel ?? "WALK_IN_CHANNEL_TAKEAWAY";
+}
+
+// The sales channel the counter's walk-ins open on, whose book the counter shows: the dining room
+// where the store eats its walk-ins in, and takeaway otherwise. Under `WALK_IN_CHANNEL_ASK` too,
+// since this till names no channel when it opens one, and the edge then opens it for takeaway.
+export function walkInSalesChannel(): string {
+  return walkInChannel() === "WALK_IN_CHANNEL_DINE_IN" ? DINE_IN : TAKEAWAY;
+}
+
+// The channel an edge sent, or `null` where it sent none the till knows.
+function readWalkInChannel(sent: unknown): string | null {
+  return typeof sent === "string" && WALK_IN_CHANNELS.includes(sent) ? sent : null;
+}
+
+// Holds the book an edge served for `channel`, merged by id as the store's own book is.
+function setWalkInBook(channel: string, book: MenuResponse): void {
+  setState("walkInMenu", channel, reconcile(book.items, { key: "menu_item_id" }));
+  setState("walkInModifierGroups", channel, book.modifier_groups);
+}
+
 // Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
 // failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
 // empty menu is a real answer — the store has published none — and the screen says so.
-// The channel a walk-in is opened on: the edge's default for `POST /api/orders` (ADR-0146), which
-// this till's counter never overrides.
-const WALK_IN_CHANNEL = "SALES_CHANNEL_TAKEAWAY";
-
 export async function loadMenu(): Promise<void> {
   // Two reads, each applied on its own: a walk-in book that fails to arrive must not keep the store's
   // own book from loading, and the reverse.
-  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(WALK_IN_CHANNEL)]);
+  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(TAKEAWAY)]);
   if (own.status === "fulfilled") {
     const response = own.value;
     // Merged by id rather than replaced, so an item that did not change keeps its place and its
@@ -1547,12 +1592,20 @@ export async function loadMenu(): Promise<void> {
     setState("acceptedTender", response.accepted_tender);
     setState("tipPercents", readTipPercents(response.tip_percents));
     setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
+    setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
     setState("coursesEnabled", response.courses_enabled);
     setState("courses", response.courses);
   }
   if (walkIn.status === "fulfilled") {
-    setState("walkInMenu", reconcile(walkIn.value.items, { key: "menu_item_id" }));
-    setState("walkInModifierGroups", walkIn.value.modifier_groups);
+    setWalkInBook(TAKEAWAY, walkIn.value);
+  }
+  // The dining room's book as well where the store's walk-ins are eaten in, read once the store's
+  // own book has said so: a store that sets nothing reads what it always read.
+  if (walkInSalesChannel() === DINE_IN) {
+    await api.menu(DINE_IN).then(
+      (book) => setWalkInBook(DINE_IN, book),
+      () => undefined,
+    );
   }
   // A read that failed keeps whatever it last loaded; the next boot or reload tries again.
 }

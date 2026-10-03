@@ -30,6 +30,7 @@
 pub mod campaign;
 pub mod chain;
 pub mod channels;
+pub mod counter;
 pub mod determinism;
 pub mod devices;
 pub mod display;

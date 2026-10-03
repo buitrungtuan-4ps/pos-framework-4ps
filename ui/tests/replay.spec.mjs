@@ -2830,6 +2830,72 @@ test("a counter tip on a bill that is not a round number still settles", async (
   }
 });
 
+/** Adds the garden salad to the walk-in on screen, after seeing the counter offer it at `price`. */
+async function sellTheSalad(page, price) {
+  await page.locator("#menu-search").fill("salad");
+  await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  await expect(page.locator('[data-step="onItem"]')).toContainText(price);
+  await page.locator('[data-step="onItem"]').click();
+  await expectLineAdded(page);
+}
+
+// A store whose walk-ins are eaten in sells them from the dining room's book (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=walk-in-dine-in` prices the garden salad at 89,000₫ in the dining room and
+// 79,000₫ to take away, and sets `counter.walk_in_channel` to dine-in. New order opens the walk-in at
+// once, as on every store, and the counter offers the salad at the dining room's price: the book of
+// the channel the edge opened it on, which charges 97,900₫ with its tax.
+test("a store whose walk-ins are eaten in sells them from the dining room's book", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-dine-in");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await sellTheSalad(page, "89,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("97,900₫");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no walk-in channel, and an edge too old to send one, sell a walk-in from the
+// takeaway book, as the counter always has.
+//
+// `POS_DEMO_PROFILE=walk-in-takeaway` prices the salad at 79,000₫ to take away and publishes no
+// `counter` node, so the edge opens a walk-in for takeaway and charges 86,900₫ for it. Then the price
+// book is read with `walk_in_channel` taken out, which is an older edge's answer, and the counter
+// still offers the takeaway book's price.
+test("a store that sets no walk-in channel, and an edge too old to send one, sell from the takeaway book", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-takeaway");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.walk_in_channel;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await startWalkIn(page);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The till draws money with the exponent the store published, not one it guessed.
 //
 // `ui/src/lib/money.ts` used to hold `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect: it is

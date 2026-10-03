@@ -45,6 +45,7 @@ import {
   voidLine,
   waiveFee,
   walkInKey,
+  walkInSalesChannel,
   type OrderLine,
   formatAmount,
 } from "../state/store";
@@ -334,9 +335,11 @@ export function Order() {
     });
 
   // The price book this order is sold from. A walk-in is priced by the edge at its own channel, so
-  // it shows that channel's book (ADR-0066); a table is the dining room's.
-  const menuItems = () => (walkIn() ? state.walkInMenu : state.menu);
-  const menuGroups = () => (walkIn() ? state.walkInModifierGroups : state.modifierGroups);
+  // it shows that channel's book (ADR-0066), the store's walk-in channel; a table is the dining
+  // room's.
+  const menuItems = () => (walkIn() ? (state.walkInMenu[walkInSalesChannel()] ?? []) : state.menu);
+  const menuGroups = () =>
+    walkIn() ? (state.walkInModifierGroups[walkInSalesChannel()] ?? []) : state.modifierGroups;
 
   // Pre-index menu items by ID using createMemo to allow O(1) lookups instead of O(N) linear scans.
   const menuItemMap = createMemo(

@@ -35557,6 +35557,16 @@ mod preview_diff_tests {
     }
 
     #[test]
+    fn nothing_waits_on_the_counter_node() {
+        // ADR-0160: the walk-in channel's node holds settings and nothing else, as `tender_keys` does.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"counter"))
+        );
+    }
+
+    #[test]
     fn a_changed_node_diffs_to_only_that_node_and_leaves_the_others_alone() {
         let state = state_with(json!({
             "tax": {"rate": 8},
