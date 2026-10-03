@@ -44,8 +44,10 @@ import {
   unsentCoursesForTable,
   voidLine,
   waiveFee,
+  walkInAsks,
+  walkInEatenIn,
   walkInKey,
-  walkInSalesChannel,
+  walkInOrderChannel,
   type OrderLine,
   formatAmount,
 } from "../state/store";
@@ -335,11 +337,11 @@ export function Order() {
     });
 
   // The price book this order is sold from. A walk-in is priced by the edge at its own channel, so
-  // it shows that channel's book (ADR-0066), the store's walk-in channel; a table is the dining
-  // room's.
-  const menuItems = () => (walkIn() ? (state.walkInMenu[walkInSalesChannel()] ?? []) : state.menu);
+  // it shows that channel's book (ADR-0066); a table is the dining room's.
+  const channel = () => walkInOrderChannel(params.id);
+  const menuItems = () => (walkIn() ? (state.walkInMenu[channel()] ?? []) : state.menu);
   const menuGroups = () =>
-    walkIn() ? (state.walkInModifierGroups[walkInSalesChannel()] ?? []) : state.modifierGroups;
+    walkIn() ? (state.walkInModifierGroups[channel()] ?? []) : state.modifierGroups;
 
   // Pre-index menu items by ID using createMemo to allow O(1) lookups instead of O(N) linear scans.
   const menuItemMap = createMemo(
@@ -625,6 +627,15 @@ export function Order() {
           <h1 class="text-lg font-semibold" data-outcome="order-open">
             {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
           </h1>
+          {/* What the guest answered, where the store asks each walk-in (ADR-0160 decision 2). */}
+          <Show when={walkIn() && walkInAsks() && walkInEatenIn(params.id) !== undefined}>
+            <span
+              class="rounded-token bg-surface-muted px-2 text-sm font-semibold"
+              data-outcome="walk-in-channel"
+            >
+              {t(walkInEatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
+            </span>
+          </Show>
           <Show when={!walkIn()}>
             <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
           </Show>

@@ -1817,6 +1817,11 @@ async fn a_store_whose_walk_ins_are_eaten_in_opens_them_dine_in_and_taxes_them_s
         read(&store, "/api/menu").await["walk_in_channel"],
         "WALK_IN_CHANNEL_DINE_IN"
     );
+    assert_eq!(
+        read(&store, "/api/orders/live").await[0]["sales_channel"],
+        "SALES_CHANNEL_DINE_IN",
+        "a till that reloads on the walk-in reads its channel"
+    );
 }
 
 /// A store that asks each guest opens a walk-in the till names no channel for as takeaway. The till

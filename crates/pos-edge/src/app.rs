@@ -1772,6 +1772,12 @@ pub struct LiveOrderView {
     /// and none of the others. It paid that one, found the table still awaiting payment, and had no
     /// id to settle the rest with — asking for a bill again is refused while one is open.
     pub open_bill_ids: Vec<BillId>,
+    /// The channel it was opened on, or `None` for an order this build never saw open or whose
+    /// channel it does not know. The counter shows a walk-in the book of its channel, and whether
+    /// the guest eats in or takes away, so a till that reloads on one learns the channel here
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    pub sales_channel: Option<SalesChannel>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
 }
@@ -1869,6 +1875,7 @@ struct LiveSnapshot {
     table_id: Option<TableId>,
     bill_id: Option<BillId>,
     open_bill_ids: Vec<BillId>,
+    sales_channel: Option<SalesChannel>,
     /// Each line with its id and whether a station has bumped it.
     lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
@@ -6205,6 +6212,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: projection.table_for_order(order_id),
                 bill_id: projection.bill_for_order(order_id),
                 open_bill_ids: projection.open_bills_for_order(order_id),
+                sales_channel: projection.order_channel(order_id),
                 lines: projection
                     .identified_lines_for_order(order_id)
                     .into_iter()
@@ -6229,6 +6237,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: order.table_id,
                 bill_id: order.bill_id,
                 open_bill_ids: order.open_bill_ids,
+                sales_channel: order.sales_channel,
                 lines: order
                     .lines
                     .into_iter()

@@ -155,15 +155,16 @@ fn tender_keys() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("tender-keys"))
 }
 
-/// Which walk-in profile this demo store runs, if any: `POS_DEMO_PROFILE=walk-in-takeaway` or
-/// `walk-in-dine-in`, lower-cased.
+/// Which walk-in profile this demo store runs, if any: `POS_DEMO_PROFILE=walk-in-takeaway`,
+/// `walk-in-dine-in` or `walk-in-ask`, lower-cased.
 ///
 /// Each prices takeaway apart from the dining room ([`demo_menu`]): the garden salad is 79,000₫ in
 /// the takeaway book and 89,000₫ in the dining room's, so the book a walk-in is sold from shows on
 /// the screen. `walk-in-takeaway` publishes no `counter` node, which is what a store that predates
-/// the setting runs, and its counter opens every walk-in for takeaway. `walk-in-dine-in` publishes
-/// the node [`demo_counter`] builds (ADR-0160 decision 2). Every other profile publishes neither, so
-/// its counter sells at the dining room's prices, as a store that prices only the dining room does.
+/// the setting runs, and its counter opens every walk-in for takeaway. `walk-in-dine-in` and
+/// `walk-in-ask` publish the node [`demo_counter`] builds (ADR-0160 decision 2). Every other profile
+/// publishes neither, so its counter sells at the dining room's prices, as a store that prices only
+/// the dining room does.
 fn walk_in_profile() -> Option<String> {
     std::env::var("POS_DEMO_PROFILE")
         .ok()
@@ -342,9 +343,10 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 ///
 /// # The walk-in profiles
 ///
-/// `POS_DEMO_PROFILE=walk-in-takeaway` and `walk-in-dine-in` publish the same store with a takeaway
-/// book priced apart from the dining room's, and the second with a `counter` node whose walk-ins are
-/// eaten in. See [`walk_in_profile`].
+/// `POS_DEMO_PROFILE=walk-in-takeaway`, `walk-in-dine-in` and `walk-in-ask` publish the same store
+/// with a takeaway book priced apart from the dining room's, the second with a `counter` node whose
+/// walk-ins are eaten in, and the third with one whose counter asks each guest. See
+/// [`walk_in_profile`].
 ///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
@@ -477,10 +479,12 @@ fn demo_tender_keys() -> serde_json::Value {
 }
 
 /// The `counter` node a walk-in `profile` publishes, or `None` for one that publishes none
-/// (ADR-0160 decision 2): `walk-in-dine-in` has every walk-in eaten in.
+/// (ADR-0160 decision 2): `walk-in-dine-in` has every walk-in eaten in, and `walk-in-ask` has the
+/// counter ask each guest.
 fn demo_counter(profile: &str) -> Option<serde_json::Value> {
     let channel = match profile {
         "walk-in-dine-in" => "WALK_IN_CHANNEL_DINE_IN",
+        "walk-in-ask" => "WALK_IN_CHANNEL_ASK",
         _ => return None,
     };
     Some(serde_json::json!({ "walk_in_channel": channel }))
