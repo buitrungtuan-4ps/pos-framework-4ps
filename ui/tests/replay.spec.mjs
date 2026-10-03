@@ -3408,6 +3408,165 @@ test("the Today screen shows no takings to a person whose role does not grant th
   }
 });
 
+// A manager makes this device one of the store's tills on its Devices screen (ADR-0112, ADR-0160
+// decision 4). The `tills` store publishes two terminals and the edge decides every answer: the
+// bind, this device refused a second till, a second device refused the till this one is, and a
+// release that asks first and then frees the till for the other device. The second device is a
+// second browser, paired with a code this manager gets on the same screen.
+test("a manager binds this device to a till, and releases it for another device", async ({
+  page,
+  browser,
+}) => {
+  const edge = await startEdge("tills");
+  const other = await browser.newPage();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    const status = card.locator('[data-outcome="till-status"]');
+    const outcome = card.locator('[data-outcome="till-outcome"]');
+    const till = (name) => card.locator("button[aria-pressed]").filter({ hasText: name });
+    await expect(status).toHaveText("This device is not one of the store's tills yet.");
+
+    await till("Bar till").click();
+    await card.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(outcome).toHaveText("Bound.");
+    await expect(status).toHaveText("This device is Bar till.");
+    await expect(till("Bar till")).toContainText("This device");
+
+    await till("Counter till").click();
+    await card.getByRole("button", { name: "Bind this device to Counter till" }).click();
+    await expect(outcome).toHaveText("This device is already another till. Release that one first.");
+    await expect(status).toHaveText("This device is Bar till.");
+
+    await page.getByRole("button", { name: "Get a pairing code" }).click();
+    const link = page.getByText(/\/pair\?code=\d{6}$/);
+    const code = /code=(\d{6})/.exec((await link.textContent()) ?? "")?.[1];
+    await other.goto(`${edge.baseURL}/pair?code=${code}`);
+    await other.locator("#pair-submit").click();
+    await expect(other).toHaveURL(/\/signin$/);
+    await signIn(other, edge);
+    await navigateTo(other, "/devices");
+    const otherCard = other.locator('[data-outcome="till"]');
+    const otherTill = (name) => otherCard.locator("button[aria-pressed]").filter({ hasText: name });
+    const otherOutcome = otherCard.locator('[data-outcome="till-outcome"]');
+    await expect(otherTill("Bar till")).toContainText("Another device is this till");
+    await otherTill("Bar till").click();
+    await otherCard.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(otherOutcome).toHaveText(
+      "Another device is already that till. Release it on that device first.",
+    );
+
+    // Release asks first, and nothing is released until the answer.
+    const releases = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/print/agent/revoke") {
+        releases.push(request.postDataJSON());
+      }
+    });
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(card.getByText("Release Bar till? This device stops being that till.")).toBeVisible();
+    expect(releases).toHaveLength(0);
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(outcome).toHaveText("Released.");
+    await expect(status).toHaveText("This device is not one of the store's tills yet.");
+    expect(releases).toHaveLength(1);
+    expect(releases[0]).toEqual({ agent_device_id: expect.any(String) });
+
+    await otherCard.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(otherOutcome).toHaveText("Bound.");
+    await expect(otherCard.locator('[data-outcome="till-status"]')).toHaveText(
+      "This device is Bar till.",
+    );
+  } finally {
+    await other.close();
+    await edge.stop();
+  }
+});
+
+// The card is drawn only for a person who may manage devices, as retiring one is (ADR-0158
+// decision 8). Where the store enforces each person's own permissions, somebody whose role does not
+// grant `admin.device.manage` is offered no Devices destination, and the screen reached by its
+// address draws without the card.
+test("the This device card is not drawn for a person who may not manage devices", async ({
+  page,
+}) => {
+  const edge = await startEdge("tills");
+  try {
+    await aSessionThatSays(page, true, () => ["sales.line.add", "sales.table.manage"]);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await page.goto(`${edge.baseURL}/devices`);
+    // The destinations are drawn once the session read has landed, so this waits for what the
+    // person may do rather than passing on a bar not drawn yet.
+    await expect
+      .poll(async () => {
+        const drawn = await destinations(page);
+        return drawn.includes("/") && !drawn.includes("/devices");
+      })
+      .toBe(true);
+    await expect(page.locator('[data-outcome="integrations"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="till"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The store server decides who may see the tills from the person's own role in every store, so in
+// a store that does not enforce each person's own set it refuses somebody the till offers the card
+// to. The card is then not drawn, and the screen carries no error for it. The refusal is the
+// store server's own words, because the demo's one employee holds every permission.
+test("a person the store server refuses the tills to sees no card and no error", async ({ page }) => {
+  const edge = await startEdge("tills");
+  try {
+    await page.route("**/api/print/agent", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        headers: { "pos-error-reason": "PERMISSION_DENIED" },
+        body: "binding a print agent needs a manager signed in on this device",
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    const read = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/print/agent" &&
+        response.request().method() === "GET",
+    );
+    await navigateTo(page, "/devices");
+    await read;
+    await expect(page.locator('[data-outcome="integrations"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="till"]')).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that publishes no terminal has no till to bind to, and the card says where tills come
+// from in one line.
+test("a store that publishes no till says where tills are created", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    await expect(card.locator('[data-outcome="till-empty"]')).toHaveText(
+      "The store has no tills yet: they are created in the console under Devices → Terminals.",
+    );
+    await expect(card.locator("button")).toHaveCount(0);
+    await expect(card.locator('[data-outcome="till-status"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A role changed in the console reaches an open till with the configuration, without a new sign-in:
 // the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
 // session again. The frame is given the next position on the stream, so it is heard as itself.

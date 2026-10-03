@@ -671,7 +671,9 @@ nothing:
 2. **The printer's device entry names that terminal** as its agent, and the config is published.
    Under **Devices → Print agents**: pick the terminal beside the printer, then publish.
 3. **This machine is paired with the store's edge**, which is what mints the device token below.
-4. **A manager binds this device to the terminal entry**, at the till, signed in. The binding is
+4. **A manager binds this device to the terminal entry**, signed in on the till that runs with this
+   machine's pairing, under **Devices → This device**: pick the terminal, then **Bind**. On a PC
+   that is POS Station, whose till window and print agent share one pairing. The binding is
    exclusive: one terminal, one machine, refused rather than promoted, because two machines holding
    one identity split a kitchen's tickets between them and nobody notices until service.
 
@@ -686,10 +688,9 @@ its own: the bar's bill at the bar
 decision 4). That takes (1), (3) and (4) above and nothing else, in a store whose edge is in the shop
 too: no printer has to name the terminal and no agent has to be installed, because the edge writes
 to the till's printer itself. Under **Devices → Terminals**, **Receipts** picks the printer and the
-languages; publish; then bind the till's paired device to the terminal entry, as in (4). The till has
-no screen for the binding yet, so a manager signed in on it calls `POST /api/print/agent` from it. A
-device bound to no terminal prints at the store's receipt printer, as before, and every cash payment
-still opens the store's drawer.
+languages; publish; then bind the till's paired device to the terminal entry, as in (4): on the till,
+under **Devices → This device**, signed in. A device bound to no terminal prints at the store's
+receipt printer, as before, and every cash payment still opens the store's drawer.
 
 ### Linux
 

@@ -559,7 +559,8 @@ where
     ));
     // Binding a terminal's print agent, in its own sub-router for the same reason and behind the
     // same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
-    // behind a *manager* — the permission is checked in the handler, over the published roster.
+    // behind a *manager*, with the read the till's binding screen draws them from — the permission
+    // is checked in the handler, over the published roster.
     let binding = print_agent::router(agent_edge, agents.clone()).layer(
         axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
     );

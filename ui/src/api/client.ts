@@ -11,6 +11,7 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
+  BindResponse,
   ClaimStatus,
   BillResponse,
   BumpRequest,
@@ -53,6 +54,7 @@ import type {
   SplitResponse,
   SyncResponse,
   TableResponse,
+  TerminalsResponse,
   TestPrintResponse,
   TransferResponse,
   VoidBillResponse,
@@ -146,6 +148,12 @@ async function request<T>(
       text.trim() || response.statusText,
       response.headers.get("pos-error-reason"),
     );
+  }
+  // A `204` has nothing to read, and reading nothing as JSON throws: retiring a device, and sending
+  // or refusing a guest's order, each reported "the store did not respond" after the store had done
+  // it. Releasing a till answers `204` too.
+  if (response.status === 204) {
+    return undefined as T;
   }
   return (await response.json()) as T;
 }
@@ -409,6 +417,18 @@ export const api = {
   printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
   testPrinter: (deviceId: string) =>
     request<TestPrintResponse>("POST", `/api/printers/${deviceId}/test`),
+  // The store's tills, and which of them this device, another device or none is (ADR-0112): what
+  // the Devices screen's *This device* card shows. `403` unless the signed-in person's own role
+  // grants `admin.device.manage`, whether or not the store enforces each person's own set.
+  terminals: () => request<TerminalsResponse>("GET", "/api/print/agent"),
+  // Makes this device that till, exclusively. `200` for each of the three outcomes, which are
+  // answers about the store rather than faults in the request, so the screen says which.
+  bindTerminal: (agentDeviceId: string) =>
+    request<BindResponse>("POST", "/api/print/agent", { agent_device_id: agentDeviceId }),
+  // Stops this device being that till: `204` whether or not it was, so a release never says what
+  // another device holds.
+  releaseTerminal: (agentDeviceId: string) =>
+    request<void>("POST", "/api/print/agent/revoke", { agent_device_id: agentDeviceId }),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>

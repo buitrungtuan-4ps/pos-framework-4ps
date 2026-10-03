@@ -67,6 +67,7 @@ anywhere except the two bootstrap exchanges, which are single-use by constructio
 | `GET /api/pair/this_device` | Paired device token alone: POS Station's token probe, asked with nobody signed in. It answers for the calling token only and names no other device | `http/pair.rs` |
 | `GET /api/pair/devices` | Paired device token alone, while a POS Station older than `this_device` still reads it as its probe ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` |
 | `POST /api/pair/codes`, `POST /api/pair/revoke` | Both domain gates, and the signed-in person's own role must grant `admin.device.manage` ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` (`manager_routes`) |
+| `GET /api/print/agent`, `POST /api/print/agent`, `POST /api/print/agent/revoke` | Both domain gates, and the signed-in person's own role must grant `admin.device.manage` ([ADR-0112](adr/0112-print-agents.md)). The read lists the store's terminals, each held by this device, another device or none, and never names another device | `http/print_agent.rs` |
 | `POST /api/pair` | The six-digit pairing code — single-use, five-minute TTL, budgeted (see §3) | `pairing.rs` |
 | `POST /api/activate` | The one-time activation code from the setup sheet | [ADR-0050](adr/0050-activation-code-exchange.md) |
 | `/healthz` | None | `http/health.rs` |
