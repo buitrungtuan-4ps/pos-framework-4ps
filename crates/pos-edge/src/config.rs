@@ -115,13 +115,19 @@ pub struct EdgeConfig {
     /// draw, and says which scripts it can print at start-up.
     #[serde(default = "default_font_directories")]
     pub font_directories: Vec<PathBuf>,
-    /// How tall printed text is, in printer dots per em. Defaults to 24, which is a comfortable
-    /// receipt body at the 203 dpi every common thermal printer runs at.
+    /// **Deprecated** ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6): how tall printed text is, in printer dots per em. The store's configuration
+    /// sets it now, as `printing.font_size_dots`, and that value wins from the next print.
     ///
     /// Only applies to rasterised lines. A line the printer's own character set covers is still sent
     /// as text and drawn in the firmware's font, which this does not change.
-    #[serde(default = "default_font_size_dots")]
-    pub font_size_dots: u16,
+    ///
+    /// Kept so a box that sets it here keeps its size until the console sets one: it applies only
+    /// while the store's configuration sets none, and the edge logs a warning while it is the size
+    /// in use. Absent or `0`, the size is 24, a comfortable receipt body at the 203 dpi every common
+    /// thermal printer runs at.
+    #[serde(default)]
+    pub font_size_dots: Option<u16>,
     /// **Deprecated** as a number, and kept as the off-switch
     /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 6): how many hours between sealed off-box archives of this store's database
@@ -182,11 +188,6 @@ fn default_font_directories() -> Vec<PathBuf> {
     }
 }
 
-/// Printer dots per em for rasterised text.
-const fn default_font_size_dots() -> u16 {
-    24
-}
-
 /// The JetStream stream this store publishes into
 /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
 ///
@@ -223,7 +224,7 @@ impl EdgeConfig {
             nats: None,
             sign_in_idle_timeout_minutes: None,
             font_directories: default_font_directories(),
-            font_size_dots: default_font_size_dots(),
+            font_size_dots: None,
             backup_interval_hours: None,
             sntp_server: default_sntp_server(),
         }

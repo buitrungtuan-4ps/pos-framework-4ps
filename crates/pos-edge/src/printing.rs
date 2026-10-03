@@ -72,6 +72,7 @@ use pos_proto::ClockSource;
 use crate::app::{
     BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptCopy, ReceiptLine, ShiftReport,
 };
+use crate::config::{ValueSource, log_in_force};
 use crate::line_notes::NoteText;
 use crate::paper_labels::PaperLabels;
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
@@ -1638,6 +1639,12 @@ pub struct Printers {
     /// The renderer that turns a line no code page covers into a raster, or `None` on a box with no
     /// font installed — which prints ASCII and refuses the rest, the behaviour before ADR-0102.
     renderer: Option<TextRenderer>,
+    /// This box's own font size, `config.toml`'s deprecated `font_size_dots`, which applies while
+    /// the store's configuration sets none (ADR-0160 decision 6).
+    local_font_size: Option<NonZeroU16>,
+    /// The font size last said and where it came from, so the log says it at start-up and again
+    /// only when it changes.
+    font_size_said: Mutex<Option<(NonZeroU16, ValueSource)>>,
     /// Where a job goes when its printer names an agent (ADR-0112), or `None` in a composition that
     /// has no queue — a route test, the fakes-backed example. A printer that names an agent then
     /// reports [`PrintOutcome::AgentUnavailable`], which is the truth for that composition rather
@@ -1674,6 +1681,8 @@ impl fmt::Debug for Printers {
             // Whether fonts are loaded, not which — the list is long and says nothing an operator
             // reading a log needs. `load_fonts` logs the faces and the script coverage at boot.
             .field("can_rasterise", &self.renderer.is_some())
+            .field("local_font_size", &self.local_font_size)
+            .field("font_size_said", &self.font_size_said)
             // Whether an agent lane is composed, not what is on it: a queue holds rendered
             // documents.
             .field("has_agent_lane", &self.agents.is_some())
@@ -1695,6 +1704,8 @@ impl Printers {
             transports,
             open: Mutex::new(HashMap::new()),
             renderer: None,
+            local_font_size: None,
+            font_size_said: Mutex::new(None),
             agents: None,
         }
     }
@@ -1721,10 +1732,69 @@ impl Printers {
         self
     }
 
+    /// Gives this dispatcher this box's own font size: `config.toml`'s deprecated `font_size_dots`,
+    /// which applies while the store's `printing.font_size_dots` sets none (ADR-0160 decision 6).
+    /// `None` or `0` leaves the renderer's own size, 24.
+    #[must_use]
+    pub fn with_local_font_size(mut self, dots: Option<u16>) -> Self {
+        self.local_font_size = dots.and_then(NonZeroU16::new);
+        self
+    }
+
     /// Whether this dispatcher can turn text into a raster.
     #[must_use]
     pub const fn can_rasterise(&self) -> bool {
         self.renderer.is_some()
+    }
+
+    /// The size a rasterised line is drawn at now, and where it comes from: the store's
+    /// `printing.font_size_dots` when its configuration sets one within the bounds, else this box's
+    /// own, else the size the fonts were loaded at, 24 (ADR-0160 decision 6).
+    fn font_size(
+        &self,
+        session: &EdgeSession,
+        renderer: &TextRenderer,
+    ) -> (NonZeroU16, ValueSource) {
+        if let Some(dots) = session.printing.font_size_dots().and_then(NonZeroU16::new) {
+            (dots, ValueSource::Published)
+        } else if let Some(dots) = self.local_font_size {
+            (dots, ValueSource::LocalFile)
+        } else {
+            (renderer.size(), ValueSource::Default)
+        }
+    }
+
+    /// The size rasterised lines are drawn at now ([`Self::font_size`]), which the log says the
+    /// first time and again whenever it changes.
+    fn font_size_now(&self, session: &EdgeSession, renderer: &TextRenderer) -> NonZeroU16 {
+        let (size, source) = self.font_size(session, renderer);
+        let changed = {
+            let mut said = self
+                .font_size_said
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let changed = *said != Some((size, source));
+            *said = Some((size, source));
+            changed
+        };
+        if changed {
+            log_in_force(
+                "printing.font_size_dots",
+                "font_size_dots",
+                u64::from(size.get()),
+                source,
+                self.local_font_size.is_some(),
+            );
+        }
+        size
+    }
+
+    /// Logs the size rasterised lines are drawn at and where it comes from, at start-up. Nothing on
+    /// a box with no fonts, which rasterises nothing.
+    pub fn say_font_size(&self, session: &EdgeSession) {
+        if let Some(renderer) = self.renderer.as_ref() {
+            let _said = self.font_size_now(session, renderer);
+        }
     }
 
     /// The words a shift report is printed in: the store's display language when this box can draw
@@ -1844,6 +1914,7 @@ impl Printers {
             second.as_ref(),
         );
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id,
@@ -1893,6 +1964,7 @@ impl Printers {
             second.as_ref(),
         );
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id: copy.job_id,
@@ -1934,6 +2006,7 @@ impl Printers {
             second.as_ref(),
         );
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id,
@@ -1967,6 +2040,7 @@ impl Printers {
             report,
         );
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id,
@@ -2012,6 +2086,7 @@ impl Printers {
             note,
         );
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id,
@@ -2045,6 +2120,7 @@ impl Printers {
         let document =
             test_page_document(&session.profile, device, printed_at, self.can_rasterise());
         self.dispatch(
+            session,
             device,
             PrintJob {
                 job_id,
@@ -2062,7 +2138,8 @@ impl Printers {
     /// The framework's half of the port's contract (ADR-0026 §5): the adapter sends `Text` as text,
     /// so deciding a line is sendable is the caller's job, and getting it wrong prints a row of
     /// question marks in front of a customer. Before ADR-0102 the only answer available here was to
-    /// refuse the whole document; now the line is drawn.
+    /// refuse the whole document; now the line is drawn, at the size in force for `session`
+    /// ([`Self::font_size`]), so a change to it applies from the next print.
     ///
     /// # Errors
     ///
@@ -2071,9 +2148,14 @@ impl Printers {
     /// than sending bytes the printer will mangle.
     fn prepare(
         &self,
+        session: &EdgeSession,
         capabilities: &PrinterCapabilities,
         document: PrintDocument,
     ) -> Result<PrintDocument, usize> {
+        let size = self
+            .renderer
+            .as_ref()
+            .map(|renderer| self.font_size_now(session, renderer));
         let mut blocks = Vec::with_capacity(document.blocks.len());
         let mut refused = 0_usize;
         for block in document.blocks {
@@ -2091,11 +2173,11 @@ impl Printers {
                 blocks.push(block);
                 continue;
             }
-            let Some(renderer) = self.renderer.as_ref() else {
+            let (Some(renderer), Some(size)) = (self.renderer.as_ref(), size) else {
                 refused = refused.saturating_add(line.chars().count());
                 continue;
             };
-            match renderer.render(line, *style, capabilities.dots_per_line) {
+            match renderer.render_at(line, *style, capabilities.dots_per_line, size) {
                 Ok(drawn) => {
                     if !drawn.substituted.is_empty() {
                         // The characters, not the line: which glyphs are missing is what an operator
@@ -2131,13 +2213,18 @@ impl Printers {
 
     /// Sends one job to one device — down the wire itself, or onto the queue of the agent that
     /// owns that device's transport (ADR-0112).
-    async fn dispatch(&self, device: &PublishedDevice, mut job: PrintJob) -> PrintOutcome {
+    async fn dispatch(
+        &self,
+        session: &EdgeSession,
+        device: &PublishedDevice,
+        mut job: PrintJob,
+    ) -> PrintOutcome {
         let capabilities = assumed_capabilities(device, self.can_rasterise());
         // Rendered **before** the branch, deliberately. The agent receives a finished document and
-        // decides nothing about it, so the rasterising, the code-page decision and the width all
-        // happen here whichever way the bytes leave. Moving any of it across would mean a store
-        // with three terminals printing three different tickets from one order.
-        match self.prepare(&capabilities, job.document) {
+        // decides nothing about it, so the rasterising, the code-page decision, the width and the
+        // font size all happen here whichever way the bytes leave. Moving any of it across would
+        // mean a store with three terminals printing three different tickets from one order.
+        match self.prepare(session, &capabilities, job.document) {
             Ok(document) => job.document = document,
             Err(line) => {
                 // Never the line's text: a document may carry a buyer's name and tax code
@@ -2239,6 +2326,7 @@ mod tests {
         ticket_language, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
+    use crate::config::ValueSource;
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
     use pos_core::billing::{BillTotals, FeeLine};
     use pos_ports::PortError;
@@ -4212,6 +4300,12 @@ mod tests {
     /// font packages — the same condition a store hits, and the reason this is a skip rather than a
     /// failure. `pos-render`'s own suite covers the rendering itself.
     fn fonts() -> Option<pos_render::TextRenderer> {
+        fonts_at(24)
+    }
+
+    /// [`fonts`] loaded at `size` dots per em: the renderer a box whose file set that size built
+    /// before ADR-0160 decision 6 made the size a setting.
+    fn fonts_at(size: u16) -> Option<pos_render::TextRenderer> {
         let mut library = pos_render::FontLibrary::new();
         for directory in [
             "/usr/share/fonts/truetype",
@@ -4225,7 +4319,7 @@ mod tests {
         }
         Some(pos_render::TextRenderer::new(
             library,
-            NonZeroU16::new(24).expect("positive"),
+            NonZeroU16::new(size).expect("positive"),
         ))
     }
 
@@ -4309,6 +4403,117 @@ mod tests {
                 .windows(4)
                 .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
             "an ASCII receipt needs no raster"
+        );
+    }
+
+    /// The bytes a Vietnamese kitchen ticket goes out as, from fonts loaded at `loaded`, with `local`
+    /// this box's own size and `published` the store's `printing.font_size_dots`. `None` where the
+    /// machine running the suite has no fonts.
+    async fn ticket_drawn(
+        loaded: u16,
+        local: Option<u16>,
+        published: Option<i64>,
+    ) -> Option<Vec<u8>> {
+        let recorder = Arc::new(Recorder {
+            written: Mutex::new(Vec::new()),
+            reachable: true,
+        });
+        let printers = Printers::over(Arc::new(Recorders {
+            recorder: Arc::clone(&recorder),
+        }))
+        .with_fonts(fonts_at(loaded)?)
+        .with_local_font_size(local);
+        let session = EdgeSession {
+            printing: PublishedPrinting {
+                font_size_dots: published,
+                ..PublishedPrinting::default()
+            },
+            ..a_kitchen(None, ReceiptLanguage::Display, ReceiptLanguage::Display)
+        };
+        let outcome = printers
+            .print_ticket(
+                &session,
+                store_id(),
+                event_id(1),
+                "A1",
+                &fired_at(oven(), vec![]),
+                None,
+            )
+            .await;
+        assert_eq!(outcome, PrintOutcome::Printed);
+        let written = recorder.written.lock().expect("the recorder");
+        written.first().cloned()
+    }
+
+    /// A store that publishes a font size has its rasterised lines drawn at it, exactly as a box
+    /// whose file set that size drew them before the setting; a store that publishes none has them
+    /// drawn at the box's own size, and at 24 where the box sets none; and a published size out of
+    /// bounds is not read (ADR-0160 decision 6).
+    #[tokio::test]
+    async fn a_rasterised_line_is_drawn_at_the_published_size_then_the_files_then_twenty_four() {
+        // What a box printed before the setting: its fonts loaded at its file's size.
+        let Some(file_was_32) = ticket_drawn(32, None, None).await else {
+            return;
+        };
+        let file_was_30 = ticket_drawn(30, None, None).await.expect("fonts");
+        let neither = ticket_drawn(24, None, None).await.expect("fonts");
+        assert_ne!(neither, file_was_32, "the size is on the paper");
+
+        assert_eq!(
+            ticket_drawn(24, None, Some(32)).await.expect("fonts"),
+            file_was_32,
+            "a published 32 draws at 32"
+        );
+        assert_eq!(
+            ticket_drawn(24, Some(30), Some(32)).await.expect("fonts"),
+            file_was_32,
+            "and wins over the box's own"
+        );
+        assert_eq!(
+            ticket_drawn(24, Some(30), None).await.expect("fonts"),
+            file_was_30,
+            "nothing published: the box's own size"
+        );
+        assert_eq!(
+            ticket_drawn(24, Some(30), Some(64)).await.expect("fonts"),
+            file_was_30,
+            "a published size out of bounds is not read"
+        );
+        assert_eq!(
+            ticket_drawn(24, None, Some(12)).await.expect("fonts"),
+            neither,
+            "and with neither, 24"
+        );
+    }
+
+    #[test]
+    fn the_font_size_in_force_is_the_stores_then_the_boxs_then_the_default() {
+        let renderer = pos_render::TextRenderer::new(
+            pos_render::FontLibrary::new(),
+            NonZeroU16::new(24).expect("positive"),
+        );
+        let session = |published: Option<i64>| EdgeSession {
+            printing: PublishedPrinting {
+                font_size_dots: published,
+                ..PublishedPrinting::default()
+            },
+            ..EdgeSession::bootstrap()
+        };
+        let size = |local: Option<u16>, published: Option<i64>| {
+            let (dots, source) = Printers::tcp()
+                .with_local_font_size(local)
+                .font_size(&session(published), &renderer);
+            (dots.get(), source)
+        };
+        assert_eq!(size(None, Some(32)), (32, ValueSource::Published));
+        assert_eq!(size(Some(30), Some(32)), (32, ValueSource::Published));
+        assert_eq!(size(Some(30), None), (30, ValueSource::LocalFile));
+        assert_eq!(size(Some(30), Some(64)), (30, ValueSource::LocalFile));
+        assert_eq!(size(None, None), (24, ValueSource::Default));
+        assert_eq!(
+            size(Some(0), Some(12)),
+            (24, ValueSource::Default),
+            "a zero in the file draws nothing, so it is not read"
         );
     }
 

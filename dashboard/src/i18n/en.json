@@ -1900,6 +1900,8 @@
   "settings.item.locale.tax_rounding.title": "Tax rounding",
   "settings.item.permissions.enforced.help": "Turning this on decides every act at the till with the signed-in person's own permissions, and refuses what their roles do not grant. Check that each role holds what its staff need before you turn it on.",
   "settings.item.permissions.enforced.title": "Each person's own permissions",
+  "settings.item.printing.font_size_dots.help": "How large the store server draws a line its printers cannot print in their own characters, such as a Vietnamese dish name, in printer dots: 24 is a comfortable receipt body. A line in the printer's own characters keeps the printer's font. Double-size text is drawn twice as large. A change applies from the next print.",
+  "settings.item.printing.font_size_dots.title": "Size of drawn text",
   "settings.item.printing.receipt_language.help": "The language a receipt, its copy and a pre-bill print their labels and dish names in. A dish the menu does not translate keeps its own name. Until the store's country is set, or where receipts have no labels in its language, the country's language prints as the display language.",
   "settings.item.printing.receipt_language.title": "Receipt language",
   "settings.item.printing.receipt_printed_on_settle.help": "Whether taking a payment prints the guest's receipt. Off, the till's print button prints a copy.",

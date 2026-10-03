@@ -482,6 +482,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console sets how large a store draws what its printers cannot print**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0102](docs/adr/0102-printing-any-script.md)). The size lived in each box's
+  `config.toml` as `font_size_dots`, where the console could not reach it.
+  - A new setting on the `printing` node, `printing.font_size_dots`, from 16 to 48 printer dots per
+    em, default 24, set at the tenant, a brand, a store group or one store. Only a line the printer
+    cannot print in its own characters, such as a Vietnamese dish name, is drawn at it; a line the
+    printer's own character set covers prints in the printer's font. Double-size text is drawn at
+    twice it.
+  - The edge reads the size at each print, so a change applies from the next print, without a
+    restart and without loading the fonts again: `pos-render` gains `TextRenderer::render_at`, which
+    draws a line at a given size. The edge logs the size in force and where it comes from, the
+    store's configuration, `config.toml` or the default, at start-up and at the first print after
+    it changes.
+  - `font_size_dots` is **deprecated**: it applies only while the store's configuration sets none,
+    with a warning while it is the size in use (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the size: a store that sets none prints
+    byte for byte as before, at its box's own size or 24, and a box's own size keeps applying until
+    a setting is written, which then wins. An edge older than this release does not read the
+    `printing` node and keeps its file's size. The settings snapshot and `docs/configuration.md` gain
+    the setting; no route, event, migration, permission or protocol change.
+
 - **The console sets how often a store archives its database**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 6, [ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The interval lived in

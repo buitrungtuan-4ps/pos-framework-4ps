@@ -791,6 +791,9 @@ where
     // Loaded before the configuration is handed to the application state, and logged there:
     // an operator needs to know at start-up whether tonight's tickets can print (ADR-0102).
     let fonts = load_fonts(&config, &edge.session());
+    // This box's own font size, read before `config` moves into the state: the deprecated file key
+    // the store's `printing.font_size_dots` overrides (ADR-0160 decision 6).
+    let local_font_size = config.font_size_dots;
     let state = AppState::with_fanout(config, edge.fanout().clone())
         .with_pairing(Arc::clone(&pairing))
         // The same cell the commands refuse on, so the `pos-lease-standing` header on every
@@ -838,6 +841,7 @@ where
             Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
             None => crate::printing::Printers::tcp(),
         }
+        .with_local_font_size(local_font_size)
         // The lane a printer that names an agent is reached through (ADR-0112). It holds the *same*
         // three values the agent's routes hold, which is the whole point of the three `Arc::clone`s
         // above: the dispatch that writes the row and the route the agent claims it from are two
@@ -849,6 +853,9 @@ where
             Arc::clone(&wake),
         ))),
     );
+    // The size rasterised lines are drawn at, and where it comes from, once at start-up; the
+    // printers say it again whenever it changes.
+    printers.say_font_size(&edge.session());
     let mut app = crate::http::router(state)
         .merge(crate::http::domain_router(
             edge,
@@ -1544,10 +1551,11 @@ fn load_fonts(config: &EdgeConfig, session: &EdgeSession) -> Option<pos_render::
         "printing fonts loaded"
     );
 
-    let size = NonZeroU16::new(config.font_size_dots).unwrap_or(
-        // A zero or absurd size would render nothing at all; 24 dots is the documented default.
-        NonZeroU16::new(24).unwrap_or(NonZeroU16::MIN),
-    );
+    // Built at the default. The size a line is drawn at is decided at each print: the store's
+    // `printing.font_size_dots`, then this box's deprecated `font_size_dots`, then this
+    // (`crate::printing::Printers`, ADR-0160 decision 6), so a change needs no reload of the faces.
+    let size =
+        NonZeroU16::new(pos_proto::printing::DEFAULT_FONT_SIZE_DOTS).unwrap_or(NonZeroU16::MIN);
     Some(pos_render::TextRenderer::new(library, size))
 }
 

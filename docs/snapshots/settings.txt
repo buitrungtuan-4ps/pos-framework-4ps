@@ -47,6 +47,17 @@ permissions.enforced	scope=SETTING_SCOPE_TENANT
 permissions.enforced	since=0.14.1
 permissions.enforced	value=false
 permissions.enforced	value=true
+printing.font_size_dots
+printing.font_size_dots	default=24
+printing.font_size_dots	kind=SETTING_KIND_INT
+printing.font_size_dots	max=48
+printing.font_size_dots	min=16
+printing.font_size_dots	scope=SETTING_SCOPE_BRAND
+printing.font_size_dots	scope=SETTING_SCOPE_STORE
+printing.font_size_dots	scope=SETTING_SCOPE_STORE_GROUP
+printing.font_size_dots	scope=SETTING_SCOPE_TENANT
+printing.font_size_dots	since=0.14.1
+printing.font_size_dots	unit=SETTING_UNIT_COUNT
 printing.receipt_language
 printing.receipt_language	default=RECEIPT_LANGUAGE_DISPLAY
 printing.receipt_language	kind=SETTING_KIND_CHOICE
