@@ -379,6 +379,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The console offers a printer's paper only to a store whose release reads it**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). Only an edge from 0.14.1 reads the paper and cutter the Devices screen sets, and an
+  older one prints on 80 mm paper with a cutter whatever is saved. So a 58 mm printer set for a
+  store still on 0.14.0 went on shearing its receipts, and nothing on screen said why.
+  - For a store whose edge reports a release older than 0.14.1, no printer offers **Paper**, and
+    one line on the card says the store does not read a printer's paper yet and prints on 80 mm
+    paper with a cutter until it updates. The Paper column still shows what was saved.
+  - A store that has not reported its release is offered **Paper** with a note, as Shared settings
+    notes one. A store on 0.14.1 or later sees no change.
+
 - **After a rollback, revoking a device no longer un-revokes the devices retired before it, and
   the OTA kill switch halts the store's rollout.** A rollback restores a version onto the store's
   Tenant layer and empties its other layers. A revocation read the deny-list from the Store layer
@@ -568,7 +579,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
     offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and
     one line says why, and a store that has not reported its release is shown them with a note.
-    A printer's **Paper** is not gated on the store's release yet.
 
   **Upgrade note:** `PublishedDevice` gains `receipt_printer_id`, `receipt_language` and
   `receipt_second_language` (`pos-proto`, additive), left off the node while unset. Nothing changes
