@@ -1920,6 +1920,8 @@
   "settings.item.tender_keys.first_tip_percent.title": "First tip key",
   "settings.item.tender_keys.second_tip_percent.help": "The second tip key on the pay screen, as a whole percentage of the bill. 0 hides the key, and so does the first key's percentage.",
   "settings.item.tender_keys.second_tip_percent.title": "Second tip key",
+  "settings.item.tender_keys.split_ways_max.help": "The most guests the pay screen offers to split a bill between evenly, from 2 to 12: it offers every number from 2 up to this one. Above 6, the row of numbers scrolls sideways on a narrow screen.",
+  "settings.item.tender_keys.split_ways_max.title": "Most guests in an even split",
   "settings.item.tender_keys.third_tip_percent.help": "The third tip key on the pay screen, as a whole percentage of the bill. 0 hides the key, and so does an earlier key's percentage. With no key left, the pay screen shows no tip row.",
   "settings.item.tender_keys.third_tip_percent.title": "Third tip key",
   "settings.kindUnsupported": "This console cannot edit this kind of setting yet.",

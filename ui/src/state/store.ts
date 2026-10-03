@@ -214,6 +214,9 @@ interface StoreShape {
   // three keys it always did. An empty array is a real answer: the store offers no tip key, and the
   // pay screen shows no tip row.
   tipPercents: number[] | null;
+  // The most guests the pay screen's even split offers, from the same read (ADR-0160 decision 2).
+  // `null` until the read lands, and from an edge older than the setting: two to six, as always.
+  splitWaysMax: number | null;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
@@ -314,6 +317,7 @@ const [state, setState] = createStore<StoreShape>({
   seatForTable: {},
   acceptedTender: null,
   tipPercents: null,
+  splitWaysMax: null,
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
@@ -1488,6 +1492,25 @@ function readTipPercents(sent: unknown): number[] | null {
   return keys.length === sent.length ? keys : null;
 }
 
+// The most guests the even split offered before a store could set its own, and the most a store
+// may set.
+const DEFAULT_SPLIT_WAYS_MAX = 6;
+const SPLIT_WAYS_LIMIT = 12;
+
+// The guest counts the pay screen's even split offers: every number from two up to the store's
+// most, or up to six where the edge sent none.
+export function splitWays(): readonly number[] {
+  const most = state.splitWaysMax ?? DEFAULT_SPLIT_WAYS_MAX;
+  return Array.from({ length: most - 1 }, (_, index) => index + 2);
+}
+
+// The most an edge sent, or `null` where it sent none the till can use: a whole number from 2 to 12.
+function readSplitWaysMax(sent: unknown): number | null {
+  return Number.isInteger(sent) && (sent as number) >= 2 && (sent as number) <= SPLIT_WAYS_LIMIT
+    ? (sent as number)
+    : null;
+}
+
 // Whether the store accepts `method` (a `PAYMENT_METHOD_*` wire name).
 //
 // An unloaded or unrestricted store accepts everything, which is why both are `true` rather than
@@ -1523,6 +1546,7 @@ export async function loadMenu(): Promise<void> {
     setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
     setState("tipPercents", readTipPercents(response.tip_percents));
+    setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
     setState("coursesEnabled", response.courses_enabled);
     setState("courses", response.courses);
   }

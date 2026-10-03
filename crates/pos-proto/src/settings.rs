@@ -535,6 +535,23 @@ pub fn register() -> Vec<Setting> {
                       `0` hides the key, and so does a percentage an earlier key offers. With no key \
                       left to offer, the pay screen shows no tip row.",
         },
+        Setting {
+            node: PublishedTenderKeys::NODE,
+            field: "split_ways_max",
+            shape: SettingShape::Int {
+                min: *tender_keys::SPLIT_WAYS_MAX.start(),
+                max: *tender_keys::SPLIT_WAYS_MAX.end(),
+                unit: SettingUnit::Count,
+                default: i64::from(PublishedTenderKeys::default().split_ways_max()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The most guests the pay screen offers to split a bill between evenly: it \
+                      offers every number from two up to this one. `6`, as before, fits one row; \
+                      above it the row scrolls sideways on a narrow screen rather than wrapping, so \
+                      the tenders below it stay where they are.",
+        },
     ]
 }
 
@@ -1103,6 +1120,7 @@ mod tests {
                     "first_tip_percent" => Some(json!(keys.first_tip_percent())),
                     "second_tip_percent" => Some(json!(keys.second_tip_percent())),
                     "third_tip_percent" => Some(json!(keys.third_tip_percent())),
+                    "split_ways_max" => Some(json!(keys.split_ways_max())),
                     _ => None,
                 }
             }

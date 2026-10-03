@@ -6,8 +6,9 @@
 //! decision 2).
 //!
 //! Every field is a setting in [`crate::settings`], and every default is what the pay screen offered
-//! before the field existed: tip keys of five, ten and fifteen percent. So a document with no
-//! `tender_keys` node, or a node without a field, runs a store exactly as it ran before.
+//! before the field existed: tip keys of five, ten and fifteen percent, and an even split between two
+//! and six guests. So a document with no `tender_keys` node, or a node without a field, runs a store
+//! exactly as it ran before.
 //!
 //! A node of its own rather than fields on `tender`, whose `accepted` list restricts the payment
 //! methods a store takes ([`crate::channels::PublishedTender`]). An edge from before these settings
@@ -23,6 +24,14 @@ pub const TIP_PERCENT: RangeInclusive<i64> = 0..=100;
 /// The tip keys when nothing sets them: five, ten and fifteen percent of the bill, the keys the pay
 /// screen offered before the settings existed.
 pub const DEFAULT_TIP_PERCENTS: [u8; 3] = [5, 10, 15];
+
+/// The most guests an even split may offer to divide a bill between, both bounds included. Two at
+/// the least, because a split into one is no split.
+pub const SPLIT_WAYS_MAX: RangeInclusive<i64> = 2..=12;
+
+/// The most ways an even split offers when nothing sets it: six, the pay screen's row of two to six
+/// before the setting existed.
+pub const DEFAULT_SPLIT_WAYS_MAX: u8 = 6;
 
 /// The `tender_keys` node.
 ///
@@ -56,6 +65,14 @@ pub struct PublishedTenderKeys {
         skip_serializing_if = "Option::is_none"
     )]
     pub third_tip_percent: Option<i64>,
+    /// The most guests an even split offers. Read it through
+    /// [`PublishedTenderKeys::split_ways_max`].
+    #[serde(
+        default,
+        deserialize_with = "whole_number",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub split_ways_max: Option<i64>,
 }
 
 impl PublishedTenderKeys {
@@ -100,6 +117,17 @@ impl PublishedTenderKeys {
             }
         }
         keys
+    }
+
+    /// The most guests an even split offers to divide a bill between: the node's number when it is
+    /// within [`SPLIT_WAYS_MAX`], and [`DEFAULT_SPLIT_WAYS_MAX`] otherwise. The pay screen offers
+    /// every number of guests from two up to it.
+    #[must_use]
+    pub fn split_ways_max(&self) -> u8 {
+        self.split_ways_max
+            .filter(|ways| SPLIT_WAYS_MAX.contains(ways))
+            .and_then(|ways| u8::try_from(ways).ok())
+            .unwrap_or(DEFAULT_SPLIT_WAYS_MAX)
     }
 }
 
@@ -189,6 +217,29 @@ mod tests {
             let read = node(garbage);
             assert_eq!(read.first_tip_percent(), 5, "{garbage}");
             assert_eq!(read.tip_percents(), vec![5, 15], "{garbage}");
+        }
+    }
+
+    /// An even split offers two to six guests until the store sets its own most, from 2 to 12; a
+    /// number outside that, or one that cannot be read, is six and costs the other fields nothing.
+    #[test]
+    fn an_even_split_offers_up_to_six_ways_until_the_store_sets_its_own() {
+        assert_eq!(node("{}").split_ways_max(), 6);
+        assert_eq!(PublishedTenderKeys::default().split_ways_max(), 6);
+        for (published, read) in [("2", 2), ("8", 8), ("12", 12)] {
+            let set = node(&format!(r#"{{ "split_ways_max": {published} }}"#));
+            assert_eq!(set.split_ways_max(), read, "{published}");
+        }
+        for garbage in ["1", "13", "0", "-6", "\"8\"", "8.5", "null"] {
+            let set = node(&format!(
+                r#"{{ "split_ways_max": {garbage}, "first_tip_percent": 20 }}"#
+            ));
+            assert_eq!(set.split_ways_max(), 6, "{garbage}");
+            assert_eq!(
+                set.first_tip_percent(),
+                20,
+                "{garbage} costs no other field"
+            );
         }
     }
 }

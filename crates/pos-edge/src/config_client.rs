@@ -2193,6 +2193,31 @@ mod tests {
         );
     }
 
+    /// The most ways an even split offers is what the `tender_keys` node sets, from 2 to 12, and six
+    /// where it sets none, sets one outside that, or sets one nobody can read.
+    #[test]
+    fn the_split_ways_are_what_the_tender_keys_node_sets_and_six_otherwise() {
+        let ways = |node: serde_json::Value| {
+            session_from_config(
+                &EdgeSession::bootstrap(),
+                &serde_json::json!({ "tender_keys": node }),
+            )
+            .tender_keys
+            .split_ways_max()
+        };
+        assert_eq!(EdgeSession::bootstrap().tender_keys.split_ways_max(), 6);
+        assert_eq!(ways(serde_json::json!({ "split_ways_max": 8 })), 8);
+        assert_eq!(ways(serde_json::json!({ "split_ways_max": 12 })), 12);
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "split_ways_max": 1 }),
+            serde_json::json!({ "split_ways_max": 13 }),
+            serde_json::json!({ "split_ways_max": "8" }),
+        ] {
+            assert_eq!(ways(unread.clone()), 6, "{unread}");
+        }
+    }
+
     #[test]
     fn a_qr_node_toggles_staff_confirmation_and_defaults_on() {
         // The bootstrap holds guest orders for staff (ADR-0057).
