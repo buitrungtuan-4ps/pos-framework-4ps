@@ -127,6 +127,19 @@ export interface DeviceProposalSummary {
   readonly paper_width: PaperWidth | null;
   /** Whether an operator says this printer cuts its paper; `null` until somebody says (a cut). */
   readonly cuts_paper: boolean | null;
+  /**
+   * On a terminal, the printer an operator says its receipts, receipt copies and pre-bills go to
+   * (ADR-0160 decision 4). `null` until somebody says, which the till prints as the store's
+   * receipt printer.
+   */
+  readonly receipt_printer_id: string | null;
+  /** On a terminal, the `RECEIPT_LANGUAGE_…` token its receipts print in; `null` is the store's. */
+  readonly receipt_language: string | null;
+  /**
+   * On a terminal, the `RECEIPT_SECOND_LANGUAGE_…` token its receipts print in second; `null` is
+   * the store's.
+   */
+  readonly receipt_second_language: string | null;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**

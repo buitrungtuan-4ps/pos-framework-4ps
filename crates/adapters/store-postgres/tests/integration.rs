@@ -7408,6 +7408,7 @@ mod reconcile_query {
 
 mod device_proposals {
     use pos_proto::devices::{DeviceConnection, PaperWidth};
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 
     use super::{TENANT_A, block_on, port_err, prepared};
 
@@ -7869,6 +7870,98 @@ mod device_proposals {
                     .expect("cross-tenant write")
                     .is_none(),
                 "the tenant scope stops one tenant setting another's paper"
+            );
+        });
+    }
+
+    /// A till's receipt printer and languages are written and read back through the columns the
+    /// publish reads (ADR-0160 decision 4), under the paper's conditional write, and cleared with
+    /// nulls.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a terminal nobody set reads none of the
+    /// three, which is published as nothing, so no till's receipts change because the columns
+    /// appeared.
+    #[test]
+    fn a_tills_receipts_round_trip_as_tokens_and_a_terminal_nobody_set_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "TILL1")
+                .expect("the terminal")
+        }
+        fn receipts(row: &store_postgres::DeviceProposalRow) -> [Option<&str>; 3] {
+            [
+                row.receipt_printer_id.as_deref(),
+                row.receipt_language.as_deref(),
+                row.receipt_second_language.as_deref(),
+            ]
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Bar till")
+                .await
+                .expect("create the terminal");
+            let till = read(&devices).await;
+            assert_eq!(
+                receipts(&till),
+                [None, None, None],
+                "a terminal nobody set says nothing about its receipts"
+            );
+
+            let moved = devices
+                .set_receipt(
+                    TENANT_A,
+                    "TILL1",
+                    Some("PRN2"),
+                    Some(ReceiptLanguage::English),
+                    Some(ReceiptSecondLanguage::None),
+                    &till.version,
+                )
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [
+                    Some("PRN2"),
+                    Some("RECEIPT_LANGUAGE_EN"),
+                    Some("RECEIPT_SECOND_LANGUAGE_NONE")
+                ],
+                "each language is stored as the token the node carries"
+            );
+            assert!(
+                devices
+                    .set_receipt(TENANT_A, "TILL1", None, None, None, &till.version)
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the receipts"
+            );
+            assert!(
+                devices
+                    .set_receipt("tenant-b", "TILL1", None, None, None, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's receipts"
+            );
+            devices
+                .set_receipt(TENANT_A, "TILL1", None, None, None, &moved)
+                .await
+                .expect("the clearing write")
+                .expect("a matching version clears");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [None, None, None],
+                "a till cleared is the store's again"
             );
         });
     }

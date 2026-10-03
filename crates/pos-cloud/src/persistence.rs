@@ -74,7 +74,7 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::{TaxComponent, TaxRate};
-use pos_proto::printing::ReceiptLanguage;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::settings::SettingScope;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -1558,6 +1558,9 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 drawer_attached: row.drawer_attached,
                 paper_width: row.paper_width,
                 cuts_paper: row.cuts_paper,
+                receipt_printer_id: row.receipt_printer_id,
+                receipt_language: row.receipt_language,
+                receipt_second_language: row.receipt_second_language,
                 status: row.status,
                 version: row.version,
             })
@@ -1653,6 +1656,32 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             &id,
             paper_width,
             cuts_paper,
+            expected,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+
+    async fn set_receipt(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        printer: Option<DeviceProposalId>,
+        language: Option<ReceiptLanguage>,
+        second_language: Option<ReceiptSecondLanguage>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let printer = printer.map(|printer| printer.to_string());
+        let changed = PostgresDeviceProposals::set_receipt(
+            self,
+            &tenant,
+            &id,
+            printer.as_deref(),
+            language,
+            second_language,
             expected,
         )
         .await

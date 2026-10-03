@@ -111,7 +111,7 @@ use pos_proto::inventory::{
 use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
-use pos_proto::printing::ReceiptLanguage;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
@@ -3158,6 +3158,10 @@ where
             "/admin/devices/proposals/{id}/paper",
             post(admin_set_printer_paper::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/receipt",
+            post(admin_set_terminal_receipt::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -3890,8 +3894,216 @@ where
     .await
 }
 
-/// The answer to a conditional write on an approved device: an agent pick, a drawer mark or a
-/// printer's paper.
+/// An operator says where an approved terminal's receipts go and the languages they print in.
+///
+/// The three fields are the till's whole receipt state, as a station's update is its whole state: an
+/// absent or `null` field is the store's again.
+#[derive(Debug, Clone, Deserialize)]
+struct SetReceiptRequest {
+    /// The tenant the terminal belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The printer this till's receipts, receipt copies and pre-bills go to (a ULID), or `null` for
+    /// the store's receipt printer.
+    #[serde(default)]
+    receipt_printer_id: Option<String>,
+    /// The language they print in, as a `RECEIPT_LANGUAGE_…` token, or `null` for the store's.
+    #[serde(default)]
+    receipt_language: Option<String>,
+    /// The second language they print in, as a `RECEIPT_SECOND_LANGUAGE_…` token, or `null` for the
+    /// store's.
+    #[serde(default)]
+    receipt_second_language: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/receipt",
+    params(
+        ("id" = String, Path, description = "The terminal's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the terminal was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's \
+                       store that serves no station; `receipt_language`, one of \
+                       `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, \
+                       `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and \
+                       `receipt_second_language`, one of `RECEIPT_SECOND_LANGUAGE_NONE`, \
+                       `RECEIPT_SECOND_LANGUAGE_VI` and `RECEIPT_SECOND_LANGUAGE_EN`. Each is \
+                       `null` or absent for the store's: its receipt printer, \
+                       `printing.receipt_language` and `printing.receipt_second_language`. The \
+                       three are the till's whole receipt state, so a field left out is the \
+                       store's again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`; an edge older than 0.14.1 \
+                                      ignores it. A device paired at the store prints by it once \
+                                      it is bound to the terminal, `POST /api/print/agent`"),
+        (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), \
+                                      `receipt_printer_id` is not an approved device of its store \
+                                      (`UNKNOWN_REFERENCE`) or not a printer serving no station \
+                                      (`WRONG_KIND`), a language is not one of its choices, an id \
+                                      is not a ULID, or If-Match is absent, malformed, or a \
+                                      wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The terminal changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says which printer a till's receipts, receipt copies and pre-bills go to, and the
+/// languages they print in
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
+///
+/// The paper's guards, for the paper's reasons: `ManageDevices`, an `If-Match`, and an audit entry.
+/// Unlike an agent pick, the printer is checked here, against the tenant's approved devices: it must
+/// be a printer of the terminal's own store that serves no station, because a kitchen's printer is
+/// for its tickets and another store's is in another building. What the check cannot see is a
+/// printer that leaves the approved set later: the publish then leaves that till printing at the
+/// store's receipt printer.
+async fn admin_set_terminal_receipt<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetReceiptRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let printer = match request.receipt_printer_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("receipt_printer_id", raw)]) {
+            Ok([printer]) => Some(DeviceProposalId::new(printer)),
+            Err(refusal) => return refusal,
+        },
+    };
+    let language = match optional_choice::<ReceiptLanguage>(
+        "receipt_language",
+        request.receipt_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let second_language = match optional_choice::<ReceiptSecondLanguage>(
+        "receipt_second_language",
+        request.receipt_second_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let approved = match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Approved)
+        .await
+    {
+        Ok(approved) => approved,
+        Err(error) => return device_error_response(&error),
+    };
+    if let Some(refusal) = till_receipt_refusal(&approved, id, printer) {
+        return refusal;
+    }
+    let written = state
+        .devices
+        .set_receipt(
+            tenant_id,
+            id,
+            printer,
+            language,
+            second_language,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_receipt",
+        serde_json::json!({
+            "receipt_printer_id": printer.map(|printer| printer.to_string()),
+            "receipt_language": language.map(ReceiptLanguage::as_wire),
+            "receipt_second_language": second_language.map(ReceiptSecondLanguage::as_wire),
+        }),
+        written,
+    )
+    .await
+}
+
+/// Why `id` may not have its receipts printed at `printer`, among the tenant's `approved` devices, or
+/// `None` when it may.
+///
+/// A `404` for a device the tenant has not approved, as a conditional write answers, and a `400`
+/// naming the field otherwise: `id` when the device is not a terminal, because only a till prints a
+/// guest's paper for itself, and `receipt_printer_id` when the printer is not an approved device of
+/// the terminal's store, or is one that is not a printer serving no station.
+fn till_receipt_refusal(
+    approved: &[DeviceProposalSummary],
+    id: DeviceProposalId,
+    printer: Option<DeviceProposalId>,
+) -> Option<Response> {
+    let id = id.to_string();
+    let Some(terminal) = approved.iter().find(|row| row.id == id) else {
+        return Some(not_found("device"));
+    };
+    if terminal.kind != DeviceKind::Terminal.as_wire() {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "only a terminal has a receipt printer and receipt languages of its own",
+            &[("id", "WRONG_KIND")],
+        ));
+    }
+    let printer = printer?.to_string();
+    match approved
+        .iter()
+        .find(|row| row.id == printer && row.store_id == terminal.store_id)
+    {
+        None => Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "receipt_printer_id must name an approved printer in the terminal's store",
+            &[("receipt_printer_id", "UNKNOWN_REFERENCE")],
+        )),
+        Some(row) if row.kind != DeviceKind::Printer.as_wire() || row.station_id.is_some() => {
+            Some(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "receipt_printer_id must name a printer that serves no station: a station's \
+                 printer prints that kitchen's tickets",
+                &[("receipt_printer_id", "WRONG_KIND")],
+            ))
+        }
+        Some(_) => None,
+    }
+}
+
+/// The answer to a conditional write on an approved device: an agent pick, a drawer mark, a
+/// printer's paper or a till's receipts.
 ///
 /// A write that changed the row is audited as `action`, with what the device now says as the
 /// entry's `after`: each of them decides what a store does with real paper or real cash. A stale
@@ -11181,15 +11393,27 @@ fn station_late_after(seconds: Option<i64>) -> Result<Option<u32>, Response> {
     reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
 )]
 fn station_ticket_language(token: Option<&str>) -> Result<Option<ReceiptLanguage>, Response> {
+    optional_choice("ticket_language", token)
+}
+
+/// A choice a request names by its wire token: `None` where it names none, which leaves the choice
+/// to whatever stands for it, or a token of `E` this release knows.
+///
+/// # Errors
+///
+/// A `400 INVALID_ENUM_VALUE` naming `field` for a token this release does not know, and for `E`'s
+/// `UNSPECIFIED`, which is what an older reader takes a newer token to be and never a choice.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn optional_choice<E: WireEnum>(field: &str, token: Option<&str>) -> Result<Option<E>, Response> {
     let Some(token) = token else {
         return Ok(None);
     };
-    match ReceiptLanguage::from_wire(token) {
-        Some(known) if known != ReceiptLanguage::Unspecified => Ok(Some(known)),
-        _ => Err(enum_refusal(
-            "ticket_language",
-            accepted_tokens::<ReceiptLanguage>(),
-        )),
+    match E::from_wire(token) {
+        Some(known) if known != E::UNSPECIFIED => Ok(Some(known)),
+        _ => Err(enum_refusal(field, accepted_tokens::<E>())),
     }
 }
 
@@ -12457,7 +12681,7 @@ where
 /// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
 /// is not a guess here, it is the accurate answer.
 fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
-    PublishedDevices::new(
+    PublishedDevices::new(with_listed_receipt_printers(
         approved
             .iter()
             .filter_map(|row| {
@@ -12508,10 +12732,62 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                         .as_deref()
                         .map_or_else(Open::default, Open::parse),
                     cuts_paper: row.cuts_paper,
+                    // Verbatim, as the paper is, and absent where nobody has said: the edge reads
+                    // absent as the store's receipt printer and languages (ADR-0160 decision 4). A
+                    // printer id that will not parse drops the printer, as an agent's does, and one
+                    // that names no printer of this node is dropped below.
+                    receipt_printer_id: row
+                        .receipt_printer_id
+                        .as_deref()
+                        .and_then(|raw| raw.parse::<Ulid>().ok())
+                        .map(DeviceId::new),
+                    receipt_language: row
+                        .receipt_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
+                    receipt_second_language: row
+                        .receipt_second_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
                 })
             })
             .collect(),
-    )
+    ))
+}
+
+/// `devices` with each till's `receipt_printer_id` that names no printer of `devices` serving no
+/// station left out (ADR-0160 decision 4).
+///
+/// The rule for a till whose receipt printer goes: the till is published without the field, and
+/// prints at the store's receipt printer, rather than the publish being refused, because the store
+/// must keep printing. A printer goes when it is no longer approved, which archiving one would be,
+/// or when its row cannot be published, as one approved with no connection cannot. The till's
+/// languages stay, and the console still shows the printer it names, so an operator can choose
+/// another.
+fn with_listed_receipt_printers(mut devices: Vec<PublishedDevice>) -> Vec<PublishedDevice> {
+    let receipt_printers: BTreeSet<DeviceId> = devices
+        .iter()
+        .filter(|device| {
+            device.kind.known() == pos_proto::devices::DeviceKind::Printer
+                && device.station_id.is_none()
+        })
+        .map(|device| device.device_id)
+        .collect();
+    for device in &mut devices {
+        if let Some(printer) = device
+            .receipt_printer_id
+            .filter(|printer| !receipt_printers.contains(printer))
+        {
+            tracing::warn!(
+                till = %device.device_id,
+                %printer,
+                "a till names a receipt printer the store's devices do not list; it is published \
+                 printing at the store's receipt printer"
+            );
+            device.receipt_printer_id = None;
+        }
+    }
+    devices
 }
 
 /// The first device in `node` that names an agent the node cannot resolve to a `TERMINAL`.
@@ -35389,6 +35665,114 @@ mod client_ip_tests {
         // deployment or its trusted proxy wrote — never a value further left that a client chose.
         let map = headers(&[("x-forwarded-for", "10.0.0.7")]);
         assert_eq!(client_ip(&map, TWO_PROXIES), Some("10.0.0.7"));
+    }
+}
+
+#[cfg(test)]
+mod devices_compile_tests {
+    //! What a till's receipts compile to ([`super::compile_devices`], ADR-0160 decision 4), and the
+    //! rule for a till whose receipt printer leaves the store's approved devices: it is published
+    //! without the field, and prints at the store's receipt printer.
+    use super::{DeviceProposalSummary, compile_devices};
+    use pos_proto::devices::PublishedDevice;
+    use pos_proto::ids::DeviceId;
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
+    use pos_proto::ulid::Ulid;
+
+    /// An approved row of the one store, as the device store lists it.
+    fn row(
+        id: u128,
+        kind: &str,
+        connection: Option<&str>,
+        station: Option<u128>,
+    ) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            id: Ulid::from_u128(id).to_string(),
+            store_id: Ulid::from_u128(0x5).to_string(),
+            kind: kind.to_owned(),
+            name: format!("Device {id}"),
+            address: String::new(),
+            connection: connection.map(str::to_owned),
+            station_id: station.map(|station| Ulid::from_u128(station).to_string()),
+            agent_device_id: None,
+            drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: None,
+            receipt_second_language: None,
+            status: "approved".to_owned(),
+            version: "1".to_owned(),
+        }
+    }
+
+    /// The bar till, naming `printer` and printing in English then Vietnamese.
+    fn bar_till(printer: u128) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            receipt_printer_id: Some(Ulid::from_u128(printer).to_string()),
+            receipt_language: Some("RECEIPT_LANGUAGE_EN".to_owned()),
+            receipt_second_language: Some("RECEIPT_SECOND_LANGUAGE_VI".to_owned()),
+            ..row(7, "terminal", None, None)
+        }
+    }
+
+    /// The compiled entry for `id`.
+    fn compiled(rows: &[DeviceProposalSummary], id: u128) -> PublishedDevice {
+        compile_devices(rows)
+            .devices()
+            .iter()
+            .find(|device| device.device_id == DeviceId::new(Ulid::from_u128(id)))
+            .cloned()
+            .expect("the device is published")
+    }
+
+    #[test]
+    fn a_till_carries_its_receipt_printer_and_languages_and_one_nobody_set_carries_none() {
+        let rows = [
+            row(1, "printer", Some("network"), None),
+            row(2, "printer", Some("network"), None),
+            bar_till(2),
+            row(8, "terminal", None, None),
+        ];
+        let bar = compiled(&rows, 7);
+        assert_eq!(
+            bar.receipt_printer_id,
+            Some(DeviceId::new(Ulid::from_u128(2)))
+        );
+        assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+        assert_eq!(
+            bar.receipt_second_language(),
+            Some(ReceiptSecondLanguage::Vietnamese)
+        );
+        let door = serde_json::to_value(compiled(&rows, 8)).expect("json");
+        for field in [
+            "receipt_printer_id",
+            "receipt_language",
+            "receipt_second_language",
+        ] {
+            assert!(door.get(field).is_none(), "{field} is not written: {door}");
+        }
+    }
+
+    #[test]
+    fn a_till_whose_receipt_printer_goes_is_published_without_it_and_keeps_its_languages() {
+        // Archived: the printer is no longer among the approved rows. A station's printer, and a
+        // printer approved before a connection was recorded, which the publish holds back, are not
+        // a counter's receipt printer either. Each till prints at the store's instead.
+        for rows in [
+            vec![row(1, "printer", Some("network"), None), bar_till(2)],
+            vec![row(2, "printer", Some("network"), Some(0x5A)), bar_till(2)],
+            vec![row(2, "printer", None, None), bar_till(2)],
+            vec![row(2, "kds", Some("network"), None), bar_till(2)],
+        ] {
+            let bar = compiled(&rows, 7);
+            assert_eq!(bar.receipt_printer_id, None, "{rows:?}");
+            assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+            assert_eq!(
+                bar.receipt_second_language(),
+                Some(ReceiptSecondLanguage::Vietnamese)
+            );
+        }
     }
 }
 

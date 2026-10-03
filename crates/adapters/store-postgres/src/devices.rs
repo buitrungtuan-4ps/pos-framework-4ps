@@ -11,6 +11,7 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 use pos_proto::devices::{DeviceConnection, PaperWidth};
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::wire_enum::WireEnum as _;
 
 use crate::store::{pool_unavailable, unavailable};
@@ -44,6 +45,15 @@ pub struct DeviceProposalRow {
     pub paper_width: Option<String>,
     /// Whether the printer cuts its paper (ADR-0160). `None` until an operator says.
     pub cuts_paper: Option<bool>,
+    /// On a `terminal` row, the printer its receipts go to (ADR-0160 decision 4). `None` until an
+    /// operator says, which is the store's receipt printer.
+    pub receipt_printer_id: Option<String>,
+    /// On a `terminal` row, the language its receipts print in, as its wire token. `None` until an
+    /// operator says, which is the store's.
+    pub receipt_language: Option<String>,
+    /// On a `terminal` row, the second language its receipts print in, as its wire token. `None`
+    /// until an operator says, which is the store's.
+    pub receipt_second_language: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The row's `xmin`, as a string: the version a conditional write must match (ADR-0094).
@@ -105,7 +115,7 @@ impl PostgresDeviceProposals {
             .query(
                 "SELECT id, store_id, kind, name, address, connection, station_id, \
                         agent_device_id, drawer_attached, paper_width, cuts_paper, status, \
-                        xmin::text \
+                        xmin::text, receipt_printer_id, receipt_language, receipt_second_language \
                  FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
@@ -129,6 +139,9 @@ impl PostgresDeviceProposals {
                 cuts_paper: row.get(10),
                 status: row.get(11),
                 version: row.get(12),
+                receipt_printer_id: row.get(13),
+                receipt_language: row.get(14),
+                receipt_second_language: row.get(15),
             })
             .collect())
     }
@@ -250,6 +263,48 @@ impl PostgresDeviceProposals {
                  WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $5 \
                  RETURNING xmin::text",
                 &[&tenant_id, &id, &paper_width, &cuts_paper, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Says which printer an **approved** terminal's receipts go to and the languages they print
+    /// in, each `None` for the store's, only if the row is still at `expected` (ADR-0094's
+    /// conditional write, ADR-0160 decision 4's receipts for one till).
+    ///
+    /// The languages are typed, and their spelling is chosen here beside the columns for the reason
+    /// [`Self::mark`] gives. Returns what [`Self::set_agent`] returns, for the same reason.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_receipt(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        receipt_printer_id: Option<&str>,
+        receipt_language: Option<ReceiptLanguage>,
+        receipt_second_language: Option<ReceiptSecondLanguage>,
+        expected: &str,
+    ) -> Result<Option<String>, PortError> {
+        let receipt_language = receipt_language.map(ReceiptLanguage::as_wire);
+        let receipt_second_language = receipt_second_language.map(ReceiptSecondLanguage::as_wire);
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "UPDATE device_proposals \
+                 SET receipt_printer_id = $3, receipt_language = $4, receipt_second_language = $5 \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $6 \
+                 RETURNING xmin::text",
+                &[
+                    &tenant_id,
+                    &id,
+                    &receipt_printer_id,
+                    &receipt_language,
+                    &receipt_second_language,
+                    &expected,
+                ],
             )
             .await
             .map_err(unavailable)?;

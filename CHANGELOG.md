@@ -535,6 +535,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A till can have its own receipt printer and receipt languages**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 4). Every till's receipts printed at the store's one receipt printer, in the store's
+  receipt languages, so a bar till's bill came out at the counter.
+  - A terminal on the `devices` node can name `receipt_printer_id`, the printer its receipts,
+    receipt copies and pre-bills go to, and `receipt_language` and `receipt_second_language`, the
+    languages they print in. Each is the store's while absent. The second language takes the store
+    setting's own choices, `RECEIPT_SECOND_LANGUAGE_NONE` among them, so a till can print in one
+    language where the store prints in two.
+  - `POST /admin/devices/proposals/{id}/receipt` (new, and documented in
+    `docs/openapi-admin.json`) sets the three, each `null` for the store's, with an `If-Match` and
+    an audit entry. It refuses `400` naming the field: `id` for a device that is not a terminal,
+    `receipt_printer_id` for a device that is not an approved printer of the terminal's store
+    serving no station, and either language for a token outside its choices.
+  - The devices publish carries them as set. A till whose receipt printer is no longer among the
+    store's published printers that serve no station, such as one archived, is published without
+    it and prints at the store's receipt printer: the publish is not refused, and the store keeps
+    printing.
+  - The console's **Terminals** card shows each till's **Receipt printer**, **Receipt language**
+    and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
+    offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and
+    one line says why, and a store that has not reported its release is shown them with a note.
+    A printer's **Paper** is not gated on the store's release yet.
+
+  **Upgrade note:** `PublishedDevice` gains `receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`pos-proto`, additive), left off the node while unset. Nothing changes
+  until a terminal sets a printer or a language and the store's devices are published, and an edge
+  older than 0.14.1 ignores the fields, because `PublishedDevice` has never refused one it does not
+  know. The cash drawer stays the store's until the multi-drawer shift work. Migration
+  `0082_terminal_receipts.sql` adds `device_proposals.receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`text`, nullable). It is additive and rollback-safe. No event,
+  permission or protocol change.
+
 - **The console sets how large a store draws what its printers cannot print**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 6, [ADR-0102](docs/adr/0102-printing-any-script.md)). The size lived in each box's
