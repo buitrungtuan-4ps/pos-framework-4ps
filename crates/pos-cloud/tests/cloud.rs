@@ -31913,6 +31913,67 @@ async fn a_whole_number_setting_is_published_to_every_store_as_a_number() {
     assert!(attempts.get("values").is_none(), "a number has no list");
 }
 
+/// The archive interval (ADR-0160 decision 6) is written on a node of its own, `backup`, on each
+/// store's Tenant layer, as a number in hours; the console is told its unit and that it cannot be
+/// written as zero.
+#[tokio::test]
+async fn the_archive_interval_reaches_each_store_on_a_backup_node_of_its_own() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number("backup.interval_hours", &serde_json::json!(6)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    for store_id in settings_stores() {
+        assert_eq!(
+            tenant_layer_node(&config_trees, store_id, "backup").await,
+            Some(serde_json::json!({ "interval_hours": 6 })),
+            "a number, on the node the edge reads it from"
+        );
+    }
+
+    // No published value switches archiving off.
+    let refused = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number("backup.interval_hours", &serde_json::json!(0)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["reason"],
+        "OUT_OF_RANGE"
+    );
+
+    let catalogue = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let interval = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "backup.interval_hours")
+        .expect("the archive interval is listed");
+    assert_eq!(interval["unit"], "SETTING_UNIT_HOURS");
+    assert_eq!(interval["min"], 1);
+    assert_eq!(interval["max"], 168);
+    assert_eq!(interval["default"], 24);
+}
+
 /// The enforcement switch (ADR-0158 Rollout) is written on each store's Tenant layer, and the
 /// merge puts it beside the staff the people compiler wrote on the Store layer. A store with no
 /// people node receives the switch alone, with no `staff` key, which the edge reads as the switch

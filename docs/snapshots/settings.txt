@@ -4,6 +4,17 @@
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
 # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+backup.interval_hours
+backup.interval_hours	default=24
+backup.interval_hours	kind=SETTING_KIND_INT
+backup.interval_hours	max=168
+backup.interval_hours	min=1
+backup.interval_hours	scope=SETTING_SCOPE_BRAND
+backup.interval_hours	scope=SETTING_SCOPE_STORE
+backup.interval_hours	scope=SETTING_SCOPE_STORE_GROUP
+backup.interval_hours	scope=SETTING_SCOPE_TENANT
+backup.interval_hours	since=0.14.1
+backup.interval_hours	unit=SETTING_UNIT_HOURS
 counter.walk_in_channel
 counter.walk_in_channel	default=WALK_IN_CHANNEL_TAKEAWAY
 counter.walk_in_channel	kind=SETTING_KIND_CHOICE

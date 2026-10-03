@@ -22,6 +22,7 @@
 //! A test reads every value of every setting back through its node's own type, so the register
 //! cannot offer a value or claim a default that the edge does not have.
 
+use crate::backup::{self, PublishedBackup};
 use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::people::PublishedPermissions;
@@ -81,6 +82,8 @@ wire_enum! {
     MinorUnits = "MINOR_UNITS",
     /// A whole percentage: `10` is ten percent.
     Percent = "PERCENT",
+    /// Hours.
+    Hours = "HOURS",
 }
 
 /// What a setting's value is, and what the register holds it to.
@@ -601,6 +604,27 @@ pub fn register() -> Vec<Setting> {
                       publishes the channels it accepts must accept the one a walk-in takes, or \
                       the order is refused.",
         },
+        Setting {
+            node: PublishedBackup::NODE,
+            field: "interval_hours",
+            shape: SettingShape::Int {
+                min: *backup::INTERVAL_HOURS.start(),
+                max: *backup::INTERVAL_HOURS.end(),
+                unit: SettingUnit::Hours,
+                default: i64::from(backup::DEFAULT_INTERVAL_HOURS),
+                // No store is given another value: a new store archives once a day, as every store
+                // did before the setting (ADR-0124).
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "How many hours apart a store ships a sealed archive of its database off the \
+                      box, from 1 to 168: the most trading it can lose if its disk dies. A change \
+                      applies from the next archive. No value switches archiving off. Only \
+                      `backup_interval_hours = 0` in a box's own config.toml does, and it wins. A \
+                      box whose config.toml sets another number keeps it until this is set, and \
+                      this then wins.",
+        },
     ]
 }
 
@@ -769,6 +793,7 @@ fn unit_phrase(unit: SettingUnit) -> &'static str {
         SettingUnit::Count => "a count",
         SettingUnit::MinorUnits => "an amount in the store currency's minor unit",
         SettingUnit::Percent => "a whole percentage",
+        SettingUnit::Hours => "a whole number of hours",
     }
 }
 
@@ -795,6 +820,7 @@ mod tests {
         ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
         render_snapshot_of,
     };
+    use crate::backup::{DEFAULT_INTERVAL_HOURS, PublishedBackup};
     use crate::counter::PublishedCounter;
     use crate::locale::LocaleSettings;
     use crate::people::PublishedPermissions;
@@ -1179,6 +1205,17 @@ mod tests {
                 let counter: PublishedCounter = serde_json::from_value(document).ok()?;
                 match field {
                     "walk_in_channel" => Some(json!(counter.walk_in_channel().as_wire())),
+                    _ => None,
+                }
+            }
+            PublishedBackup::NODE => {
+                let backup: PublishedBackup = serde_json::from_value(document).ok()?;
+                match field {
+                    // A node that sets no interval leaves the edge on its deprecated local file and
+                    // then on this default, so the default is what a store with neither runs.
+                    "interval_hours" => Some(json!(
+                        backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
+                    )),
                     _ => None,
                 }
             }

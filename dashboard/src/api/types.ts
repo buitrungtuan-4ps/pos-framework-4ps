@@ -1956,7 +1956,7 @@ export interface SettingDefinition {
   /** For a whole number, the largest value it takes. */
   readonly max?: number;
   /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_COUNT`,
+   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_HOURS`, `_COUNT`,
    * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
    * percentage — which the console names in the operator's language.
    */

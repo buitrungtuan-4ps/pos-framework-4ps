@@ -27,6 +27,7 @@
 // that doc examples compile under the same rules has to be stated separately.
 #![doc(test(attr(deny(warnings))))]
 
+pub mod backup;
 pub mod campaign;
 pub mod chain;
 pub mod channels;
