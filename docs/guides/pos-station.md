@@ -118,8 +118,11 @@ and killed on **Quit**; a job it was printing returns to the queue at its lease.
 
 The agent prints for a terminal only after a manager binds it at the till (`POST /api/print/agent`).
 Until then the edge answers `409` and the agent asks again every five seconds, which is the right
-state for a freshly paired terminal. If the app is killed rather than quit, the agent outlives it
-until the next start (see *What is left*).
+state for a freshly paired terminal. The same binding makes the computer that till for its own
+receipt printer and receipt languages, where the console names them for the terminal
+([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md) decision 4).
+If the app is killed rather than quit, the agent outlives it until the next start (see *What is
+left*).
 
 ## Security
 

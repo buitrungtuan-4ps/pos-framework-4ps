@@ -678,6 +678,19 @@ nothing:
 Until (4) the agent runs and is told, on every claim, that it answers for no print agent. That is the
 honest state rather than a fault, and the log line says exactly that.
 
+### A till's own receipt printer
+
+A till can print its receipts, receipt copies and pre-bills at a printer of its own, in languages of
+its own: the bar's bill at the bar
+([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 4). That takes (1), (3) and (4) above and nothing else, in a store whose edge is in the shop
+too: no printer has to name the terminal and no agent has to be installed, because the edge writes
+to the till's printer itself. Under **Devices → Terminals**, **Receipts** picks the printer and the
+languages; publish; then bind the till's paired device to the terminal entry, as in (4). The till has
+no screen for the binding yet, so a manager signed in on it calls `POST /api/print/agent` from it. A
+device bound to no terminal prints at the store's receipt printer, as before, and every cash payment
+still opens the store's drawer.
+
 ### Linux
 
 ```sh

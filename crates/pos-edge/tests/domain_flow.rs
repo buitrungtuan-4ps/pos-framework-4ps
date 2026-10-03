@@ -16,7 +16,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::pairing::Minter;
-use pos_edge::printing::{Printers, TransportFactory};
+use pos_edge::printing::{AgentLane, Printers, TransportFactory};
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
     StaffRoster, StoreIdentity, SystemClock,
@@ -1822,5 +1822,251 @@ async fn a_fee_is_waived_over_http_and_each_refusal_says_why() {
         check["total_due"],
         json!(vnd(176_000)),
         "the bill reads as the waive answered"
+    );
+}
+
+// --- A till's own receipt printer (ADR-0160 decision 4) -----------------------------------------
+
+/// What each printer was sent, by its address, so a test can say at which counter paper came out.
+#[derive(Debug, Default)]
+struct Counters {
+    sent: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+impl Counters {
+    /// The addresses written to, in order.
+    fn at(&self) -> Vec<String> {
+        let sent = self.sent.lock().expect("the counters");
+        sent.iter().map(|(address, _)| address.clone()).collect()
+    }
+}
+
+#[derive(Debug)]
+struct CountersAt(Arc<Counters>);
+
+#[derive(Debug)]
+struct CounterTransport(Arc<Counters>, String);
+
+impl Transport for CounterTransport {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        self.0
+            .sent
+            .lock()
+            .map_err(|_| Unreachable)?
+            .push((self.1.clone(), bytes.to_vec()));
+        Ok(())
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        Ok(TransportStatus::default())
+    }
+}
+
+impl TransportFactory for CountersAt {
+    fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
+        Ok(Box::new(CounterTransport(
+            Arc::clone(&self.0),
+            device.address.clone(),
+        )))
+    }
+}
+
+/// The store's receipt printer, on USB at the counter with the cash drawer on it (ADR-0165).
+const COUNTER_PRINTER: &str = "/dev/usb/lp0";
+/// The bar's printer, which serves no station.
+const BAR_PRINTER: &str = "192.0.2.30:9100";
+/// The bar till: a `TERMINAL` entry whose receipts print at the bar.
+const BAR_TILL: u128 = 0x7111;
+
+/// The store the till tests sell in, and two paired devices signed in on it by a manager: the first
+/// to become the bar till, the second a till bound to no terminal. The printers' binding record is
+/// the one `POST /api/print/agent` binds through, as `serve` composes it.
+async fn tills_app(counters: &Arc<Counters>) -> (Router, String, String) {
+    let bar_printer = PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9130)),
+        address: BAR_PRINTER.to_owned(),
+        name: DisplayName::new("Bar"),
+        ..counter_printer()
+    };
+    let devices = PublishedDevices::new(vec![
+        PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            address: COUNTER_PRINTER.to_owned(),
+            drawer_attached: true,
+            ..counter_printer()
+        },
+        PublishedDevice {
+            device_id: DeviceId::new(Ulid::from_u128(BAR_TILL)),
+            kind: DeviceKind::Terminal.into(),
+            connection: Open::default(),
+            address: String::new(),
+            name: DisplayName::new("Bar till"),
+            receipt_printer_id: Some(bar_printer.device_id),
+            ..counter_printer()
+        },
+        bar_printer,
+    ]);
+    let mut roster = StaffRoster::new();
+    roster.insert(
+        STAFF_CODE,
+        StaffAuth {
+            employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+            permissions: PermissionSet::default().with(Permission::ManageDevices),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: Some(hash_of(STAFF_PIN)),
+        },
+    );
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7))),
+            EdgeSession {
+                devices,
+                ..EdgeSession::bootstrap().with_staff(roster)
+            },
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed"),
+    );
+    let agents = Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new());
+    let queue = Arc::new(pos_edge::print_queue::InMemoryPrintQueue::new());
+    let wake = pos_edge::print_wake::SharedPrintWake::new();
+    let printers = Arc::new(
+        Printers::over(Arc::new(CountersAt(Arc::clone(counters)))).with_agents(Arc::new(
+            AgentLane::new(Arc::clone(&agents), Arc::clone(&queue), wake.clone()),
+        )),
+    );
+    let pairing = Arc::new(Pairing::new());
+    let now = SystemClock.now();
+    let mut tokens = Vec::new();
+    for _ in 0..2 {
+        let (code, _) = pairing
+            .mint(now, Minter::Boot)
+            .expect("mint a pairing code");
+        let paired = pairing.redeem(&code, now).await.expect("redeem");
+        let token = paired.token().expect("a fresh code pairs a device");
+        tokens.push(token.as_str().to_owned());
+    }
+    let service = pos_edge::http::domain_router(
+        edge,
+        InMemoryQueueNumbers::new(),
+        agents,
+        queue,
+        wake,
+        pairing,
+        Arc::new(Sessions::new()),
+        &Arc::new(pos_edge::origins::Origins::new()),
+    )
+    .layer(axum::Extension(printers));
+    for token in &tokens {
+        let (status, _) = send(
+            service.clone(),
+            token,
+            "POST",
+            "/api/session/sign-in",
+            Some(json!({ "code": STAFF_CODE, "pin": STAFF_PIN })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "the manager signs in on both tills");
+    }
+    let counter = tokens.pop().expect("the second till");
+    let bar = tokens.pop().expect("the first till");
+    (service, bar, counter)
+}
+
+/// Binds the device holding `token` to the bar till, as a manager does at it (ADR-0112).
+async fn bind_to_the_bar_till(app: &Router, token: &str) {
+    let (status, bound) = send(
+        app.clone(),
+        token,
+        "POST",
+        "/api/print/agent",
+        Some(json!({ "agent_device_id": DeviceId::new(Ulid::from_u128(BAR_TILL)) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    assert_eq!(bound["outcome"], "BOUND");
+}
+
+#[tokio::test]
+async fn the_bar_till_prints_its_pre_bill_receipt_and_copy_at_the_bar_and_opens_the_stores_drawer()
+{
+    let counters = Arc::new(Counters::default());
+    let (app, bar, _counter) = tills_app(&counters).await;
+    bind_to_the_bar_till(&app, &bar).await;
+
+    let table = TableId::new(Ulid::from_u128(730));
+    for (uri, body) in [
+        (format!("/api/tables/{table}/seat"), None),
+        (format!("/api/tables/{table}/lines"), Some(a_line_body())),
+    ] {
+        let (status, answer) = send(app.clone(), &bar, "POST", &uri, body).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {answer}");
+    }
+    let check = format!("/api/tables/{table}/check/print");
+    let (_, pre_bill) = send(app.clone(), &bar, "POST", &check, None).await;
+    assert_eq!(pre_bill["prints"], json!(["PRINTED"]));
+
+    let (_, bill) = send(
+        app.clone(),
+        &bar,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let cash = json!({
+        "payments": [{
+            "method": "PAYMENT_METHOD_CASH",
+            "tendered": vnd(165_000),
+            "applied_to_bill": vnd(165_000),
+        }],
+    });
+    let settle = format!("/api/bills/{bill_id}/settle");
+    let (status, settled) = send(app.clone(), &bar, "POST", &settle, Some(cash)).await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(
+        settled["drawer_open"], "OPENED",
+        "the store's drawer, at the counter"
+    );
+    assert_eq!(settled["receipt_print"], "PRINTED");
+    let reprint = format!("/api/bills/{bill_id}/receipt/reprint");
+    let (_, copy) = send(app.clone(), &bar, "POST", &reprint, None).await;
+    assert_eq!(copy["receipt_print"], "PRINTED", "{copy}");
+
+    assert_eq!(
+        counters.at(),
+        [BAR_PRINTER, COUNTER_PRINTER, BAR_PRINTER, BAR_PRINTER],
+        "the pre-bill at the bar, the drawer's kick at the counter, the receipt and its copy at \
+         the bar"
+    );
+    let sent = counters.sent.lock().expect("the counters");
+    assert_eq!(
+        sent.get(1).map(|(_, bytes)| bytes.as_slice()),
+        Some(printer_escpos::escpos::DRAWER_KICK.as_slice()),
+        "the counter was sent the kick and nothing else"
+    );
+}
+
+#[tokio::test]
+async fn a_till_bound_to_no_terminal_prints_at_the_stores_receipt_printer() {
+    let counters = Arc::new(Counters::default());
+    let (app, bar, counter) = tills_app(&counters).await;
+    bind_to_the_bar_till(&app, &bar).await;
+
+    let settled = settle_a_table_with(
+        &app,
+        &counter,
+        TableId::new(Ulid::from_u128(731)),
+        "PAYMENT_METHOD_CARD",
+    )
+    .await;
+    assert_eq!(settled["receipt_print"], "PRINTED");
+    assert_eq!(
+        counters.at(),
+        [COUNTER_PRINTER],
+        "another till's receipt prints where every receipt did"
     );
 }
