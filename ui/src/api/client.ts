@@ -338,8 +338,11 @@ export const api = {
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
-  // The counter starts its own order (ADR-0146): a tableless takeaway order and its queue number.
-  openOrder: () => request<OpenedOrder>("POST", "/api/orders", {}),
+  // The counter starts its own order (ADR-0146): a tableless order and its queue number, on
+  // `channel` where the cashier asked the guest, and on the store's walk-in channel without one
+  // (ADR-0160 decision 2).
+  openOrder: (channel?: string) =>
+    request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
   addOrderLine: (orderId: string, line: OrderLineRequest) =>
     request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 

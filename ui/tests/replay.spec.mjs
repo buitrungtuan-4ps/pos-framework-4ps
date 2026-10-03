@@ -2853,6 +2853,7 @@ test("a store whose walk-ins are eaten in sells them from the dining room's book
     await pair(page, edge);
     await signIn(page, edge);
     await startWalkIn(page);
+    await expect(page.locator('[data-outcome="walk-in-channel"]')).toHaveCount(0);
     await sellTheSalad(page, "89,000₫");
     await expect(page.locator('[data-outcome="check-total"]')).toContainText("97,900₫");
   } finally {
@@ -2875,6 +2876,7 @@ test("a store that sets no walk-in channel, and an edge too old to send one, sel
     await pair(page, edge);
     await signIn(page, edge);
     await startWalkIn(page);
+    await expect(page.locator('[data-outcome="walk-in-channel"]')).toHaveCount(0);
     await sellTheSalad(page, "79,000₫");
     await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
 
@@ -2888,6 +2890,71 @@ test("a store that sets no walk-in channel, and an edge too old to send one, sel
     });
     await page.goto(`${edge.baseURL}/counter`);
     await startWalkIn(page);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that asks each walk-in guest opens the order on their answer (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=walk-in-ask` prices the salad at 89,000₫ in the dining room and 79,000₫ to take
+// away, and sets `counter.walk_in_channel` to ask. New order offers two large answers instead of
+// opening the order. Eat in opens it on the dining room's channel: the header says so, the counter
+// offers the dining room's price and the edge charges 97,900₫. It still says so after a reload, which
+// the till learns from the live orders. Take away opens the next one on takeaway, at 79,000₫ and
+// 86,900₫, with the next queue number.
+//
+// Then the price book is read with `walk_in_channel` taken out, which is an older edge's answer: New
+// order opens the order at one tap, as it always did, with no answer on the header, from the
+// takeaway book, and the edge opens it for takeaway because the till named no channel.
+test("a store that asks each walk-in guest opens the order eaten in or taken away, as they answer", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-ask");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const answer = page.locator('[data-outcome="walk-in-channel"]');
+    const opensOn = async (step, label, price, total) => {
+      await navigateTo(page, "/counter");
+      // Collapsed, rather than absent, once the till has read that the store asks.
+      await expect(page.locator('[data-step="newOrder"]')).toHaveAttribute("aria-expanded", "false");
+      await page.locator('[data-step="newOrder"]').click();
+      await expect(page.locator('[data-step="eatIn"]')).toBeVisible();
+      await expect(page.locator('[data-step="takeAway"]')).toBeVisible();
+      await page.locator(`[data-step="${step}"]`).click();
+      await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+      await expect(answer).toHaveText(label);
+      await sellTheSalad(page, price);
+      await expect(page.locator('[data-outcome="check-total"]')).toContainText(total);
+    };
+
+    await opensOn("eatIn", "Eat in", "89,000₫", "97,900₫");
+    await page.reload();
+    await expect(answer).toHaveText("Eat in");
+    await page.locator("#menu-search").fill("salad");
+    await expect(page.locator('[data-step="onItem"]')).toContainText("89,000₫");
+    await page.locator("#menu-search").fill("");
+
+    await opensOn("takeAway", "Take away", "79,000₫", "86,900₫");
+    await navigateTo(page, "/counter");
+    await expect(page.locator('[data-step="charge"]')).toHaveCount(2);
+    await expect(page.getByText("No. 2", { exact: true })).toBeVisible();
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.walk_in_channel;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await startWalkIn(page);
+    await expect(answer).toHaveCount(0);
     await sellTheSalad(page, "79,000₫");
     await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
     expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);

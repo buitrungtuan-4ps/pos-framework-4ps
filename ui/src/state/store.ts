@@ -224,6 +224,9 @@ interface StoreShape {
   // `WALK_IN_CHANNEL_TAKEAWAY`, `_DINE_IN` or `_ASK`. `null` until the read lands, and from an edge
   // older than the setting, which opens every walk-in for takeaway.
   walkInChannel: string | null;
+  // The sales channel of each walk-in whose channel the till knows: the one this till opened it on,
+  // or the one the edge's live read names. A walk-in it has no channel for is on the store's.
+  walkInChannels: Record<string, string>;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
@@ -326,6 +329,7 @@ const [state, setState] = createStore<StoreShape>({
   tipPercents: null,
   splitWaysMax: null,
   walkInChannel: null,
+  walkInChannels: {},
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
@@ -1357,11 +1361,15 @@ export function holdWalkIn(orderId: string): void {
 
 /**
  * Opens a tableless order at the counter and returns its id (ADR-0146). The edge records it, gives
- * it the day's next queue number, and prices every line added to it at the order's own channel.
+ * it the day's next queue number, and prices every line added to it at the order's own channel:
+ * `channel` where the cashier asked the guest, and the store's walk-in channel otherwise.
  */
-export async function startWalkIn(): Promise<string> {
-  const opened = await api.openOrder();
+export async function startWalkIn(channel?: string): Promise<string> {
+  const opened = await api.openOrder(channel);
   holdWalkIn(opened.order_id);
+  if (channel !== undefined) {
+    setState("walkInChannels", opened.order_id, channel);
+  }
   return opened.order_id;
 }
 
@@ -1552,11 +1560,29 @@ export function walkInChannel(): string {
   return state.walkInChannel ?? "WALK_IN_CHANNEL_TAKEAWAY";
 }
 
-// The sales channel the counter's walk-ins open on, whose book the counter shows: the dining room
-// where the store eats its walk-ins in, and takeaway otherwise. Under `WALK_IN_CHANNEL_ASK` too,
-// since this till names no channel when it opens one, and the edge then opens it for takeaway.
+// The sales channel a walk-in opens on when the till names none: the dining room where the store
+// eats its walk-ins in, and takeaway otherwise. Under `WALK_IN_CHANNEL_ASK` the till names the
+// guest's answer, and only an older till names none; the edge then opens takeaway.
 export function walkInSalesChannel(): string {
   return walkInChannel() === "WALK_IN_CHANNEL_DINE_IN" ? DINE_IN : TAKEAWAY;
+}
+
+// Whether the counter asks each walk-in guest whether they eat in or take away.
+export function walkInAsks(): boolean {
+  return walkInChannel() === "WALK_IN_CHANNEL_ASK";
+}
+
+// The sales channel a walk-in is on, whose book the order screen shows: the one it was opened on
+// where the till knows it, and the store's walk-in channel otherwise.
+export function walkInOrderChannel(orderId: string): string {
+  return state.walkInChannels[orderId] ?? walkInSalesChannel();
+}
+
+// Whether a walk-in is eaten in, which the order screen says where the store asks: as the till
+// opened it or the edge's live read names it, and `undefined` while the till does not know.
+export function walkInEatenIn(orderId: string): boolean | undefined {
+  const channel = state.walkInChannels[orderId];
+  return channel === undefined ? undefined : channel === DINE_IN;
 }
 
 // The channel an edge sent, or `null` where it sent none the till knows.
@@ -1599,9 +1625,9 @@ export async function loadMenu(): Promise<void> {
   if (walkIn.status === "fulfilled") {
     setWalkInBook(TAKEAWAY, walkIn.value);
   }
-  // The dining room's book as well where the store's walk-ins are eaten in, read once the store's
-  // own book has said so: a store that sets nothing reads what it always read.
-  if (walkInSalesChannel() === DINE_IN) {
+  // The dining room's book as well where the store's walk-ins are eaten in, or may be, read once
+  // the store's own book has said so: a store that sets nothing reads what it always read.
+  if (walkInChannel() !== "WALK_IN_CHANNEL_TAKEAWAY") {
     await api.menu(DINE_IN).then(
       (book) => setWalkInBook(DINE_IN, book),
       () => undefined,
@@ -1748,6 +1774,15 @@ export async function loadLiveOrders(): Promise<void> {
       // The answer is the whole live set, so it replaces the one held rather than merging into it:
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
+      // The channel of each walk-in the edge names one for, replacing the set held for the same
+      // reason: a walk-in that is no longer live needs no book.
+      draft.walkInChannels = Object.fromEntries(
+        orders.flatMap((order) =>
+          order.table_id === undefined && order.sales_channel !== undefined
+            ? [[order.order_id, order.sales_channel] as const]
+            : [],
+        ),
+      );
       // The same for the kitchen's own set, when the edge answered: a paid order it no longer
       // lists has been bumped, or its day has ended.
       if (kitchen !== null) {

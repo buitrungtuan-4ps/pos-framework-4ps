@@ -456,6 +456,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The counter asks a walk-in guest whether they eat in or take away**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A store that sets `counter.walk_in_channel` to `WALK_IN_CHANNEL_ASK` opened every
+  walk-in for takeaway, because the till asked nothing.
+  - Under ask, **New order** offers two large answers, **Eat in** and **Take away**. The order opens
+    on the channel tapped, with the day's next queue number as before; the counter shows that
+    channel's book, and the order's header says which answer the guest gave.
+  - `GET /api/orders/live` names each order's `sales_channel`, so a till that reloads on a walk-in
+    shows its book and its answer again.
+  - **Upgrade note:** only a store set to ask sees anything new. A till older than this release
+    opens a walk-in at one tap, which the edge opens for takeaway, and a till reading an older edge
+    never asks. The new response field is additive; no route, event, migration, permission or
+    protocol change.
+
 - **A store chooses the channel its walk-ins take**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2, [ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md)). The counter

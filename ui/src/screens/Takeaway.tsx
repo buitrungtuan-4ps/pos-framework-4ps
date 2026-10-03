@@ -16,6 +16,7 @@ import {
   startWalkIn,
   tenderAccepted,
   tipsEnabled,
+  walkInAsks,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
@@ -84,14 +85,19 @@ export function Takeaway() {
   // A walk-in guest (ADR-0146, finding F12): the counter opens its own order and goes straight to
   // it. Before this, a store without tables could charge an order someone else started and could
   // not start one.
-  const newOrder = async () => {
+  const openWalkIn = async (channel?: string) => {
     setError(null);
     try {
-      navigate(`/order/${await startWalkIn()}`);
+      navigate(`/order/${await startWalkIn(channel)}`);
     } catch (caught) {
       explain(caught);
     }
   };
+  // A store that asks each walk-in guest whether they eat in or take away (ADR-0160 decision 2):
+  // New order offers the two answers, and the order opens on the channel tapped. Every other store
+  // opens the order at the first tap, as before.
+  const [asking, setAsking] = createSignal(false);
+  const newOrder = () => (walkInAsks() ? setAsking(!asking()) : void openWalkIn());
 
   onMount(() => void refresh());
 
@@ -240,11 +246,32 @@ export function Takeaway() {
             <button
               type="button"
               class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
+              aria-expanded={walkInAsks() ? asking() : undefined}
               data-step="newOrder"
-              onClick={() => void newOrder()}
+              onClick={() => newOrder()}
             >
               {t("counter.new_order")}
             </button>
+            <Show when={walkInAsks() && asking()}>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                  data-step="eatIn"
+                  onClick={() => void openWalkIn("SALES_CHANNEL_DINE_IN")}
+                >
+                  {t("counter.eat_in")}
+                </button>
+                <button
+                  type="button"
+                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                  data-step="takeAway"
+                  onClick={() => void openWalkIn("SALES_CHANNEL_TAKEAWAY")}
+                >
+                  {t("counter.take_away")}
+                </button>
+              </div>
+            </Show>
             </Show>
 
             <Show when={error()}>

@@ -123,6 +123,10 @@ export interface LiveOrder {
   // its bill has been split (ADR-0128). `bill_id` names only the newest. Absent from an edge older
   // than the field, which never had a way to show a till a split table anyway.
   open_bill_ids?: string[];
+  // The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book of
+  // its channel, and whether the guest eats in (ADR-0160 decision 2). Absent from an edge older than
+  // the field, and for an order the edge cannot name a channel for.
+  sales_channel?: string;
   lines: LiveLine[];
 }
 
