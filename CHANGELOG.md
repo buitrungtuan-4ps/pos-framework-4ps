@@ -107,10 +107,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
-- **The cloud and the edge read the `qr` and `retention` nodes through one definition**
+- **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
-  consequences accepted). Each side read these nodes with code of its own, and a test on each side
-  pinned the numbers the other used.
+  consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
+  reader was a private struct the cloud checked against a list of field names, and a test on each
+  side pinned the retention bounds the other used.
+  - `pos_proto::locale::PublishedLocale` is the country's view of the `locale` node, moved from the
+    edge with its fields and its parse unchanged: `currency_code`, `timezone` and `cutoff_hour` stay
+    required, so a node carrying only settings is not read as a country's locale, and
+    `LocaleSettings` stays beside it as the register's view. The cloud's test of the node it
+    publishes reads it through the type instead of the list.
   - `pos_proto::qr::PublishedQr` carries the guardrails the console's QR form writes beside
     `table_order`: `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`
     and `business_hours`. Each is read field by field, as before: a field holding anything but its

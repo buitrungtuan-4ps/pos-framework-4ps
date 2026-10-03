@@ -35350,6 +35350,7 @@ mod locale_node_tests {
     //! write, none of which can tell you whether the node an edge receives is complete.
     use super::{PublishLocaleRequest, checked_locale_node, packed_facts};
     use crate::countries;
+    use pos_proto::locale::{PublishedLocale, PublishedNumberFormat};
     use serde_json::Value;
 
     /// A publish as the console sends one, for a store trading in `currency`.
@@ -35442,69 +35443,77 @@ mod locale_node_tests {
         );
     }
 
-    /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
+    /// The node carries every field the edge reads, and nothing else but the two the cloud keeps for
+    /// itself.
     ///
-    /// Written out rather than derived, because the two sides sit in different crates with nothing
-    /// linking them: `crates/pos-edge/src/config_client.rs` declares what an edge parses, this
-    /// function declares what a cloud sends, and the silence between them is where
-    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
-    /// on them.
+    /// The fields are the type's, `pos_proto::locale::PublishedLocale`, the one the edge applies the
+    /// node through, rather than a list written out here: the node parses as it, sends each field it
+    /// reads and reads back as stated, and sends no other key but the cloud's own. A field added to
+    /// the type does not compile below until it is stated.
     ///
     /// Both directions are checked, because the gap has appeared both ways round: a key the edge
-    /// reads and the cloud never sends is a feature that does nothing, and a key the cloud sends and
-    /// the edge never reads is a payload nobody consumes. Neither shows up as a failure anywhere
-    /// else.
-    ///
-    /// **What it does not do**, because the list is written here rather than read from the edge: it
-    /// cannot tell whether `PublishedLocale` really parses these. Adding a name to the list is what
-    /// makes this pass, so the list is a checklist with teeth on the *node*, not a cross-crate
-    /// check. No crate depends on both, and adding a dependency to make a test possible is the
-    /// wrong trade.
+    /// reads and the cloud never sends is a feature that does nothing, which is where
+    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
+    /// on them, and a key the cloud sends and the edge never reads is a payload nobody consumes.
+    /// Neither shows up as a failure anywhere else.
     ///
     /// Its sibling closes the other half: `every_field_a_locale_node_carries_reaches_the_session`
-    /// in `crates/pos-edge/src/config_client.rs` asserts each of these keys actually moves a session
-    /// field. Between them, each side is checked against real behaviour rather than against nothing.
-    /// What neither catches is a field added to both lists and to neither implementation, which is
-    /// what the per-field tests above are for.
+    /// in `crates/pos-edge/src/config_client.rs` asserts each of these fields actually moves a
+    /// session field.
     #[test]
     fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
-        // `crates/pos-edge/src/config_client.rs`, `struct PublishedLocale`.
-        const READ_BY_THE_EDGE: &[&str] = &[
-            "currency_code",
-            "currency_exponent",
-            "timezone",
-            "cutoff_hour",
-            "prices_include_tax",
-            "cash_rounding_increment",
-            "cash_denominations",
-            "default_retention_days",
-            "number_format",
-            "country_language",
-        ];
-        // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
-        // against a store's region (ADR-0114); `display_language` is applied when the menu book is
-        // compiled rather than onto the session.
+        // Not read through `PublishedLocale`. `country_code` is the fleet console's own comparison
+        // against a store's region (ADR-0114). `display_language` is the store's choice rather than
+        // its country's, and the edge reads it apart from the type, field by field, to name the
+        // menu's items in it and keep it on the session (ADR-0074).
         const THE_CLOUD_S_OWN: &[&str] = &["country_code", "display_language"];
 
-        let node =
-            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
-                .expect("a valid publish");
-        let object = node.as_object().expect("the node is an object");
+        let mut published = request("VN", "VND");
+        published.display_language = Some("vi".to_owned());
+        let node = checked_locale_node(&published, &packed_facts(&countries::registry()))
+            .expect("a valid publish");
+        let sent = node.as_object().expect("the node is an object");
 
-        let missing: Vec<&&str> = READ_BY_THE_EDGE
-            .iter()
-            .filter(|key| !object.contains_key(**key))
+        // The node as the edge reads it, through its text as `session_from_config` parses it, and
+        // written back: an optional field the node sends as `null` reads as absent.
+        let read: PublishedLocale =
+            serde_json::from_str(&node.to_string()).expect("the edge applies the node it is sent");
+        let read = serde_json::to_value(read).expect("serialise");
+        let read = read.as_object().expect("an object");
+
+        // Every key the type reads, from the type: a value stating each field, written.
+        let every_field = serde_json::to_value(PublishedLocale {
+            currency_code: String::new(),
+            currency_exponent: Some(0),
+            timezone: String::new(),
+            cutoff_hour: 0,
+            prices_include_tax: true,
+            cash_rounding_increment: Some(0),
+            cash_denominations: vec![0],
+            default_retention_days: Some(0),
+            number_format: Some(PublishedNumberFormat {
+                decimal_separator: String::new(),
+                group_separator: String::new(),
+                digits_per_group: 0,
+            }),
+            country_language: Some(String::new()),
+        })
+        .expect("serialise");
+        let every_field = every_field.as_object().expect("an object");
+
+        let missing: Vec<&String> = every_field
+            .keys()
+            .filter(|key| !sent.contains_key(*key) || !read.contains_key(*key))
             .collect();
         assert!(
             missing.is_empty(),
             "the edge parses these and the node does not send them, so they do nothing: {missing:?}"
         );
 
-        let unclaimed: Vec<&String> = object
+        let unclaimed: Vec<&String> = sent
             .keys()
             .filter(|key| {
-                !READ_BY_THE_EDGE.contains(&key.as_str())
-                    && !THE_CLOUD_S_OWN.contains(&key.as_str())
+                !every_field.contains_key(*key) && !THE_CLOUD_S_OWN.contains(&key.as_str())
             })
             .collect();
         assert!(

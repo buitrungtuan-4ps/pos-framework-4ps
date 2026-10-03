@@ -564,14 +564,120 @@ impl TaxRounding {
     }
 }
 
+/// The published `locale` node, as a store applies it: the store's currency, timezone, business-date
+/// cutoff, tax posture, cash rounding and number format, which the cloud's locale publish writes
+/// from the store's country pack ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md),
+/// Track M4).
+///
+/// **One of two views of the node.** This is the country's view, and [`LocaleSettings`] is the
+/// register's, the settings the cloud writes beside these fields. They stay two types:
+/// `currency_code`, `timezone` and `cutoff_hour` are required here, so a node without them, such as
+/// a `locale` node carrying only settings, does not parse as this type, while [`LocaleSettings`]
+/// reads any node. That refusal is load-bearing. The edge applies `prices_include_tax`,
+/// `cash_rounding_increment`, `cash_denominations` and `country_language` as the node states them,
+/// absent included, so a settings-only node that parsed would put a store's tax posture and cash
+/// rounding back to their defaults.
+///
+/// Deliberately permissive: the fields are strings and plain numbers rather than domain types, so a
+/// value the edge cannot use, such as a currency code that is not one, costs that field alone
+/// rather than the whole node. A value of the wrong JSON type still fails the whole node. No
+/// `deny_unknown_fields`, as for every published node: the cloud's own fields, `country_code` and
+/// `display_language`, ride the same node, and a node carrying a field from a newer release still
+/// applies. An absent optional field stays off the wire; `prices_include_tax` and
+/// `cash_denominations` are written as they read, as the cloud writes them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedLocale {
+    /// The store's currency, as an ISO 4217 code: a string, narrowed to a [`CurrencyCode`] where it
+    /// is applied, so a code that does not parse costs the currency alone.
+    pub currency_code: String,
+    /// How many decimal places the currency has (ADR-0134). `#[serde(default)]` because a cloud
+    /// that predates the field must still publish a locale node an edge can apply, and `None` then
+    /// means "leave what the session has" — not zero, which would be the very silent default that
+    /// record is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency_exponent: Option<u8>,
+    /// The store's IANA timezone, such as `Asia/Ho_Chi_Minh`: a string, checked against the timezone
+    /// database where it is applied, so a name that is not one costs the timezone alone.
+    pub timezone: String,
+    /// The hour of the day the store's business date turns over, checked where it is applied.
+    pub cutoff_hour: u8,
+    /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
+    /// node published before this field existed still applies, as the exclusive posture it meant.
+    #[serde(default)]
+    pub prices_include_tax: bool,
+    /// What the grand total is rounded to in cash, in minor units (ADR-0105). Absent means no
+    /// rounding, which is what every store did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cash_rounding_increment: Option<i64>,
+    /// The notes the till offers as quick-cash keys, in minor units. Absent means the exact amount
+    /// only, which is the front end's own fallback, so an older publish changes nothing.
+    #[serde(default)]
+    pub cash_denominations: Vec<i64>,
+    /// How many days the store keeps a personal record before its own sweep scrubs it (ADR-0107).
+    /// Absent leaves the session's current figure — the country pack's default — rather than zero,
+    /// which would scrub a buyer the moment the invoice was printed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_retention_days: Option<u16>,
+    /// How this store's country writes a number
+    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Absent for a
+    /// cloud that predates the field, which leaves the session's own — the `en-US`-shaped default
+    /// every surface used before the node could say otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<PublishedNumberFormat>,
+    /// The language of the store's country, from the cloud's pack for it (ADR-0105), which a receipt
+    /// set to `RECEIPT_LANGUAGE_COUNTRY` prints in (ADR-0160). Absent for a cloud that predates the
+    /// field, and such a receipt prints in the display language.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_language: Option<String>,
+}
+
+/// A published number format, in the permissive shape the rest of [`PublishedLocale`] uses.
+///
+/// Separators are `String` rather than `char` and are narrowed on the way in, for the reason
+/// `currency_code` is a `String` there and a [`CurrencyCode`] after: a value [`PublishedLocale`]
+/// cannot deserialize takes the **whole** locale node down with it, and a store that loses its
+/// currency and its timezone because somebody published a two-character group separator is a worse
+/// outcome than one that keeps the format it had.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishedNumberFormat {
+    /// Between the integer and fractional parts, as [`NumberFormat::decimal_separator`].
+    pub decimal_separator: String,
+    /// Between groups of digits, as [`NumberFormat::group_separator`].
+    pub group_separator: String,
+    /// Digits per group, as [`NumberFormat::digits_per_group`].
+    pub digits_per_group: u8,
+}
+
+impl PublishedNumberFormat {
+    /// The domain form, or `None` when the publish does not describe one.
+    ///
+    /// A separator has to be exactly one character — not zero, which would run the digits together,
+    /// and not two, which no formatter here can place. A group of zero digits would loop forever in
+    /// any grouping routine that trusted it.
+    #[must_use]
+    pub fn validate(&self) -> Option<NumberFormat> {
+        let mut decimal = self.decimal_separator.chars();
+        let mut group = self.group_separator.chars();
+        let (decimal_separator, group_separator) = (decimal.next()?, group.next()?);
+        if decimal.next().is_some() || group.next().is_some() || self.digits_per_group == 0 {
+            return None;
+        }
+        Some(NumberFormat {
+            decimal_separator,
+            group_separator,
+            digits_per_group: self.digits_per_group,
+        })
+    }
+}
+
 /// The settings on the published `locale` node, as far as the register reads it (ADR-0160).
 ///
 /// The node is older than this type: the cloud's locale publish writes the store's currency,
 /// timezone, cutoff, tax posture and cash rounding onto it from the store's country pack, and the
-/// edge reads those where it reads the node. This type carries only the fields that are settings in
-/// [`crate::settings`], which the cloud writes beside them, and leaves the rest to that reader. It
-/// has no `deny_unknown_fields`, so a node carrying the country's fields parses, and so does one
-/// carrying a field from a newer release.
+/// edge reads those through [`PublishedLocale`], the node's other view. This type carries only the
+/// fields that are settings in [`crate::settings`], which the cloud writes beside them, and leaves
+/// the rest to that view. It has no `deny_unknown_fields`, so a node carrying the country's fields
+/// parses, and so does one carrying a field from a newer release.
 ///
 /// Every default is what the edge did before the field existed, so a node without a field runs a
 /// store as it ran before.
@@ -607,8 +713,8 @@ impl LocaleSettings {
 #[cfg(test)]
 mod tests {
     use super::{
-        CountryCode, CountryCodeError, LocalePack, LocaleSettings, NumberFormat, TaxComponent,
-        TaxRate, TaxRateTable, TaxRounding,
+        CountryCode, CountryCodeError, LocalePack, LocaleSettings, NumberFormat, PublishedLocale,
+        PublishedNumberFormat, TaxComponent, TaxRate, TaxRateTable, TaxRounding,
     };
     use crate::enums::SalesChannel;
     use crate::ids::TaxClassId;
@@ -920,5 +1026,148 @@ mod tests {
         assert_eq!(default.group_separator, ',');
         assert_eq!(default.decimal_separator, '.');
         assert_eq!(default.digits_per_group, 3);
+    }
+
+    /// A store's `locale` node as it reaches the edge: the country's fields the locale publish
+    /// writes, the cloud's own beside them, and a setting from the Tenant layer.
+    fn a_published_locale_node() -> serde_json::Value {
+        serde_json::json!({
+            "country_code": "VN",
+            "currency_code": "VND",
+            "currency_exponent": 0,
+            "timezone": "Asia/Ho_Chi_Minh",
+            "cutoff_hour": 4,
+            "prices_include_tax": false,
+            "cash_rounding_increment": 1000,
+            "cash_denominations": [10_000, 20_000, 50_000],
+            "default_retention_days": 365,
+            "number_format": {
+                "decimal_separator": ",",
+                "group_separator": ".",
+                "digits_per_group": 3,
+            },
+            "country_language": "vi",
+            "display_language": "vi",
+            "tax_rounding": "TAX_ROUNDING_DOWN",
+        })
+    }
+
+    #[test]
+    fn a_published_locale_round_trips_and_its_settings_read_from_the_same_node() {
+        let node = a_published_locale_node();
+        let locale: PublishedLocale =
+            serde_json::from_value(node.clone()).expect("the node parses");
+        assert_eq!(locale.currency_code, "VND");
+        assert_eq!(locale.currency_exponent, Some(0));
+        assert_eq!(locale.cash_rounding_increment, Some(1000));
+        assert_eq!(
+            locale
+                .number_format
+                .as_ref()
+                .and_then(PublishedNumberFormat::validate),
+            Some(NumberFormat {
+                decimal_separator: ',',
+                group_separator: '.',
+                digits_per_group: 3,
+            })
+        );
+        assert_eq!(locale.country_language.as_deref(), Some("vi"));
+
+        // Every field the type reads comes back as it was written; the others belong to the cloud
+        // and to the register's view.
+        let mut read_back = node.clone();
+        for not_this_view in ["country_code", "display_language", "tax_rounding"] {
+            read_back
+                .as_object_mut()
+                .expect("an object")
+                .remove(not_this_view);
+        }
+        assert_eq!(serde_json::to_value(&locale).expect("serialise"), read_back);
+
+        let settings: LocaleSettings = serde_json::from_value(node).expect("the settings parse");
+        assert_eq!(settings.tax_rounding(), TaxRounding::Down);
+    }
+
+    #[test]
+    fn an_absent_field_stays_absent_and_an_unknown_one_is_ignored() {
+        let locale: PublishedLocale = serde_json::from_value(serde_json::json!({
+            "currency_code": "JPY",
+            "timezone": "Asia/Tokyo",
+            "cutoff_hour": 5,
+            "from_a_newer_release": { "nested": true },
+        }))
+        .expect("the required fields are enough");
+        assert_eq!(
+            locale,
+            PublishedLocale {
+                currency_code: "JPY".to_owned(),
+                currency_exponent: None,
+                timezone: "Asia/Tokyo".to_owned(),
+                cutoff_hour: 5,
+                prices_include_tax: false,
+                cash_rounding_increment: None,
+                cash_denominations: Vec::new(),
+                default_retention_days: None,
+                number_format: None,
+                country_language: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&locale).expect("serialise"),
+            serde_json::json!({
+                "currency_code": "JPY",
+                "timezone": "Asia/Tokyo",
+                "cutoff_hour": 5,
+                "prices_include_tax": false,
+                "cash_denominations": [],
+            })
+        );
+    }
+
+    #[test]
+    fn a_node_without_the_country_s_required_fields_is_not_a_published_locale_but_is_settings() {
+        // The two views stay two types for this: a settings-only node must not read as a country's
+        // locale, or the edge would put the store's tax posture and cash rounding back to defaults.
+        for required in ["currency_code", "timezone", "cutoff_hour"] {
+            let mut node = a_published_locale_node();
+            node.as_object_mut().expect("an object").remove(required);
+            assert!(
+                serde_json::from_value::<PublishedLocale>(node.clone()).is_err(),
+                "{required}"
+            );
+            let settings: LocaleSettings =
+                serde_json::from_value(node).expect("the settings read any node");
+            assert_eq!(settings.tax_rounding(), TaxRounding::Down, "{required}");
+        }
+
+        let settings_only = serde_json::json!({ "tax_rounding": "TAX_ROUNDING_DOWN" });
+        assert!(serde_json::from_value::<PublishedLocale>(settings_only.clone()).is_err());
+        let settings: LocaleSettings =
+            serde_json::from_value(settings_only).expect("the settings read any node");
+        assert_eq!(settings.tax_rounding(), TaxRounding::Down);
+    }
+
+    #[test]
+    fn a_published_number_format_takes_one_character_each_side_and_a_group_of_digits() {
+        let format = |decimal: &str, group: &str, digits_per_group: u8| PublishedNumberFormat {
+            decimal_separator: decimal.to_owned(),
+            group_separator: group.to_owned(),
+            digits_per_group,
+        };
+        assert_eq!(
+            format(",", "\u{a0}", 3).validate(),
+            Some(NumberFormat {
+                decimal_separator: ',',
+                group_separator: '\u{a0}',
+                digits_per_group: 3,
+            })
+        );
+        for refused in [
+            format("", ".", 3),
+            format(",", "..", 3),
+            format(",", ".", 0),
+        ] {
+            assert_eq!(refused.validate(), None, "{refused:?}");
+        }
     }
 }
