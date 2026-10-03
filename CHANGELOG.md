@@ -379,6 +379,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **After a rollback, the console reads a store's nodes as the store runs them.** A rollback
+  restores a version onto the store's Tenant layer and empties its Store layer, and the console's
+  node forms and three of its checks read a node from the Store layer alone. Until each node was
+  published again, the forms for channels, tender, origins, QR guardrails, event retention and
+  vendor policies showed nothing while the store ran the restored values, and saving one wrote
+  defaults over them; a `menu` batch skipped the store and a release carrying a menu was refused,
+  as if the store had no `tax` or `locale`; and a wall-clock release refused the store as having no
+  timezone. They now read the node from the store's four layers composed, as the store runs it,
+  without the fields the settings register puts on it, so a node holding nothing but settings
+  still reads as unpublished.
+  - **Upgrade note:** no stored data, wire format or route changes. Reads after a rollback now
+    show what the store runs. Where a tenant or brand layer carries a node's own fields, the forms
+    and checks now read them with the store's, because the store runs them.
+
 - **The counter's pay pad offers the store's own tip keys**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). After the table pay screen took the store's `tender_keys`, the counter's pad still
