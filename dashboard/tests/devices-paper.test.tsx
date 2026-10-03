@@ -7,7 +7,11 @@
 //     to have, on the card and in the form, because that is what the till prints it as;
 //   * the form offers the three papers the cloud accepts and nothing else;
 //   * saving sends the wire token and the cutter with the version the row was read at, as the
-//     drawer mark does, so a colleague's change is not silently overwritten.
+//     drawer mark does, so a colleague's change is not silently overwritten;
+//   * honour or hide (decision 5): only an edge from 0.14.1 reads a printer's paper, so a store on
+//     an older release is offered no Paper action, and one line says why, while the column still
+//     shows what was saved; a store that has not said which release it runs is offered it with a
+//     note.
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +43,7 @@ const PRINTER: DeviceProposalSummary = {
 };
 
 const listStoreDevices = vi.fn();
+const fleetStore = vi.fn();
 const setPrinterPaper = vi.fn();
 
 vi.mock("../src/api/client", () => ({
@@ -46,6 +51,7 @@ vi.mock("../src/api/client", () => ({
     listProposals: () => Promise.resolve([]),
     listStores: () => Promise.resolve([]),
     listStoreDevices: (...args: unknown[]) => listStoreDevices(...args),
+    fleetStore: (...args: unknown[]) => fleetStore(...args),
     listStations: () => Promise.resolve([]),
     listAudit: () => Promise.resolve([]),
     setPrinterPaper: (...args: unknown[]) => setPrinterPaper(...args),
@@ -67,6 +73,8 @@ describe("a printer's paper", () => {
     localStorage.clear();
     vi.clearAllMocks();
     setPrinterPaper.mockResolvedValue(undefined);
+    // The release that first reads a printer's paper, unless a test says otherwise.
+    fleetStore.mockResolvedValue({ installed_version: "0.14.1" });
     selectTenant(TENANT.id, TENANT.name);
     selectStore(STORE.id, STORE.name);
   });
@@ -117,5 +125,57 @@ describe("a printer's paper", () => {
       "PAPER_WIDTH_MILLIMETRES_58",
     );
     expect((within(panel).getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("offers no Paper on a store whose release does not read it, and says why", async () => {
+    fleetStore.mockResolvedValue({ installed_version: "0.14.0" });
+    listStoreDevices.mockResolvedValue([
+      PRINTER,
+      { ...PRINTER, id: "01PRINTERBBBBBBBBBBBBBBBBB", name: "Bar", address: "192.0.2.11:9100" },
+    ]);
+    render(() => <Devices />);
+    expect(
+      await screen.findByText(
+        "Paper cannot be set for Ben Thanh yet: it runs release 0.14.0, which does not read a " +
+          "printer's paper, so it prints on 80 mm paper with a cutter, whatever is saved here, " +
+          "until it updates to 0.14.1.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Choose agent" })).toHaveLength(2);
+    expect(screen.queryAllByRole("button", { name: "Paper" })).toHaveLength(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("still shows the paper a store on an older release has saved", async () => {
+    fleetStore.mockResolvedValue({ installed_version: "0.14.0" });
+    listStoreDevices.mockResolvedValue([
+      { ...PRINTER, paper_width: "PAPER_WIDTH_MILLIMETRES_58", cuts_paper: false },
+    ]);
+    render(() => <Devices />);
+    // Once the release is read, so that a missing action is the gate and not the read still out.
+    expect(await screen.findByText(/^Paper cannot be set for Ben Thanh yet/)).toBeTruthy();
+    expect(screen.getByText("58 mm, no cutter")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Paper" })).toBeNull();
+  });
+
+  it("offers Paper with a note where the store has not said which release it runs", async () => {
+    fleetStore.mockRejectedValue(new Error("the fleet read failed"));
+    listStoreDevices.mockResolvedValue([PRINTER]);
+    render(() => <Devices />);
+    expect(
+      await screen.findByText(
+        "Ben Thanh has not reported which release it runs, so it may not honour a printer's " +
+          "paper yet. Paper is honoured from release 0.14.1.",
+      ),
+    ).toBeTruthy();
+    expect(await openPaper()).toBeTruthy();
+  });
+
+  it("offers Paper with no line at all to a store on a later release", async () => {
+    fleetStore.mockResolvedValue({ installed_version: "0.15.2" });
+    listStoreDevices.mockResolvedValue([PRINTER]);
+    render(() => <Devices />);
+    expect(await screen.findByRole("button", { name: "Paper" })).toBeTruthy();
+    expect(screen.queryByText(/printer's paper/)).toBeNull();
   });
 });

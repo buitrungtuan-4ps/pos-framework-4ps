@@ -17,7 +17,9 @@
 // receipt copies and pre-bills go to, and the languages they print in, each the store's until
 // somebody says. A store on a release older than the one that honours them ignores them, so for that
 // store they are hidden and one line says why (decision 5, honour or hide), from the release the
-// fleet read says the store runs; a store whose release is unknown is shown them with a note.
+// fleet read says the store runs; a store whose release is unknown is shown them with a note. A
+// printer's paper follows the same rule on the printers card, where only the action is hidden: the
+// Paper column still shows what was saved, and the line says why it is not in force.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
@@ -65,6 +67,11 @@ const paperLabel = (paper: PaperWidth | null) =>
 // The first release whose edge prints a till's receipts at its own printer and in its own languages
 // (ADR-0160 decision 4). An older edge ignores both.
 const TILL_RECEIPTS_SINCE = "0.14.1";
+
+// The first release whose edge lays a receipt out for the paper a printer takes, and sends no cut
+// to one with no cutter (ADR-0160 decision 2). An older edge prints 80 mm paper with a cutter
+// whatever the console says.
+const PAPER_SINCE = "0.14.1";
 
 // A till's receipt languages: the receipt language setting's own choices, and the second
 // language's, each beside "the store's", which is the empty choice.
@@ -198,8 +205,18 @@ export function Devices() {
     const release = installed();
     return release === undefined ? "loading" : releaseStanding(release, since);
   };
+  /**
+   * Whether a field honoured from release `since` is offered: where the store honours it, and, with
+   * a note, where it cannot say.
+   */
+  const offersDeviceField = (since: string) => {
+    const standing = deviceFieldStanding(since);
+    return standing === "honours" || standing === "unknown";
+  };
   const tillReceipts = () => deviceFieldStanding(TILL_RECEIPTS_SINCE);
-  const offersTillReceipts = () => tillReceipts() === "honours" || tillReceipts() === "unknown";
+  const offersTillReceipts = () => offersDeviceField(TILL_RECEIPTS_SINCE);
+  const paperStanding = () => deviceFieldStanding(PAPER_SINCE);
+  const offersPaper = () => offersDeviceField(PAPER_SINCE);
 
   // Binding a printer to an agent is a conditional write — it sends the version the row was read at
   // (ADR-0094) — so it owes the reader a reload and a sentence when somebody else got there first.
@@ -640,6 +657,23 @@ export function Devices() {
             <p class="mb-3 text-sm text-ink-muted">{t("devices.agentsHint")}</p>
             <p class="mb-3 text-sm text-ink-muted">{t("devices.publishHint")}</p>
             <Show when={storeId()} fallback={<p class="text-sm text-ink-muted">{t("context.storeRequired")}</p>}>
+              <Show when={paperStanding() === "older"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.paperHidden", {
+                    store: chosenStoreName() || storeId(),
+                    installed: installed() ?? "",
+                    since: PAPER_SINCE,
+                  })}
+                </p>
+              </Show>
+              <Show when={paperStanding() === "unknown"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.paperUnknown", {
+                    store: chosenStoreName() || storeId(),
+                    since: PAPER_SINCE,
+                  })}
+                </p>
+              </Show>
               <DataTable
                 columns={printerColumns()}
                 rows={printers()}
@@ -657,16 +691,18 @@ export function Devices() {
                     >
                       {t("devices.chooseAgent")}
                     </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => {
-                        setPaperChoice(row.paper_width ?? UNSET_PAPER);
-                        setCutsChoice(row.cuts_paper ?? true);
-                        paperDraft.edit(row);
-                      }}
-                    >
-                      {t("devices.choosePaper")}
-                    </Button>
+                    <Show when={offersPaper()}>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          setPaperChoice(row.paper_width ?? UNSET_PAPER);
+                          setCutsChoice(row.cuts_paper ?? true);
+                          paperDraft.edit(row);
+                        }}
+                      >
+                        {t("devices.choosePaper")}
+                      </Button>
+                    </Show>
                     <Button
                       variant="secondary"
                       disabled={row.connection !== "usb"}
