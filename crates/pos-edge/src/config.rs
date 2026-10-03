@@ -122,22 +122,30 @@ pub struct EdgeConfig {
     /// as text and drawn in the firmware's font, which this does not change.
     #[serde(default = "default_font_size_dots")]
     pub font_size_dots: u16,
-    /// How many hours between sealed off-box archives of this store's database
-    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). Defaults to 24.
+    /// **Deprecated** as a number, and kept as the off-switch
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6): how many hours between sealed off-box archives of this store's database
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). The store's
+    /// configuration sets the interval now, as `backup.interval_hours`, and that value wins.
     ///
     /// An archive is a `VACUUM INTO` copy of the whole database, compressed and encrypted at the
     /// till, shipped to the cloud, and never readable by it. The interval is the recovery point: a
     /// store on the default loses at most a day of trading if its disk dies, and lowering it costs
     /// one snapshot's worth of disk and uplink each time.
     ///
+    /// A number here is kept so a box keeps its interval until the console sets one: it applies
+    /// only while the store's configuration sets none, and the edge logs a warning while it is the
+    /// interval in use. Absent, the interval is a day.
+    ///
     /// `0` turns archiving off, for a box on a metered link whose operator has arranged something
-    /// else. It is announced as a warning at start-up rather than accepted quietly — a store with no
-    /// backups is a fact somebody should have to see in the log.
+    /// else. It is the one off-switch: no published value switches archiving off, and none
+    /// overrides this. It is announced as a warning at start-up rather than accepted quietly — a
+    /// store with no backups is a fact somebody should have to see in the log.
     ///
     /// Archiving also requires a cloud: a box with no [`Self::cloud_url`], no scoped sync key, or a
     /// cloud without archive storage configured has nowhere to ship to, and says so.
-    #[serde(default = "default_backup_interval_hours")]
-    pub backup_interval_hours: u64,
+    #[serde(default)]
+    pub backup_interval_hours: Option<u64>,
     /// The time server this box measures its own clock against (roadmap-v3 PF4, [`crate::sntp`]),
     /// as a host name or an IP address, always on port 123. Defaults to
     /// [`DEFAULT_SNTP_SERVER`](crate::sntp::DEFAULT_SNTP_SERVER).
@@ -155,11 +163,6 @@ pub struct EdgeConfig {
 /// [`crate::sntp::DEFAULT_SNTP_SERVER`], owned, for serde.
 fn default_sntp_server() -> String {
     crate::sntp::DEFAULT_SNTP_SERVER.to_owned()
-}
-
-/// Once a day, which is the recovery point ADR-0046 assumes for a store.
-const fn default_backup_interval_hours() -> u64 {
-    24
 }
 
 /// The standard font directories for this platform.
@@ -221,7 +224,7 @@ impl EdgeConfig {
             sign_in_idle_timeout_minutes: None,
             font_directories: default_font_directories(),
             font_size_dots: default_font_size_dots(),
-            backup_interval_hours: default_backup_interval_hours(),
+            backup_interval_hours: None,
             sntp_server: default_sntp_server(),
         }
     }
@@ -308,6 +311,69 @@ impl EdgeConfig {
             source,
         })?;
         Self::from_toml_str(&text)
+    }
+}
+
+/// Where the value in force of a setting `config.toml` used to hold comes from
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 6), in the order the edge chooses it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueSource {
+    /// The store's configuration sets it, and it wins.
+    Published,
+    /// The configuration sets none, and `config.toml` still carries the deprecated key.
+    LocalFile,
+    /// Neither does: the default.
+    Default,
+}
+
+impl ValueSource {
+    /// The words the log gives it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Published => "the store's configuration",
+            Self::LocalFile => "config.toml (deprecated)",
+            Self::Default => "the default",
+        }
+    }
+}
+
+/// Says which value of `setting` is in force and where it comes from: once at start-up, and again
+/// whenever it changes ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 6).
+///
+/// `file_key` is the deprecated `config.toml` key the setting replaces, and `file_sets` whether this
+/// box's file still carries a value for it. While that value is the one in use the line is a warning
+/// that says what to do; once the store's configuration sets the setting, the line says that it
+/// overrides the file, so an operator who still has a file value can see which of the two the box
+/// runs.
+pub(crate) fn log_in_force(
+    setting: &'static str,
+    file_key: &'static str,
+    value: u64,
+    source: ValueSource,
+    file_sets: bool,
+) {
+    match source {
+        ValueSource::Published if file_sets => tracing::info!(
+            setting,
+            value,
+            from = source.as_str(),
+            "{setting} is set by the store's configuration, which overrides config.toml's \
+             deprecated {file_key} (ADR-0160 decision 6)"
+        ),
+        ValueSource::LocalFile => tracing::warn!(
+            setting,
+            value,
+            from = source.as_str(),
+            "config.toml sets {file_key}, which is deprecated, and it is the value in use because \
+             the store's configuration sets no {setting}: set {setting} in the console's shared \
+             settings, and it replaces this one (ADR-0160 decision 6)"
+        ),
+        ValueSource::Published | ValueSource::Default => {
+            tracing::info!(setting, value, from = source.as_str(), "{setting} in force");
+        }
     }
 }
 

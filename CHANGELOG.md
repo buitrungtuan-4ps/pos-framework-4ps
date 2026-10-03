@@ -482,6 +482,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console sets how often a store archives its database**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The interval lived in
+  each box's `config.toml` as `backup_interval_hours`, where the console could not reach it.
+  - A new setting on a new `backup` node, `backup.interval_hours`, from 1 to 168 hours, default 24,
+    set at the tenant, a brand, a store group or one store. It is the most trading a store can lose
+    if its disk dies. The register gains a unit, `SETTING_UNIT_HOURS`, which the console names in
+    English and Vietnamese.
+  - No published value switches archiving off: the bounds start at one hour, and the cloud refuses
+    `0` with `OUT_OF_RANGE`.
+  - The archive loop reads the interval as it schedules each archive, so a change applies from the
+    next archive without a restart. The first archive is still five minutes after the box starts.
+    The edge logs the interval in force and where it comes from, the store's configuration,
+    `config.toml` or the default, when the loop starts and whenever it changes.
+  - `backup_interval_hours` is **deprecated** as a number: it applies only while the store's
+    configuration sets none, with a warning while it is the interval in use.
+    `backup_interval_hours = 0` is not deprecated: it is still the one way to switch archiving off,
+    and no published value overrides it (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the interval: the default is today's day,
+    and a box's own number keeps applying until a setting is written, which then wins. A box whose
+    file sets `backup_interval_hours = 0` keeps archiving off whatever is published. An edge older
+    than this release ignores the `backup` node and keeps its file's interval. `pos-proto` gains the
+    `backup` module and the unit, additively; the settings snapshot and `docs/configuration.md` gain
+    the setting. No route, event, migration, permission or protocol change.
+
 - **A tenant sets the fewest digits a staff PIN may have**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). A PIN could always be four digits, and nothing let a tenant ask for more.

@@ -44,6 +44,7 @@ use pos_ports::config_store::{ConfigDocument, ConfigSnapshot, ConfigStore, Confi
 use pos_ports::error::PortError;
 use pos_ports::event_store::EventStore;
 use pos_ports::tx::TxContext;
+use pos_proto::backup::PublishedBackup;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
 use pos_proto::counter::PublishedCounter;
@@ -572,6 +573,21 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 .and_then(|text| serde_json::from_str::<PublishedCounter>(&text).ok())
             {
                 session.counter = counter;
+            }
+        }
+    }
+    // The `backup` node (ADR-0160 decision 6): how often the store archives its database. A node
+    // of settings like `counter`, so absent leaves the box on its own interval and an unparseable
+    // one keeps the last. The archive loop reads it as it schedules each archive
+    // ([`crate::backup_client`]), so it applies from the next archive.
+    match document.get(PublishedBackup::NODE) {
+        None => session.backup = PublishedBackup::default(),
+        Some(value) => {
+            if let Some(backup) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedBackup>(&text).ok())
+            {
+                session.backup = backup;
             }
         }
     }
@@ -2285,6 +2301,49 @@ mod tests {
             eats_in.enabled_channels, None,
             "the walk-in channel says nothing about the channels a store accepts"
         );
+    }
+
+    /// The `backup` node's interval reaches the session the archive loop reads: none where the node
+    /// sets none, sets one out of bounds, or is gone, and the last where it cannot be read
+    /// (ADR-0160 decision 6).
+    #[test]
+    fn the_backup_node_sets_the_archive_interval_and_none_otherwise() {
+        let interval = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "backup": node }))
+                .backup
+                .interval_hours()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.backup.interval_hours(), None, "the box's own interval");
+        let six = session_from_config(
+            &base,
+            &serde_json::json!({ "backup": { "interval_hours": 6 } }),
+        );
+        assert_eq!(six.backup.interval_hours(), Some(6));
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "interval_hours": 0 }),
+            serde_json::json!({ "interval_hours": 169 }),
+        ] {
+            assert_eq!(interval(&six, unread.clone()), None, "{unread}");
+        }
+        assert_eq!(
+            session_from_config(&six, &serde_json::json!({}))
+                .backup
+                .interval_hours(),
+            None,
+            "a document with no backup node carries no setting"
+        );
+        for unreadable in [
+            serde_json::json!("not a node"),
+            serde_json::json!({ "interval_hours": "6" }),
+        ] {
+            assert_eq!(
+                interval(&six, unreadable.clone()),
+                Some(6),
+                "a node that cannot be read keeps the interval the store had: {unreadable}"
+            );
+        }
     }
 
     #[test]

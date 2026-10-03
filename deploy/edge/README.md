@@ -488,6 +488,28 @@ applies from the next request and the key is ignored. Remove the key then.
 |---|---|---|
 | `WARN config.toml sets sign_in_idle_timeout_minutes, which is deprecated, and it is the sign-in idle timeout in use` (`minutes`) | Logged at start-up when the file's value is the window in use. | Set `session.sign_in_idle_timeout_minutes` for the store in the console's shared settings, then remove the key. |
 
+### `backup_interval_hours` is deprecated, except `0`
+
+How many hours apart the store ships a sealed archive of its database off the box
+([ADR-0124](../../docs/adr/0124-a-store-that-can-be-restored.md)) is a setting of the store's
+configuration now, `backup.interval_hours`, from 1 to 168, written in the console's shared settings
+([`docs/configuration.md`](../../docs/configuration.md),
+[ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 6). A number in `config.toml` is still read, so a box that sets one keeps its interval, but
+only while the store's configuration sets none. Once the console sets one, it applies from the next
+archive and the number is ignored. Remove the key then. A box that sets neither archives once a day.
+
+`backup_interval_hours = 0` is not deprecated. It is the one way to switch archiving off, for a box on
+a metered link whose operator has arranged something else, and it wins: no published value switches
+archiving off, and none switches it back on.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN config.toml sets backup_interval_hours, which is deprecated, and it is the value in use because the store's configuration sets no backup.interval_hours` (`value`) | Logged when the archive loop starts, and when the interval changes, while the file's number is the interval in use. | Set `backup.interval_hours` for the store in the console's shared settings, then remove the key. |
+| `INFO backup.interval_hours is set by the store's configuration, which overrides config.toml's deprecated backup_interval_hours` (`value`) | The published interval is in force, and the file's number is ignored. | Remove the key. |
+| `INFO backup.interval_hours in force` (`value`, `from`) | The interval in force, in hours, and where it comes from. Logged when the archive loop starts and whenever the interval changes. | Nothing. |
+| `WARN backup_interval_hours = 0: this store ships no off-box archive of its database, so a failed disk loses everything since the last one taken by hand` | Archiving is off in this box's file. Logged at every start. | Nothing, if that is intended. Otherwise remove the line, and the store archives at the interval its configuration sets, or once a day. |
+
 ### The clock is measured against a time server
 
 Every fifteen minutes the edge asks a time server what time it is, over SNTP (outbound UDP 123), and

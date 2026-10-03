@@ -35629,6 +35629,27 @@ mod preview_diff_tests {
     }
 
     #[test]
+    fn a_backup_node_of_settings_alone_is_a_settings_only_node() {
+        // ADR-0160 decision 6: the settings compile writes `backup.interval_hours` on the Tenant
+        // layer of every store it reaches, and the node holds nothing else, so the publish check
+        // treats it as it treats a `locale` holding only its tax rounding.
+        assert!(super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6})
+        ));
+        assert!(!super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6, "destination": "elsewhere"})
+        ));
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"backup")),
+            "and no node waits on it"
+        );
+    }
+
+    #[test]
     fn nothing_waits_on_the_tender_keys_node() {
         // ADR-0160: the node holds settings and nothing else, which the rule above counts as no node.
         assert!(

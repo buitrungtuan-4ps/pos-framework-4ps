@@ -44,6 +44,7 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, TxContext};
+use pos_proto::backup::PublishedBackup;
 use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
@@ -592,6 +593,11 @@ pub struct EdgeSession {
     /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
     /// before the setting, in the bootstrap and wherever the node sets none.
     pub counter: PublishedCounter,
+    /// How often the store archives its database off the box, from the `backup` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
+    /// archive loop on this box's own interval ([`crate::backup_client`]).
+    pub backup: PublishedBackup,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
@@ -766,6 +772,7 @@ impl EdgeSession {
             accepted_tender: None,
             tender_keys: PublishedTenderKeys::default(),
             counter: PublishedCounter::default(),
+            backup: PublishedBackup::default(),
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,

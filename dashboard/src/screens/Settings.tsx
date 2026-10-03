@@ -107,6 +107,7 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_COUNT: "settings.unit.count",
   SETTING_UNIT_MINOR_UNITS: "settings.unit.minor_units",
   SETTING_UNIT_PERCENT: "settings.unit.percent",
+  SETTING_UNIT_HOURS: "settings.unit.hours",
 };
 
 /**
