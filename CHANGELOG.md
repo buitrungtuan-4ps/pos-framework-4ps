@@ -105,6 +105,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **SSRF protection in webhook URL classification now checks the PCP and TURN anycast IPv6 range (`2001:1::/32`, RFC 7723 / RFC 8155).**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `2001:1::/32` as `ForbiddenReason::Reserved`. Its anycast addresses reach a nearby network service, never a webhook receiver. **Upgrade note:** none.
 
+- **Refuse IPv6 AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) in webhook SSRF filter.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 7450 AMT (`2001:3::/32`) and RFC 7535 AS112 (`2001:4:112::/48`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
+
 ### Changed
 
 - **QR ordering is one switch, `qr_ordering_enabled`**
