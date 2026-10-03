@@ -19,7 +19,9 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{RowUpdate, pool_unavailable, unavailable, window_total};
+use crate::store::{
+    RowUpdate, already_exists_or_unavailable, pool_unavailable, unavailable, window_total,
+};
 
 /// An employee as listed — identity, code, status, and whether a PIN is set. Never the PIN hash.
 #[derive(Clone, Debug)]
@@ -623,8 +625,9 @@ impl PostgresPeople {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails (including the
-    /// same employee already assigned to that store).
+    /// [`PortError::already_exists`] if the employee is already assigned to that store (the
+    /// `employee_store_assignments_unique` index), and [`PortError::unavailable`] if the database
+    /// cannot be reached or the insert fails otherwise.
     pub async fn insert_assignment(
         &self,
         id: &str,
@@ -642,7 +645,12 @@ impl PostgresPeople {
                 &[&id, &tenant_id, &employee_id, &store_id, &role_template_id],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                already_exists_or_unavailable(
+                    error,
+                    "the employee is already assigned to that store",
+                )
+            })?;
         Ok(())
     }
 
@@ -653,8 +661,9 @@ impl PostgresPeople {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails (including the
-    /// same employee already assigned to that group, or tenant-wide twice).
+    /// [`PortError::already_exists`] if the employee is already assigned to that group, or already
+    /// tenant-wide (the two partial unique indexes, one per scope), and [`PortError::unavailable`] if
+    /// the database cannot be reached or the insert fails otherwise.
     pub async fn insert_scope_assignment(
         &self,
         id: &str,
@@ -680,7 +689,14 @@ impl PostgresPeople {
                 ],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                let duplicate = if scope_kind == "TENANT" {
+                    "the employee is already assigned to every store"
+                } else {
+                    "the employee is already assigned to that store group"
+                };
+                already_exists_or_unavailable(error, duplicate)
+            })?;
         Ok(())
     }
 

@@ -19004,8 +19004,8 @@ impl AssignmentStore for FakeAssignments {
                 && row.employee_id == assignment.employee_id
                 && row.scope == assignment.scope
         }) {
-            return Err(AssignmentStoreError::new(
-                "the employee is already assigned there",
+            return Err(AssignmentStoreError::AlreadyAssigned(
+                "the employee is already assigned there".to_owned(),
             ));
         }
         rows.push(Assignment {
@@ -22884,6 +22884,76 @@ async fn a_store_that_joins_or_leaves_a_named_group_is_told_at_once() {
         "no assignment names it"
     );
     assert_eq!(versions_at(&config, shop(3)).await, 0);
+}
+
+/// Assigning a person where they already hold an assignment is a conflict, not an outage: `409`
+/// `ALREADY_EXISTS` naming the field that names the place, at each scope. The refused one writes
+/// nothing, records nothing in the trail and publishes nothing, so a store the first reached is
+/// published once (ADR-0158 decision 3).
+#[tokio::test]
+async fn a_second_assignment_at_the_same_place_is_refused_409_and_changes_nothing() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let published = async || {
+        [
+            versions_at(&config, store_id()).await,
+            versions_at(&config, shop(1)).await,
+        ]
+    };
+    let recorded = async || audit.list(None, 100).await.expect("list audit").len();
+
+    for (field, value) in [
+        ("store_id", store_id().as_ulid().to_string()),
+        ("store_group_id", airport.as_ulid().to_string()),
+        ("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned()),
+    ] {
+        let body = assignment_body(bao, cashier, &[(field, value)]);
+        let created = post_assignment(&router, &owner, &body).await;
+        assert_eq!(created.status(), StatusCode::CREATED, "{field}");
+        let (versions, entries) = (published().await, recorded().await);
+
+        let again = post_assignment(&router, &owner, &body).await;
+        assert_eq!(again.status(), StatusCode::CONFLICT, "{field}");
+        let error = json_body(again).await;
+        assert_eq!(error["error"]["status"], "ALREADY_EXISTS", "{error}");
+        assert_eq!(error["error"]["details"][0]["field"], field, "{error}");
+        assert_eq!(
+            error["error"]["details"][0]["reason"], "ALREADY_EXISTS",
+            "{error}"
+        );
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("change or remove")),
+            "it says what resolves it: {error}"
+        );
+        assert_eq!(published().await, versions, "nothing published ({field})");
+        assert_eq!(recorded().await, entries, "nothing recorded ({field})");
+    }
+    let held = AssignmentStore::list_for_employee(&people, tenant(), bao)
+        .await
+        .expect("list");
+    assert_eq!(
+        held.len(),
+        3,
+        "one at each place, and no refused one written"
+    );
 }
 
 /// Removing an assignment to a group or to every store publishes at once to every store it
