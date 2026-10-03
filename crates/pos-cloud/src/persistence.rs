@@ -67,6 +67,7 @@ use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -4199,7 +4200,15 @@ impl AssignmentStore for PostgresPeople {
                 .await
             }
         };
-        written.map_err(|error| AssignmentStoreError::new(error.to_string()))
+        // The adapter reports the unique index refusing a second row as `already_exists`: the
+        // person is assigned there already, which is a conflict and not an outage.
+        written.map_err(|error| {
+            if error.status() == ErrorStatus::AlreadyExists {
+                AssignmentStoreError::AlreadyAssigned(error.message().to_owned())
+            } else {
+                AssignmentStoreError::new(error.to_string())
+            }
+        })
     }
 
     async fn list_for_store(

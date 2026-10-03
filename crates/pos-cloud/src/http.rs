@@ -7628,7 +7628,8 @@ where
 /// group or role the tenant does not have is `404` — another tenant's group included — and one it
 /// has archived is `409` (decision 7): a grant to a retired person, store or group would publish
 /// nobody, and one with a retired role would grant nothing, while the console showed it as a grant.
-/// Each refusal names the field that carried the id.
+/// Each refusal names the field that carried the id. A person who already holds an assignment
+/// there is `409` too ([`already_assigned`]), and nothing is written, audited or published.
 ///
 /// An assignment to one store publishes as before, when someone presses publish, and answers `201`
 /// with its id. One to a group or to every store publishes the `permissions` node at once to every
@@ -7728,8 +7729,29 @@ where
             };
             (StatusCode::CREATED, Json(created)).into_response()
         }
+        Err(AssignmentStoreError::AlreadyAssigned(_)) => already_assigned(scope),
         Err(error) => people_error_response(&error),
     }
+}
+
+/// The `409` an assignment earns where the person already holds one: a person holds one per store,
+/// one per group and one tenant-wide (ADR-0158 decision 3). It names the field that names the place,
+/// `store_id`, `store_group_id` or `scope_kind` for every store.
+///
+/// A conflict rather than an outage: before the store said which, this was the people service's
+/// `503`, which sent the operator to retry what can never succeed. What resolves it is the
+/// assignment that is there, changed or removed.
+fn already_assigned(scope: AssignmentScope) -> Response {
+    let field = match scope {
+        AssignmentScope::Store(_) => "store_id",
+        AssignmentScope::StoreGroup(_) => "store_group_id",
+        AssignmentScope::Tenant => "scope_kind",
+    };
+    api_error_with_details(
+        ErrorStatus::AlreadyExists,
+        "the employee is already assigned there: change or remove that assignment instead",
+        &[(field, "ALREADY_EXISTS")],
+    )
 }
 
 /// The scope a new assignment's fields name, with the id that names it as sent, before it is

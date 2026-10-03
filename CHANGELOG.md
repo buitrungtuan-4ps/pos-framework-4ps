@@ -399,6 +399,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Assigning a person where they already hold an assignment answers `409`, not `503`.** A person
+  holds at most one assignment per store, one per group and one tenant-wide (ADR-0158 decision 3),
+  and the database refused a second with its unique index. The cloud read that refusal as the
+  database failing, so the console said the people service was unavailable and a retry could never
+  succeed.
+  - The store says which: a unique violation (SQLSTATE `23505`) on either assignment insert is
+    `already_exists`, and every other failure stays `unavailable`.
+  - `POST /admin/assignments` answers `409` `ALREADY_EXISTS`, naming `store_id`, `store_group_id`
+    or `scope_kind`, with a message that says to change or remove the assignment that is there. The
+    refused request writes nothing, records nothing in the audit trail and publishes nothing. The
+    People screen shows the message as it shows every refusal.
+
+  **Upgrade note:** a duplicate assignment now answers `409` instead of `503`. No route, event,
+  migration, permission or setting changes, and the admin OpenAPI document does not list this route.
+
 - **Retiring a device, and sending a guest's order to the kitchen or refusing it, no longer say the
   store did not respond.** The edge answers each with `204` and no body, and the till read every
   answer as JSON. So a retirement that had worked said "The store did not respond." and left the
