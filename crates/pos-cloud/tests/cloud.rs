@@ -22084,6 +22084,63 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
     assert!(rule_ids.contains(&"seats.requires.tables"));
 }
 
+/// The console offers a switch only where a release reads it (ADR-0160 decision 5): tabs, pay-first,
+/// barcode entry and queue numbers stay in the catalogue, marked not offered, and the presets that
+/// turn them on still name them; every other flag is offered.
+#[tokio::test]
+async fn the_catalogue_offers_only_the_switches_a_release_reads() {
+    let admin = provisioned_admin();
+    let router = capabilities_app(admin.clone());
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let body = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/capabilities", &viewer))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+
+    let offered: Vec<(&str, bool)> = body["flags"]
+        .as_array()
+        .expect("flags array")
+        .iter()
+        .map(|flag| {
+            (
+                flag["key"].as_str().expect("a key"),
+                flag["offered"].as_bool().expect("offered is a boolean"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        offered,
+        vec![
+            ("tables_enabled", true),
+            ("tabs_enabled", false),
+            ("seats_enabled", true),
+            ("kds_enabled", true),
+            ("courses_enabled", true),
+            ("pay_first_enabled", false),
+            ("barcode_enabled", false),
+            ("queue_number_enabled", false),
+            ("tips_enabled", true),
+            ("qr_ordering_enabled", true),
+        ]
+    );
+    let counter = body["presets"]
+        .as_array()
+        .expect("presets array")
+        .iter()
+        .find(|preset| preset["id"] == "counter")
+        .expect("the counter preset");
+    assert!(
+        counter["keys"]
+            .as_array()
+            .expect("keys")
+            .contains(&serde_json::json!("pay_first_enabled")),
+        "the preset is unchanged: {counter}"
+    );
+}
+
 // --- ADR-0158 decision 3: an assignment reaches a store, a store group or every store -----------
 
 /// A store these tests assign people through, numbered so the reports' store order is the order

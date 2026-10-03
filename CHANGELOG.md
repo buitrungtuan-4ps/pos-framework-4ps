@@ -107,6 +107,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console offers only the capability switches a release reads**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). The Config screen offered `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` and
+  `queue_number_enabled`, and none of them changed anything at any store: no tab, pay-first flow or
+  barcode field exists, and queue numbers are always issued for tableless orders, whatever the switch
+  says.
+  - `GET /admin/capabilities` marks each flag `offered`, and those four `false`. The Config screen
+    leaves them out of its switches and of what a preset or a publish sets, and no longer offers the
+    Retail preset, which named only barcode entry and so would only have turned every switch off. A
+    store that has one on is shown it as set but not used by this release.
+  - Table service still turns on. A store whose stored `pay_first_enabled` is on, as the Counter
+    preset left it, has it turned off by a publish that turns tables on, which the screen says
+    before the publish, and by a store-group copy that turns tables on. Nothing reads the flag, and
+    the cloud's rule that pay-first excludes tables is unchanged.
+  - **Upgrade note:** nothing changes for any store. Queue numbers are issued for tableless orders as
+    before. A store's stored values are kept and sent as before, the cloud's rules and presets are
+    unchanged, and a console reading an older cloud offers every switch and preset as it did. No
+    route, event, migration, permission or protocol change.
+
 - **QR ordering is one switch, `qr_ordering_enabled`**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 5). Three values decided whether a store took a guest's QR order: the capability flag

@@ -7880,6 +7880,27 @@ struct CapabilityFlagView {
     key: &'static str,
     default_on: bool,
     description: &'static str,
+    /// Whether the console offers the flag as a switch: `false` for one no release reads yet
+    /// ([`offered`]).
+    offered: bool,
+}
+
+/// Whether the console offers `capability` as a switch
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 5: every switch the console offers changes behaviour at the edge).
+///
+/// `false` for the four nothing reads yet: no domain rule, edge route or till screen acts on
+/// `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` or `queue_number_enabled`. No tab, no
+/// pay-first flow and no barcode entry exists, and every tableless order is given a queue number
+/// whatever the switch says. Only the console stops offering them. A store's stored value is kept,
+/// published and parsed as before, the presets still name them, and the §10 rules still apply to
+/// them. A flag is offered again in the change that gives it a reader.
+const fn offered(capability: pos_core::capability::Capability) -> bool {
+    use pos_core::capability::Capability;
+    !matches!(
+        capability,
+        Capability::Tabs | Capability::PayFirst | Capability::Barcode | Capability::QueueNumber
+    )
 }
 
 /// One capability preset (§10) — a named starting profile the console offers as a button, given as the
@@ -7941,7 +7962,8 @@ where
         .with_state(CapabilitiesState { admin, clock })
 }
 
-/// Serves the §10 capability catalogue for the console's form editor.
+/// Serves the §10 capability catalogue for the console's form editor. Each flag says whether the
+/// console offers it as a switch ([`offered`]).
 async fn admin_list_capabilities<A, C>(
     State(state): State<CapabilitiesState<A, C>>,
     headers: HeaderMap,
@@ -7971,6 +7993,7 @@ where
                 key: meta.key,
                 default_on: meta.default_on,
                 description: meta.description,
+                offered: offered(capability),
             }
         })
         .collect();
