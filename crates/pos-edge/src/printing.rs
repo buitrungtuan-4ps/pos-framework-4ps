@@ -38,6 +38,15 @@
 //! [`PrintJob`]: a device that drew its own glyphs would draw them from whatever fonts that device
 //! happens to have, and a store with three terminals would print three different tickets from one
 //! order.
+//!
+//! # A till may print its guests' paper at a printer of its own
+//!
+//! [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! decision 4: a `TERMINAL` entry may name the receipt printer and the receipt languages of the till
+//! it is, and a paired device is that till through the print-agent binding it already holds. A
+//! route resolves the till from the device a request came from ([`Printers::till_for`]) and passes
+//! the choice down ([`TillPrinting`]); a receipt, its copy and a pre-bill follow it, and nothing
+//! else does. A store whose terminals name nothing prints exactly as before.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -62,7 +71,7 @@ use pos_proto::floor::{KitchenStation, StationPlan};
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StationId, StoreId};
 use pos_proto::locale::NumberFormat;
 use pos_proto::money::Money;
-use pos_proto::printing::ReceiptLanguage;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::quantity::Quantity;
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
@@ -90,6 +99,111 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
         .devices()
         .iter()
         .find(|device| device.station_id.is_none() && is_printer(device))
+}
+
+/// What one till prints differently from its store
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4): the receipt printer and the receipt languages its `TERMINAL` entry names, as
+/// [`Printers::till_for`] resolves them for the device a print was asked from.
+///
+/// Only a guest's paper follows it: a receipt, its copy and a pre-bill. A kitchen ticket goes to its
+/// station's printer, a shift report to the store's receipt printer, and the cash drawer opens
+/// through the store's ([`drawer_printer`]) until the multi-drawer shift work gives a till its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TillPrinting {
+    /// The printer the till's paper goes to, where its terminal names one.
+    receipt_printer_id: Option<DeviceId>,
+    /// The language it prints in, where its terminal names one.
+    receipt_language: Option<ReceiptLanguage>,
+    /// Its second language, where its terminal names one.
+    receipt_second_language: Option<ReceiptSecondLanguage>,
+    /// Which till this is cannot be told: a terminal of the store prints differently, and the
+    /// device's binding could not be read.
+    unknown: bool,
+}
+
+impl TillPrinting {
+    /// The store's choices, which every till printed with before a terminal could name its own: a
+    /// device bound to no terminal prints with them, as does one whose terminal names nothing.
+    pub const STORE: Self = Self {
+        receipt_printer_id: None,
+        receipt_language: None,
+        receipt_second_language: None,
+        unknown: false,
+    };
+
+    /// A till that cannot be told apart from the others, whose guest's paper is refused rather than
+    /// printed at a counter that may be the wrong one.
+    const UNKNOWN: Self = Self {
+        unknown: true,
+        ..Self::STORE
+    };
+
+    /// What `terminal`'s entry names, each the store's where it names nothing.
+    #[must_use]
+    pub fn of(terminal: &PublishedDevice) -> Self {
+        Self {
+            receipt_printer_id: terminal.receipt_printer_id,
+            receipt_language: terminal.receipt_language(),
+            receipt_second_language: terminal.receipt_second_language(),
+            unknown: false,
+        }
+    }
+
+    /// The language this till's paper prints in: its own, or the store's `printing` node's.
+    fn receipt_language(&self, session: &EdgeSession) -> ReceiptLanguage {
+        self.receipt_language
+            .unwrap_or_else(|| session.printing.receipt_language())
+    }
+
+    /// The second language this till's paper prints in: its own, or the store's `printing` node's.
+    fn receipt_second_language(&self, session: &EdgeSession) -> ReceiptSecondLanguage {
+        self.receipt_second_language
+            .unwrap_or_else(|| session.printing.receipt_second_language())
+    }
+}
+
+/// Whether a terminal in `devices` names anything of its own to print with.
+fn a_till_prints_its_own(devices: &PublishedDevices) -> bool {
+    devices.devices().iter().any(|device| {
+        device.kind.known() == DeviceKind::Terminal
+            && TillPrinting::of(device) != TillPrinting::STORE
+    })
+}
+
+/// The printer a guest's paper for `till` goes to, or what the till is told instead.
+///
+/// The till's own receipt printer where its terminal names one the node lists as a printer that
+/// serves no station, and the store's [`receipt_printer`] otherwise, which is also where every till
+/// printed before a terminal could name one. A printer the node does not list is the store's case:
+/// the cloud publishes none, so one only arrives from a node this edge did not expect.
+///
+/// No fallback past the till's own: once it is chosen, a print it fails is reported as that
+/// printer's failure, because a bill printed at the wrong counter is worse than one that visibly did
+/// not print. For the same reason a till that cannot be told apart ([`TillPrinting::UNKNOWN`]) is
+/// refused, as [`PrintOutcome::Unavailable`].
+fn guest_printer<'a>(
+    devices: &'a PublishedDevices,
+    till: &TillPrinting,
+) -> Result<&'a PublishedDevice, PrintOutcome> {
+    if till.unknown {
+        tracing::warn!(
+            "the till a guest's paper is for could not be told; nothing was printed rather than \
+             printing it at a counter that may be the wrong one"
+        );
+        return Err(PrintOutcome::Unavailable);
+    }
+    till.receipt_printer_id
+        .and_then(|own| {
+            devices.devices().iter().find(|device| {
+                device.device_id == own && device.station_id.is_none() && is_printer(device)
+            })
+        })
+        .or_else(|| receipt_printer(devices))
+        .ok_or_else(|| {
+            tracing::info!("no receipt printer is published for this store; nothing to print");
+            PrintOutcome::NoPrinter
+        })
 }
 
 /// The printer serving `station`, falling back to the station plan's declared backup, and the
@@ -307,14 +421,15 @@ struct SecondNames {
 }
 
 impl SecondLanguage {
-    /// The second language `session` prints a guest's paper in on a printer `columns` wide, or
-    /// `None` for one language: none is set, the receipt's labels are in it already, or this box
+    /// The second language `session` prints `till`'s guest's paper in on a printer `columns` wide,
+    /// or `None` for one language: none is set, the receipt's labels are in it already, or this box
     /// has no fonts to draw it with ([`PaperLabels::for_store`]).
     ///
     /// `captured` are the rows as the bill holds them and `printed` the same rows named in the
     /// receipt's language; `totals` names the fees as the receipt prints them.
     fn for_receipt(
         session: &EdgeSession,
+        till: &TillPrinting,
         first: &PaperLabels,
         can_rasterise: bool,
         columns: u16,
@@ -322,7 +437,7 @@ impl SecondLanguage {
         printed: &[ReceiptLine],
         totals: &BillTotals,
     ) -> Option<Self> {
-        let tag = session.printing.receipt_second_language().tag()?;
+        let tag = till.receipt_second_language(session).tag()?;
         let labels = PaperLabels::for_store(Some(tag), can_rasterise);
         if labels == first {
             return None;
@@ -937,11 +1052,12 @@ fn format_quantity(quantity: Quantity) -> String {
     }
 }
 
-/// The language a receipt, its copy and a pre-bill print in, from the `printing` node (ADR-0160),
-/// resolved by [`paper_language`].
+/// The language a receipt, its copy and a pre-bill print in for `till`: its terminal's
+/// `receipt_language` where it names one (ADR-0160 decision 4), and the `printing` node's
+/// otherwise, resolved by [`paper_language`].
 #[must_use]
-pub fn receipt_language(session: &EdgeSession) -> Option<String> {
-    paper_language(session, session.printing.receipt_language())
+pub fn receipt_language(session: &EdgeSession, till: &TillPrinting) -> Option<String> {
+    paper_language(session, till.receipt_language(session))
 }
 
 /// The language a kitchen ticket printed at `station` prints in: the station's `ticket_language` on
@@ -988,8 +1104,12 @@ fn paper_language(session: &EdgeSession, chosen: ReceiptLanguage) -> Option<Stri
 /// Only when the receipt's language is not the display language: a line captures its name in the
 /// display language, so a receipt in that language prints exactly the names it always printed —
 /// the snapshot a settled bill keeps whatever the menu says next week (§14.2).
-fn receipt_lines_in<'a>(session: &EdgeSession, lines: &'a [ReceiptLine]) -> Cow<'a, [ReceiptLine]> {
-    let Some(language) = receipt_language(session)
+fn receipt_lines_in<'a>(
+    session: &EdgeSession,
+    till: &TillPrinting,
+    lines: &'a [ReceiptLine],
+) -> Cow<'a, [ReceiptLine]> {
+    let Some(language) = receipt_language(session, till)
         .filter(|language| session.display_language.as_deref() != Some(language.as_str()))
     else {
         return Cow::Borrowed(lines);
@@ -1211,8 +1331,12 @@ fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, words: Words<'_>) -> Vec<
 ///
 /// Unlike an item's, a fee's frozen name is the rule's own rather than one already resolved to the
 /// display language, so it is looked up in whatever language the receipt prints in.
-fn receipt_totals_in<'a>(session: &EdgeSession, totals: &'a BillTotals) -> Cow<'a, BillTotals> {
-    let Some(language) = receipt_language(session) else {
+fn receipt_totals_in<'a>(
+    session: &EdgeSession,
+    till: &TillPrinting,
+    totals: &'a BillTotals,
+) -> Cow<'a, BillTotals> {
+    let Some(language) = receipt_language(session, till) else {
         return Cow::Borrowed(totals);
     };
     if !totals
@@ -1399,6 +1523,11 @@ impl DrawerOutcome {
 /// it generic over three more parameters would push those three into the signature of every caller
 /// that only ever wanted to print a receipt. So the erasure happens once, here, at the point where
 /// the three become one question: *can this agent take this job, and does it now have it?*
+///
+/// The binding answers one more question, and this is where a route can ask it: which terminal a
+/// paired device is, which decides where that till's guests' paper prints
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
 pub trait AgentDispatch: Send + Sync {
     /// Offers `job` to `agent` for `printer`, answering with what the till should say.
     ///
@@ -1410,6 +1539,16 @@ pub trait AgentDispatch: Send + Sync {
         printer: DeviceId,
         job: PrintJob,
     ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>>;
+
+    /// The terminal paired `device` answers for, if any: the till it is.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the binding cannot be read.
+    fn terminal_of<'a>(
+        &'a self,
+        device: DeviceId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DeviceId>, PortError>> + Send + 'a>>;
 }
 
 /// The shipped [`AgentDispatch`]: the binding, the queue and the wake, in ADR-0112's order.
@@ -1532,6 +1671,13 @@ where
                 }
             }
         })
+    }
+
+    fn terminal_of<'a>(
+        &'a self,
+        device: DeviceId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DeviceId>, PortError>> + Send + 'a>> {
+        Box::pin(self.agents.agent_for(device))
     }
 }
 
@@ -1803,17 +1949,25 @@ impl Printers {
         PaperLabels::for_store(session.display_language.as_deref(), self.can_rasterise())
     }
 
-    /// The words the paper a guest is handed — a receipt, its copy, a pre-bill — is printed in: the
-    /// receipt's language ([`receipt_language`]), with the same fallback to English.
-    fn receipt_labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
-        PaperLabels::for_store(receipt_language(session).as_deref(), self.can_rasterise())
+    /// The words the paper a guest is handed — a receipt, its copy, a pre-bill — is printed in for
+    /// `till`: the receipt's language ([`receipt_language`]), with the same fallback to English.
+    fn receipt_labels_for(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+    ) -> &'static PaperLabels {
+        PaperLabels::for_store(
+            receipt_language(session, till).as_deref(),
+            self.can_rasterise(),
+        )
     }
 
-    /// The second language a guest's paper prints in on `device` ([`SecondLanguage::for_receipt`]),
-    /// as wide as this build takes the printer to be.
+    /// The second language `till`'s guest's paper prints in on `device`
+    /// ([`SecondLanguage::for_receipt`]), as wide as this build takes the printer to be.
     fn second_language_for(
         &self,
         session: &EdgeSession,
+        till: &TillPrinting,
         device: &PublishedDevice,
         captured: &[ReceiptLine],
         printed: &[ReceiptLine],
@@ -1821,7 +1975,8 @@ impl Printers {
     ) -> Option<SecondLanguage> {
         SecondLanguage::for_receipt(
             session,
-            self.receipt_labels_for(session),
+            till,
+            self.receipt_labels_for(session, till),
             self.can_rasterise(),
             assumed_capabilities(device, self.can_rasterise())
                 .columns
@@ -1830,6 +1985,40 @@ impl Printers {
             printed,
             totals,
         )
+    }
+
+    /// The paper choices of the till `device` is
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 4): what the `TERMINAL` entry it is bound to names, through the print-agent binding
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// [`TillPrinting::STORE`] when no terminal in the store's `devices` node names anything of its
+    /// own, without reading the binding at all, so a store that names nothing prints as before
+    /// whatever the binding record holds. The same when `device` is bound to no terminal, when its
+    /// terminal is not in the node, and in a composition with no binding record. A binding that
+    /// cannot be read while a terminal does name its own is a till nobody can tell apart, whose
+    /// paper is refused: printed at the store's receipt printer, the bar's bill would come out at
+    /// the counter.
+    pub async fn till_for(&self, session: &EdgeSession, device: DeviceId) -> TillPrinting {
+        if !a_till_prints_its_own(&session.devices) {
+            return TillPrinting::STORE;
+        }
+        let Some(lane) = self.agents.as_ref() else {
+            return TillPrinting::STORE;
+        };
+        match lane.terminal_of(device).await {
+            Ok(terminal) => terminal
+                .and_then(|terminal| {
+                    session.devices.devices().iter().find(|entry| {
+                        entry.device_id == terminal && entry.kind.known() == DeviceKind::Terminal
+                    })
+                })
+                .map_or(TillPrinting::STORE, TillPrinting::of),
+            Err(error) => {
+                tracing::warn!(%device, %error, "the terminal a device is bound to could not be read");
+                TillPrinting::UNKNOWN
+            }
+        }
     }
 
     /// Opens the store's cash drawer through the printer [`drawer_printer`] picks
@@ -1879,14 +2068,22 @@ impl Printers {
         }
     }
 
-    /// Prints the guest's receipt for a settled bill on the store's receipt printer.
+    /// Prints the guest's receipt for a settled bill, on `till`'s receipt printer: the store's,
+    /// unless the till's terminal names its own that the node lists as a printer serving no
+    /// station.
     ///
     /// `job_id` is the idempotency key: pass the settle's event id and a retried settle reprints
     /// nothing. Never returns an error — a printer that is down must not roll back a bill the guest
     /// has already paid, so the outcome is reported and the caller decides what to tell the cashier.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the receipt's own arguments plus the till it is printed for; a struct for them \
+                  would be built at one call site and taken apart here"
+    )]
     pub async fn print_receipt(
         &self,
         session: &EdgeSession,
+        till: &TillPrinting,
         store_id: StoreId,
         job_id: EventId,
         receipt_number: u64,
@@ -1894,19 +2091,19 @@ impl Printers {
         totals: &BillTotals,
         buyer: Option<&BuyerDetails>,
     ) -> PrintOutcome {
-        let Some(device) = receipt_printer(&session.devices) else {
-            tracing::info!("no receipt printer is published for this store; nothing to print");
-            return PrintOutcome::NoPrinter;
+        let device = match guest_printer(&session.devices, till) {
+            Ok(device) => device,
+            Err(outcome) => return outcome,
         };
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
-        let printed = receipt_lines_in(session, lines);
-        let totals = receipt_totals_in(session, totals);
-        let second = self.second_language_for(session, device, lines, &printed, &totals);
+        let printed = receipt_lines_in(session, till, lines);
+        let totals = receipt_totals_in(session, till, totals);
+        let second = self.second_language_for(session, till, device, lines, &printed, &totals);
         let document = receipt_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.receipt_labels_for(session),
+            self.receipt_labels_for(session, till),
             receipt_number,
             &printed,
             &totals,
@@ -1926,7 +2123,7 @@ impl Printers {
         .await
     }
 
-    /// Prints a copy of a settled bill's receipt on the store's receipt printer
+    /// Prints a copy of a settled bill's receipt on `till`'s receipt printer, as the receipt is
     /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)),
     /// marked as a copy with the store's local time it was printed at.
     ///
@@ -1935,26 +2132,28 @@ impl Printers {
     pub async fn print_receipt_copy(
         &self,
         session: &EdgeSession,
+        till: &TillPrinting,
         store_id: StoreId,
         copy: &ReceiptCopy,
         buyer: Option<&BuyerDetails>,
     ) -> PrintOutcome {
-        let Some(device) = receipt_printer(&session.devices) else {
-            tracing::info!("no receipt printer is published for this store; nothing to print");
-            return PrintOutcome::NoPrinter;
+        let device = match guest_printer(&session.devices, till) {
+            Ok(device) => device,
+            Err(outcome) => return outcome,
         };
         // An instant always reads as a local time; the empty fallback is for a timestamp outside
         // what the calendar can represent, which a copy printed now cannot have.
         let reprinted = local_time(copy.reprinted_time, &session.timezone)
             .map(|time| time.to_string())
             .unwrap_or_default();
-        let printed = receipt_lines_in(session, &copy.lines);
-        let totals = receipt_totals_in(session, &copy.totals);
-        let second = self.second_language_for(session, device, &copy.lines, &printed, &totals);
+        let printed = receipt_lines_in(session, till, &copy.lines);
+        let totals = receipt_totals_in(session, till, &copy.totals);
+        let second =
+            self.second_language_for(session, till, device, &copy.lines, &printed, &totals);
         let document = receipt_copy_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.receipt_labels_for(session),
+            self.receipt_labels_for(session, till),
             copy.receipt_number,
             copy.copy_number,
             &reprinted,
@@ -1976,7 +2175,7 @@ impl Printers {
         .await
     }
 
-    /// Prints a pre-bill on the store's receipt printer — the same device the receipt goes to, since
+    /// Prints a pre-bill on `till`'s receipt printer — the same device its receipt goes to, since
     /// both are handed to the guest.
     ///
     /// `job_id` should be fresh for each press: a table that asks twice gets two pieces of paper, and
@@ -1984,22 +2183,24 @@ impl Printers {
     pub async fn print_pre_bill(
         &self,
         session: &EdgeSession,
+        till: &TillPrinting,
         store_id: StoreId,
         job_id: EventId,
         reference: &str,
         pre_bill: &PreBill,
     ) -> PrintOutcome {
-        let Some(device) = receipt_printer(&session.devices) else {
-            tracing::info!("no receipt printer is published for this store; nothing to print");
-            return PrintOutcome::NoPrinter;
+        let device = match guest_printer(&session.devices, till) {
+            Ok(device) => device,
+            Err(outcome) => return outcome,
         };
-        let printed = receipt_lines_in(session, &pre_bill.lines);
-        let totals = receipt_totals_in(session, &pre_bill.totals);
-        let second = self.second_language_for(session, device, &pre_bill.lines, &printed, &totals);
+        let printed = receipt_lines_in(session, till, &pre_bill.lines);
+        let totals = receipt_totals_in(session, till, &pre_bill.totals);
+        let second =
+            self.second_language_for(session, till, device, &pre_bill.lines, &printed, &totals);
         let document = pre_bill_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.receipt_labels_for(session),
+            self.receipt_labels_for(session, till),
             reference,
             &printed,
             &totals,
@@ -2319,8 +2520,8 @@ mod tests {
     use super::TcpTransports;
     use super::{
         AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers, SecondLanguage, SecondNames,
-        TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
-        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
+        TicketLine, TicketNote, TillPrinting, TransportFactory, assumed_capabilities,
+        connection_of, drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
         receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
         shift_report_document, short_reference, station_printer, ticket_at, ticket_document,
         ticket_language, ticket_line,
@@ -2329,8 +2530,8 @@ mod tests {
     use crate::config::ValueSource;
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
     use pos_core::billing::{BillTotals, FeeLine};
-    use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
+    use pos_ports::{PortError, PortName};
     use pos_proto::ClockSource as _;
     use pos_proto::devices::{
         DeviceConnection, DeviceKind, PaperWidth, PublishedDevice, PublishedDevices,
@@ -2349,7 +2550,11 @@ mod tests {
     use pos_proto::wire_enum::Open;
     use printer_escpos::{Transport, TransportStatus, Unreachable};
     use std::num::NonZeroU16;
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+
+    /// The store's own choices, which a till whose terminal names nothing prints with.
+    const STORE: TillPrinting = TillPrinting::STORE;
 
     /// A settled bill's totals, for the receipt tests: one 10 % tax line and nothing else.
     /// The money style a test store writes with: `exponent` decimals and the common marks.
@@ -2515,6 +2720,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(1),
                 42,
@@ -2548,6 +2754,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(1),
                 42,
@@ -2576,6 +2783,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(1),
                 42,
@@ -2605,6 +2813,7 @@ mod tests {
             let outcome = printers
                 .print_receipt(
                     &session,
+                    &STORE,
                     store_id(),
                     event_id(1),
                     42,
@@ -3140,24 +3349,24 @@ mod tests {
             display_language: Some("vi".to_owned()),
             ..EdgeSession::bootstrap()
         };
-        assert_eq!(receipt_language(&session).as_deref(), Some("vi"));
+        assert_eq!(receipt_language(&session, &STORE).as_deref(), Some("vi"));
         session.printing = printing_in(ReceiptLanguage::English);
-        assert_eq!(receipt_language(&session).as_deref(), Some("en"));
+        assert_eq!(receipt_language(&session, &STORE).as_deref(), Some("en"));
         session.printing = printing_in(ReceiptLanguage::Country);
         assert_eq!(
-            receipt_language(&session).as_deref(),
+            receipt_language(&session, &STORE).as_deref(),
             Some("vi"),
             "a store whose locale names no country language prints in its display language"
         );
         session.country_language = Some("ja".to_owned());
         assert_eq!(
-            receipt_language(&session).as_deref(),
+            receipt_language(&session, &STORE).as_deref(),
             Some("vi"),
             "and so does one whose country's language the edge has no labels in"
         );
         session.display_language = Some("en".to_owned());
         session.country_language = Some("vi".to_owned());
-        let language = receipt_language(&session);
+        let language = receipt_language(&session, &STORE);
         assert_eq!(language.as_deref(), Some("vi"), "whatever the tills show");
         assert_eq!(
             PaperLabels::for_store(language.as_deref(), true),
@@ -3207,7 +3416,7 @@ mod tests {
             },
         ];
 
-        let english = receipt_lines_in(&session, &lines);
+        let english = receipt_lines_in(&session, &STORE, &lines);
         assert_eq!(english[0].display_name.as_str(), "Beef pho");
         assert_eq!(english[0].modifier_display_names[0].as_str(), "Egg");
         assert_eq!(
@@ -3222,7 +3431,7 @@ mod tests {
             ..session
         };
         assert!(matches!(
-            receipt_lines_in(&as_before, &lines),
+            receipt_lines_in(&as_before, &STORE, &lines),
             std::borrow::Cow::Borrowed(same) if same == lines
         ));
     }
@@ -3368,13 +3577,13 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            names(&receipt_totals_in(&session, &totals)),
+            names(&receipt_totals_in(&session, &STORE, &totals)),
             ["Phí phục vụ", "Cover charge", "Bag"]
         );
         // In English nothing is translated, so the receipt prints the names the bill froze.
         session.printing = printing_in(ReceiptLanguage::English);
         assert!(matches!(
-            receipt_totals_in(&session, &totals),
+            receipt_totals_in(&session, &STORE, &totals),
             std::borrow::Cow::Borrowed(same) if same == &totals
         ));
     }
@@ -3873,9 +4082,13 @@ mod tests {
             ..EdgeSession::bootstrap()
         };
         let (lines, totals) = a_bilingual_bill();
-        let english =
-            SecondLanguage::for_receipt(&session, &VIETNAMESE, true, 42, &lines, &lines, &totals)
-                .expect("a bilingual receipt");
+        // At the store's own choices, on paper 42 characters wide.
+        let second = |session: &EdgeSession, first, rasterise, printed: &[ReceiptLine]| {
+            SecondLanguage::for_receipt(
+                session, &STORE, first, rasterise, 42, &lines, printed, &totals,
+            )
+        };
+        let english = second(&session, &VIETNAMESE, true, &lines).expect("a bilingual receipt");
         assert_eq!(english.labels, &ENGLISH);
         assert_eq!(
             english.rows,
@@ -3898,10 +4111,8 @@ mod tests {
             },
             ..session
         };
-        let printed = receipt_lines_in(&session, &lines);
-        let vietnamese =
-            SecondLanguage::for_receipt(&session, &ENGLISH, true, 42, &lines, &printed, &totals)
-                .expect("a bilingual receipt");
+        let printed = receipt_lines_in(&session, &STORE, &lines);
+        let vietnamese = second(&session, &ENGLISH, true, &printed).expect("a bilingual receipt");
         assert_eq!(
             vietnamese.rows,
             [
@@ -3919,26 +4130,17 @@ mod tests {
 
         // One language: on a box with no fonts, which cannot draw Vietnamese labels; where the
         // second language is the receipt's own; and where none is set.
-        assert_eq!(
-            SecondLanguage::for_receipt(&session, &ENGLISH, false, 42, &lines, &printed, &totals),
-            None
-        );
+        assert_eq!(second(&session, &ENGLISH, false, &printed), None);
         let same = EdgeSession {
             printing: second_in(ReceiptSecondLanguage::Vietnamese),
             ..session.clone()
         };
-        assert_eq!(
-            SecondLanguage::for_receipt(&same, &VIETNAMESE, true, 42, &lines, &lines, &totals),
-            None
-        );
+        assert_eq!(second(&same, &VIETNAMESE, true, &lines), None);
         let none = EdgeSession {
             printing: PublishedPrinting::default(),
             ..session
         };
-        assert_eq!(
-            SecondLanguage::for_receipt(&none, &VIETNAMESE, true, 42, &lines, &lines, &totals),
-            None
-        );
+        assert_eq!(second(&none, &VIETNAMESE, true, &lines), None);
     }
 
     #[test]
@@ -4389,6 +4591,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(1),
                 42,
@@ -4553,7 +4756,16 @@ mod tests {
         let session = a_bilingual_store(ReceiptSecondLanguage::English, "vi");
         let (lines, totals) = a_bilingual_bill();
         let outcome = printers
-            .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+            .print_receipt(
+                &session,
+                &STORE,
+                store_id(),
+                event_id(1),
+                7,
+                &lines,
+                &totals,
+                None,
+            )
             .await;
 
         assert_eq!(outcome, PrintOutcome::Printed);
@@ -4585,7 +4797,16 @@ mod tests {
             let (printers, recorder) = recorder(true);
             let session = a_bilingual_store(second, "en");
             let outcome = printers
-                .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+                .print_receipt(
+                    &session,
+                    &STORE,
+                    store_id(),
+                    event_id(1),
+                    7,
+                    &lines,
+                    &totals,
+                    None,
+                )
                 .await;
             assert_eq!(outcome, PrintOutcome::Printed);
             written.push(recorder.written.lock().expect("the recorder").concat());
@@ -4670,6 +4891,7 @@ mod tests {
             let outcome = printers
                 .print_receipt(
                     &session,
+                    &STORE,
                     store_id(),
                     event_id(seed),
                     7,
@@ -4712,7 +4934,16 @@ mod tests {
             let (printers, recorder) = recorder(true);
             let session = session_with(PublishedDevices::new(vec![printer]));
             let outcome = printers
-                .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+                .print_receipt(
+                    &session,
+                    &STORE,
+                    store_id(),
+                    event_id(1),
+                    7,
+                    &lines,
+                    &totals,
+                    None,
+                )
                 .await;
             assert_eq!(outcome, PrintOutcome::Printed);
             printed.push(recorder.written.lock().expect("the recorder").concat());
@@ -4872,6 +5103,7 @@ mod tests {
         let receipt = printers
             .print_receipt(
                 &session_with(PublishedDevices::new(vec![unmarked])),
+                &STORE,
                 store_id(),
                 event_id(1),
                 1,
@@ -4956,6 +5188,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(7),
                 41,
@@ -5000,6 +5233,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(8),
                 42,
@@ -5026,6 +5260,7 @@ mod tests {
             let outcome = printers
                 .print_receipt(
                     &session,
+                    &STORE,
                     store_id(),
                     event_id(9),
                     43,
@@ -5082,6 +5317,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(10),
                 44,
@@ -5107,6 +5343,7 @@ mod tests {
         let outcome = printers
             .print_receipt(
                 &session,
+                &STORE,
                 store_id(),
                 event_id(11),
                 45,
@@ -5117,5 +5354,365 @@ mod tests {
             .await;
         assert_eq!(outcome, PrintOutcome::AgentUnavailable);
         assert!(recorder.written.lock().expect("lock").is_empty());
+    }
+
+    // --- A till's own receipt printer and languages (ADR-0160 decision 4) ----------------------
+
+    /// What each printer was sent, by its address, so a test can say at which counter a document
+    /// came out. The printer at `down`, if any, does not answer.
+    #[derive(Debug, Default)]
+    struct Counters {
+        sent: Mutex<Vec<(String, Vec<u8>)>>,
+        down: Option<&'static str>,
+    }
+
+    impl Counters {
+        /// The addresses written to, in order.
+        fn at(&self) -> Vec<String> {
+            let sent = self.sent.lock().expect("the counters");
+            sent.iter().map(|(address, _)| address.clone()).collect()
+        }
+
+        /// Everything the printer at `address` was sent, in one.
+        fn bytes_at(&self, address: &str) -> Vec<u8> {
+            let sent = self.sent.lock().expect("the counters");
+            sent.iter()
+                .filter(|(at, _)| at == address)
+                .flat_map(|(_, bytes)| bytes.clone())
+                .collect()
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountersFactory(Arc<Counters>);
+
+    #[derive(Debug)]
+    struct CounterTransport {
+        counters: Arc<Counters>,
+        address: String,
+    }
+
+    impl Transport for CounterTransport {
+        fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+            if self.counters.down == Some(self.address.as_str()) {
+                return Err(Unreachable);
+            }
+            self.counters
+                .sent
+                .lock()
+                .map_err(|_| Unreachable)?
+                .push((self.address.clone(), bytes.to_vec()));
+            Ok(())
+        }
+
+        fn probe(&self) -> Result<TransportStatus, Unreachable> {
+            if self.counters.down == Some(self.address.as_str()) {
+                Err(Unreachable)
+            } else {
+                Ok(TransportStatus::default())
+            }
+        }
+    }
+
+    impl TransportFactory for CountersFactory {
+        fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
+            Ok(Box::new(CounterTransport {
+                counters: Arc::clone(&self.0),
+                address: device.address.clone(),
+            }))
+        }
+    }
+
+    const COUNTER: &str = "192.0.2.2:9100";
+    const BAR: &str = "192.0.2.3:9100";
+
+    fn paired(seed: u128) -> DeviceId {
+        DeviceId::new(Ulid::from_u128(seed))
+    }
+
+    /// A terminal `seed` naming `printer` as its receipt printer and `language` as its language.
+    fn till(
+        seed: u128,
+        printer: Option<u128>,
+        language: Option<ReceiptLanguage>,
+    ) -> PublishedDevice {
+        PublishedDevice {
+            receipt_printer_id: printer.map(paired),
+            receipt_language: language.map_or_else(Open::default, Open::from_known),
+            ..device(seed, DeviceKind::Terminal, None)
+        }
+    }
+
+    /// The store's devices: its receipt printer at the counter, a printer at the bar, a kitchen's,
+    /// and four tills. The bar till (7) names the bar's printer; the door till (8) names nothing;
+    /// the terrace till (9) names the kitchen's, and the patio till (10) a printer the node lacks.
+    fn the_tills() -> PublishedDevices {
+        PublishedDevices::new(vec![
+            device(2, DeviceKind::Printer, None),
+            device(3, DeviceKind::Printer, None),
+            device(4, DeviceKind::Printer, Some(station(9))),
+            till(7, Some(3), None),
+            till(8, None, None),
+            till(9, Some(4), None),
+            till(10, Some(5), None),
+        ])
+    }
+
+    /// A dispatcher over `counters` whose binding record holds each till for one paired device:
+    /// the bar till for `0xBA2`, the door till for `0xD002`, the terrace till for `0x7E2` and the
+    /// patio till for `0xFA7`.
+    async fn with_tills(counters: &Arc<Counters>) -> Printers {
+        use crate::print_agent::PrintAgents as _;
+        let agents = Arc::new(crate::print_agent::InMemoryPrintAgents::new());
+        let now = crate::clock::SystemClock
+            .now()
+            .as_milliseconds_since_epoch();
+        for (terminal, device) in [(7, 0xBA2), (8, 0xD002), (9, 0x7E2), (10, 0xFA7)] {
+            agents
+                .claim(paired(terminal), paired(device), now)
+                .await
+                .expect("the binding is recorded");
+        }
+        Printers::over(Arc::new(CountersFactory(Arc::clone(counters)))).with_agents(Arc::new(
+            AgentLane::new(
+                agents,
+                Arc::new(crate::print_queue::InMemoryPrintQueue::new()),
+                Arc::new(crate::print_wake::SharedPrintWake::new()),
+            ),
+        ))
+    }
+
+    /// Prints a receipt for the till `device` is, and answers what came of it.
+    async fn receipt_from(
+        printers: &Printers,
+        session: &EdgeSession,
+        device: u128,
+    ) -> PrintOutcome {
+        let till = printers.till_for(session, paired(device)).await;
+        printers
+            .print_receipt(
+                session,
+                &till,
+                store_id(),
+                event_id(device),
+                42,
+                &[],
+                &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+                None,
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn a_till_bound_to_a_terminal_with_its_own_printer_prints_there_and_the_rest_at_the_stores()
+     {
+        let counters = Arc::new(Counters::default());
+        let printers = with_tills(&counters).await;
+        let session = session_with(the_tills());
+        for (device, expected, why) in [
+            (0xBA2, BAR, "the bar till prints at the bar"),
+            (
+                0xD002,
+                COUNTER,
+                "a till whose terminal names nothing prints at the store's",
+            ),
+            (
+                0x0FF,
+                COUNTER,
+                "a device bound to no terminal prints at the store's",
+            ),
+            (
+                0x7E2,
+                COUNTER,
+                "a kitchen's printer is not a receipt printer",
+            ),
+            (
+                0xFA7,
+                COUNTER,
+                "a printer the node does not list is the store's case",
+            ),
+        ] {
+            assert_eq!(
+                receipt_from(&printers, &session, device).await,
+                PrintOutcome::Printed,
+                "{why}"
+            );
+            assert_eq!(
+                counters.at().last().map(String::as_str),
+                Some(expected),
+                "{why}"
+            );
+        }
+        assert_eq!(
+            counters.at().len(),
+            5,
+            "one receipt each, and no other paper"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tills_printer_that_does_not_answer_is_reported_and_nothing_prints_at_the_counter() {
+        // No fallback: the bar's bill at the counter is worse than a failure the cashier reads.
+        let counters = Arc::new(Counters {
+            down: Some(BAR),
+            ..Counters::default()
+        });
+        let printers = with_tills(&counters).await;
+        let session = session_with(the_tills());
+        assert_eq!(
+            receipt_from(&printers, &session, 0xBA2).await,
+            PrintOutcome::Unavailable
+        );
+        assert!(
+            counters.at().is_empty(),
+            "nothing came out anywhere: {:?}",
+            counters.at()
+        );
+    }
+
+    /// A binding record that cannot be read.
+    struct Unreadable;
+
+    impl super::AgentDispatch for Unreadable {
+        fn enqueue<'a>(
+            &'a self,
+            _agent: DeviceId,
+            _printer: DeviceId,
+            _job: PrintJob,
+        ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
+            Box::pin(async { PrintOutcome::AgentUnavailable })
+        }
+
+        fn terminal_of<'a>(
+            &'a self,
+            _device: DeviceId,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<DeviceId>, PortError>> + Send + 'a>>
+        {
+            Box::pin(async {
+                Err(PortError::unavailable(
+                    PortName::EventStore,
+                    "the binding cannot be read",
+                ))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_till_that_cannot_be_told_is_refused_only_where_a_till_prints_its_own() {
+        let counters = Arc::new(Counters::default());
+        let printers = Printers::over(Arc::new(CountersFactory(Arc::clone(&counters))))
+            .with_agents(Arc::new(Unreadable));
+        // A terminal names its own printer, so which till this is decides the counter.
+        let session = session_with(the_tills());
+        assert_eq!(
+            receipt_from(&printers, &session, 0xBA2).await,
+            PrintOutcome::Unavailable
+        );
+        assert!(counters.at().is_empty(), "not guessed at the counter");
+        // No terminal names anything: the binding is not read, and the store prints as before.
+        let session = session_with(PublishedDevices::new(vec![
+            device(2, DeviceKind::Printer, None),
+            till(8, None, None),
+        ]));
+        assert_eq!(
+            receipt_from(&printers, &session, 0xBA2).await,
+            PrintOutcome::Printed
+        );
+        assert_eq!(counters.at(), [COUNTER]);
+    }
+
+    #[tokio::test]
+    async fn a_tills_language_prints_its_receipt_in_that_language_and_the_others_in_the_stores() {
+        // An English store whose menu names the pho in Vietnamese, ASCII here so that a box with no
+        // fonts prints it, and a bar till that prints its receipts in Vietnamese.
+        let item = MenuItemId::new(Ulid::from_u128(1));
+        let session = EdgeSession {
+            display_language: Some("en".to_owned()),
+            menu: MenuCatalog::new().with(
+                MenuEntry::new(
+                    item,
+                    DisplayName::new("Beef pho"),
+                    Money::new(CurrencyCode::VND, 65_000),
+                    EdgeSession::standard_tax_class(),
+                )
+                .with_name_translations([("vi".to_owned(), DisplayName::new("Pho bo"))].into()),
+            ),
+            ..session_with(PublishedDevices::new(vec![
+                device(2, DeviceKind::Printer, None),
+                till(7, None, Some(ReceiptLanguage::Vietnamese)),
+            ]))
+        };
+        let price = Money::new(CurrencyCode::VND, 65_000);
+        let lines = [ReceiptLine {
+            menu_item_id: item,
+            ..sold("Beef pho", 1_000, price, price)
+        }];
+        let counters = Arc::new(Counters::default());
+        let printers = with_tills(&counters).await;
+        for (device, name) in [(0xBA2, "Pho bo"), (0xD002, "Beef pho")] {
+            let till = printers.till_for(&session, paired(device)).await;
+            let outcome = printers
+                .print_receipt(
+                    &session,
+                    &till,
+                    store_id(),
+                    event_id(device),
+                    42,
+                    &lines,
+                    &totals_of(price),
+                    None,
+                )
+                .await;
+            assert_eq!(outcome, PrintOutcome::Printed);
+            let bytes = counters.bytes_at(COUNTER);
+            assert!(
+                bytes
+                    .windows(name.len())
+                    .any(|window| window == name.as_bytes()),
+                "{name}: the till's language decides the names, at the store's printer"
+            );
+            counters.sent.lock().expect("the counters").clear();
+        }
+        assert_eq!(
+            receipt_language(
+                &session,
+                &TillPrinting::of(&till(7, None, Some(ReceiptLanguage::Country)))
+            )
+            .as_deref(),
+            Some("en"),
+            "resolved as the store's own choice is: a country with no language on the node"
+        );
+    }
+
+    #[test]
+    fn a_tills_second_language_replaces_the_stores_and_none_is_a_choice() {
+        let (lines, totals) = a_bilingual_bill();
+        let session = EdgeSession {
+            display_language: Some("vi".to_owned()),
+            printing: PublishedPrinting {
+                receipt_second_language: Open::from_known(ReceiptSecondLanguage::English),
+                ..PublishedPrinting::default()
+            },
+            ..EdgeSession::bootstrap()
+        };
+        let second = |till: &PublishedDevice| {
+            SecondLanguage::for_receipt(
+                &session,
+                &TillPrinting::of(till),
+                &VIETNAMESE,
+                true,
+                42,
+                &lines,
+                &lines,
+                &totals,
+            )
+            .map(|second| second.labels)
+        };
+        let one_language = PublishedDevice {
+            receipt_second_language: Open::from_known(ReceiptSecondLanguage::None),
+            ..till(7, None, None)
+        };
+        assert_eq!(second(&till(8, None, None)), Some(&ENGLISH), "the store's");
+        assert_eq!(second(&one_language), None, "this till prints one language");
     }
 }

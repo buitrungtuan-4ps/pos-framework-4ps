@@ -553,6 +553,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     store's published printers that serve no station, such as one archived, is published without
     it and prints at the store's receipt printer: the publish is not refused, and the store keeps
     printing.
+  - The edge prints a receipt, its copy and a pre-bill asked for at a till at the printer its
+    terminal names, in its languages. A paired device is that till once a manager binds it to the
+    terminal with the print-agent binding, `POST /api/print/agent`
+    ([ADR-0112](docs/adr/0112-print-agents.md)); no agent has to be installed for this. A device
+    bound to no terminal, a terminal that names nothing, and a printer the node does not list as
+    one serving no station print at the store's receipt printer, as before. A till's printer that
+    does not answer is reported as `PRINTER_UNAVAILABLE`, and nothing prints at the counter
+    instead. Kitchen tickets, the shift report and the cash drawer are unchanged: a cash payment
+    at the bar till opens the store's drawer.
+  - The till has no screen for the binding yet: a manager signed in on the till binds it with
+    `POST /api/print/agent`.
   - The console's **Terminals** card shows each till's **Receipt printer**, **Receipt language**
     and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
     offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and
@@ -561,7 +572,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   **Upgrade note:** `PublishedDevice` gains `receipt_printer_id`, `receipt_language` and
   `receipt_second_language` (`pos-proto`, additive), left off the node while unset. Nothing changes
-  until a terminal sets a printer or a language and the store's devices are published, and an edge
+  until a terminal sets a printer or a language and the store's devices are published: until then
+  the edge reads no binding to print a guest's paper, and prints it byte for byte as before. An edge
   older than 0.14.1 ignores the fields, because `PublishedDevice` has never refused one it does not
   know. The cash drawer stays the store's until the multi-drawer shift work. Migration
   `0082_terminal_receipts.sql` adds `device_proposals.receipt_printer_id`, `receipt_language` and
