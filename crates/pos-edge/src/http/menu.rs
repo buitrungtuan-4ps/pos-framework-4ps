@@ -51,8 +51,8 @@
 //! table-service application. It landed every store on a floor plan and offered every store a
 //! kitchen board, including the ones that have neither.
 //!
-//! `tip_percents` is a published setting rather than a flag, and arrived under the same rule: the pay
-//! screen's tip row reads it in the change that added it
+//! `tip_percents` and `split_ways_max` are published settings rather than flags, and arrived under
+//! the same rule: the pay screen's tip row and its even split read them in the changes that added them
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
@@ -152,6 +152,10 @@ pub(crate) struct MenuResponse {
     /// older than the field ignores it, and a till reading an edge older than the field offers the
     /// three keys it always did.
     tip_percents: Vec<u8>,
+    /// The most guests the pay screen's even split offers, from the store's `tender_keys` node
+    /// (ADR-0160 decision 2): it offers every number from two up to this one. `6` until a store sets
+    /// its own, at most `12`. A till reading an edge older than the field offers two to six.
+    split_ways_max: u8,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -358,6 +362,7 @@ where
                 .as_ref()
                 .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
             tip_percents: session.tender_keys.tip_percents(),
+            split_ways_max: session.tender_keys.split_ways_max(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu

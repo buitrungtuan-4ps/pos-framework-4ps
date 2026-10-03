@@ -1871,14 +1871,15 @@ test("a store's own tip keys are offered in its order, and a store that hides th
   }
 });
 
-// A store that sets no tip keys, and an edge too old to send them, both offer the keys the till
-// always offered: five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the salad's 97,900₫.
+// A store that sets no tip keys or split ways, and an edge too old to send them, both offer what the
+// till always offered: tip keys of five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the
+// salad's 97,900₫, and an even split of two to six guests.
 //
 // The second half is the one only a browser can see. An edge from before the settings sends no
-// `tip_percents`, and the till must fall back to its own three rather than offer none. The price book
-// is read from the real edge and the field taken out on the way, which is what an older edge's
-// answer is.
-test("a store that sets no tip keys, and an edge too old to send them, offer today's three", async ({
+// `tip_percents` and no `split_ways_max`, and the till must fall back to its own rather than offer
+// none. The price book is read from the real edge and the fields taken out on the way, which is what
+// an older edge's answer is.
+test("a store that sets nothing, and an edge too old to send the settings, offer today's keys and split", async ({
   page,
 }) => {
   const edge = await startEdge();
@@ -1889,23 +1890,85 @@ test("a store that sets no tip keys, and an edge too old to send them, offer tod
     await addStarter(page);
     const table = new URL(page.url()).pathname.split("/")[2];
     const today = ["4,895₫", "9,790₫", "14,685₫"];
+    const twoToSix = ["2", "3", "4", "5", "6"];
 
     await page.locator('[data-step="takePayment"]').click();
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    await expect(page.locator('[data-step="splitEvenly"]')).toHaveText(twoToSix);
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
       const response = await route.fetch();
       const book = await response.json();
       delete book.tip_percents;
+      delete book.split_ways_max;
       older += 1;
       await route.fulfill({ response, json: book });
     });
     await page.goto(`${edge.baseURL}/table/${table}/pay`);
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    await expect(page.locator('[data-step="splitEvenly"]')).toHaveText(twoToSix);
     expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that splits a bill more ways keeps the split in one row (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=tender-keys` lets an even split go up to twelve guests, the most a store may
+// set: eleven keys, which a phone's width cannot hold. A second line of them would push the tenders
+// down on every bill, split or not, so the row scrolls sideways instead, as the kitchen board's
+// station tabs do: every key on one line, the last one reached by scrolling the row, and the first
+// tender still on a phone's screen with the page where it opened. Then the edge says eight, and the
+// row offers two to eight the same way.
+test("a store that splits up to twelve ways keeps one row that scrolls, and the tenders on screen", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+
+    const ways = page.locator('[data-step="splitEvenly"]');
+    const offersInOneRow = async (most) => {
+      await expect(ways).toHaveText(Array.from({ length: most - 1 }, (_, index) => `${index + 2}`));
+      const lines = await ways.evaluateAll(
+        (keys) => new Set(keys.map((key) => Math.round(key.getBoundingClientRect().top))).size,
+      );
+      expect(lines, "every guest count sits on one line").toBe(1);
+      await expect(page.locator('[data-step="setTender"]').first()).toBeInViewport();
+    };
+
+    await offersInOneRow(12);
+    const row = await ways
+      .first()
+      .evaluate((key) => ({ content: key.parentElement.scrollWidth, box: key.parentElement.clientWidth }));
+    expect(row.content, "the row scrolls sideways rather than wrapping").toBeGreaterThan(row.box);
+    await ways.last().click();
+    await expect(ways.last()).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-outcome="share-due"]')).toBeVisible();
+
+    let rewritten = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.split_ways_max = 8;
+      rewritten += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await offersInOneRow(8);
+    expect(rewritten, "the price book the till read said eight").toBeGreaterThan(0);
   } finally {
     await edge.stop();
   }

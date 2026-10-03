@@ -169,6 +169,17 @@ tender_keys.second_tip_percent	scope=SETTING_SCOPE_STORE_GROUP
 tender_keys.second_tip_percent	scope=SETTING_SCOPE_TENANT
 tender_keys.second_tip_percent	since=0.14.1
 tender_keys.second_tip_percent	unit=SETTING_UNIT_PERCENT
+tender_keys.split_ways_max
+tender_keys.split_ways_max	default=6
+tender_keys.split_ways_max	kind=SETTING_KIND_INT
+tender_keys.split_ways_max	max=12
+tender_keys.split_ways_max	min=2
+tender_keys.split_ways_max	scope=SETTING_SCOPE_BRAND
+tender_keys.split_ways_max	scope=SETTING_SCOPE_STORE
+tender_keys.split_ways_max	scope=SETTING_SCOPE_STORE_GROUP
+tender_keys.split_ways_max	scope=SETTING_SCOPE_TENANT
+tender_keys.split_ways_max	since=0.14.1
+tender_keys.split_ways_max	unit=SETTING_UNIT_COUNT
 tender_keys.third_tip_percent
 tender_keys.third_tip_percent	default=15
 tender_keys.third_tip_percent	kind=SETTING_KIND_INT

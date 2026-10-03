@@ -1920,6 +1920,8 @@
   "settings.item.tender_keys.first_tip_percent.title": "Phím tip thứ nhất",
   "settings.item.tender_keys.second_tip_percent.help": "Phím tip thứ hai trên màn hình thanh toán, là số nguyên phần trăm của hóa đơn. 0 là ẩn phím này; trùng phần trăm với phím thứ nhất cũng bị ẩn.",
   "settings.item.tender_keys.second_tip_percent.title": "Phím tip thứ hai",
+  "settings.item.tender_keys.split_ways_max.help": "Số người nhiều nhất mà màn hình thanh toán cho chia đều hóa đơn, từ 2 đến 12: màn hình đưa ra mọi số từ 2 đến số này. Trên 6, hàng số cuộn ngang trên màn hình hẹp.",
+  "settings.item.tender_keys.split_ways_max.title": "Số người tối đa khi chia đều",
   "settings.item.tender_keys.third_tip_percent.help": "Phím tip thứ ba trên màn hình thanh toán, là số nguyên phần trăm của hóa đơn. 0 là ẩn phím này; trùng phần trăm với một phím trước cũng bị ẩn. Khi không còn phím nào, màn hình thanh toán không hiện hàng tip.",
   "settings.item.tender_keys.third_tip_percent.title": "Phím tip thứ ba",
   "settings.kindUnsupported": "Bảng điều khiển này chưa sửa được loại cài đặt này.",

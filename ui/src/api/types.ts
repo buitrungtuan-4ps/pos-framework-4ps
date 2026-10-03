@@ -260,6 +260,9 @@ export interface MenuResponse {
   // no key is left, and the pay screen then shows no tip row. Absent from an edge older than the
   // setting, and the till then offers the three keys it always did.
   tip_percents?: number[];
+  // The most guests the pay screen's even split offers: every number from two up to it (ADR-0160
+  // decision 2). Absent from an edge older than the setting, and the till then offers two to six.
+  split_ways_max?: number;
 }
 
 // One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display

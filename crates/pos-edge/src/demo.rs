@@ -143,13 +143,13 @@ fn kitchen_stations() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("kitchen-stations"))
 }
 
-/// Whether this demo store sets its own tip keys — `POS_DEMO_PROFILE=tender-keys`.
+/// Whether this demo store sets its own tip keys and split ways — `POS_DEMO_PROFILE=tender-keys`.
 ///
 /// That profile publishes the `tender_keys` node [`demo_tender_keys`] builds
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-/// decision 2), so the browser gate can see the pay screen offer a store's own keys. Every other
-/// profile publishes no `tender_keys` node, which is what a store that predates the settings runs:
-/// five, ten and fifteen percent.
+/// decision 2), so the browser gate can see the pay screen offer a store's own keys, and an even
+/// split of up to twelve guests. Every other profile publishes no `tender_keys` node, which is what a
+/// store that predates the settings runs: five, ten and fifteen percent, and two to six guests.
 fn tender_keys() -> bool {
     std::env::var("POS_DEMO_PROFILE")
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("tender-keys"))
@@ -310,7 +310,7 @@ fn demo_menu() -> MenuBook {
 /// # The tender-keys profile
 ///
 /// `POS_DEMO_PROFILE=tender-keys` publishes the same store with a `tender_keys` node that sets its
-/// own tip keys. See [`tender_keys`].
+/// own tip keys and the most ways it splits a bill. See [`tender_keys`].
 ///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
@@ -424,12 +424,14 @@ fn demo_stations() -> serde_json::Value {
     })
 }
 
-/// A store's own tip keys, ten and twenty percent with the middle key hidden (ADR-0160 decision 2).
+/// A store's own tip keys, ten and twenty percent with the middle key hidden, and an even split of up
+/// to twelve guests, the most a store may set (ADR-0160 decision 2).
 fn demo_tender_keys() -> serde_json::Value {
     serde_json::json!({
         "first_tip_percent": 10,
         "second_tip_percent": 0,
         "third_tip_percent": 20,
+        "split_ways_max": 12,
     })
 }
 
@@ -679,5 +681,6 @@ mod tests {
         let document = serde_json::json!({ "tender_keys": demo_tender_keys() });
         let session = session_from_config(&EdgeSession::bootstrap(), &document);
         assert_eq!(session.tender_keys.tip_percents(), vec![10, 20]);
+        assert_eq!(session.tender_keys.split_ways_max(), 12);
     }
 }

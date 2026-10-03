@@ -456,6 +456,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **An even split offers as many guests as the store sets**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered an even split between two and six guests at every store.
+  - A new setting on the `tender_keys` node, `split_ways_max`: a count from 2 to 12, default 6, set
+    at the tenant, a brand, a store group or one store. A value out of range or unreadable reads as
+    6.
+  - The edge sends it with the price book as `split_ways_max`, and the pay screen offers every
+    count from two up to it. Up to six the row is the five columns it was; past six it is one row
+    that scrolls sideways, as the kitchen board's station tabs do, so the tenders below it stay on
+    a phone's screen.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's row, a till
+    reading an older edge offers two to six, an older till ignores the field, and an edge older
+    than this release ignores the `tender_keys` node. No route, event, migration, permission or
+    protocol change.
+
 - **A store sets its own tip keys**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). The pay screen offered 5, 10 and 15 percent at every store.

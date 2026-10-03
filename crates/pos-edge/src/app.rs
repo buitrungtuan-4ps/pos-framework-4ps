@@ -583,8 +583,8 @@ pub struct EdgeSession {
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
     /// The keys the pay screen offers, from the `tender_keys` node
     /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-    /// decision 2): its tip keys. The defaults, five, ten and fifteen percent, in the bootstrap and
-    /// wherever the node sets none.
+    /// decision 2): its tip keys and how many guests its even split offers. The defaults, five, ten
+    /// and fifteen percent and up to six guests, in the bootstrap and wherever the node sets none.
     pub tender_keys: PublishedTenderKeys,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).

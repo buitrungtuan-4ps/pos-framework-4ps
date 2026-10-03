@@ -1896,6 +1896,21 @@ async fn the_till_is_told_the_stores_tip_keys_in_order_without_the_ones_it_hid()
     );
 }
 
+/// The till is told how many guests the store's even split offers (ADR-0160 decision 2): six until
+/// the store sets its own, and then its own.
+#[tokio::test]
+async fn the_till_is_told_how_many_ways_the_store_splits_a_bill_evenly() {
+    let unset = read(&a_store().await, "/api/menu").await;
+    assert_eq!(unset["split_ways_max"], json!(6));
+
+    let store = a_store_where(|mut session| {
+        session.tender_keys.split_ways_max = Some(12);
+        session
+    })
+    .await;
+    assert_eq!(read(&store, "/api/menu").await["split_ways_max"], json!(12));
+}
+
 /// The till reads a channel's own price book by naming it (ADR-0066), so the counter's buttons
 /// show the takeaway price its lines are charged at. With no channel named the route serves the
 /// store's own, as it always has, and a channel the edge does not know is refused.
