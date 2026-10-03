@@ -23728,11 +23728,78 @@ async fn a_store_s_event_retention_is_published_within_its_range() {
     }
 }
 
-/// The cloud's bounds on `event_log_days` are the edge's. The two crates share no dependency, so
-/// this pins the numbers here and the edge's own test pins them there.
+/// The cloud's bounds on `event_log_days` are the edge's: both take them from the `retention`
+/// node's type in `pos-proto`, and this pins the numbers.
 #[test]
 fn the_cloud_bounds_event_retention_as_the_edge_does() {
     assert_eq!(http::EVENT_LOG_DAYS, 30..=3650);
+}
+
+/// The `retention` node the route publishes reads back through the type the edge reads it with,
+/// at every figure the route takes, its bounds included; and a figure past what the type holds is
+/// refused as one past the bounds is.
+#[tokio::test]
+async fn the_retention_node_reads_back_through_its_type() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees.clone(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let publish = |days: u32| {
+        put_with_cookie(
+            "/admin/config/retention",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "event_log_days": days,
+            }),
+            &cookie,
+        )
+    };
+
+    for days in [30_u16, 45, 3650] {
+        let published = router
+            .clone()
+            .oneshot(publish(u32::from(days)))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK, "{days}");
+        let tree = trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a tree");
+        let node = &tree.record.layers[2]["retention"];
+        let read = pos_proto::retention::PublishedRetention::read(node).expect("an object");
+        assert_eq!(read.event_log_days(), Some(days));
+        assert_eq!(&serde_json::to_value(read).expect("serialise"), node);
+    }
+    for refused in [70_000, u32::MAX] {
+        let response = router
+            .clone()
+            .oneshot(publish(refused))
+            .await
+            .expect("route the publish");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused} days");
+        let body = json_body(response).await;
+        assert_eq!(
+            body["error"]["message"],
+            "event_log_days must be between 30 and 3650"
+        );
+        assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    }
 }
 
 /// A range refusal about two fields names only the one actually out of range.

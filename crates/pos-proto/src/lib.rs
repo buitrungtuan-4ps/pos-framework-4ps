@@ -55,6 +55,7 @@ pub mod protocol;
 pub mod qr;
 pub mod quantity;
 pub mod reason_codes;
+pub mod retention;
 pub mod session;
 pub mod settings;
 pub mod shift;

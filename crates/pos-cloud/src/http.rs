@@ -10795,10 +10795,9 @@ where
     .await
 }
 
-/// The range a store's `event_log_days` may take (ADR-0145). The edge holds the same bounds as
-/// `pos_edge::EVENT_LOG_DAYS` and ignores a value outside them; the two crates share no dependency,
-/// so each side's test pins the numbers and a change to one fails until the other agrees.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u32> = 30..=3650;
+/// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
+/// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
@@ -10874,7 +10873,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    if !EVENT_LOG_DAYS.contains(&request.event_log_days) {
+    if !u16::try_from(request.event_log_days).is_ok_and(|days| EVENT_LOG_DAYS.contains(&days)) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
             "event_log_days must be between 30 and 3650",
@@ -35528,6 +35527,61 @@ mod locale_node_tests {
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
         );
+    }
+}
+
+#[cfg(test)]
+mod qr_node_tests {
+    //! The `qr` node the console's QR form publishes reads back through the type the edge and the
+    //! guest intake read it with (`pos_proto::qr::PublishedQr`), every field as it was written.
+    use super::{QrBusinessHoursRequest, QrGuardrailFields, qr_guardrail_node};
+    use pos_proto::qr::{PublishedQr, QrBusinessHours, TableOrder};
+
+    #[test]
+    fn the_node_the_qr_form_writes_reads_back_through_its_type() {
+        for (enabled, hours) in [
+            (
+                Some(false),
+                Some(QrBusinessHoursRequest {
+                    open_hour: 22,
+                    close_hour: 2,
+                    tz_offset_minutes: 420,
+                }),
+            ),
+            (None, None),
+        ] {
+            let fields = QrGuardrailFields {
+                enabled,
+                staff_confirmation_required: false,
+                per_table_limit: 5,
+                rate_window_secs: 300,
+                business_hours: hours.clone(),
+            };
+            let node = qr_guardrail_node(&fields).expect("a valid publish");
+            let read: PublishedQr =
+                serde_json::from_str(&node.to_string()).expect("the node parses");
+            assert_eq!(read.table_order(), TableOrder::Separate);
+            assert_eq!(read.enabled, enabled);
+            assert_eq!(read.staff_confirmation_required, Some(false));
+            assert_eq!(read.per_table_limit, Some(5));
+            assert_eq!(read.rate_window_secs, Some(300));
+            assert_eq!(
+                read.business_hours,
+                hours.map(|hours| QrBusinessHours {
+                    open_hour: hours.open_hour,
+                    close_hour: hours.close_hour,
+                    tz_offset_minutes: Some(hours.tz_offset_minutes),
+                })
+            );
+            assert_eq!(PublishedQr::guardrails(&node), Some(read.clone()));
+
+            // Nothing the form writes is lost or renamed on the way through the type.
+            let mut written_back = serde_json::to_value(&read).expect("serialise");
+            if let serde_json::Value::Object(fields) = &mut written_back {
+                fields.remove("table_order");
+            }
+            assert_eq!(written_back, node);
+        }
     }
 }
 
