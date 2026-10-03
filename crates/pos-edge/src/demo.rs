@@ -155,6 +155,22 @@ fn tender_keys() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("tender-keys"))
 }
 
+/// Which walk-in profile this demo store runs, if any: `POS_DEMO_PROFILE=walk-in-takeaway` or
+/// `walk-in-dine-in`, lower-cased.
+///
+/// Each prices takeaway apart from the dining room ([`demo_menu`]): the garden salad is 79,000₫ in
+/// the takeaway book and 89,000₫ in the dining room's, so the book a walk-in is sold from shows on
+/// the screen. `walk-in-takeaway` publishes no `counter` node, which is what a store that predates
+/// the setting runs, and its counter opens every walk-in for takeaway. `walk-in-dine-in` publishes
+/// the node [`demo_counter`] builds (ADR-0160 decision 2). Every other profile publishes neither, so
+/// its counter sells at the dining room's prices, as a store that prices only the dining room does.
+fn walk_in_profile() -> Option<String> {
+    std::env::var("POS_DEMO_PROFILE")
+        .ok()
+        .map(|profile| profile.to_ascii_lowercase())
+        .filter(|profile| profile.starts_with("walk-in-"))
+}
+
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
 ///
 /// That profile publishes no `permissions` node, which is what a store the console has not staffed
@@ -167,7 +183,22 @@ pub fn staffed() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("unstaffed"))
 }
 
-fn demo_menu() -> MenuBook {
+/// The demo store's price book: [`demo_catalog`] for the dining room and every other channel, and,
+/// where `takeaway_apart`, a takeaway book of its own whose garden salad is 79,000₫ rather than
+/// 89,000₫.
+fn demo_menu(takeaway_apart: bool) -> MenuBook {
+    let book = MenuBook::new()
+        .with(SalesChannel::DineIn, demo_catalog(89_000))
+        .with_fallback(demo_catalog(89_000));
+    if takeaway_apart {
+        book.with(SalesChannel::Takeaway, demo_catalog(79_000))
+    } else {
+        book
+    }
+}
+
+/// The demo store's catalogue, with the garden salad at `salad` đồng.
+fn demo_catalog(salad: i64) -> MenuCatalog {
     let tax_class = EdgeSession::standard_tax_class();
     let menu_item = |id: u128| MenuItemId::new(Ulid::from_u128(id));
     let group = |id: u128| ModifierGroupId::new(Ulid::from_u128(id));
@@ -193,8 +224,8 @@ fn demo_menu() -> MenuBook {
     // fire-by-course that ignored the filter pass. The iced tea is on **no** course deliberately: a
     // drink goes when it is poured, and a line on no course is what most lines in most stores are —
     // so the flow that fires the starters must leave it alone, and the gate can see that it does.
-    let catalog = MenuCatalog::new()
-        .with(item(102, "Garden salad", 89_000).with_course(course(900)))
+    MenuCatalog::new()
+        .with(item(102, "Garden salad", salad).with_course(course(900)))
         .with(item(103, "Iced tea", 39_500))
         .with(
             item(101, "Margherita", 149_000)
@@ -248,10 +279,7 @@ fn demo_menu() -> MenuBook {
             course(900),
             DisplayName::new("Starters"),
             10,
-        ));
-    MenuBook::new()
-        .with(SalesChannel::DineIn, catalog.clone())
-        .with_fallback(catalog)
+        ))
 }
 
 /// The demo store's configuration document: a `permissions` node with one employee, and a `menu`
@@ -312,6 +340,12 @@ fn demo_menu() -> MenuBook {
 /// `POS_DEMO_PROFILE=tender-keys` publishes the same store with a `tender_keys` node that sets its
 /// own tip keys and the most ways it splits a bill. See [`tender_keys`].
 ///
+/// # The walk-in profiles
+///
+/// `POS_DEMO_PROFILE=walk-in-takeaway` and `walk-in-dine-in` publish the same store with a takeaway
+/// book priced apart from the dining room's, and the second with a `counter` node whose walk-ins are
+/// eaten in. See [`walk_in_profile`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -330,7 +364,7 @@ pub fn config_document() -> Option<serde_json::Value> {
                 "pin_phc": crate::auth::hash_pin(DEMO_STAFF_PIN)?,
             }],
         },
-        "menu": serde_json::to_value(demo_menu()).ok()?,
+        "menu": serde_json::to_value(demo_menu(walk_in_profile().is_some())).ok()?,
         "floor": demo_floor(),
         // Table service, unless the profile says otherwise. On by default (§10), so the flag is
         // published either way rather than only when it is false — a document that named it only to
@@ -390,6 +424,13 @@ pub fn config_document() -> Option<serde_json::Value> {
     {
         object.insert("tender_keys".to_owned(), demo_tender_keys());
     }
+    // Published only on its own profile, so every other flow opens a walk-in for takeaway, as a store
+    // that predates the setting does.
+    if let Some(counter) = walk_in_profile().as_deref().and_then(demo_counter)
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("counter".to_owned(), counter);
+    }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
     if !staffed()
@@ -433,6 +474,16 @@ fn demo_tender_keys() -> serde_json::Value {
         "third_tip_percent": 20,
         "split_ways_max": 12,
     })
+}
+
+/// The `counter` node a walk-in `profile` publishes, or `None` for one that publishes none
+/// (ADR-0160 decision 2): `walk-in-dine-in` has every walk-in eaten in.
+fn demo_counter(profile: &str) -> Option<serde_json::Value> {
+    let channel = match profile {
+        "walk-in-dine-in" => "WALK_IN_CHANNEL_DINE_IN",
+        _ => return None,
+    };
+    Some(serde_json::json!({ "walk_in_channel": channel }))
 }
 
 /// The money settings of a store in a country that rounds its cash (ADR-0105).
@@ -522,11 +573,13 @@ fn demo_floor() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    use pos_proto::SalesChannel;
     use pos_proto::ids::MenuItemId;
     use pos_proto::ulid::Ulid;
 
     use super::{
-        DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_stations, demo_tender_keys,
+        DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_counter, demo_menu, demo_stations,
+        demo_tender_keys,
     };
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
@@ -682,5 +735,38 @@ mod tests {
         let session = session_from_config(&EdgeSession::bootstrap(), &document);
         assert_eq!(session.tender_keys.tip_percents(), vec![10, 20]);
         assert_eq!(session.tender_keys.split_ways_max(), 12);
+    }
+
+    /// The walk-in profiles sell the salad for 79,000₫ to take away and 89,000₫ in the dining room,
+    /// and `walk-in-dine-in` opens its walk-ins eaten in; the book every other profile publishes
+    /// prices takeaway as the dining room.
+    #[test]
+    fn the_walk_in_profiles_price_takeaway_apart_and_one_eats_its_walk_ins_in() {
+        let salad = |session: &EdgeSession, channel| {
+            session
+                .menu_for(channel)
+                .items()
+                .iter()
+                .find(|entry| entry.menu_item_id == menu_item(102))
+                .map(|entry| entry.unit_price.amount_minor)
+        };
+        let document = serde_json::json!({
+            "menu": serde_json::to_value(demo_menu(true)).expect("the book serialises"),
+            "counter": demo_counter("walk-in-dine-in"),
+        });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(salad(&session, SalesChannel::Takeaway), Some(79_000));
+        assert_eq!(salad(&session, SalesChannel::DineIn), Some(89_000));
+        assert_eq!(
+            session.counter.walk_in_channel().sales_channel(),
+            SalesChannel::DineIn
+        );
+        assert_eq!(demo_counter("walk-in-takeaway"), None);
+
+        let document = serde_json::json!({
+            "menu": serde_json::to_value(demo_menu(false)).expect("the book serialises"),
+        });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(salad(&session, SalesChannel::Takeaway), Some(89_000));
     }
 }

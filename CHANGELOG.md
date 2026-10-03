@@ -456,6 +456,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store chooses the channel its walk-ins take**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md)). The counter
+  opened every walk-in for takeaway, so a café whose guests eat at its counter charged them
+  takeaway's prices and tax.
+  - A new setting on a new `counter` node, `walk_in_channel`: `WALK_IN_CHANNEL_TAKEAWAY`, the
+    default, `WALK_IN_CHANNEL_DINE_IN` or `WALK_IN_CHANNEL_ASK`, set at the tenant, a brand, a store
+    group or one store. No new store is given a value, and a value the edge cannot read is takeaway.
+  - `POST /api/orders` without a channel opens the walk-in on the store's channel, and on takeaway
+    under `WALK_IN_CHANNEL_ASK`, where the till names the guest's choice. A channel the till names
+    still wins. A store that publishes the channels it accepts must accept the one a walk-in takes,
+    or the order is refused as before.
+  - The edge sends the setting with the price book as `walk_in_channel`, and the counter shows the
+    book of the channel its walk-ins open on. It reads the dining room's book for the counter only
+    where the store's walk-ins are eaten in.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's takeaway, a till
+    reading an older edge shows the takeaway book, and an older till ignores the field. The setting
+    lives on a node of its own, not on `channels`, so an edge older than this release ignores it and
+    opens every walk-in for takeaway, and the channels a store accepts are unchanged. The settings
+    snapshot and `docs/configuration.md` gain the setting; no route, event, migration, permission or
+    protocol change.
+
 - **An even split offers as many guests as the store sets**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). The pay screen offered an even split between two and six guests at every store.

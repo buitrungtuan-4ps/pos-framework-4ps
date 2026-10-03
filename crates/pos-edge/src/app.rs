@@ -44,6 +44,7 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, TxContext};
+use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
@@ -586,6 +587,11 @@ pub struct EdgeSession {
     /// decision 2): its tip keys and how many guests its even split offers. The defaults, five, ten
     /// and fifteen percent and up to six guests, in the bootstrap and wherever the node sets none.
     pub tender_keys: PublishedTenderKeys,
+    /// How the counter opens an order for a walk-in guest, from the `counter` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
+    /// before the setting, in the bootstrap and wherever the node sets none.
+    pub counter: PublishedCounter,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
@@ -759,6 +765,7 @@ impl EdgeSession {
             enabled_channels: None,
             accepted_tender: None,
             tender_keys: PublishedTenderKeys::default(),
+            counter: PublishedCounter::default(),
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,

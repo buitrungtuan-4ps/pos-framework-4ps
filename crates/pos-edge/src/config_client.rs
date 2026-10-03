@@ -46,6 +46,7 @@ use pos_ports::event_store::EventStore;
 use pos_ports::tx::TxContext;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::LayoutBook;
 use pos_proto::fees::PublishedFees;
@@ -556,6 +557,21 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 .and_then(|text| serde_json::from_str::<PublishedTenderKeys>(&text).ok())
             {
                 session.tender_keys = keys;
+            }
+        }
+    }
+    // The `counter` node (ADR-0160 decision 2): the channel the counter opens a walk-in on when the
+    // till names none. A node of settings like `tender_keys`, so absent puts takeaway back and a node
+    // that is not an object keeps the last; a value that is not a token is takeaway
+    // ([`PublishedCounter`]).
+    match document.get(PublishedCounter::NODE) {
+        None => session.counter = PublishedCounter::default(),
+        Some(value) => {
+            if let Some(counter) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedCounter>(&text).ok())
+            {
+                session.counter = counter;
             }
         }
     }
@@ -2216,6 +2232,59 @@ mod tests {
         ] {
             assert_eq!(ways(unread.clone()), 6, "{unread}");
         }
+    }
+
+    /// A walk-in opens on the channel the `counter` node sets: takeaway where it sets none, sets one
+    /// nobody can read, or is gone, and the channel it had where the node is not an object.
+    #[test]
+    fn a_walk_in_opens_on_the_channel_the_counter_node_sets_and_takeaway_otherwise() {
+        let opens_on = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "counter": node }))
+                .counter
+                .walk_in_channel()
+                .sales_channel()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.counter.walk_in_channel().sales_channel(),
+            SalesChannel::Takeaway
+        );
+        let eats_in = session_from_config(
+            &base,
+            &serde_json::json!({ "counter": { "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" } }),
+        );
+        assert_eq!(
+            eats_in.counter.walk_in_channel().sales_channel(),
+            SalesChannel::DineIn
+        );
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "walk_in_channel": "WALK_IN_CHANNEL_DRIVE_THROUGH" }),
+            serde_json::json!({ "walk_in_channel": 2 }),
+        ] {
+            assert_eq!(
+                opens_on(&eats_in, unread.clone()),
+                SalesChannel::Takeaway,
+                "{unread}"
+            );
+        }
+        assert_eq!(
+            session_from_config(&eats_in, &serde_json::json!({}))
+                .counter
+                .walk_in_channel()
+                .sales_channel(),
+            SalesChannel::Takeaway,
+            "a document with no counter node carries no setting"
+        );
+        assert_eq!(
+            opens_on(&eats_in, serde_json::json!("not a node")),
+            SalesChannel::DineIn,
+            "a node that cannot be read keeps the channel the store had"
+        );
+        assert_eq!(
+            eats_in.enabled_channels, None,
+            "the walk-in channel says nothing about the channels a store accepts"
+        );
     }
 
     #[test]

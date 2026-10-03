@@ -263,6 +263,11 @@ export interface MenuResponse {
   // The most guests the pay screen's even split offers: every number from two up to it (ADR-0160
   // decision 2). Absent from an edge older than the setting, and the till then offers two to six.
   split_ways_max?: number;
+  // The channel the counter opens a walk-in on (ADR-0160 decision 2): `WALK_IN_CHANNEL_TAKEAWAY`,
+  // `WALK_IN_CHANNEL_DINE_IN`, or `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. The
+  // counter shows the book of that channel. Absent from an edge older than the setting, which opens
+  // every walk-in for takeaway, and the counter then shows the takeaway book, as it always did.
+  walk_in_channel?: string;
 }
 
 // One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display

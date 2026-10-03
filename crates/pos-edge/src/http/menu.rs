@@ -54,6 +54,7 @@
 //! `tip_percents` and `split_ways_max` are published settings rather than flags, and arrived under
 //! the same rule: the pay screen's tip row and its even split read them in the changes that added them
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+//! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 //!
@@ -61,8 +62,9 @@
 //!
 //! `?channel=SALES_CHANNEL_TAKEAWAY` serves that channel's price book, with its tax rates, as the
 //! edge prices an order on it ([`EdgeSession::menu_for`](crate::app::EdgeSession::menu_for)). The
-//! counter reads the takeaway book this way, so the price on a button is the price the line is
-//! charged at. With no channel named the route serves the store's own channel, as it always has.
+//! counter reads the book of the channel its walk-ins open on this way, so the price on a button is
+//! the price the line is charged at. With no channel named the route serves the store's own channel,
+//! as it always has.
 
 use std::sync::Arc;
 
@@ -156,6 +158,15 @@ pub(crate) struct MenuResponse {
     /// (ADR-0160 decision 2): it offers every number from two up to this one. `6` until a store sets
     /// its own, at most `12`. A till reading an edge older than the field offers two to six.
     split_ways_max: u8,
+    /// The channel the counter opens a walk-in on, from the store's `counter` node (ADR-0160
+    /// decision 2): `WALK_IN_CHANNEL_TAKEAWAY` until a store sets its own, `WALK_IN_CHANNEL_DINE_IN`,
+    /// or `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. A value the edge cannot read is
+    /// sent as takeaway, the channel it opens such a store's walk-ins on.
+    ///
+    /// The counter shows a walk-in the book of the channel it opens on. A till older than the field
+    /// ignores it, and a till reading an edge older than the field shows the takeaway book, the
+    /// channel that edge opens every walk-in on.
+    walk_in_channel: &'static str,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -363,6 +374,7 @@ where
                 .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
             tip_percents: session.tender_keys.tip_percents(),
             split_ways_max: session.tender_keys.split_ways_max(),
+            walk_in_channel: session.counter.walk_in_channel().as_wire(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu
