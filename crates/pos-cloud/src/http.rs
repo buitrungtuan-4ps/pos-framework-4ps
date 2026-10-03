@@ -5478,7 +5478,7 @@ where
     }
 
     for key in prerequisites {
-        match read_store_node(config_trees, tenant_id, store_id, key).await {
+        match read_store_node_as_run(config_trees, tenant_id, store_id, key).await {
             Ok(serde_json::Value::Null) => {
                 return MemberOutcome::skipped(format!(
                     "this store has no `{key}` node yet; publish one to it before this"
@@ -10168,8 +10168,22 @@ fn accepted_tokens<E: WireEnum>() -> impl Iterator<Item = &'static str> {
         .map(WireEnum::as_wire)
 }
 
-/// Reads a store's current Store-layer node value by key, or `null` when it has none.
-async fn read_store_node<Cfg>(
+/// A store's `node_key` node as the store runs it, without the node's settings fields, or `null`
+/// when it runs none.
+///
+/// Read from the tree's four layers composed ([`ConfigTree::effective`]), not from the Store layer
+/// alone. A rollback writes the restored version onto the Tenant layer and empties the others
+/// ([`ConfigTree::restore_with`]), so a Store-layer read answered `null` for every node the store
+/// still ran: the console's forms went blank, and its checks refused a store that held the node. A
+/// node a tenant or brand layer sets is read with the store's own, because the store runs it.
+///
+/// The fields the settings register puts on the node (`pos_proto::settings::register`) are left
+/// out. They are written on the Tenant layer by the settings compile, and they are the settings
+/// store's to decide (ADR-0160 decision 3): a form that read one and saved the node back would pin
+/// it on the Store layer, where it would shadow every later settings change for the store. A node
+/// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
+/// holding only `tax_rounding` is not the locale a menu waits for.
+async fn read_store_node_as_run<Cfg>(
     config_trees: &Cfg,
     tenant_id: TenantId,
     store_id: StoreId,
@@ -10183,14 +10197,37 @@ where
         .await
         .map(strip_tree_version)
     {
-        Ok(Some(state)) => Ok(state
-            .layers
-            .get(2)
-            .and_then(|layer| layer.get(node_key))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)),
+        Ok(Some(state)) => {
+            let composed = ConfigTree::from_state(store_id, CapabilityValidator, state).effective();
+            Ok(node_as_run(node_key, composed.get(node_key)))
+        }
         Ok(None) => Ok(serde_json::Value::Null),
         Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+/// The answer [`read_store_node_as_run`] gives for `node`, the store's `node_key` as its layers
+/// compose it: the node without its settings fields, and `null` for a node the store does not run
+/// or one that holds nothing but settings. A node that is not an object is answered as it is.
+fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::Value {
+    match node {
+        None => serde_json::Value::Null,
+        Some(value) if only_settings(node_key, value) => serde_json::Value::Null,
+        Some(serde_json::Value::Object(fields)) => {
+            let register = pos_proto::settings::register();
+            serde_json::Value::Object(
+                fields
+                    .iter()
+                    .filter(|(field, _)| {
+                        !register.iter().any(|setting| {
+                            setting.node == node_key && setting.field == field.as_str()
+                        })
+                    })
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect(),
+            )
+        }
+        Some(other) => other.clone(),
     }
 }
 
@@ -10324,7 +10361,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "channels").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "channels").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10403,7 +10440,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "tender").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "tender").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10482,7 +10519,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "origins").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "origins").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10738,7 +10775,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "qr").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10836,7 +10873,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "retention").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "retention").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10929,7 +10966,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "vendors").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -34637,7 +34674,8 @@ where
     publishable_membership(groups, tenant_id, group_id).await
 }
 
-/// Reads each target store's published `locale.timezone`, for the wall-clock conversion.
+/// Reads each target store's `locale.timezone` as the store runs it ([`read_store_node_as_run`]),
+/// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
 /// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
@@ -34652,7 +34690,7 @@ where
 {
     let mut targets = Vec::with_capacity(stores.len());
     for store_id in stores {
-        let locale = read_store_node(config_trees, tenant_id, *store_id, "locale").await?;
+        let locale = read_store_node_as_run(config_trees, tenant_id, *store_id, "locale").await?;
         targets.push(TargetStore {
             store_id: *store_id,
             timezone: locale
@@ -34829,7 +34867,9 @@ where
                 continue;
             }
             for store_id in &stores {
-                match read_store_node(&state.config_trees, tenant_id, *store_id, needed).await {
+                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
+                    .await
+                {
                     Ok(serde_json::Value::Null) => {
                         return api_error(
                             ErrorStatus::Unprocessable,
@@ -35536,6 +35576,45 @@ mod locale_node_tests {
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
         );
+    }
+}
+
+#[cfg(test)]
+mod node_as_run_tests {
+    //! What a store's node reads as once its layers are composed ([`super::node_as_run`]).
+    use super::node_as_run;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_node_reads_without_its_settings_and_one_of_settings_alone_reads_as_none() {
+        let locale = json!({
+            "currency_code": "VND",
+            "timezone": "Asia/Ho_Chi_Minh",
+            "tax_rounding": "TAX_ROUNDING_DOWN",
+        });
+        assert_eq!(
+            node_as_run("locale", Some(&locale)),
+            json!({ "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" })
+        );
+        for (node, settings) in [
+            ("locale", json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })),
+            ("qr", json!({ "table_order": "TABLE_ORDER_JOIN" })),
+        ] {
+            assert_eq!(node_as_run(node, Some(&settings)), Value::Null, "{node}");
+        }
+        assert_eq!(node_as_run("locale", None), Value::Null);
+    }
+
+    #[test]
+    fn a_node_with_no_settings_fields_reads_as_it_is_composed() {
+        // `table_order` is a setting of the `qr` node, not of `channels`.
+        let channels = json!({ "enabled": ["SALES_CHANNEL_DINE_IN"], "table_order": 1 });
+        assert_eq!(node_as_run("channels", Some(&channels)), channels);
+        // An empty node is a node, as the publish check counts it, and a node that is not an
+        // object, `null` included, is answered as it is.
+        for node in [json!({}), Value::Null, json!([1, 2]), json!("text")] {
+            assert_eq!(node_as_run("qr", Some(&node)), node, "{node}");
+        }
     }
 }
 
