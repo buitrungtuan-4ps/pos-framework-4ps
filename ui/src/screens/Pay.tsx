@@ -90,6 +90,9 @@ function methodKey(method: string): MessageKey {
 // figures are less tidy and strictly more useful, so the snap stands down rather than degrading the
 // row it was meant to improve. Asked of the keys in the store's order, which need not be ascending
 // (ADR-0160), so it compares each key with every other rather than with the one before it.
+//
+// The counter's pay pad (`Takeaway.tsx`) keeps a copy of this guard and of `tipKeys` below, in step
+// by hand until a third screen needs them (`docs/design-principles.md`, rule of three).
 function distinctAndSpendable(keys: readonly number[]): boolean {
   return keys.every((amount, index) => amount > 0 && keys.indexOf(amount) === index);
 }

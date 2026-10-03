@@ -334,6 +334,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The counter's pay pad offers the store's own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). After the table pay screen took the store's `tender_keys`, the counter's pad still
+  offered 5, 10 and 15 percent at every store. It now offers the same keys in the same order, draws
+  no tip row where the store hides every key, and keeps the cash snap from making two keys the same
+  in whatever order the store sets them. No protocol, migration or permission change.
+
 - **A merge refuses bills on different orders**
   ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
   `POST /api/bills/{id}/merge` checked only that the bills shared a table, and two counter bills
