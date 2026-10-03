@@ -482,6 +482,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A tenant sets the fewest digits a staff PIN may have**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A PIN could always be four digits, and nothing let a tenant ask for more.
+  - A new setting, `session.pin_min_length`, from 4 to 8, default 4. It is written in Shared
+    settings for the whole tenant and nowhere narrower, because a person may work at every store;
+    the cloud refuses it at a brand, a store group or one store with `SCOPE_NOT_ALLOWED`. It is a
+    policy choice rather than a defence, which stays the PIN's Argon2id cost and the lockout.
+  - `PUT /admin/employees/{employee_id}/pin` holds a PIN set or reset to it. A PIN shorter than the
+    minimum, or longer than eight digits, is refused `400` with `pin: OUT_OF_RANGE` and a message
+    naming the range, such as "the PIN must be 6 to 8 digits". If the tenant's settings cannot be
+    read, the PIN is refused `503` rather than held to four.
+  - The People screen's PIN dialog names the tenant's range and checks it before sending. If it
+    cannot read the minimum it asks for 4 to 8, and the cloud still refuses a shorter PIN.
+  - Shared settings names no release for it and notes no store as too old, because the cloud applies
+    it whatever release a store runs. The register says so with `0.0.0` as the release it is
+    honoured from.
+  - **Upgrade note:** nothing changes until a tenant sets it: the default is today's four. Raising
+    the minimum does not touch a PIN already set, which keeps working; to move everyone to the new
+    length, reset their PINs. The value rides each store's `session` node, from which the edge reads
+    nothing, so there is no edge or till change. The settings snapshot and `docs/configuration.md`
+    gain the setting; no route, event, migration, permission or protocol change.
+
 - **The counter asks a walk-in guest whether they eat in or take away**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). A store that sets `counter.walk_in_channel` to `WALK_IN_CHANNEL_ASK` opened every

@@ -20,6 +20,13 @@
 // has not reported yet is exactly the new store an operator is setting up. The one tolerance is a
 // leading `v`: the release tags are `v1.2.0` and the edge strips the `v` before it reports, but an
 // older report or a hand-entered one may carry it, and it means the same release.
+//
+// # Every release
+//
+// A setting honoured from `0.0.0` is honoured by every release, so a store honours it whatever it
+// reports, unknown included. The register names `0.0.0` for a setting the cloud applies itself, such
+// as the fewest digits a PIN may have: the cloud measures a PIN when it is set, and the release a
+// store runs plays no part.
 
 /** A release, as its three numbers. */
 export interface Release {
@@ -80,11 +87,25 @@ export function compareReleases(
 /** Whether a store on `installed` honours a setting honoured from `since`. */
 export type ReleaseStanding = "honours" | "older" | "unknown";
 
-/** See {@link ReleaseStanding}: `unknown` when either release cannot be read, never `older`. */
+/** The release a setting every release honours is honoured from. See "Every release" above. */
+const EVERY_RELEASE = "0.0.0";
+
+/** Whether every release honours a setting honoured from `since`, so no store's release matters. */
+export function honouredByEveryRelease(since: string): boolean {
+  return compareReleases(since, EVERY_RELEASE) === 0;
+}
+
+/**
+ * See {@link ReleaseStanding}: `unknown` when either release cannot be read, never `older`, and
+ * `honours` whatever the store reports when every release honours the setting.
+ */
 export function releaseStanding(
   installed: string | null | undefined,
   since: string,
 ): ReleaseStanding {
+  if (honouredByEveryRelease(since)) {
+    return "honours";
+  }
   const order = compareReleases(installed, since);
   if (order === null) {
     return "unknown";

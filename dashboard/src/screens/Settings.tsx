@@ -23,7 +23,9 @@
 // A store on a release older than a setting's `since` ignores the value, so for one store the
 // setting is hidden and one line says why. For a wider scope it stays, with a count of the stores it
 // reaches that are too old to honour it. A store whose release is unknown is never treated as older
-// (`lib/semver.ts`): it is shown, with a note.
+// (`lib/semver.ts`): it is shown, with a note. A setting honoured from `0.0.0`, which the register
+// names for one the cloud applies itself, is honoured by every store whatever it runs, so it carries
+// no note and names no release.
 //
 // # A new store's values (decision 1)
 //
@@ -59,7 +61,7 @@ import { formatCount, formatInstant } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
-import { releaseStanding } from "../lib/semver";
+import { honouredByEveryRelease, releaseStanding } from "../lib/semver";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
   Banner,
@@ -753,7 +755,9 @@ export function Settings() {
         setting().preset === undefined
           ? null
           : t("settings.presetIs", { value: valueLabel(setting(), setting().preset) }),
-        t("settings.sinceIs", { since: setting().since }),
+        honouredByEveryRelease(setting().since)
+          ? null
+          : t("settings.sinceIs", { since: setting().since }),
       ]
         .filter((fact): fact is string => fact !== null)
         .join(" · ");
