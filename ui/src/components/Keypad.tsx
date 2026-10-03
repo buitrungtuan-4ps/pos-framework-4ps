@@ -30,6 +30,8 @@ export function Keypad(props: {
   onChange: (next: string) => void;
   /** The step gate's handle, when a declared flow presses this. */
   "data-step"?: string;
+  /** Names the keypad for screen readers; a grid of single characters says nothing on its own. */
+  label?: string;
 }) {
   const press = (digit: string) => {
     // A leading zero is dropped rather than accumulated: `0` then `5` is five, not "05", which
@@ -39,12 +41,27 @@ export function Keypad(props: {
   // 56px keys and 8px gaps, the floor `docs/ui-ux.md` §2 sets for a cash keypad — above the 48px
   // touch minimum because this one is pressed repeatedly and under time pressure.
   const key =
-    "min-h-[56px] rounded-token border border-line bg-surface-raised text-xl font-semibold text-ink active:bg-surface";
+    "min-h-[56px] rounded-token border border-line bg-surface-raised text-xl font-semibold text-ink active:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+
+  // Pressing a key must not take the caret out of the field it is filling. `pointerdown` is where a
+  // button steals focus, so that is where it is refused — `click` still fires and still types.
+  const hold = (event: PointerEvent) => event.preventDefault();
+
   return (
-    <div class="mt-2 grid grid-cols-3 gap-2" data-step={props["data-step"]}>
+    <div
+      class="mt-2 grid grid-cols-3 gap-2"
+      role="group"
+      aria-label={props.label ?? t("keypad.aria_label")}
+      data-step={props["data-step"]}
+    >
       <For each={DIGITS}>
         {(digit) => (
-          <button type="button" class={key} onClick={() => press(digit)}>
+          <button
+            type="button"
+            class={key}
+            onPointerDown={hold}
+            onClick={() => press(digit)}
+          >
             {digit}
           </button>
         )}
@@ -52,17 +69,24 @@ export function Keypad(props: {
       <button
         type="button"
         class={key}
+        onPointerDown={hold}
         aria-label={t("keypad.clear")}
         onClick={() => props.onChange("")}
       >
         {t("keypad.clear_short")}
       </button>
-      <button type="button" class={key} onClick={() => press("0")}>
+      <button
+        type="button"
+        class={key}
+        onPointerDown={hold}
+        onClick={() => press("0")}
+      >
         0
       </button>
       <button
         type="button"
         class={key}
+        onPointerDown={hold}
         aria-label={t("keypad.backspace")}
         onClick={() => props.onChange(props.value.slice(0, -1))}
       >
