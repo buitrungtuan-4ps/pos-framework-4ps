@@ -9235,7 +9235,13 @@ where
         .into_response()
 }
 
-/// Composes the `revoked_devices` node from the one the tree currently holds plus `listed`.
+/// Composes the `revoked_devices` node from the one the store runs plus `listed`.
+///
+/// The list is read from the tree's layers composed ([`ConfigTreeState::effective`]) and written,
+/// with `listed` added, onto the Store layer as before. Read from the Store layer alone it was wrong
+/// after a rollback, which restores a version onto the Tenant layer and empties the Store layer: the
+/// append wrote a list of `listed` alone, and since a list replaces when layers merge, the store
+/// stopped refusing every device it had retired.
 ///
 /// Called on every attempt of the conditional-write retry, so the merge always sees the tree as just
 /// read. Three properties, all load-bearing:
@@ -9261,8 +9267,9 @@ fn append_revoked_device(
     listed: &str,
 ) -> Result<Vec<(String, serde_json::Value)>, Response> {
     let mut ids: Vec<String> = before
-        .map(|state| state.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("revoked_devices"))
+        .map(ConfigTreeState::effective)
+        .as_ref()
+        .and_then(|document| document.get("revoked_devices"))
         .and_then(|node| node.get("device_ids"))
         .and_then(serde_json::Value::as_array)
         .map(|entries| {
@@ -13607,11 +13614,13 @@ where
 /// The country a store's published `locale` node names, or `None` when it has never published one
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
-/// Reads the Store layer, which is where `admin_publish_locale` writes. A value that is not two
-/// ASCII letters answers `None` rather than an error: a node written by a fork, or by a build older
-/// than the required-`country_code` change, is a store this console still has to be able to draw.
+/// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
+/// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant
+/// layer. A value that is not two ASCII letters answers `None` rather than an error: a node written
+/// by a fork, or by a build older than the required-`country_code` change, is a store this console
+/// still has to be able to draw.
 fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
-    tree.layer(ConfigLevel::Store)
+    tree.effective()
         .get("locale")?
         .get("country_code")?
         .as_str()
@@ -22715,10 +22724,14 @@ where
     .await
 }
 
-/// Flips the kill switch on a store's published rollout: loads its authored `fleet_update`, sets
-/// `halted`, and re-publishes — preserving the rest of the rollout, so an operator halts a bad rollout
-/// (or resumes a paused one) without re-typing the target, ring, and key. `400` if the store has no
-/// rollout to halt.
+/// Flips the kill switch on a store's published rollout: loads the `fleet_update` the store runs, sets
+/// `halted`, and re-publishes it on the Store layer — preserving the rest of the rollout, so an
+/// operator halts a bad rollout (or resumes a paused one) without re-typing the target, ring, and
+/// key. `400` if the store has no rollout to halt.
+///
+/// The rollout is read from the tree's layers composed ([`ConfigTreeState::effective`]): a rollback
+/// restores a version onto the Tenant layer and empties the Store layer, and a halt that read the
+/// Store layer alone refused a store running the restored rollout.
 async fn admin_halt_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -22755,9 +22768,8 @@ where
     let state_before = &loaded.state;
     let Some(mut node) = state_before
         .as_ref()
-        .map(|s| s.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("fleet_update"))
-        .cloned()
+        .map(ConfigTreeState::effective)
+        .and_then(|document| document.get("fleet_update").cloned())
     else {
         return api_error(
             ErrorStatus::InvalidArgument,
@@ -22859,8 +22871,9 @@ where
         .into_response()
 }
 
-/// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
-/// is published. Behind [`ConsolePermission::Read`].
+/// Reads a store's currently-published rollout — the `fleet_update` node the store runs, its layers
+/// composed so a rollout a rollback restored reads as it runs — or `null` if none is published.
+/// Behind [`ConsolePermission::Read`].
 async fn admin_get_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -22898,9 +22911,8 @@ where
         Ok(state_before) => {
             let rollout = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Store))
-                .and_then(|layer| layer.get("fleet_update"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("fleet_update").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(rollout)).into_response()
         }
@@ -22970,8 +22982,9 @@ where
     .await
 }
 
-/// Reads a store's published placement — the authored `device_ota` node — or `null` if the store has
-/// never been placed. Behind [`ConsolePermission::Read`].
+/// Reads a store's published placement — the `device_ota` node the store runs, its layers composed
+/// so a placement a rollback restored reads as it runs — or `null` if the store has never been
+/// placed. Behind [`ConsolePermission::Read`].
 async fn admin_get_placement<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -23009,9 +23022,8 @@ where
         Ok(state_before) => {
             let placement = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Device))
-                .and_then(|layer| layer.get("device_ota"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("device_ota").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(placement)).into_response()
         }
@@ -35575,6 +35587,79 @@ mod locale_node_tests {
             node.get("currency_exponent").and_then(Value::as_u64),
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod revoked_devices_tests {
+    //! The deny-list a revocation writes ([`super::append_revoked_device`]): the list the store runs,
+    //! read from the tree's layers composed, with the new id appended.
+    use super::append_revoked_device;
+    use crate::config_tree::ConfigTreeState;
+    use pos_core::device_revocation::MAX_REVOKED_DEVICES;
+    use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    /// A tree whose Tenant layer holds `tenant` and whose Store layer holds `store`.
+    fn tree(tenant: Value, store: Value) -> ConfigTreeState {
+        ConfigTreeState {
+            layers: [tenant, json!({}), store, json!({})],
+            history: Vec::new(),
+            k: 8,
+        }
+    }
+
+    fn id(n: u128) -> String {
+        Ulid::from_u128(n).to_string()
+    }
+
+    fn deny_list(ids: &[String]) -> Value {
+        json!({ "revoked_devices": { "device_ids": ids } })
+    }
+
+    /// The ids the append writes onto the Store layer.
+    fn written(before: &ConfigTreeState, listed: &str) -> Vec<String> {
+        let (key, node) = append_revoked_device(Some(before), listed)
+            .expect("appended")
+            .into_iter()
+            .next()
+            .expect("one node");
+        assert_eq!(key, "revoked_devices");
+        serde_json::from_value(node["device_ids"].clone()).expect("a list of ids")
+    }
+
+    #[test]
+    fn a_restored_list_is_kept_and_the_new_id_appended_to_it() {
+        // A rollback leaves the restored list on the Tenant layer and the Store layer empty.
+        let restored = tree(deny_list(&[id(1), id(2)]), json!({}));
+        assert_eq!(written(&restored, &id(3)), vec![id(1), id(2), id(3)]);
+        assert_eq!(
+            written(&restored, &id(1)),
+            vec![id(1), id(2)],
+            "an id already listed adds nothing"
+        );
+    }
+
+    #[test]
+    fn the_list_appended_to_is_the_one_the_store_runs() {
+        // A list on the Store layer replaces one below it when the layers merge, so it is the list
+        // the store runs, and the one a revocation adds to.
+        let both = tree(deny_list(&[id(1)]), deny_list(&[id(2)]));
+        assert_eq!(written(&both, &id(3)), vec![id(2), id(3)]);
+    }
+
+    #[test]
+    fn the_cap_counts_the_list_the_store_runs() {
+        let full: Vec<String> = (1_u128..).take(MAX_REVOKED_DEVICES).map(id).collect();
+        let restored = tree(deny_list(&full), json!({}));
+        let refused =
+            append_revoked_device(Some(&restored), &id(0xFFFF)).expect_err("past the cap");
+        assert_eq!(refused.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            written(&restored, &id(1)).len(),
+            MAX_REVOKED_DEVICES,
+            "an id already listed re-publishes the full list"
         );
     }
 }
