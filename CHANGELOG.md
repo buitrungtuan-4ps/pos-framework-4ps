@@ -127,6 +127,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **ContextPicker & AccountMenu keyboard focus accessibility.**
+  Added `focus-visible` outline rings and hover transitions to top-bar header interactive controls (`ContextPicker` and `AccountMenu` triggers, language select, account navigation links, and logout button) in `dashboard/src/components/ContextPicker.tsx` and `dashboard/src/components/AccountMenu.tsx`.
+
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
   consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
