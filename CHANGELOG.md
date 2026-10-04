@@ -385,6 +385,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize active areas and subcategories in console.**
   `activeAreas` in `dashboard/src/screens/Floor.tsx` and active subcategory lookups in `dashboard/src/screens/Layout.tsx` are now memoized with `createMemo` to avoid redundant array filtering and $O(N)$ scans on re-renders.
 
+- **Memoize option lists in the SolidJS Inventory screen** (`dashboard/src/screens/Inventory.tsx`).
+  Option lists (`unitOptions`, `itemOptions`, `ingredientOptions`) are now memoized with `createMemo` to avoid redundant array allocations and `t()` translation calls on every input stroke inside the recipe BOM lines. **Upgrade note:** none.
+
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
 

@@ -153,6 +153,27 @@ export function Inventory() {
     return map;
   });
 
+  // Optimization: Memoize unit, item, and ingredient options with createMemo to avoid redundant O(I) / O(N) array allocations and t() lookups on every input stroke in the recipe/ingredient drawers.
+  // Placed below `items()` and `ingredients()` accessor definitions to prevent TDZ runtime failures.
+  const unitOptions = createMemo(() =>
+    UNITS.map((unit) => ({ value: unit, label: t(UNIT_LABEL[unit]) })),
+  );
+
+  const itemOptions = createMemo(() =>
+    items().map((item) => ({
+      value: item.menu_item_id,
+      label: item.name,
+      keywords: Object.values(item.name_translations),
+    })),
+  );
+
+  const ingredientOptions = createMemo(() =>
+    (ingredients() ?? []).map((ing) => ({
+      value: ing.id,
+      label: `${ing.name} (${t(UNIT_LABEL[ing.unit])})`,
+    })),
+  );
+
   /** The name of a menu item by id, falling back to the id when the catalog has no such item. */
   const itemName = (id: string): string => itemMap().get(id) ?? id;
 
@@ -635,7 +656,7 @@ export function Inventory() {
             <SelectField
               label={t("inventory.unit")}
               value={ingUnit()}
-              options={UNITS.map((unit) => ({ value: unit, label: t(UNIT_LABEL[unit]) }))}
+              options={unitOptions()}
               onChange={(value) => setIngUnit(value as UnitOfMeasure)}
             />
           </div>
@@ -662,11 +683,7 @@ export function Inventory() {
             <ComboboxField
               label={t("inventory.item")}
               value={recItem()}
-              options={items().map((item) => ({
-                value: item.menu_item_id,
-                label: item.name,
-                keywords: Object.values(item.name_translations),
-              }))}
+              options={itemOptions()}
               onChange={setRecItem}
               placeholder={t("catalog.chooseItem")}
               searchLabel={t("catalog.searchItems")}
@@ -702,10 +719,7 @@ export function Inventory() {
                             searchLabel={t("inventory.searchIngredients")}
                             emptyLabel={t("picker.noMatch")}
                             value={line.ingredient}
-                            options={(ingredients() ?? []).map((ing) => ({
-                              value: ing.id,
-                              label: `${ing.name} (${t(UNIT_LABEL[ing.unit])})`,
-                            }))}
+                            options={ingredientOptions()}
                             onChange={(value) =>
                               setRecLines((prev) =>
                                 prev.map((l, i) => (i === index() ? { ...l, ingredient: value } : l)),
