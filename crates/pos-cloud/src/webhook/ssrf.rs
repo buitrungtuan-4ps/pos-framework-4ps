@@ -448,8 +448,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x0100 && second == 0 && third == 0 && segments[3] == 0 {
         // 100::/64 Discard-Only Address Block (RFC 6666).
         Some(ForbiddenReason::Reserved)
-    } else if first == 0x2001 && second == 0x0001 {
-        // 2001:1::/32 PCP and TURN anycast (RFC 7723, RFC 8155), within 2001::/23 (RFC 2928).
+    } else if first == 0x2001 && (second == 0x0001 || second == 0x0003) {
+        // 2001:1::/32 PCP and TURN anycast (RFC 7723, RFC 8155) and 2001:3::/32 AMT Anycast (RFC 7450), within 2001::/23 (RFC 2928).
         Some(ForbiddenReason::Reserved)
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
@@ -933,6 +933,14 @@ mod tests {
             classify_ip(ip("100::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("100::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        // AMT Anycast IPv6 range (2001:3::/32, RFC 7450).
+        assert_eq!(
+            classify_ip(ip("2001:3::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:3::1"),
                 ForbiddenReason::Reserved
             ))
         );
