@@ -230,7 +230,7 @@ export function ContextPicker() {
         aria-haspopup="dialog"
         aria-expanded={open()}
         onClick={toggle}
-        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <span class="text-ink-muted">{t("context.workingIn")}</span>
         <span class="font-medium">{tenantName() || t("context.chooseTenant")}</span>

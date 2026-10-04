@@ -104,6 +104,12 @@ describe("the context picker on a cell that already has tenants", () => {
     listTenants.mockResolvedValue([TENANT, OTHER]);
   });
 
+  it("carries focus-visible styling on the trigger button for keyboard accessibility", () => {
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    expect(trigger.className).toContain("focus-visible:outline-2");
+  });
+
   it("puts the cursor in the search box the first time it is opened", async () => {
     // The first open is the whole test. On it the list is still in flight, so the box is not in the
     // DOM yet and the skeleton is — focus logic that waits only on the panel being open reaches for

@@ -54,6 +54,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("the account menu", () => {
+  it("carries focus-visible styling on the trigger button for keyboard accessibility", () => {
+    mount();
+    const btn = screen.getByRole("button", { name: "Your account" });
+    expect(btn.className).toContain("focus-visible:outline-2");
+  });
+
   it("names the signed-in admin, their address and their role", async () => {
     setActingAdmin({ ...FIXTURE });
     mount();
