@@ -284,14 +284,20 @@ export function DataTable<T>(props: {
       return base;
     }
     const direction = ascending() ? 1 : -1;
-    return [...base].sort((a, b) => {
-      const av = value(a);
-      const bv = value(b);
+    // Each row's value is read once rather than on every comparison, and text compares the way it
+    // is read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that
+    // tie keep the order they came in, because the sort is stable.
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    const decorated = base.map((row) => ({ row, val: value(row) }));
+    decorated.sort((a, b) => {
+      const av = a.val;
+      const bv = b.val;
       if (typeof av === "number" && typeof bv === "number") {
         return (av - bv) * direction;
       }
-      return String(av).localeCompare(String(bv)) * direction;
+      return collator.compare(String(av), String(bv)) * direction;
     });
+    return decorated.map((entry) => entry.row);
   });
 
   // Server mode needs both halves: a total to count with and a way to ask for the next page. One

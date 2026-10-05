@@ -10,7 +10,7 @@
 // supported at the wire level; the console offers item routing (the item is picked from the catalog),
 // so no course ULID is ever typed. Publishing here compiles the same floor plan the Floor screen does.
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { RoutingRule, Station } from "../api/types";
@@ -92,6 +92,23 @@ export function Stations() {
   const stations = () => plan.value()?.stations ?? null;
   const rules = () => plan.value()?.rules ?? [];
   const items = () => plan.value()?.items ?? [];
+
+  // Optimization: Pre-index station and item names into Maps using createMemo for O(1) lookups
+  // instead of O(N) / O(M) linear scans per table row cell rendering.
+  // Declarations placed below `stations` and `items` accessors to prevent SolidJS TDZ errors.
+  const stationMap = createMemo(
+    () => new Map((stations() ?? []).map((station) => [station.station_id, station.name])),
+  );
+  const itemMap = createMemo(
+    () => new Map(items().map((item) => [item.menu_item_id, item.name])),
+  );
+  const activeStations = createMemo(
+    () => stations()?.filter((station) => station.status === "active") ?? [],
+  );
+
+  const stationName_ = (id: string) => stationMap().get(id) ?? id;
+  const itemName = (id: string) => itemMap().get(id) ?? id;
+
   // The form's own refusals — a blank name, a sort that is not a number. Kept apart from the read's
   // refusal (`failureOf`) because they are different failures with different fixes: one is the
   // operator's to correct, the other is not theirs at all.
@@ -141,12 +158,6 @@ export function Stations() {
     setError(message);
     toast.error(message);
   };
-
-  const stationName_ = (id: string) =>
-    stations()?.find((station) => station.station_id === id)?.name ?? id;
-  const itemName = (id: string) =>
-    items().find((item) => item.menu_item_id === id)?.name ?? id;
-  const activeStations = () => stations()?.filter((station) => station.status === "active") ?? [];
 
   const openNewStation = () => {
     setStationDraftId("");
