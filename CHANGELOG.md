@@ -125,6 +125,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **SSRF protection in webhook URL classification now checks the PCP and TURN anycast IPv6 range (`2001:1::/32`, RFC 7723 / RFC 8155).**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `2001:1::/32` as `ForbiddenReason::Reserved`. Its anycast addresses reach a nearby network service, never a webhook receiver. **Upgrade note:** none.
 
+- **SSRF protection in webhook URL classification now checks the AMT (`2001:3::/32`, RFC 7450) and AS112 (`2001:4:112::/48`, RFC 7535) IPv6 ranges.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies both as `ForbiddenReason::Reserved`. They are globally reachable, but their anycast addresses reach multicast-tunnel relays and the AS112 reverse-DNS sinks, never a webhook receiver. **Upgrade note:** none.
+
 ### Changed
 
 - **The till's number pad names itself to a screen reader and keeps focus where it was.** The keypad
