@@ -397,6 +397,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize coveredLines and isPart on the Pay screen.**
   `coveredLines` and `isPart` in `ui/src/screens/Pay.tsx` are now memoized with `createMemo` to avoid redundant $O(N \log N)$ array filtering and string sorting passes on re-renders.
 
+- **Memoize station and item lookups in Stations screen.**
+  `stationMap`, `itemMap`, and `activeStations` in `dashboard/src/screens/Stations.tsx` are now memoized with `createMemo` to avoid redundant $O(N)$ linear scans during table cell renders.
+
 ### Fixed
 
 - **Assigning a person where they already hold an assignment answers `409`, not `503`.** A person

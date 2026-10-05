@@ -10,7 +10,7 @@
 // supported at the wire level; the console offers item routing (the item is picked from the catalog),
 // so no course ULID is ever typed. Publishing here compiles the same floor plan the Floor screen does.
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { RoutingRule, Station } from "../api/types";
@@ -142,11 +142,20 @@ export function Stations() {
     toast.error(message);
   };
 
-  const stationName_ = (id: string) =>
-    stations()?.find((station) => station.station_id === id)?.name ?? id;
-  const itemName = (id: string) =>
-    items().find((item) => item.menu_item_id === id)?.name ?? id;
-  const activeStations = () => stations()?.filter((station) => station.status === "active") ?? [];
+  // Optimization: Index stations and items into Maps using createMemo for O(1) lookups instead of O(S) / O(I) linear scans per table cell.
+  // Memoize activeStations array to prevent redundant O(S) filtering on re-renders.
+  const stationMap = createMemo(
+    () => new Map((stations() ?? []).map((station) => [station.station_id, station.name])),
+  );
+  const itemMap = createMemo(
+    () => new Map(items().map((item) => [item.menu_item_id, item.name])),
+  );
+  const activeStations = createMemo(
+    () => stations()?.filter((station) => station.status === "active") ?? [],
+  );
+
+  const stationName_ = (id: string) => stationMap().get(id) ?? id;
+  const itemName = (id: string) => itemMap().get(id) ?? id;
 
   const openNewStation = () => {
     setStationDraftId("");
