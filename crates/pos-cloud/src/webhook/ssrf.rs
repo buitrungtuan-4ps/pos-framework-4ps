@@ -454,6 +454,11 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
         Some(ForbiddenReason::Reserved)
+    } else if (first == 0x2001 && second == 0x0003)
+        || (first == 0x2001 && second == 0x0004 && third == 0x0112)
+    {
+        // 2001:3::/32 AMT (RFC 7450) and 2001:4:112::/48 AS112 (RFC 7535).
+        Some(ForbiddenReason::Reserved)
     } else {
         None
     }
@@ -963,6 +968,21 @@ mod tests {
             classify_ip(ip("2001:20::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("2001:20::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        // AMT (2001:3::/32, RFC 7450) and AS112 (2001:4:112::/48, RFC 7535) IPv6 ranges.
+        assert_eq!(
+            classify_ip(ip("2001:3::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:3::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:4:112::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:4:112::1"),
                 ForbiddenReason::Reserved
             ))
         );
