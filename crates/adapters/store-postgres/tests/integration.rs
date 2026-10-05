@@ -5033,6 +5033,7 @@ mod audit_log {
 mod employees_store {
     use core::fmt::Write as _;
 
+    use pos_proto::error::ErrorStatus;
     use store_postgres::EmployeeOrder;
 
     use super::{TENANT_A, block_on, prepared};
@@ -5069,18 +5070,34 @@ mod employees_store {
                 .await
                 .expect("a duplicate code is fine under a different tenant");
 
-            // The unique index refuses a second "A01" within tenant-a.
+            // The unique index refuses a second "A01" within tenant-a, as a conflict rather than an
+            // outage, and the refusal names the staff code without quoting it: a code identifies a
+            // person.
+            let refused = people
+                .insert("01EMP0000000000000000000A3", "tenant-a", "A01", "Clone")
+                .await
+                .expect_err("staff codes are unique within a tenant");
+            assert_eq!(refused.status(), ErrorStatus::AlreadyExists, "{refused}");
             assert!(
-                people
-                    .insert("01EMP0000000000000000000A3", "tenant-a", "A01", "Clone")
-                    .await
-                    .is_err(),
-                "staff codes are unique within a tenant"
+                refused.message().contains("staff code") && !refused.message().contains("A01"),
+                "{refused}"
+            );
+            assert!(
+                core::error::Error::source(&refused).is_none(),
+                "the database's own error, which quotes the key, does not travel with it"
             );
 
-            // Tenant-scoped, newest-first, and no PIN yet.
+            // Tenant-scoped, newest-first, and no PIN yet; the refused one wrote nothing.
             let scoped = people.fetch("tenant-a").await.expect("fetch tenant-a");
             assert_eq!(scoped.len(), 2, "only tenant-a's own employees");
+            assert_eq!(
+                scoped
+                    .iter()
+                    .find(|row| row.code == "A01")
+                    .map(|row| row.name.as_str()),
+                Some("Alice"),
+                "the code still belongs to the first"
+            );
             assert_eq!(scoped.first().expect("a row").name, "Anh", "newest first");
             assert!(scoped.iter().all(|row| !row.has_pin), "no PIN set yet");
 

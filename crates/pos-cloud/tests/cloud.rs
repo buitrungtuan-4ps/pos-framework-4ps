@@ -9,6 +9,7 @@
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
 mod assignment_contract;
+mod employee_contract;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -17767,9 +17768,7 @@ impl EmployeeStore for FakeEmployees {
             .iter()
             .any(|row| row.tenant_id == employee.tenant_id && row.code == employee.code)
         {
-            return Err(EmployeeStoreError::new(
-                "duplicate staff code within the tenant",
-            ));
+            return Err(EmployeeStoreError::CodeInUse);
         }
         rows.push(FakeEmployeeRow {
             employee_id: employee.employee_id,
@@ -19206,6 +19205,14 @@ async fn the_in_memory_assignment_store_holds_the_contract() {
     assignment_contract::holds(&assignments, &groups, 0).await;
 }
 
+/// The in-memory employee store holds the seam's rule for staff codes, the one `PostgresPeople` is
+/// held to in `tests/employee_store_postgres.rs`: unique within a tenant, free across tenants, and a
+/// second one refused as a duplicate that writes nothing.
+#[tokio::test]
+async fn the_in_memory_employee_store_holds_the_contract() {
+    employee_contract::holds(&FakeEmployees::default(), 0).await;
+}
+
 /// The three people seams as one type — what a router that carries a single `people` state needs (the
 /// binary's `PostgresPeople` implements all three). Delegates to the per-seam fakes above.
 #[derive(Clone, Default)]
@@ -20457,6 +20464,75 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
     let table_ref = pos_cloud::qr::verify_table_token(&secret, token).expect("verifies");
     assert_eq!(table_ref.table_id, active);
     assert_eq!(table_ref.store_id, store);
+}
+
+/// A staff code the tenant already uses is a conflict, not an outage: `409` `ALREADY_EXISTS` naming
+/// `code`, saying to choose another, and never quoting the code, which identifies a person. The
+/// refused one writes nothing, records nothing in the trail and publishes nothing.
+#[tokio::test]
+async fn a_second_employee_with_a_staff_code_in_use_is_refused_409_and_changes_nothing() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let hire = |name: &str| {
+        let body = serde_json::json!({
+            "tenant_id": tenant().as_ulid().to_string(),
+            "code": "B07",
+            "name": name,
+        });
+        router
+            .clone()
+            .oneshot(post_with_cookie("/admin/employees", &body, &owner))
+    };
+    let recorded = async || audit.list(None, 100).await.expect("list audit").len();
+
+    let created = hire("Bao").await.expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let (published, entries) = (versions_at(&config, store_id()).await, recorded().await);
+
+    let again = hire("Binh").await.expect("route the create");
+    assert_eq!(again.status(), StatusCode::CONFLICT);
+    let error = json_body(again).await;
+    assert_eq!(error["error"]["status"], "ALREADY_EXISTS", "{error}");
+    assert_eq!(error["error"]["details"][0]["field"], "code", "{error}");
+    assert_eq!(
+        error["error"]["details"][0]["reason"], "ALREADY_EXISTS",
+        "{error}"
+    );
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("choose another")),
+        "it says what resolves it: {error}"
+    );
+    assert!(
+        !error.to_string().contains("B07"),
+        "never the code: {error}"
+    );
+    assert_eq!(
+        versions_at(&config, store_id()).await,
+        published,
+        "nothing published"
+    );
+    assert_eq!(recorded().await, entries, "nothing recorded");
+    let holders: Vec<String> = EmployeeStore::list(&people, tenant())
+        .await
+        .expect("the roster")
+        .into_iter()
+        .filter(|row| row.record.code == "B07")
+        .map(|row| row.record.name)
+        .collect();
+    assert_eq!(holders, ["Bao"], "the refused one wrote nothing");
 }
 
 /// An assignment names the person it grants, so the console can label it without reading the roster.

@@ -217,9 +217,9 @@ use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequ
 use crate::people::{
     Assignment, AssignmentId, AssignmentScope, AssignmentScopeKind, AssignmentStore,
     AssignmentStoreError, Employee, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
-    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate,
-    RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate, is_known_permission,
-    is_pin_flagged_permission, permission_catalogue,
+    EmployeeStoreError, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
+    PermissionInfo, RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate,
+    is_known_permission, is_pin_flagged_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
@@ -6885,7 +6885,8 @@ where
 }
 
 /// A super-admin creates an employee (no PIN yet). Audited `employee.create` with id/code/status —
-/// never the name.
+/// never the name. A staff code the tenant already uses is `409` ([`code_in_use`]), and nothing is
+/// written or audited.
 async fn admin_create_employee<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6969,8 +6970,24 @@ where
                 &version,
             )
         }
+        Err(EmployeeStoreError::CodeInUse) => code_in_use(),
         Err(error) => people_error_response(&error),
     }
+}
+
+/// The `409` a new employee earns for a staff code the tenant already uses: a code is unique within a
+/// tenant, because it is what a person types to sign in. It names the request's `code` field and
+/// never the code itself, which identifies a person.
+///
+/// A conflict rather than an outage: before the store said which, this was the people service's
+/// `503`, which sent the operator to retry what can never succeed. A code cannot be changed once
+/// set, so only a create meets this.
+fn code_in_use() -> Response {
+    api_error_with_details(
+        ErrorStatus::AlreadyExists,
+        "that staff code is already in use: choose another code",
+        &[("code", "ALREADY_EXISTS")],
+    )
 }
 
 /// A super-admin renames an employee and/or sets their status. Audited `employee.update` with

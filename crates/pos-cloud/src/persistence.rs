@@ -3889,7 +3889,15 @@ impl EmployeeStore for PostgresPeople {
         )
         .await
         .map(Version::new)
-        .map_err(|error| EmployeeStoreError::new(error.to_string()))
+        .map_err(|error| {
+            // The adapter reports the unique index refusing a second code as `already_exists`: a
+            // conflict the operator resolves by choosing another code, not an outage.
+            if error.status() == ErrorStatus::AlreadyExists {
+                EmployeeStoreError::CodeInUse
+            } else {
+                EmployeeStoreError::new(error.to_string())
+            }
+        })
     }
 
     async fn list(&self, tenant: TenantId) -> Result<Vec<Versioned<Employee>>, EmployeeStoreError> {
