@@ -34,6 +34,7 @@ mod print_jobs;
 mod printers;
 pub mod qr;
 pub mod reason_codes;
+mod reports;
 pub mod route_permissions;
 pub mod shifts;
 mod sync;
@@ -187,13 +188,15 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health::healthz))
         .merge(live)
         .merge(pair)
-        // Which devices are paired (ADR-0091), behind the paired-device gate alone: POS Station
-        // reads it as its "is my token still accepted" probe with nobody signed in, and behind the
+        // POS Station's "is my token still accepted" probe, and which devices are paired (ADR-0091),
+        // behind the paired-device gate alone. Station asks with nobody signed in, and behind the
         // signed-in gate every such probe would answer `403`, so the app could no longer tell a live
-        // pairing from a lost one. Retiring a device is a manager's act, on the domain router
-        // (ADR-0158 decision 8).
+        // pairing from a lost one. The probe answers for the calling token alone; the list stays
+        // here while a Station older than the probe still reads it instead (ADR-0158 decision 8).
+        // Retiring a device is a manager's act, on the domain router.
         .merge(
             Router::new()
+                .route("/api/pair/this_device", get(pair::this_device))
                 .route("/api/pair/devices", get(pair::devices))
                 .layer(axum::middleware::from_fn_with_state(
                     Arc::clone(&state_for_devices.pairing),
@@ -493,6 +496,12 @@ where
         .route("/api/lines/{id}/void", post(lines::void::<S>))
         .route("/api/bills/{id}/void", post(bills::void::<S>))
         .route("/api/bills/{id}/discount", post(bills::discount::<S>))
+        // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
+        // so the approver rides with the request as it does for a void.
+        .route(
+            "/api/bills/{id}/fees/{fee_id}/waive",
+            post(bills::waive_fee::<S>),
+        )
         // Split and merge (ADR-0128). Both need `billing.bill.split` (ADR-0158) and neither asks
         // for a PIN: both move amounts that are already captured, and a prompt here would be paid
         // for on every table.
@@ -510,6 +519,9 @@ where
         // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
         // normally" and how many events are waiting.
         .route("/api/sync", get(sync::read::<S>))
+        // What the store has taken today, for the Today screen's tile (ADR-0160 decision 2), to a
+        // person whose own role grants `reports.takings.view`, checked in the handler.
+        .route("/api/reports/takings", get(reports::takings::<S>))
         // The published printers, and a manager's test page on one — how a new store learns a
         // printer is wired before a guest's receipt tells it.
         // The vendor connections the cloud published to this store (ADR-0153): which e-invoice
@@ -547,7 +559,8 @@ where
     ));
     // Binding a terminal's print agent, in its own sub-router for the same reason and behind the
     // same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
-    // behind a *manager* — the permission is checked in the handler, over the published roster.
+    // behind a *manager*, with the read the till's binding screen draws them from — the permission
+    // is checked in the handler, over the published roster.
     let binding = print_agent::router(agent_edge, agents.clone()).layer(
         axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
     );
@@ -620,6 +633,12 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             DomainError::ReductionExceedsBill { .. } => "REDUCTION_EXCEEDS_BILL",
             DomainError::NotAPartition { .. } => "SPLIT_NOT_A_PARTITION",
             DomainError::TaxRateNotConfigured { .. } => "TAX_RATE_NOT_CONFIGURED",
+            // The edge reads a bill's lines and its class bases from one snapshot, so this is a
+            // broken invariant rather than a refusal, and answers as a server error.
+            DomainError::LinesDoNotMatchBases => "LINES_DO_NOT_MATCH_BASES",
+            // A waive the bill cannot take (ADR-0159 decision 5).
+            DomainError::FeeNotOnBill => "FEE_NOT_ON_BILL",
+            DomainError::FeeNotWaivable => "FEE_NOT_WAIVABLE",
             DomainError::Empty { .. } => "EMPTY",
             DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
             DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",
@@ -639,6 +658,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::UnknownBill => "UNKNOWN_BILL",
         AppError::NothingToPrint => "NOTHING_TO_PRINT",
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
+        AppError::BillsOnDifferentOrders => "BILLS_ON_DIFFERENT_ORDERS",
         AppError::UnknownShift => "UNKNOWN_SHIFT",
         AppError::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
         AppError::OpenShiftRequired => "OPEN_SHIFT_REQUIRED",
@@ -668,10 +688,14 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
 /// A refused command (an illegal transition, a missing permission, a disabled capability, or a
 /// table/line/bill/shift that is not in a state the command applies to) is the caller's fault, so it
 /// is `409 Conflict` rather than `500`. An unreachable store is `503`; a clock or encoding failure is
-/// the edge's own `500`.
+/// the edge's own `500`, and so is a bill whose lines do not come to its class bases, which the
+/// edge reads from one snapshot and so can only be a broken invariant (ADR-0159).
 pub(crate) fn error_response(error: &AppError) -> Response {
     let reason = error_reason(error);
     match error {
+        AppError::Domain(inner @ DomainError::LinesDoNotMatchBases) => {
+            refusal(StatusCode::INTERNAL_SERVER_ERROR, reason, inner.to_string())
+        }
         AppError::Domain(inner) => refusal(StatusCode::CONFLICT, reason, inner.to_string()),
         AppError::NoOpenOrder
         | AppError::UnknownLine
@@ -685,6 +709,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnknownBill
         | AppError::NothingToPrint
         | AppError::BillsOnDifferentTables
+        | AppError::BillsOnDifferentOrders
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen
         | AppError::OpenShiftRequired
@@ -723,5 +748,48 @@ pub(crate) fn error_response(error: &AppError) -> Response {
             reason,
             "the edge could not apply the command".to_owned(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use pos_core::error::DomainError;
+
+    use super::{ERROR_REASON_HEADER, error_reason, error_response};
+    use crate::app::AppError;
+
+    /// A bill whose lines do not come to its class bases is the edge's own broken invariant
+    /// (ADR-0159): a server error under a token of its own, where every other rule the core
+    /// enforces stays a refusal.
+    #[test]
+    fn lines_that_are_not_the_bills_answer_as_a_server_error() {
+        let broken = AppError::Domain(DomainError::LinesDoNotMatchBases);
+        assert_eq!(error_reason(&broken), "LINES_DO_NOT_MATCH_BASES");
+        let response = error_response(&broken);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get(ERROR_REASON_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("LINES_DO_NOT_MATCH_BASES")
+        );
+        let refused = error_response(&AppError::Domain(DomainError::NegativeChange));
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+    }
+
+    /// A merge across orders is the caller's to fix, so a refusal under a token of its own.
+    #[test]
+    fn a_merge_across_orders_is_a_conflict_with_its_own_token() {
+        let refused = error_response(&AppError::BillsOnDifferentOrders);
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            refused
+                .headers()
+                .get(ERROR_REASON_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("BILLS_ON_DIFFERENT_ORDERS")
+        );
     }
 }

@@ -142,9 +142,10 @@ impl EventStoreHarness for StoreHarness {
                  catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
                  catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
-                 employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
+                 employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
                  integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-                 reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
+                 reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
+                 store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
                  subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
@@ -206,9 +207,10 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
              catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
-             employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
+             employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
              integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-             reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
+             reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
+                 store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
              subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
@@ -5595,12 +5597,19 @@ mod employees_store {
 
 mod role_templates_and_assignments {
     use super::{block_on, prepared};
+    use pos_proto::error::ErrorStatus;
     use store_postgres::RowUpdate;
 
-    /// Role templates insert with a jsonb permission set that round-trips as its JSON text, read back
-    /// tenant-scoped and newest-first, and update name/permissions/status. The grant is
-    /// SELECT/INSERT/UPDATE only — no DELETE (a role is archived, never removed) ([ADR-0070]).
+    /// Role templates insert with two jsonb permission sets — what the role grants directly and what
+    /// it grants with approval — that round-trip as their JSON text, read back tenant-scoped and
+    /// newest-first, and update name/permissions/status. The grant is SELECT/INSERT/UPDATE only — no
+    /// DELETE (a role is archived, never removed) ([ADR-0070]).
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one round trip over both permission lists, the ceiling, the update and the grant, \
+                  checked against the same rows"
+    )]
     fn role_templates_round_trip_permissions_and_grant() {
         block_on(async {
             let (store, admin) = prepared().await.expect("prepare the database");
@@ -5612,6 +5621,8 @@ mod role_templates_and_assignments {
                     "tenant-a",
                     "Cashier",
                     r#"["billing.discount.apply","sales.item.open"]"#,
+                    // Voids a bill with somebody else's code and PIN (ADR-0158 decision 4).
+                    r#"["billing.bill.void"]"#,
                     // A cashier who may discount up to 30,000 without a manager — the column this
                     // row exists to round-trip.
                     Some(30_000),
@@ -5623,6 +5634,7 @@ mod role_templates_and_assignments {
                     "01ROLE000000000000000000B1",
                     "tenant-b",
                     "Cashier",
+                    "[]",
                     "[]",
                     None,
                 )
@@ -5637,6 +5649,7 @@ mod role_templates_and_assignments {
                         "tenant-a",
                         "Cashier",
                         "[]",
+                        "[]",
                         None
                     )
                     .await
@@ -5644,7 +5657,7 @@ mod role_templates_and_assignments {
                 "role names are unique within a tenant"
             );
 
-            // Tenant-scoped read; the jsonb permission set round-trips as its JSON text.
+            // Tenant-scoped read; each jsonb permission set round-trips as its JSON text.
             let scoped = people
                 .fetch_role_templates("tenant-a")
                 .await
@@ -5660,13 +5673,21 @@ mod role_templates_and_assignments {
                     "sales.item.open".to_owned()
                 ]
             );
+            let with_approval: Vec<String> =
+                serde_json::from_str(&cashier.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON");
+            assert_eq!(
+                with_approval,
+                vec!["billing.bill.void".to_owned()],
+                "what the role grants with approval is its own column, apart from the direct list"
+            );
             assert_eq!(
                 cashier.discount_ceiling_minor,
                 Some(30_000),
                 "the ceiling round-trips through the column"
             );
 
-            // Update the permission set + archive, at the version the read handed out (ADR-0094).
+            // Update the permission sets + archive, at the version the read handed out (ADR-0094).
             assert!(
                 matches!(
                     people
@@ -5675,6 +5696,7 @@ mod role_templates_and_assignments {
                             "01ROLE000000000000000000A1",
                             "Cashier",
                             r#"["sales.item.open"]"#,
+                            r#"["billing.bill.void","sales.line.void_fired"]"#,
                             "archived",
                             None,
                             &cashier.version,
@@ -5694,6 +5716,16 @@ mod role_templates_and_assignments {
             let updated_permissions: Vec<String> =
                 serde_json::from_str(&updated.permissions_json).expect("permissions are JSON");
             assert_eq!(updated_permissions, vec!["sales.item.open".to_owned()]);
+            let updated_with_approval: Vec<String> =
+                serde_json::from_str(&updated.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON");
+            assert_eq!(
+                updated_with_approval,
+                vec![
+                    "billing.bill.void".to_owned(),
+                    "sales.line.void_fired".to_owned()
+                ]
+            );
 
             // Roles are archived, never deleted: no DELETE grant.
             let can_delete: bool = admin
@@ -5737,6 +5769,7 @@ mod role_templates_and_assignments {
                     "tenant-a",
                     "Server",
                     r#"["billing.discount.apply","sales.line.add"]"#,
+                    "[]",
                     None,
                 )
                 .await
@@ -5774,6 +5807,7 @@ mod role_templates_and_assignments {
                     ROLE,
                     "Server",
                     &written,
+                    &role.permissions_with_approval_json,
                     "active",
                     None,
                     &role.version,
@@ -5794,6 +5828,568 @@ mod role_templates_and_assignments {
                 "a later boot does not hand back what the owner removed"
             );
             assert_eq!(kept.len(), without_payment.len());
+        });
+    }
+
+    /// Every role that exists is given, once, each PIN-flagged permission it does not grant
+    /// directly, with approval (migration 0074, ADR-0158 decision 4). What it grants directly is
+    /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
+    /// since taken away.
+    ///
+    /// The 0073, 0076 and 0079 markers are written before the boot, so the boot runs 0074 alone
+    /// against the roles as they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over three roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_roles_grant_each_pin_flagged_permission_with_approval_once() {
+        const FLAGGED: [&str; 7] = [
+            "billing.bill.void",
+            "billing.comp.apply",
+            "billing.discount.override_ceiling",
+            "billing.price.override",
+            "billing.refund.issue",
+            "cash.drawer.open_no_sale",
+            "sales.line.void_fired",
+        ];
+        const MANAGER: &str = "01ROLE000000000000000000M1";
+        const SERVER: &str = "01ROLE000000000000000000S1";
+        const RETIRED: &str = "01ROLE000000000000000000R1";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee'), \
+                            ('0079_approvers_who_close_a_shift_see_takings')",
+                    &[],
+                )
+                .await
+                .expect("0073, 0076 and 0079 have already run");
+            let people = store.people();
+            // A manager who voids directly, and so approves voids for others, listed out of order
+            // as a console may have written it.
+            people
+                .insert_role_template(
+                    MANAGER,
+                    "tenant-a",
+                    "Manager",
+                    r#"["sales.line.void_fired","billing.bill.void","billing.discount.apply"]"#,
+                    "[]",
+                    Some(500_000),
+                )
+                .await
+                .expect("a manager");
+            people
+                .insert_role_template(
+                    SERVER,
+                    "tenant-a",
+                    "Server",
+                    r#"["billing.discount.apply","sales.line.add"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a server");
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let mut direct_before: Vec<(String, String)> = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch")
+                .into_iter()
+                .map(|role| (role.id, role.permissions_json))
+                .collect();
+            direct_before.sort();
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0074 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let mut direct_after: Vec<(String, String)> = roles
+                .iter()
+                .map(|role| (role.id.clone(), role.permissions_json.clone()))
+                .collect();
+            direct_after.sort();
+            assert_eq!(
+                direct_after, direct_before,
+                "what each role grants directly is byte-identical"
+            );
+            let with_approval = |id: &str| -> Vec<String> {
+                let role = roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed");
+                serde_json::from_str(&role.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON")
+            };
+            let flagged_except = |held: &[&str]| -> Vec<String> {
+                FLAGGED
+                    .iter()
+                    .filter(|id| !held.contains(id))
+                    .map(|id| (*id).to_owned())
+                    .collect()
+            };
+            assert_eq!(
+                with_approval(MANAGER),
+                flagged_except(&["billing.bill.void", "sales.line.void_fired"]),
+                "the five it does not grant directly, sorted; the two it does stay direct"
+            );
+            assert_eq!(with_approval(SERVER), flagged_except(&[]), "all seven");
+            assert_eq!(
+                with_approval(RETIRED),
+                flagged_except(&[]),
+                "an archived role too, so restoring it restores what it had"
+            );
+
+            // The owner takes the drawer without a sale off servers altogether.
+            let server = roles
+                .iter()
+                .find(|role| role.id == SERVER)
+                .expect("the server");
+            let without_drawer = flagged_except(&["cash.drawer.open_no_sale"]);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SERVER,
+                    "Server",
+                    &server.permissions_json,
+                    &serde_json::to_string(&without_drawer).expect("serialise"),
+                    "active",
+                    None,
+                    &server.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SERVER)
+                .await
+                .expect("fetch")
+                .expect("present");
+            let kept: Vec<String> = serde_json::from_str(&after.permissions_with_approval_json)
+                .expect("permissions with approval are JSON");
+            assert_eq!(
+                kept, without_drawer,
+                "a later boot does not hand back an approval the owner took away"
+            );
+        });
+    }
+
+    /// Every role that exists is given, once, `billing.fee.waive` on the terms it grants
+    /// `billing.discount.override_ceiling` (migration 0076, ADR-0159 decision 5): directly where it
+    /// grants the override directly, and with approval otherwise. Nothing else in either list
+    /// changes, and a later boot does not hand back a waive an owner has since taken away.
+    ///
+    /// The 0073, 0074 and 0079 markers are written before the boot, so the boot runs 0076 alone
+    /// against the roles as they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over four roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_roles_waive_a_fee_on_the_terms_they_exceed_the_ceiling_once() {
+        const MANAGER: &str = "01ROLE000000000000000000M2";
+        const SUPERVISOR: &str = "01ROLE000000000000000000V2";
+        const SERVER: &str = "01ROLE000000000000000000S2";
+        const RETIRED: &str = "01ROLE000000000000000000R2";
+        const WAIVE: &str = "billing.fee.waive";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), \
+                            ('0074_role_permissions_with_approval'), \
+                            ('0079_approvers_who_close_a_shift_see_takings')",
+                    &[],
+                )
+                .await
+                .expect("0073, 0074 and 0079 have already run");
+            let people = store.people();
+            // A manager who exceeds the ceiling directly, and so approves it for others.
+            people
+                .insert_role_template(
+                    MANAGER,
+                    "tenant-a",
+                    "Manager",
+                    r#"["billing.bill.void","billing.discount.apply","billing.discount.override_ceiling"]"#,
+                    r#"["billing.comp.apply"]"#,
+                    Some(500_000),
+                )
+                .await
+                .expect("a manager");
+            // A supervisor who exceeds it only with somebody's approval.
+            people
+                .insert_role_template(
+                    SUPERVISOR,
+                    "tenant-a",
+                    "Supervisor",
+                    r#"["billing.discount.apply"]"#,
+                    r#"["billing.bill.void","billing.discount.override_ceiling"]"#,
+                    None,
+                )
+                .await
+                .expect("a supervisor");
+            // A server who cannot exceed it at all, listed out of order as a console may have
+            // written it.
+            people
+                .insert_role_template(
+                    SERVER,
+                    "tenant-a",
+                    "Server",
+                    r#"["sales.line.add","billing.discount.apply"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a server");
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let before = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let direct_before = |id: &str| -> String {
+                before
+                    .iter()
+                    .find(|role| role.id == id)
+                    .map(|role| role.permissions_json.clone())
+                    .expect("the role is listed")
+            };
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0076 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let role = |id: &str| {
+                roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed")
+            };
+            let list = |json: &str| -> Vec<String> {
+                serde_json::from_str(json).expect("a permission list is JSON")
+            };
+
+            assert_eq!(
+                list(&role(MANAGER).permissions_json),
+                [
+                    "billing.bill.void",
+                    "billing.discount.apply",
+                    "billing.discount.override_ceiling",
+                    WAIVE,
+                ],
+                "directly, beside the override, in byte order"
+            );
+            assert_eq!(
+                list(&role(MANAGER).permissions_with_approval_json),
+                ["billing.comp.apply"],
+                "not with approval as well"
+            );
+            for (id, approved) in [
+                (
+                    SUPERVISOR,
+                    vec![
+                        "billing.bill.void",
+                        "billing.discount.override_ceiling",
+                        WAIVE,
+                    ],
+                ),
+                (SERVER, vec![WAIVE]),
+                (RETIRED, vec![WAIVE]),
+            ] {
+                assert_eq!(
+                    role(id).permissions_json,
+                    direct_before(id),
+                    "{id}: what it grants directly is byte-identical"
+                );
+                assert_eq!(
+                    list(&role(id).permissions_with_approval_json),
+                    approved,
+                    "{id}: with approval, in byte order"
+                );
+            }
+
+            // The owner takes the waive off servers altogether.
+            let server = role(SERVER);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SERVER,
+                    "Server",
+                    &server.permissions_json,
+                    "[]",
+                    "active",
+                    None,
+                    &server.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SERVER)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(
+                list(&after.permissions_with_approval_json),
+                Vec::<String>::new(),
+                "a later boot does not hand back a waive the owner took away"
+            );
+        });
+    }
+
+    /// Every role that exists, grants `cash.shift.close` directly and grants at least one PIN-flagged
+    /// permission directly is given, once, `reports.takings.view` directly (migration 0079, ADR-0160
+    /// decision 2): an approver who closes shifts, as a new tenant's supervisor, manager and owner
+    /// are. No other role is, each case on a role of its own: one that closes but approves nothing
+    /// directly, as a cashier's does after 0074; an approver who closes no shift; and one that closes
+    /// only with approval. No with-approval list changes, an archived approver is included, and a
+    /// later boot does not hand back takings an owner has since taken away.
+    ///
+    /// The 0073, 0074 and 0076 markers are written before the boot, so the boot runs 0079 alone
+    /// against the roles as they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over five roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_approvers_who_close_a_shift_see_takings_once_and_no_other_role_does() {
+        const SUPERVISOR: &str = "01ROLE000000000000000000V3";
+        const CASHIER: &str = "01ROLE000000000000000000C3";
+        const BOOKKEEPER: &str = "01ROLE000000000000000000B3";
+        const TRAINEE: &str = "01ROLE000000000000000000T3";
+        const RETIRED: &str = "01ROLE000000000000000000R3";
+        const TAKINGS: &str = "reports.takings.view";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), \
+                            ('0074_role_permissions_with_approval'), \
+                            ('0076_roles_can_waive_a_fee')",
+                    &[],
+                )
+                .await
+                .expect("0073, 0074 and 0076 have already run");
+            let people = store.people();
+            // (role, name, direct, with approval), each the one case it is named for.
+            let authored = [
+                // Closes a shift and voids a bill directly: an approver who closes shifts. Listed
+                // out of order, as a console may have written it.
+                (
+                    SUPERVISOR,
+                    "Supervisor",
+                    r#"["cash.shift.open","cash.shift.close","billing.bill.void"]"#,
+                    r#"["billing.comp.apply"]"#,
+                ),
+                // Closes a shift directly, and holds every PIN-flagged act only with approval, as a
+                // cashier's role does once 0074 has run.
+                (
+                    CASHIER,
+                    "Cashier",
+                    r#"["billing.payment.take","cash.shift.close","cash.shift.open"]"#,
+                    r#"["billing.bill.void","cash.drawer.open_no_sale"]"#,
+                ),
+                // Approves a refund directly and closes no shift.
+                (
+                    BOOKKEEPER,
+                    "Bookkeeper",
+                    r#"["billing.refund.issue"]"#,
+                    "[]",
+                ),
+                // Approves a void directly and closes a shift only with approval, which the console
+                // refuses to write but a row may still hold.
+                (
+                    TRAINEE,
+                    "Trainee",
+                    r#"["billing.bill.void","cash.shift.open"]"#,
+                    r#"["cash.shift.close"]"#,
+                ),
+            ];
+            for (id, name, direct, approval) in authored {
+                people
+                    .insert_role_template(id, "tenant-a", name, direct, approval, None)
+                    .await
+                    .expect("a role");
+            }
+            // An approver who closes shifts, since retired.
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Night manager",
+                    r#"["cash.drawer.open_no_sale","cash.shift.close"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Night manager",
+                    r#"["cash.drawer.open_no_sale","cash.shift.close"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let before = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let as_authored = |id: &str| {
+                before
+                    .iter()
+                    .find(|role| role.id == id)
+                    .map(|role| {
+                        (
+                            role.permissions_json.clone(),
+                            role.permissions_with_approval_json.clone(),
+                        )
+                    })
+                    .expect("the role is listed")
+            };
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0079 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let role = |id: &str| {
+                roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed")
+            };
+            let list = |json: &str| -> Vec<String> {
+                serde_json::from_str(json).expect("a permission list is JSON")
+            };
+
+            assert_eq!(
+                list(&role(SUPERVISOR).permissions_json),
+                [
+                    "billing.bill.void",
+                    "cash.shift.close",
+                    "cash.shift.open",
+                    TAKINGS
+                ],
+                "an approver who closes shifts sees takings, directly, in byte order"
+            );
+            assert_eq!(
+                list(&role(RETIRED).permissions_json),
+                ["cash.drawer.open_no_sale", "cash.shift.close", TAKINGS],
+                "an archived approver too, so restoring it restores what it had"
+            );
+            for (id, why) in [
+                (CASHIER, "closes, but approves nothing directly"),
+                (BOOKKEEPER, "approves, but closes no shift"),
+                (TRAINEE, "closes only with approval"),
+            ] {
+                assert_eq!(
+                    role(id).permissions_json,
+                    as_authored(id).0,
+                    "{id} {why}, so it is not touched"
+                );
+            }
+            for id in [SUPERVISOR, CASHIER, BOOKKEEPER, TRAINEE, RETIRED] {
+                assert_eq!(
+                    role(id).permissions_with_approval_json,
+                    as_authored(id).1,
+                    "{id}: what it grants with approval is byte-identical"
+                );
+            }
+
+            // The owner takes the takings off supervisors.
+            let supervisor = role(SUPERVISOR);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SUPERVISOR,
+                    "Supervisor",
+                    r#"["billing.bill.void","cash.shift.close","cash.shift.open"]"#,
+                    &supervisor.permissions_with_approval_json,
+                    "active",
+                    None,
+                    &supervisor.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SUPERVISOR)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert!(
+                !list(&after.permissions_json).iter().any(|id| id == TAKINGS),
+                "a later boot does not hand back takings the owner took away"
+            );
         });
     }
 
@@ -5901,29 +6497,31 @@ mod role_templates_and_assignments {
                 )
                 .await
                 .expect("assign");
-            // The same person at the same store twice is refused by the unique index.
-            assert!(
-                people
-                    .insert_assignment(
-                        "01ASSIGN00000000000000000B",
-                        "tenant-a",
-                        "01EMP0000000000000000000A1",
-                        "01STORE000000000000000000S",
-                        "01ROLE000000000000000000A1",
-                    )
-                    .await
-                    .is_err(),
-                "a person is assigned to a store at most once"
-            );
+            // The same person at the same store twice is refused by the unique index, as a conflict
+            // rather than an outage, and the first assignment stays as it was.
+            let refused = people
+                .insert_assignment(
+                    "01ASSIGN00000000000000000B",
+                    "tenant-a",
+                    "01EMP0000000000000000000A1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000B2",
+                )
+                .await
+                .expect_err("a person is assigned to a store at most once");
+            assert_eq!(refused.status(), ErrorStatus::AlreadyExists, "{refused}");
 
             // Readable both ways, tenant-scoped.
+            let at_store = people
+                .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
+                .await
+                .expect("by store");
+            assert_eq!(at_store.len(), 1);
+            let first = at_store.first().expect("a row");
             assert_eq!(
-                people
-                    .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
-                    .await
-                    .expect("by store")
-                    .len(),
-                1
+                (first.id.as_str(), first.role_template_id.as_str()),
+                ("01ASSIGN00000000000000000A", "01ROLE000000000000000000A1"),
+                "the refused duplicate changed nothing"
             );
             assert_eq!(
                 people
@@ -6025,7 +6623,8 @@ mod role_templates_and_assignments {
                 .expect("by id")
                 .expect("the assignment exists");
             assert_eq!(
-                one.store_id, "01STORE000000000000000000T",
+                (one.scope_kind.as_str(), one.store_id.as_deref()),
+                ("STORE", Some("01STORE000000000000000000T")),
                 "the store a removal must tell"
             );
             assert_eq!(one.employee_name.as_deref(), Some("Lan"));
@@ -6050,7 +6649,7 @@ mod role_templates_and_assignments {
                 .await
                 .expect("by role")
                 .into_iter()
-                .map(|row| row.store_id)
+                .filter_map(|row| row.store_id)
                 .collect();
             stores.sort();
             assert_eq!(
@@ -6068,6 +6667,312 @@ mod role_templates_and_assignments {
             );
 
             drop(admin);
+        });
+    }
+
+    /// The ids of a read's rows, sorted, so a test can compare reads whatever order they return in.
+    fn ids_of(rows: Vec<store_postgres::AssignmentRow>) -> Vec<String> {
+        let mut ids: Vec<String> = rows.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// The wider scopes of migration 0077
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 3). An assignment to a store group or to every store is a row of
+    /// `employee_scope_assignments`, and every assignment read lists it beside the one-store rows. A
+    /// store's read lists every row that reaches it — its own, its groups' through
+    /// `store_group_members` in the same statement, and its tenant's — so a membership change moves
+    /// a group's rows from the next read on. The checks hold each scope to exactly its id, the
+    /// partial unique indexes allow one row per person and group and one per person tenant-wide, a
+    /// removal finds a row in either table by its id, and re-running the schema, as every boot does,
+    /// changes none of it.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table's rules, each step reading the rows the one before wrote"
+    )]
+    fn a_wider_assignment_reaches_through_its_group_and_its_tenant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            let groups = store.store_groups();
+            let (north, south, east) = (
+                "01STORE00000000000000000N1",
+                "01STORE00000000000000000S1",
+                "01STORE00000000000000000E1",
+            );
+            let airport = "01GROUP0000000000000000AP1";
+            let (cashier, lead) = ("01ROLE000000000000000000A1", "01ROLE000000000000000000B2");
+            let (alice, bao, cam) = (
+                "01EMP0000000000000000000A1",
+                "01EMP0000000000000000000B2",
+                "01EMP0000000000000000000C3",
+            );
+            let created = groups
+                .insert_group("tenant-a", airport, "Airport", "active")
+                .await
+                .expect("insert the group")
+                .expect("a free id");
+            let members = [north.to_owned(), south.to_owned()];
+            let Ok(RowUpdate::Updated(version)) = groups
+                .set_members_at("tenant-a", airport, &members, &created)
+                .await
+            else {
+                panic!("the membership applies at the group's version");
+            };
+
+            people
+                .insert_assignment(
+                    "01ASSIGN0000000000000WIDE1",
+                    "tenant-a",
+                    alice,
+                    north,
+                    cashier,
+                )
+                .await
+                .expect("one store");
+            people
+                .insert_scope_assignment(
+                    "01ASSIGN0000000000000WIDE2",
+                    "tenant-a",
+                    bao,
+                    "STORE_GROUP",
+                    Some(airport),
+                    cashier,
+                )
+                .await
+                .expect("a group");
+            for (id, tenant) in [
+                ("01ASSIGN0000000000000WIDE3", "tenant-a"),
+                ("01ASSIGN0000000000000WIDE4", "tenant-b"),
+            ] {
+                people
+                    .insert_scope_assignment(id, tenant, cam, "TENANT", None, lead)
+                    .await
+                    .expect("every store");
+            }
+
+            // Each scope holds exactly its id, and one row per person and group or tenant-wide. A
+            // second row at a scope the person holds is a conflict; a row the checks refuse is not
+            // one, and stays the database's failure.
+            for (id, employee, kind, group, status, why) in [
+                (
+                    "01ASSIGN000000000000BAD01",
+                    alice,
+                    "STORE_GROUP",
+                    None,
+                    ErrorStatus::Unavailable,
+                    "a group's row names its group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD02",
+                    alice,
+                    "TENANT",
+                    Some(airport),
+                    ErrorStatus::Unavailable,
+                    "a tenant-wide row names no group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD03",
+                    alice,
+                    "STORE",
+                    None,
+                    ErrorStatus::Unavailable,
+                    "a one-store row is not this table's",
+                ),
+                (
+                    "01ASSIGN000000000000BAD04",
+                    bao,
+                    "STORE_GROUP",
+                    Some(airport),
+                    ErrorStatus::AlreadyExists,
+                    "one per person and group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD05",
+                    cam,
+                    "TENANT",
+                    None,
+                    ErrorStatus::AlreadyExists,
+                    "one per person tenant-wide",
+                ),
+            ] {
+                let refused = people
+                    .insert_scope_assignment(id, "tenant-a", employee, kind, group, lead)
+                    .await
+                    .expect_err(why);
+                assert_eq!(refused.status(), status, "{why}: {refused}");
+            }
+            people
+                .insert_scope_assignment(
+                    "01ASSIGN0000000000000WIDE5",
+                    "tenant-a",
+                    alice,
+                    "TENANT",
+                    None,
+                    lead,
+                )
+                .await
+                .expect("a one-store row and a tenant-wide one, for the same person");
+
+            // A store's read reaches through its groups and its tenant, and no further.
+            let at =
+                |store_id: &'static str| people.fetch_assignments_for_store("tenant-a", store_id);
+            assert_eq!(
+                ids_of(at(north).await.expect("by store")),
+                vec![
+                    "01ASSIGN0000000000000WIDE1",
+                    "01ASSIGN0000000000000WIDE2",
+                    "01ASSIGN0000000000000WIDE3",
+                    "01ASSIGN0000000000000WIDE5",
+                ]
+            );
+            assert_eq!(
+                ids_of(at(east).await.expect("by store")),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"],
+                "not in the group, and none of tenant B's"
+            );
+            let row = at(south)
+                .await
+                .expect("by store")
+                .into_iter()
+                .find(|row| row.id == "01ASSIGN0000000000000WIDE2")
+                .expect("the group's row reaches a member");
+            assert_eq!(
+                (row.scope_kind.as_str(), row.store_id, row.store_group_id),
+                ("STORE_GROUP", None, Some(airport.to_owned()))
+            );
+
+            // A membership change moves the group's rows from the next read on.
+            let moved = [south.to_owned(), east.to_owned()];
+            assert!(matches!(
+                groups
+                    .set_members_at("tenant-a", airport, &moved, &version)
+                    .await
+                    .expect("move the membership"),
+                RowUpdate::Updated(_)
+            ));
+            assert!(
+                !ids_of(at(north).await.expect("by store"))
+                    .contains(&"01ASSIGN0000000000000WIDE2".to_owned()),
+                "the store that left"
+            );
+            assert!(
+                ids_of(at(east).await.expect("by store"))
+                    .contains(&"01ASSIGN0000000000000WIDE2".to_owned()),
+                "the store that joined"
+            );
+
+            // The wider rows read by what they name, by person and by role, and by id.
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_group("tenant-a", airport)
+                        .await
+                        .expect("by group")
+                ),
+                vec!["01ASSIGN0000000000000WIDE2"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_tenant_wide_assignments("tenant-a")
+                        .await
+                        .expect("tenant-wide")
+                ),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_employee("tenant-a", alice)
+                        .await
+                        .expect("by employee")
+                ),
+                vec!["01ASSIGN0000000000000WIDE1", "01ASSIGN0000000000000WIDE5"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_role("tenant-a", lead)
+                        .await
+                        .expect("by role")
+                ),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
+            let wide = people
+                .fetch_assignment("tenant-a", "01ASSIGN0000000000000WIDE3")
+                .await
+                .expect("by id")
+                .expect("the row exists");
+            assert_eq!(
+                (wide.scope_kind.as_str(), wide.store_id, wide.store_group_id),
+                ("TENANT", None, None)
+            );
+
+            // A removal finds the row in either table, within its tenant.
+            assert!(
+                !people
+                    .delete_assignment("tenant-b", "01ASSIGN0000000000000WIDE2")
+                    .await
+                    .expect("cross-tenant remove")
+            );
+            for id in ["01ASSIGN0000000000000WIDE2", "01ASSIGN0000000000000WIDE1"] {
+                assert!(
+                    people
+                        .delete_assignment("tenant-a", id)
+                        .await
+                        .expect("remove")
+                );
+                assert!(
+                    !people
+                        .delete_assignment("tenant-a", id)
+                        .await
+                        .expect("again")
+                );
+            }
+
+            // The query role sees its own tenant's rows only, and may delete them.
+            admin
+                .batch_execute("SET ROLE app_tenant")
+                .await
+                .expect("assume the app_tenant role");
+            admin
+                .execute(
+                    "SELECT set_config('app.tenant_id', $1, false)",
+                    &[&"tenant-b"],
+                )
+                .await
+                .expect("scope the session to tenant B");
+            let visible: Vec<String> = admin
+                .query("SELECT assignment_id FROM employee_scope_assignments", &[])
+                .await
+                .expect("readable")
+                .iter()
+                .map(|row| row.get(0))
+                .collect();
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employee_scope_assignments', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            admin
+                .batch_execute("RESET ROLE")
+                .await
+                .expect("reset the role");
+            assert_eq!(visible, vec!["01ASSIGN0000000000000WIDE4".to_owned()]);
+            assert!(can_delete, "an assignment is removed, not archived");
+
+            // The schema again, as the next boot applies it: nothing written is lost.
+            store.migrate().await.expect("migrate again");
+            assert_eq!(
+                ids_of(at(east).await.expect("by store")),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
         });
     }
 }
@@ -6510,7 +7415,8 @@ mod reconcile_query {
 // ---------------------------------------------------------------------------
 
 mod device_proposals {
-    use pos_proto::devices::DeviceConnection;
+    use pos_proto::devices::{DeviceConnection, PaperWidth};
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 
     use super::{TENANT_A, block_on, port_err, prepared};
 
@@ -6880,6 +7786,190 @@ mod device_proposals {
             assert!(
                 !read(&devices).await.drawer_attached,
                 "and the clear does too"
+            );
+        });
+    }
+
+    /// A printer's paper and cutter are written and read back through the columns the publish reads
+    /// (ADR-0160 decision 2), under the drawer mark's conditional write.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a row nobody set reads neither, which is
+    /// published as nothing, so no store's receipts change because the columns appeared.
+    #[test]
+    fn a_printers_paper_round_trips_as_its_token_and_a_row_nobody_set_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "PRN1")
+                .expect("the printer")
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create(
+                    "PRN1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Counter",
+                    "192.0.2.10:9100",
+                )
+                .await
+                .expect("propose the printer");
+            devices
+                .mark(
+                    TENANT_A,
+                    "PRN1",
+                    "approved",
+                    Some(DeviceConnection::Network),
+                    None,
+                )
+                .await
+                .expect("approve the printer");
+            let printer = read(&devices).await;
+            assert_eq!(
+                (printer.paper_width.as_deref(), printer.cuts_paper),
+                (None, None),
+                "a printer nobody set says nothing about its paper"
+            );
+
+            let moved = devices
+                .set_paper(
+                    TENANT_A,
+                    "PRN1",
+                    PaperWidth::Millimetres58,
+                    false,
+                    &printer.version,
+                )
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            let written = read(&devices).await;
+            assert_eq!(
+                (written.paper_width.as_deref(), written.cuts_paper),
+                (Some("PAPER_WIDTH_MILLIMETRES_58"), Some(false)),
+                "the paper is stored as the token the node carries"
+            );
+            assert!(
+                devices
+                    .set_paper(
+                        TENANT_A,
+                        "PRN1",
+                        PaperWidth::Millimetres80,
+                        true,
+                        &printer.version
+                    )
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the paper"
+            );
+            assert!(
+                devices
+                    .set_paper("tenant-b", "PRN1", PaperWidth::Millimetres80, true, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's paper"
+            );
+        });
+    }
+
+    /// A till's receipt printer and languages are written and read back through the columns the
+    /// publish reads (ADR-0160 decision 4), under the paper's conditional write, and cleared with
+    /// nulls.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a terminal nobody set reads none of the
+    /// three, which is published as nothing, so no till's receipts change because the columns
+    /// appeared.
+    #[test]
+    fn a_tills_receipts_round_trip_as_tokens_and_a_terminal_nobody_set_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "TILL1")
+                .expect("the terminal")
+        }
+        fn receipts(row: &store_postgres::DeviceProposalRow) -> [Option<&str>; 3] {
+            [
+                row.receipt_printer_id.as_deref(),
+                row.receipt_language.as_deref(),
+                row.receipt_second_language.as_deref(),
+            ]
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Bar till")
+                .await
+                .expect("create the terminal");
+            let till = read(&devices).await;
+            assert_eq!(
+                receipts(&till),
+                [None, None, None],
+                "a terminal nobody set says nothing about its receipts"
+            );
+
+            let moved = devices
+                .set_receipt(
+                    TENANT_A,
+                    "TILL1",
+                    Some("PRN2"),
+                    Some(ReceiptLanguage::English),
+                    Some(ReceiptSecondLanguage::None),
+                    &till.version,
+                )
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [
+                    Some("PRN2"),
+                    Some("RECEIPT_LANGUAGE_EN"),
+                    Some("RECEIPT_SECOND_LANGUAGE_NONE")
+                ],
+                "each language is stored as the token the node carries"
+            );
+            assert!(
+                devices
+                    .set_receipt(TENANT_A, "TILL1", None, None, None, &till.version)
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the receipts"
+            );
+            assert!(
+                devices
+                    .set_receipt("tenant-b", "TILL1", None, None, None, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's receipts"
+            );
+            devices
+                .set_receipt(TENANT_A, "TILL1", None, None, None, &moved)
+                .await
+                .expect("the clearing write")
+                .expect("a matching version clears");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [None, None, None],
+                "a till cleared is the store's again"
             );
         });
     }
@@ -7400,7 +8490,7 @@ mod conditional_writes {
                 .await
                 .expect("insert the area");
             let station_version = floor
-                .insert_station(station, tenant, store_id, "Oven", None, true)
+                .insert_station(station, tenant, store_id, "Oven", None, true, None, None)
                 .await
                 .expect("insert the station");
 
@@ -7419,7 +8509,9 @@ mod conditional_writes {
             // A stale tag is refused; the current one applies and moves the row.
             assert_eq!(
                 floor
-                    .set_station(tenant, station, "Nope", None, false, "active", "1")
+                    .set_station(
+                        tenant, station, "Nope", None, false, None, None, "active", "1"
+                    )
                     .await
                     .expect("the comparison must not raise"),
                 RowUpdate::VersionMismatch
@@ -7431,6 +8523,8 @@ mod conditional_writes {
                     "Pizza oven",
                     Some(station),
                     false,
+                    None,
+                    None,
                     "active",
                     &station_version,
                 )
@@ -7465,6 +8559,8 @@ mod conditional_writes {
                         "Ghost",
                         None,
                         false,
+                        None,
+                        None,
                         "active",
                         &moved,
                     )
@@ -7472,6 +8568,172 @@ mod conditional_writes {
                     .expect("the probe must not raise"),
                 RowUpdate::NotFound
             );
+        });
+    }
+
+    /// A station's late threshold (migration 0080, ADR-0160 decision 2) is written on create and on
+    /// update and read back from the column the mapper expects; a station nobody has set reads
+    /// `None`, which the cloud publishes as nothing, and an update that clears it writes null again.
+    #[test]
+    fn a_stations_late_threshold_round_trips_and_a_row_nobody_set_has_none() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let floor = store.floor();
+            let tenant = "0000000000TENANTSTATIONLATE";
+            let store_id = "000000000000STORESTATIONLA";
+            let oven = "0000000000000STATIONOVENLA";
+            let bar = "00000000000000STATIONBARLA";
+
+            let oven_version = floor
+                .insert_station(oven, tenant, store_id, "Oven", None, true, Some(240), None)
+                .await
+                .expect("insert the oven");
+            floor
+                .insert_station(bar, tenant, store_id, "Bar", None, false, None, None)
+                .await
+                .expect("insert the bar");
+            let read = |rows: &[store_postgres::StationRow], id: &str| {
+                rows.iter()
+                    .find(|row| row.id == id)
+                    .map(|row| (row.name.clone(), row.late_after_seconds))
+                    .expect("the station is listed")
+            };
+            let rows = floor
+                .fetch_stations(tenant, store_id)
+                .await
+                .expect("list the stations");
+            assert_eq!(read(&rows, oven), ("Oven".to_owned(), Some(240)));
+            assert_eq!(read(&rows, bar), ("Bar".to_owned(), None));
+
+            let moved = match floor
+                .set_station(
+                    tenant,
+                    oven,
+                    "Oven",
+                    None,
+                    true,
+                    Some(900),
+                    None,
+                    "active",
+                    &oven_version,
+                )
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.late_after_seconds, Some(900));
+            assert_eq!(
+                row.version, moved,
+                "the version still comes from its own column"
+            );
+
+            floor
+                .set_station(
+                    tenant, oven, "Oven", None, true, None, None, "active", &moved,
+                )
+                .await
+                .expect("the update");
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(
+                row.late_after_seconds, None,
+                "cleared, it is nobody's again"
+            );
+        });
+    }
+
+    /// A station's ticket language (migration 0081, ADR-0160 decision 2) is written on create and on
+    /// update as the token the cloud validated, and read back from the column the mapper expects; a
+    /// station nobody has set reads `None`, which the cloud publishes as nothing, and an update that
+    /// clears it writes null again.
+    #[test]
+    fn a_stations_ticket_language_round_trips_and_a_row_nobody_set_has_none() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let floor = store.floor();
+            let tenant = "000000000TENANTSTATIONLANG";
+            let store_id = "000000000000STORESTATIONLG";
+            let oven = "0000000000000STATIONOVENLG";
+            let bar = "00000000000000STATIONBARLG";
+            let english = Some("RECEIPT_LANGUAGE_EN");
+
+            let oven_version = floor
+                .insert_station(oven, tenant, store_id, "Oven", None, true, None, english)
+                .await
+                .expect("insert the oven");
+            floor
+                .insert_station(bar, tenant, store_id, "Bar", None, false, Some(300), None)
+                .await
+                .expect("insert the bar");
+            let rows = floor
+                .fetch_stations(tenant, store_id)
+                .await
+                .expect("list the stations");
+            let read = |id: &str| {
+                rows.iter()
+                    .find(|row| row.id == id)
+                    .map(|row| (row.ticket_language.clone(), row.late_after_seconds))
+                    .expect("the station is listed")
+            };
+            assert_eq!(read(oven), (english.map(str::to_owned), None));
+            assert_eq!(read(bar), (None, Some(300)), "each column in its own place");
+
+            let vietnamese = Some("RECEIPT_LANGUAGE_VI");
+            let moved = match floor
+                .set_station(
+                    tenant,
+                    oven,
+                    "Oven",
+                    None,
+                    true,
+                    None,
+                    vietnamese,
+                    "active",
+                    &oven_version,
+                )
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.ticket_language.as_deref(), vietnamese);
+            assert_eq!(
+                row.version, moved,
+                "the version still comes from its own column"
+            );
+
+            floor
+                .set_station(
+                    tenant, oven, "Oven", None, true, None, None, "active", &moved,
+                )
+                .await
+                .expect("the update");
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.ticket_language, None, "cleared, it is nobody's again");
         });
     }
 
@@ -7486,7 +8748,14 @@ mod conditional_writes {
             let role = "00000000000000000ROLEXMINA";
 
             let first = people
-                .insert_role_template(role, tenant, "Cashier", "[\"sales.item.open\"]", None)
+                .insert_role_template(
+                    role,
+                    tenant,
+                    "Cashier",
+                    "[\"sales.item.open\"]",
+                    "[\"billing.bill.void\"]",
+                    None,
+                )
                 .await
                 .expect("insert the role template");
 
@@ -7500,6 +8769,10 @@ mod conditional_writes {
                 "the column order survived the addition"
             );
             assert_eq!(row.permissions_json, "[\"sales.item.open\"]");
+            assert_eq!(
+                row.permissions_with_approval_json,
+                "[\"billing.bill.void\"]"
+            );
             assert_eq!(row.version, first);
 
             assert_eq!(
@@ -7508,6 +8781,7 @@ mod conditional_writes {
                         tenant,
                         role,
                         "Nope",
+                        "[]",
                         "[]",
                         "active",
                         None,
@@ -7518,7 +8792,9 @@ mod conditional_writes {
                 RowUpdate::VersionMismatch
             );
             let second = match people
-                .set_role_template(tenant, role, "Cashier", "[]", "archived", None, &first)
+                .set_role_template(
+                    tenant, role, "Cashier", "[]", "[]", "archived", None, &first,
+                )
                 .await
                 .expect("the update")
             {
@@ -9422,6 +10698,243 @@ mod integration_connections {
 }
 
 // ---------------------------------------------------------------------------
+// A tenant's fee rules (ADR-0159, migration 0075).
+// ---------------------------------------------------------------------------
+
+/// The fee-rule table against a real PostgreSQL, held to the rules `pos-cloud`'s `FeeRuleStore`
+/// contract suite holds its in-memory store to: a second write to a slot replaces the first, the
+/// same fee at another scope is a row of its own, the list is in scope, scope-id and fee-id order by
+/// bytes, a delete says whether there was a rule, and a tenant never reads or deletes another's — by
+/// the adapter's own `WHERE` and, as the query role, by the migration's policy.
+mod fee_rules {
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    use store_postgres::{FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};
+
+    const FEE: &str = "01J000000000000000000000FE";
+
+    const STORE_SLOT: FeeRuleSlot<'static> = FeeRuleSlot {
+        scope: "FEE_SCOPE_STORE",
+        scope_id: "01J0000000000000000000STOR",
+        fee_id: FEE,
+    };
+
+    /// A rule as `pos-cloud` writes one. The adapter treats `doc` as opaque JSON, so the test crate
+    /// needs none of the cloud's types.
+    fn doc(code: &str) -> String {
+        serde_json::json!({
+            "fee_id": FEE,
+            "code": code,
+            "display_name": "Service charge",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+        })
+        .to_string()
+    }
+
+    /// Writes `doc_json` into `slot` for `tenant`, at `update_time_ms`, as `updated_by`.
+    async fn write(
+        rules: &PostgresFeeRules,
+        tenant: &str,
+        slot: FeeRuleSlot<'_>,
+        doc_json: &str,
+        update_time_ms: i64,
+        updated_by: &str,
+    ) {
+        rules
+            .upsert(
+                tenant,
+                slot,
+                FeeRuleWrite {
+                    doc_json,
+                    update_time_ms,
+                    updated_by,
+                },
+            )
+            .await
+            .expect("write a fee rule");
+    }
+
+    #[test]
+    fn a_rule_is_written_replaced_and_deleted_in_its_slot() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let rules = store.fee_rules();
+
+            let first = doc("SERVICE");
+            write(&rules, TENANT_A, STORE_SLOT, &first, 1_000, "admin-1").await;
+            write(
+                &rules,
+                TENANT_A,
+                STORE_SLOT,
+                &doc("SERVICE_2"),
+                2_000,
+                "admin-2",
+            )
+            .await;
+            let tenant_slot = FeeRuleSlot {
+                scope: "FEE_SCOPE_TENANT",
+                scope_id: TENANT_A,
+                ..STORE_SLOT
+            };
+            write(&rules, TENANT_A, tenant_slot, &first, 3_000, "admin-1").await;
+            // Two brands whose ids sort one way by bytes and the other way in a natural-language
+            // collation, so the list's order is pinned to the bytes, as the in-memory store's is.
+            for brand in ["a-brand", "B-brand"] {
+                let brand_slot = FeeRuleSlot {
+                    scope: "FEE_SCOPE_BRAND",
+                    scope_id: brand,
+                    ..STORE_SLOT
+                };
+                write(&rules, TENANT_A, brand_slot, &first, 4_000, "admin-1").await;
+            }
+
+            let listed = rules.fetch(TENANT_A).await.expect("list");
+            assert_eq!(
+                listed
+                    .iter()
+                    .map(|row| (row.scope.as_str(), row.scope_id.as_str()))
+                    .collect::<Vec<_>>(),
+                [
+                    ("FEE_SCOPE_BRAND", "B-brand"),
+                    ("FEE_SCOPE_BRAND", "a-brand"),
+                    ("FEE_SCOPE_STORE", STORE_SLOT.scope_id),
+                    ("FEE_SCOPE_TENANT", TENANT_A),
+                ],
+                "the second write to a slot replaced the first, each scope's is its own row, and \
+                 the list is in scope and scope-id order, by bytes"
+            );
+            let store_rule = listed
+                .iter()
+                .find(|row| row.scope == "FEE_SCOPE_STORE")
+                .expect("the store's rule");
+            assert!(store_rule.doc_json.contains("SERVICE_2"), "the later rule");
+            assert_eq!(store_rule.update_time_ms, 2_000, "the cloud's clock, kept");
+            assert_eq!(store_rule.updated_by, "admin-2");
+            assert_eq!(store_rule.fee_id, FEE);
+            assert!(
+                rules.fetch(TENANT_B).await.expect("list").is_empty(),
+                "another tenant reads nothing"
+            );
+
+            assert!(
+                !rules.delete(TENANT_B, STORE_SLOT).await.expect("delete"),
+                "another tenant cannot delete it"
+            );
+            assert!(rules.delete(TENANT_A, STORE_SLOT).await.expect("delete"));
+            assert!(
+                !rules
+                    .delete(TENANT_A, STORE_SLOT)
+                    .await
+                    .expect("delete again"),
+                "deleting what is not there is no error"
+            );
+            assert_eq!(rules.fetch(TENANT_A).await.expect("list").len(), 3);
+        });
+    }
+
+    /// A rule with every field set comes back from the `jsonb` column as the rule it was written:
+    /// the column keeps its own spacing and key order, and what `pos-cloud` parses from that text is
+    /// still the same rule, its money, its translated name and its open enums included.
+    #[test]
+    fn a_whole_rule_reads_back_from_jsonb_as_it_was_written() {
+        use std::collections::BTreeMap;
+
+        use pos_proto::Ulid;
+        use pos_proto::enums::SalesChannel;
+        use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, PublishedFee};
+        use pos_proto::ids::{FeeId, MenuItemId, TaxClassId};
+        use pos_proto::money::{CurrencyCode, Money, Ratio};
+        use pos_proto::text::DisplayName;
+        use pos_proto::wire_enum::Open;
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let rules = store.fee_rules();
+            let fee_id = FeeId::new(Ulid::from_u128(0xFE));
+            let rule = PublishedFee {
+                fee_id,
+                code: FeeCode::new("PACKAGING"),
+                display_name: DisplayName::new("Packaging"),
+                display_name_translations: BTreeMap::from([(
+                    "vi".to_owned(),
+                    DisplayName::new("Phí đóng gói"),
+                )]),
+                kind: Open::from_known(FeeKind::AmountPerUnit),
+                rate: Some(Ratio::percent(5).expect("a rate")),
+                amount: Some(Money::new(CurrencyCode::VND, 5_000)),
+                channels: vec![
+                    Open::from_known(SalesChannel::Takeaway),
+                    Open::from_known(SalesChannel::Delivery),
+                ],
+                item_scope: Open::from_known(FeeItems::Include),
+                menu_item_ids: vec![
+                    MenuItemId::new(Ulid::from_u128(1)),
+                    MenuItemId::new(Ulid::from_u128(2)),
+                ],
+                base_discounted: false,
+                base_tax_inclusive: true,
+                tax: Open::from_known(FeeTax::TaxClass),
+                tax_class_id: Some(TaxClassId::new(Ulid::from_u128(3))),
+                waivable: true,
+                active: false,
+            };
+            let doc_json = serde_json::to_string(&rule).expect("encode the rule");
+            let fee_id_text = fee_id.to_string();
+            let slot = FeeRuleSlot {
+                fee_id: &fee_id_text,
+                ..STORE_SLOT
+            };
+            write(&rules, TENANT_A, slot, &doc_json, 1_000, "admin-1").await;
+
+            let listed = rules.fetch(TENANT_A).await.expect("list");
+            assert_eq!(listed.len(), 1);
+            let row = listed.first().expect("the rule");
+            assert_ne!(row.doc_json, doc_json, "jsonb keeps its own spacing");
+            let read: PublishedFee =
+                serde_json::from_str(&row.doc_json).expect("the stored rule parses");
+            assert_eq!(read, rule);
+        });
+    }
+
+    #[test]
+    fn the_query_role_sees_only_its_own_tenants_rules() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let rules = store.fee_rules();
+            let rule = doc("SERVICE");
+            for tenant in [TENANT_A, TENANT_B] {
+                write(&rules, tenant, STORE_SLOT, &rule, 1_000, "admin-1").await;
+            }
+
+            admin
+                .batch_execute("SET ROLE app_tenant")
+                .await
+                .expect("assume the app_tenant role");
+            admin
+                .execute(
+                    "SELECT set_config('app.tenant_id', $1, false)",
+                    &[&TENANT_A],
+                )
+                .await
+                .expect("scope the session to tenant A");
+            let visible: Vec<String> = admin
+                .query("SELECT tenant_id FROM fee_rules", &[])
+                .await
+                .expect("readable")
+                .iter()
+                .map(|row| row.get(0))
+                .collect();
+            admin
+                .batch_execute("RESET ROLE")
+                .await
+                .expect("reset the role");
+            assert_eq!(visible, vec![TENANT_A.to_owned()]);
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // A tenant's setting values (ADR-0160, migration 0072).
 // ---------------------------------------------------------------------------
 
@@ -9542,6 +11055,81 @@ mod setting_values {
                 .await
                 .expect("reset the role");
             assert_eq!(visible, vec![TENANT_A.to_owned()]);
+        });
+    }
+}
+
+/// The record of the one-time changes the cloud makes through its own code (`data_migrations`):
+/// a change is unrecorded until it is recorded, recording it twice keeps the first row, and a name
+/// recorded by a migration's own SQL reads as made too, since the two share the table.
+mod data_migrations {
+    use super::{block_on, prepared};
+
+    const CHANGE: &str = "qr_ordering_one_switch";
+
+    #[test]
+    fn a_change_reads_as_made_at_its_time_once_recorded_and_recording_it_again_keeps_the_first() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let markers = store.data_migrations();
+
+            assert_eq!(
+                markers
+                    .recorded_time(CHANGE)
+                    .await
+                    .expect("read the record"),
+                None,
+                "nothing has recorded the change yet"
+            );
+            markers
+                .record(CHANGE, 1_790_000_000_123)
+                .await
+                .expect("record the change");
+            assert_eq!(
+                markers
+                    .recorded_time(CHANGE)
+                    .await
+                    .expect("read the record"),
+                Some(1_790_000_000_123),
+                "the time comes back to the millisecond"
+            );
+
+            markers
+                .record(CHANGE, 1_790_000_999_000)
+                .await
+                .expect("record the change again");
+            let rows = admin
+                .query(
+                    "SELECT name FROM data_migrations WHERE name = $1",
+                    &[&CHANGE],
+                )
+                .await
+                .expect("read the rows");
+            assert_eq!(rows.len(), 1, "one row per change");
+            assert_eq!(
+                markers
+                    .recorded_time(CHANGE)
+                    .await
+                    .expect("read the record"),
+                Some(1_790_000_000_123),
+                "the second record keeps the first row, and its time"
+            );
+
+            // A name a migration's SQL claimed is in the same table, so it reads as made as well.
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) VALUES ('0073_roles_keep_every_till_action')",
+                    &[],
+                )
+                .await
+                .expect("claim a SQL migration's row");
+            assert!(
+                markers
+                    .recorded_time("0073_roles_keep_every_till_action")
+                    .await
+                    .expect("read the record")
+                    .is_some()
+            );
         });
     }
 }

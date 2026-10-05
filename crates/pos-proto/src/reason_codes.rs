@@ -3,16 +3,16 @@
 
 //! The published `reason_codes` config node ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)):
 //! the managed list every action that must give a reason draws from — a void, a discount, a comp,
-//! a refund, an out-of-sale drawer opening, and the five more the event catalogue names below.
+//! a refund, an out-of-sale drawer opening, and the six more the event catalogue names below.
 //!
 //! `docs/pos-spec.md` §11 **Fraud controls**, item 2, requires *"mandatory reasons from a
-//! cloud-managed list"* for six actions. Eleven event fields in [`crate::events`] carry a
-//! [`ReasonCodeId`] — the spec's six plus five the event catalogue adds (`sales.order.rejected_by_staff`,
+//! cloud-managed list"* for six actions. Twelve event fields in [`crate::events`] carry a
+//! [`ReasonCodeId`] — the spec's six plus six the event catalogue adds (`sales.order.rejected_by_staff`,
 //! `cash.drawer.paid_in`, `cash.drawer.paid_out`, `inventory.stock.adjusted`,
-//! `inventory.stock.wasted`) — and until this node existed, every one of them named a list nothing
-//! produced. [`ReasonAction`] therefore has a variant for each of the eleven, not only the spec's
-//! six: an operator who cannot author a reason for a cash paid-in cannot record one, and the field
-//! on that event would stay unfillable.
+//! `inventory.stock.wasted`, `billing.fee.waived`) — and until this node existed, every one of them
+//! named a list nothing produced. [`ReasonAction`] therefore has a variant for each of the twelve,
+//! not only the spec's six: an operator who cannot author a reason for a cash paid-in cannot record
+//! one, and the field on that event would stay unfillable.
 //!
 //! # Why the framework carries a default set
 //!
@@ -56,7 +56,7 @@ wire_enum! {
     ///
     /// One variant per event field that declares a `reason_code_id`, and the event is named on each
     /// so the two cannot drift: the first six are `docs/pos-spec.md` §11 item 2 verbatim, the last
-    /// five are actions whose events already demand a reason that §11's sentence does not mention.
+    /// six are actions whose events demand a reason that §11's sentence does not mention.
     /// Without them an entry could not be tagged for a cash movement or a stock correction, and
     /// those fields would have nothing valid to put in them.
     ///
@@ -94,6 +94,9 @@ wire_enum! {
     /// Stock written off — `inventory.stock.wasted`: spoilage, breakage, or the waste a void after
     /// firing records instead of returning stock (§8).
     StockWaste = "STOCK_WASTE",
+    /// Waiving a fee on one bill — `billing.fee.waived`, which needs `billing.fee.waive`
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    WaiveFee = "WAIVE_FEE",
 }
 
 /// A short, stable, language-independent handle for a reason — `"WASTE"`, `"STAFF_ERROR"`.
@@ -283,7 +286,7 @@ impl PublishedReasonCodes {
     pub fn framework_default() -> Self {
         use ReasonAction::{
             CashPaidIn, CashPaidOut, Comp, Discount, DrawerOpen, Refund, RejectOrder,
-            StockAdjustment, StockWaste, VoidBill, VoidLine,
+            StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
         };
 
         let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);
@@ -314,14 +317,21 @@ impl PublishedReasonCodes {
                 framework_id(4),
                 ReasonCode::new("STAFF_ERROR"),
                 DisplayName::new("Staff error"),
-                vec![VoidLine, VoidBill, Refund, Discount, StockAdjustment],
+                vec![
+                    VoidLine,
+                    VoidBill,
+                    Refund,
+                    Discount,
+                    StockAdjustment,
+                    WaiveFee,
+                ],
             )
             .with_name_translations(vi("Nhân viên nhập sai")),
             PublishedReasonCode::new(
                 framework_id(5),
                 ReasonCode::new("SERVICE_RECOVERY"),
                 DisplayName::new("Putting it right for a guest"),
-                vec![Discount, Comp, Refund],
+                vec![Discount, Comp, Refund, WaiveFee],
             )
             .with_name_translations(vi("Bù cho khách")),
             PublishedReasonCode::new(
@@ -407,9 +417,9 @@ mod tests {
 
     #[test]
     fn there_is_one_action_per_event_field_that_demands_a_reason() {
-        // The reason this enum has eleven variants and not the specification's six. The catalogue
-        // is the authority on which actions need a reason, and it currently names eleven; a
-        // twelfth event that declares a `reason_code_id` fails here until `ReasonAction` and the
+        // The reason this enum has twelve variants and not the specification's six. The catalogue
+        // is the authority on which actions need a reason, and it currently names twelve; a
+        // thirteenth event that declares a `reason_code_id` fails here until `ReasonAction` and the
         // framework default set grow to cover it, rather than shipping a field the console cannot
         // author a value for.
         let demanded = crate::snapshot::render()

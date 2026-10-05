@@ -8,6 +8,7 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  FeeLine,
   PaymentRequest,
   ReprintResponse,
 } from "../api/types";
@@ -37,9 +38,12 @@ import {
   seatsEnabled,
   settle,
   splitBill,
+  splitWays,
   tenderAccepted,
+  tipPercents,
   tipsEnabled,
   voidBill,
+  waiveFee,
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
@@ -56,15 +60,15 @@ const VOID_BILL = "REASON_ACTION_VOID_BILL";
 // the wrong one — so a picker that offered both would offer a refusal.
 const DISCOUNT = "REASON_ACTION_DISCOUNT";
 
-// The shares of the bill the tip row offers. Three, because the row has four columns and one of
-// them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
-// makes by tapping the nearest of three.
-const TIP_PERCENTS = [5, 10, 15] as const;
+// The action waiving a fee cites (ADR-0159 decision 5), its own again: a reason for forgiving a
+// service charge is not necessarily one for taking money off the food.
+const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 
-// The guest counts an even split offers, two to six, in one row like the tips. A second row for the
-// rarer larger party would push the tenders below the fold on a phone for every bill, split or not;
-// splitting more ways than six is left for when a store asks for it.
-const SPLIT_WAYS = [2, 3, 4, 5, 6] as const;
+// How many guest counts fit the even split's row as five equal columns: two to six, the row every
+// store had before it could set its own most (ADR-0160 decision 2). More than that and the row
+// scrolls sideways instead, like the kitchen board's station tabs. A second row for the rarer larger
+// party would push the tenders below the fold on a phone for every bill, split or not.
+const SPLIT_COLUMNS = 5;
 
 // The label for a payment method in a split's list of shares.
 function methodKey(method: string): MessageKey {
@@ -78,16 +82,19 @@ function methodKey(method: string): MessageKey {
   }
 }
 
-// Whether a set of tip keys is still worth offering: every key positive, and every key larger than
-// the one before it.
+// Whether a set of tip keys is still worth offering: every key positive, and no two the same.
 //
 // The guard on the cash snap below. On a bill of 8,000₫ a 1,000₫ increment turns 5/10/15% into 0,
 // 1,000 and 1,000 — a dead button and a duplicate, on a row whose buttons carry an amount and
 // nothing else, so a cashier cannot tell which is which or why one of them does nothing. The exact
 // figures are less tidy and strictly more useful, so the snap stands down rather than degrading the
-// row it was meant to improve.
+// row it was meant to improve. Asked of the keys in the store's order, which need not be ascending
+// (ADR-0160), so it compares each key with every other rather than with the one before it.
+//
+// The counter's pay pad (`Takeaway.tsx`) keeps a copy of this guard and of `tipKeys` below, in step
+// by hand until a third screen needs them (`docs/design-principles.md`, rule of three).
 function distinctAndSpendable(keys: readonly number[]): boolean {
-  return keys.every((amount, index) => amount > (index === 0 ? 0 : (keys[index - 1] ?? 0)));
+  return keys.every((amount, index) => amount > 0 && keys.indexOf(amount) === index);
 }
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
@@ -171,6 +178,11 @@ export function Pay() {
   // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
   // than becoming a figure the screen then reformats under the operator's fingers.
   const [discountText, setDiscountText] = createSignal("");
+  // The fee whose waive is being reasoned about (ADR-0159 decision 5), and the name of the last one
+  // waived, which the screen says back. The manager fields are the void's and the discount's: only
+  // one panel is ever open.
+  const [waiving, setWaiving] = createSignal<FeeLine | null>(null);
+  const [waivedFee, setWaivedFee] = createSignal<string | null>(null);
 
   // This bill's pre-bill, for the guest who wants to check it on paper before paying — on a split
   // table, their own part (roadmap-v3 B2.1). What came of it, or null before the first press.
@@ -312,7 +324,10 @@ export function Pay() {
   const typeTender = () => setTyping(true);
 
   // Tip keys as a share of the bill, plus a clear. Percentages rather than fixed amounts so they
-  // scale with the check.
+  // scale with the check. The store's own keys, in its order: five, ten and fifteen percent until it
+  // sets its own (ADR-0160 decision 2). At most three, because the row has four columns and one of
+  // them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
+  // makes by tapping the nearest of three.
   //
   // `(total * percent) / 100` is what this line used to say, and it is a float division wearing an
   // integer's clothes. It was invisible for as long as every figure on the check was a round
@@ -335,7 +350,7 @@ export function Pay() {
   // and the exact figures are used instead. Better a key of 400₫ a cashier rounds in their head
   // than three identical buttons they cannot choose between.
   const tipKeys = () => {
-    const exact = TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+    const exact = tipPercents().map((percent) => percentOf(total(), percent));
     const increment = cashRoundingIncrement();
     if (increment === null) {
       return exact;
@@ -746,6 +761,53 @@ export function Pay() {
       );
   };
 
+  // Waiving a fee (ADR-0159 decision 5): offered on a fee whose rule allows it, on a bill nothing
+  // has been taken against yet, to a person who may waive and where the store publishes a reason to
+  // cite. `billing.fee.waive` asks for an approver where the person holds it with approval, and
+  // where the store does not enforce each person's own set, always.
+  const waiveAsks = () => asksApprover("billing.fee.waive");
+  const readyToWaive = () => !waiveAsks() || approverTyped();
+  const canWaive = (fee: FeeLine) =>
+    fee.waivable === true &&
+    billId() !== null &&
+    taken().length === 0 &&
+    can("billing.fee.waive") &&
+    reasonsFor(WAIVE_FEE).length > 0;
+
+  const closeWaive = () => {
+    setWaiving(null);
+    setApproverCode("");
+    setApproverPin("");
+  };
+
+  // The first tap opens the reasons for this fee; nothing is written until one is chosen. A
+  // discount or a void half begun is put away, as the three share the manager's fields.
+  const askWaiveFee = (fee: FeeLine) => {
+    setError(null);
+    setWaivedFee(null);
+    closeDiscount();
+    closeVoid();
+    setWaiving(fee);
+  };
+
+  // The second tap: waive it, citing this reason. The edge answers with the whole bill as it now
+  // stands and the screen takes that figure, because the fee's tax leaves with it.
+  const waiveFeeReason = (reasonCodeId: string) => {
+    const id = billId();
+    const fee = waiving();
+    if (id === null || fee === null) {
+      return;
+    }
+    setError(null);
+    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approval() : undefined)
+      .then((totals) => {
+        setCheck(totals);
+        setWaivedFee(fee.display_name);
+        closeWaive();
+      })
+      .catch((caught: unknown) => setError(errorMessage(caught)));
+  };
+
   // What the screen becomes once the bill is voided: no money was taken, and the order is still
   // sitting on the table to be charged again. The way back is the order, not the floor — a voided
   // bill usually means the cashier is about to open the right one.
@@ -805,10 +867,95 @@ export function Pay() {
                       </span>
                     </p>
                   </Show>
+                  {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
+                      already includes them: the till shows the edge's arithmetic, never its own.
+                      A fee its rule lets staff waive carries **Waive** (decision 5). */}
+                  <For
+                    each={(totals().fee_lines ?? []).filter(
+                      (fee) => fee.amount.amount_minor !== 0,
+                    )}
+                  >
+                    {(fee) => (
+                      <p
+                        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+                        data-outcome="bill-fee"
+                      >
+                        <span>{fee.display_name}</span>
+                        <span class="flex items-center gap-2">
+                          <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                          <Show when={canWaive(fee) && waiving() === null}>
+                            <button
+                              type="button"
+                              class="min-h-touch rounded-token border border-line px-3 text-sm"
+                              data-step="askWaiveFee"
+                              onClick={() => askWaiveFee(fee)}
+                            >
+                              {t("pay.waive_fee")}
+                            </button>
+                          </Show>
+                        </span>
+                      </p>
+                    )}
+                  </For>
                   <p class="text-2xl font-semibold tabular-nums">
                     {formatAmount(totals().total_due)}
                   </p>
                 </>
+              )}
+            </Show>
+            {/*
+              Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
+              the manager's badge and PIN where the person needs an approver, typed rather than
+              tapped, so the act is three taps from the order screen — pay, waive, reason — as the
+              discount is. The reasons stay disabled until the approver is typed.
+            */}
+            <Show when={waiving()}>
+              {(fee) => (
+                <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                  <h2 class="font-semibold">{t("pay.waive_title", { fee: fee().display_name })}</h2>
+                  <Show when={waiveAsks()}>
+                    <p class="mt-1 text-sm text-ink-muted">{t("pay.waive_manager")}</p>
+                    <ApproverFields
+                      id="waive-fee-approver"
+                      code={approverCode()}
+                      pin={approverPin()}
+                      onCode={setApproverCode}
+                      onPin={setApproverPin}
+                      codeLabel={t("pay.approver_code")}
+                      pinLabel={t("pay.approver_pin")}
+                    />
+                  </Show>
+                  <p class="mt-3 text-sm text-ink-muted">{t("pay.waive_reason")}</p>
+                  <div class="mt-2 grid grid-cols-2 gap-2">
+                    <For each={reasonsFor(WAIVE_FEE)}>
+                      {(reason) => (
+                        <button
+                          type="button"
+                          class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                          disabled={!readyToWaive()}
+                          data-step="waiveFeeReason"
+                          onClick={() => waiveFeeReason(reason.reason_code_id)}
+                        >
+                          {reason.display_name}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                    onClick={() => closeWaive()}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              )}
+            </Show>
+            <Show when={waivedFee()}>
+              {(name) => (
+                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="fee-waived">
+                  {t("pay.fee_waived", { fee: name() })}
+                </p>
               )}
             </Show>
             {/*
@@ -872,13 +1019,22 @@ export function Pay() {
             */}
             <Show when={can("billing.payment.take")}>
             <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
-            <div class="grid grid-cols-5 gap-2">
-              <For each={SPLIT_WAYS}>
+            <div
+              class={
+                splitWays().length > SPLIT_COLUMNS
+                  ? "-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+                  : "grid grid-cols-5 gap-2"
+              }
+            >
+              <For each={splitWays()}>
                 {(n) => (
                   <button
                     type="button"
                     class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
-                    classList={{ "border-accent": ways() === n }}
+                    classList={{
+                      "border-accent": ways() === n,
+                      "min-w-touch shrink-0": splitWays().length > SPLIT_COLUMNS,
+                    }}
                     aria-pressed={ways() === n}
                     aria-label={t("pay.split_ways", { count: n })}
                     disabled={taken().length > 0 || picking()}
@@ -1021,7 +1177,11 @@ export function Pay() {
 
             {/* The tip, the buyer and the tenders are taking payment (ADR-0158). */}
             <Show when={can("billing.payment.take")}>
-            <Show when={tipsEnabled() && ways() === null}>
+            {/*
+              No tip key left to offer, and the row is not drawn: with no amount to type, a lone
+              "No tip" would offer nothing (ADR-0160 decision 2).
+            */}
+            <Show when={tipsEnabled() && ways() === null && tipPercents().length > 0}>
               <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
               <div class="grid grid-cols-4 gap-2">
                 <button

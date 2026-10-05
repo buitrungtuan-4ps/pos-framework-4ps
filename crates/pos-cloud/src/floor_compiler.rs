@@ -25,6 +25,7 @@ use pos_proto::floor::{
     FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule as PlanRoutingRule, StationPlan,
 };
 use pos_proto::text::DisplayName;
+use pos_proto::wire_enum::Open;
 
 use crate::floorplan::{Area, RoutingRule, Station, Table};
 use crate::registry::EntityStatus;
@@ -80,6 +81,15 @@ pub fn compile_stations(stations: &[Station], rules: &[RoutingRule]) -> StationP
             backup_station_id: station
                 .backup_station_id
                 .filter(|backup| *backup != station.station_id && active_ids.contains(backup)),
+            // As stored: the route refused a threshold outside its bounds, and an unset one stays
+            // off the node, so the edge reads its default.
+            late_after_seconds: station.late_after_seconds,
+            // As stored too, and off the node while unset, so the edge prints in the display
+            // language there as it always did.
+            ticket_language: station
+                .ticket_language
+                .as_deref()
+                .map_or_else(Open::default, Open::parse),
         })
         .collect();
     plan_stations.sort_by_key(|station| station.station_id.to_string());
@@ -118,6 +128,7 @@ mod tests {
     use super::{compile_floor, compile_stations};
 
     use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, TenantId};
+    use pos_proto::printing::ReceiptLanguage;
     use pos_proto::ulid::Ulid;
 
     use crate::floorplan::{Area, RoutingRule, RoutingRuleId, Station, Table};
@@ -167,6 +178,8 @@ mod tests {
             name: name.to_owned(),
             backup_station_id: backup.map(|b| StationId::new(Ulid::from_u128(b))),
             is_default,
+            late_after_seconds: None,
+            ticket_language: None,
             status,
         }
     }
@@ -239,6 +252,57 @@ mod tests {
         assert_eq!(
             plan.default_station_id(),
             Some(StationId::new(Ulid::from_u128(1)))
+        );
+    }
+
+    #[test]
+    fn a_stations_threshold_is_published_as_stored_and_an_unset_one_is_left_off() {
+        let stations = vec![
+            Station {
+                late_after_seconds: Some(240),
+                ..station(1, "Oven", None, true, EntityStatus::Active)
+            },
+            station(2, "Bar", None, false, EntityStatus::Active),
+        ];
+        let plan = compile_stations(&stations, &[]);
+        let oven = plan
+            .station(StationId::new(Ulid::from_u128(1)))
+            .expect("the oven");
+        assert_eq!(oven.late_after_seconds, Some(240));
+        let bar = plan
+            .station(StationId::new(Ulid::from_u128(2)))
+            .expect("the bar");
+        assert_eq!(bar.late_after_seconds, None);
+        let node = serde_json::to_value(&plan).expect("serialise");
+        assert_eq!(node["stations"][0]["late_after_seconds"], 240);
+        assert!(
+            node["stations"][1].get("late_after_seconds").is_none(),
+            "a station that sets no threshold publishes none"
+        );
+    }
+
+    #[test]
+    fn a_stations_ticket_language_is_published_as_stored_and_an_unset_one_is_left_off() {
+        let stations = vec![
+            Station {
+                ticket_language: Some("RECEIPT_LANGUAGE_EN".to_owned()),
+                ..station(1, "Oven", None, true, EntityStatus::Active)
+            },
+            station(2, "Bar", None, false, EntityStatus::Active),
+        ];
+        let plan = compile_stations(&stations, &[]);
+        let oven = plan
+            .station(StationId::new(Ulid::from_u128(1)))
+            .expect("the oven");
+        assert_eq!(oven.ticket_language(), ReceiptLanguage::English);
+        let node = serde_json::to_value(&plan).expect("serialise");
+        assert_eq!(
+            node["stations"][0]["ticket_language"],
+            "RECEIPT_LANGUAGE_EN"
+        );
+        assert!(
+            node["stations"][1].get("ticket_language").is_none(),
+            "a station that sets no language publishes none"
         );
     }
 

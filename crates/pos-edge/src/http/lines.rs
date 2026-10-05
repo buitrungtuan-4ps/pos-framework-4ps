@@ -37,7 +37,7 @@ use pos_proto::ids::EventId;
 use crate::app::{Approval, Edge, LineDraft, LineView};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::line_notes::NoteText;
-use crate::printing::{PrintOutcome, Printers, ticket_line};
+use crate::printing::{PrintOutcome, Printers};
 
 /// A line as a device asks for it to be added — the amounts captured from the menu it holds.
 #[derive(Debug, Deserialize)]
@@ -335,9 +335,9 @@ where
             // The line's own id as the idempotency key: a fire retried after an ambiguous failure
             // reuses it, and the kitchen gets one ticket rather than making the dish twice.
             EventId::new(view.order_line_id.as_ulid()),
-            fired.station_id,
             &crate::printing::short_reference(&view.order_id.to_string()),
-            &ticket_line(&session, fired, edge.line_note(view.order_line_id).as_ref()),
+            fired,
+            edge.line_note(view.order_line_id).as_ref(),
         )
         .await
 }

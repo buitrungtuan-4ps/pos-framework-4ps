@@ -31,6 +31,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   RECEIPT_FROM_ANOTHER_DAY: "error.receipt_from_another_day",
   NOTHING_TO_PRINT: "error.nothing_to_print",
   BILLS_ON_DIFFERENT_TABLES: "error.bills_on_different_tables",
+  // The till merges only to undo a split, so it never asks for this; a direct caller can.
+  BILLS_ON_DIFFERENT_ORDERS: "error.bills_on_different_orders",
   UNROUTABLE_LINE: "error.unroutable_line",
   AWAITING_STAFF_CONFIRMATION: "error.awaiting_staff_confirmation",
   NOT_AWAITING_STAFF_CONFIRMATION: "error.not_awaiting_staff_confirmation",
@@ -54,6 +56,12 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   REDUCTION_EXCEEDS_BILL: "error.reduction_exceeds_bill",
   SPLIT_NOT_A_PARTITION: "error.split_not_a_partition",
   TAX_RATE_NOT_CONFIGURED: "error.tax_rate_not_configured",
+  // A bill whose lines do not come to its class bases: the edge's own fault, not the cashier's.
+  LINES_DO_NOT_MATCH_BASES: "error.internal",
+  // A waive the bill cannot take (ADR-0159 decision 5): a fee its rule keeps on every bill, or
+  // one no longer on this one, waived already on another till.
+  FEE_NOT_WAIVABLE: "error.fee_not_waivable",
+  FEE_NOT_ON_BILL: "error.fee_not_on_bill",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
   // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.

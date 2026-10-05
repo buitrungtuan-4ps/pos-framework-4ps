@@ -102,13 +102,15 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 > The commented `advertised_ip` and `store_path` lines are optional overrides; leave them commented
 > unless you have a reason. `tenant_id` is not a key the edge accepts — the store id is enough.
 >
-> `backup_interval_hours` is the other override worth knowing about. It defaults to `24`, and that
-> number is the store's recovery point: the box snapshots its whole database on that interval,
-> seals it on the machine, and ships only ciphertext to the cloud
-> ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)). Lower it for a busy shop and the
-> recovery point shortens; set it to `0` and the store ships nothing, which the log says loudly at
-> every start-up. Archiving needs `cloud_url`, the scoped sync key, and a cloud configured for it;
-> a box missing any of those trades normally and names the missing piece in its log.
+> The archive interval is the store's recovery point: the box snapshots its whole database every so
+> many hours, seals it on the machine, and ships only ciphertext to the cloud
+> ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)). It is a setting now,
+> `backup.interval_hours` in the console's shared settings, a day unless someone sets it; lower it
+> for a busy shop and the recovery point shortens. The file's `backup_interval_hours` is deprecated
+> as a number, and `backup_interval_hours = 0` is the one thing it still does that the console
+> cannot: the store ships nothing, which the log says loudly at every start-up. Archiving needs
+> `cloud_url`, the scoped sync key, and a cloud configured for it; a box missing any of those trades
+> normally and names the missing piece in its log.
 
 ## Step 2 — Install the store server and drop the config
 
@@ -355,9 +357,14 @@ keeping the last-known-good if a version is rejected
 | **Shared settings** | each value a store may run differently ([`configuration.md`](../configuration.md)), written once for every store, a brand, a store group or this store, and published to every store it reaches as it is saved | No — a store runs each default until a value is set, and a store the wizard created already has the owner's new-store values |
 
 Author in that order. Items before Menus (a menu places items that must exist), and tax classes
-before items (an item names one). **Store groups** publishes one node to a whole set of shops at
+before items (an item names one). A tenant the console creates already has six roles in **People**
+to assign — owner, manager, supervisor, cashier, server and cook, named in the language the console
+was shown in — each granting what the permission catalogue's defaults say; rename, change or archive
+them there ([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md)). **Store groups** publishes one node to a whole set of shops at
 once ([ADR-0122](../adr/0122-a-store-group-is-a-delivery-cohort.md)), which is how the second and later
-stores of a brand skip most of this step.
+stores of a brand skip most of this step. People work the same way: someone assigned in **People** to
+every store is on a new store's roster from its first people publish, and someone assigned to a store
+group is on it as soon as the store joins the group, with no assignment of the store's own.
 
 **The permissions node is not optional and neither is the menu.** A freshly installed store boots with
 an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the

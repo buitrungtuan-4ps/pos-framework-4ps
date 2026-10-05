@@ -186,6 +186,11 @@ export function TextField(
      * the thing an operator recognises; a locale tag is not, which is why it can carry one.
      */
     suggestions?: readonly { readonly value: string; readonly label?: string }[];
+    /**
+     * The step gate's handle on this control, when a declared flow types into it
+     * (`scripts/step-tasks.mjs`). Forwarded to the `<input>`, as {@link MoneyField} forwards its own.
+     */
+    "data-step"?: string;
   } & Pick<JSX.InputHTMLAttributes<HTMLInputElement>, "type" | "placeholder" | "autocomplete">,
 ) {
   const hintId = createUniqueId();
@@ -194,6 +199,7 @@ export function TextField(
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
       <input
+        data-step={props["data-step"]}
         class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
         type={props.type ?? "text"}
         placeholder={props.placeholder}

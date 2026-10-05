@@ -12,8 +12,9 @@
 use core::fmt;
 use core::future::Future;
 
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::ids::{StationId, StoreId, TenantId};
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::ulid::Ulid;
 
 /// Which kind of device a proposal is for.
@@ -146,6 +147,25 @@ pub struct DeviceProposalSummary {
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
     /// `false` until somebody does, which is what every store assumed before the mark existed.
     pub drawer_attached: bool,
+    /// The paper an operator says this printer takes, as its wire token (`PAPER_WIDTH_…`,
+    /// [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every
+    /// store assumed before the field existed.
+    pub paper_width: Option<String>,
+    /// Whether an operator says this printer cuts its paper. `None` until somebody says, which the
+    /// edge reads as `true`.
+    pub cuts_paper: Option<bool>,
+    /// On a `terminal`, the printer an operator says this till's receipts, receipt copies and
+    /// pre-bills go to (a ULID string,
+    /// [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 4). `None` until somebody says, which is the store's receipt printer.
+    pub receipt_printer_id: Option<String>,
+    /// On a `terminal`, the language an operator says this till's receipts print in, as its wire
+    /// token (`RECEIPT_LANGUAGE_…`). `None` until somebody says, which is the store's.
+    pub receipt_language: Option<String>,
+    /// On a `terminal`, the second language an operator says this till's receipts print in, as its
+    /// wire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's.
+    pub receipt_second_language: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -155,8 +175,10 @@ pub struct DeviceProposalSummary {
 }
 
 /// What a conditional write to an approved device did: an agent pick
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)) or a drawer mark
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), a drawer mark
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
+/// a printer's paper or a till's receipts
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceWriteOutcome {
     /// The row was changed, and now sits at this version.
@@ -291,6 +313,48 @@ pub trait DeviceProposalStore {
         tenant: TenantId,
         id: DeviceProposalId,
         drawer_attached: bool,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Says what paper an approved printer takes and whether it cuts it
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is, for the same reasons. Like
+    /// [`Self::set_drawer`], this seam does not check that the device is a printer: the console
+    /// offers the choice only there, and nothing but a printer reads it.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Says which printer an approved terminal's receipts, receipt copies and pre-bills go to, and
+    /// the languages they print in, each `None` for the store's
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 4). The three are the till's whole receipt state, so a `None` clears what was said.
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is, for the same reasons. This
+    /// seam does not check that the device is a terminal, or that `printer` is a printer of its store
+    /// serving no station: the route checks both against the approved devices before it writes.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_receipt(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        printer: Option<DeviceProposalId>,
+        language: Option<ReceiptLanguage>,
+        second_language: Option<ReceiptSecondLanguage>,
         expected: &str,
     ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
 }

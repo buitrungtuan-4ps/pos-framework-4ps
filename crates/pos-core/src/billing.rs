@@ -17,6 +17,7 @@
 //!   construction sums to [`BillTotals::tax_total`].
 //! - **Cash rounding is an explicit line.** [`BillTotals::rounding_adjustment`] is the difference
 //!   between the rounded and unrounded totals, so the printed lines reconcile to the printed total.
+//!   It is always half-up ([`CASH_ROUNDING`]): it is about the coins a country has, not its tax.
 //! - **Tips are not part of the total.** [`settle`] takes them separately and they appear only in
 //!   the change identity, never in `total_due`.
 //!
@@ -33,19 +34,33 @@
 //! A fee is a published rule ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), and
 //! [`assemble`] charges every rule that applies to the bill as one [`FeeLine`]. A percentage is
 //! taken of the lines it counts, after their share of the bill's discount and comps, and never of
-//! another fee, so fees do not compound. Each fee rounds once, by the bill's rounding mode. Its
-//! taxed parts join their classes' bases before each class's tax is rounded, so tax still rounds
-//! once per class (ADR-0028); each part then carries its share of that class's tax.
+//! another fee, so fees do not compound. Each fee rounds once, by the store's tax rounding
+//! ([`BillInput::tax_rounding`]). Its taxed parts join their classes' bases before each class's tax
+//! is rounded, so tax still rounds once per class (ADR-0028); each part then carries its share of
+//! that class's tax.
 //! [`BillTotals::service_charge`] carries the sum of every fee, so the readers of that one figure
 //! stay right (ADR-0159 decision 4).
+//!
+//! A fee waived on a bill (ADR-0159 decision 5) is left out of it: [`assemble`] charges and taxes
+//! the bill as though the rule were not there, and the rule's `fee_id` is what keeps it waived on
+//! every part of a split and every merge the bill joins ([`MergedFees::waived_fee_ids`]).
 
-use pos_proto::fees::{FeeKind, FeeTax, FrozenFee};
+use pos_proto::fees::{FeeCode, FeeKind, FeeTax, FrozenFee};
 use pos_proto::locale::{TaxComponent, TaxRateTable};
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding, div_round};
 use pos_proto::quantity::Quantity;
+use pos_proto::text::DisplayName;
 use pos_proto::{CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId};
 
 use crate::error::DomainError;
+
+/// How the grand total rounds to the store's cash increment: half-up, whatever the store's tax
+/// rounding ([`BillInput::tax_rounding`]).
+///
+/// Cash rounding is about the coins a guest can hand over, not about tax
+/// (`pos_proto::locale::LocalePack::cash_rounding_increment`), so a store that drops the fraction of
+/// its tax still rounds what it is paid to the nearest coin, as every store always has.
+pub const CASH_ROUNDING: Rounding = Rounding::HalfUp;
 
 /// One line of tax on the bill: a class, the base it was charged on, and the tax itself.
 ///
@@ -166,7 +181,12 @@ pub struct FeeClassShare {
 pub struct FeeLine {
     /// The rule that charged it.
     pub fee_id: FeeId,
-    /// What it charged, rounded once to the minor unit by the bill's rounding mode.
+    /// The rule's code, what a report groups fees by.
+    pub code: FeeCode,
+    /// The rule's own name, as the bill froze it: what the bill prints the fee under.
+    pub display_name: DisplayName,
+    /// What it charged, rounded once to the minor unit by the store's tax rounding
+    /// ([`BillInput::tax_rounding`]).
     pub amount: Money,
     /// The parts of `amount` taxed at each class, which sum to it. There are none for a fee that is
     /// not taxed, one for a fee taxed at a named class, and for a fee that follows its lines one
@@ -175,6 +195,9 @@ pub struct FeeLine {
     pub class_shares: Vec<FeeClassShare>,
     /// The tax on the fee: the sum of its parts' taxes. Zero for a fee that is not taxed.
     pub tax: Money,
+    /// Whether the rule lets staff waive the fee on one bill, as the bill froze it (ADR-0159
+    /// decision 5), so a till can offer the act only where it is allowed.
+    pub waivable: bool,
 }
 
 /// Everything needed to assemble a bill's totals.
@@ -200,10 +223,20 @@ pub struct BillInput<'a> {
     /// The channel this bill's order came in on, which selects the tax rate.
     pub sales_channel: SalesChannel,
     /// The cash-rounding increment in minor units (500 for VND rounding to the nearest 500), or
-    /// `None` for no rounding. Applied to the grand total, materialised as an explicit adjustment.
+    /// `None` for no rounding. Applied to the grand total, half-up ([`CASH_ROUNDING`]), and
+    /// materialised as an explicit adjustment.
     pub cash_rounding_increment: Option<i64>,
-    /// The rounding mode for tax and for cash rounding.
-    pub rounding_mode: Rounding,
+    /// How each tax amount and each fee rounds to the minor unit: the store's `locale.tax_rounding`
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2), half-up unless it says otherwise.
+    ///
+    /// It rounds the tax of each class and of each charge taxed at a class no line is in, extracted
+    /// or added on top as [`Self::prices_include_tax`] says, and each fee's amount (ADR-0159
+    /// decision 2). A tax line's named parts and a fee's share of a class's tax are shares of that
+    /// rounded tax, so they follow it. It does not round the cash rounding of the grand total, which
+    /// is always [`CASH_ROUNDING`], nor anything the caller priced before the bill, such as a line's
+    /// net or a campaign's reduction.
+    pub tax_rounding: Rounding,
     /// Whether the class bases already contain their tax — the store's `locale.prices_include_tax`
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     ///
@@ -222,8 +255,13 @@ pub struct BillInput<'a> {
     /// currency. So does a percentage whose base is in the other tax posture from
     /// [`Self::prices_include_tax`]: this release does not convert between the two (ADR-0104).
     pub fee_rules: &'a [FrozenFee],
-    /// The bill's sold lines, which the rules match. Read only when [`Self::fee_rules`] is not
-    /// empty, and then each class's lines must sum to its [`ClassBase`].
+    /// The fees waived on this bill (`billing.fee.waived`, ADR-0159 decision 5), by id. A rule
+    /// listed here is left out: it charges nothing and taxes nothing, and every other figure is
+    /// what it would be with the rule not frozen on the bill at all. Empty, as for every bill not
+    /// yet opened, waives nothing.
+    pub waived_fee_ids: &'a [FeeId],
+    /// The bill's sold lines, which the rules match. Read only when a rule is left to charge, and
+    /// then each class's lines must sum to its [`ClassBase`].
     pub lines: &'a [BillLine],
 }
 
@@ -355,7 +393,7 @@ fn extra_class_lines(
                 .rates
                 .components_for(charge.tax_class_id, input.sales_channel),
             input.prices_include_tax,
-            input.rounding_mode,
+            input.tax_rounding,
         )?;
         lines.push(TaxLine {
             tax_class_id: charge.tax_class_id,
@@ -380,20 +418,28 @@ struct Fees {
 
 /// Charges the bill's fee rules (ADR-0159 decision 2). A percentage is taken of lines, never of
 /// another fee, so the fees do not compound and their order decides only the order of their lines.
+///
+/// A waived rule is left out before anything else is read, so a bill whose every fee is waived is
+/// assembled exactly as one that froze none.
 fn charge_fees(input: &BillInput<'_>, subtotal: Money) -> Result<Fees, DomainError> {
     let mut fees = Fees {
         lines: Vec::new(),
         class_shares: Vec::new(),
         total: Money::zero(input.currency_code),
     };
-    if input.fee_rules.is_empty() {
+    let rules: Vec<&FrozenFee> = input
+        .fee_rules
+        .iter()
+        .filter(|rule| !input.waived_fee_ids.contains(&rule.fee_id))
+        .collect();
+    if rules.is_empty() {
         return Ok(fees);
     }
     if !lines_match_bases(input.lines, input.class_bases)? {
         return Err(DomainError::LinesDoNotMatchBases);
     }
     let reductions = input.bill_discount.checked_add(input.comps)?;
-    for rule in input.fee_rules {
+    for rule in rules {
         if let Some(line) = fee_line(rule, input, subtotal, reductions)? {
             fees.total = fees.total.checked_add(line.amount)?;
             for share in &line.class_shares {
@@ -440,7 +486,7 @@ fn fee_line(
                 Money::zero(input.currency_code)
             };
             let counted_net = sum_nets(&counted, input.currency_code)?;
-            percent_of(counted_net, subtotal, reductions, rate, input.rounding_mode)?
+            percent_of(counted_net, subtotal, reductions, rate, input.tax_rounding)?
         }
         FeeKind::AmountPerBill | FeeKind::AmountPerUnit => {
             let Some(amount) = rule.amount else {
@@ -450,7 +496,7 @@ fn fee_line(
                 let units = counted
                     .iter()
                     .try_fold(Quantity::ZERO, |sum, line| sum.checked_add(line.quantity))?;
-                amount.mul_quantity(units, input.rounding_mode)?
+                amount.mul_quantity(units, input.tax_rounding)?
             } else {
                 amount
             }
@@ -474,9 +520,12 @@ fn fee_line(
     };
     Ok(Some(FeeLine {
         fee_id: rule.fee_id,
+        code: rule.code.clone(),
+        display_name: rule.display_name.clone(),
         amount,
         class_shares,
         tax: Money::zero(amount.currency_code),
+        waivable: rule.waivable,
     }))
 }
 
@@ -752,7 +801,7 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
                 .rates
                 .components_for(base.tax_class_id, input.sales_channel),
             input.prices_include_tax,
-            input.rounding_mode,
+            input.tax_rounding,
         )?;
         tax_total = tax_total.checked_add(tax)?;
         tax_lines.push(TaxLine {
@@ -793,11 +842,12 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         .checked_add(service_charge)?
         .checked_add(tax_total)?;
 
-    // Cash rounding, materialised as an explicit adjustment so the receipt reconciles.
+    // Cash rounding, materialised as an explicit adjustment so the receipt reconciles. Half-up
+    // whatever the tax rounding: it is about coins, not tax.
     let (total_due, rounding_adjustment) = match input.cash_rounding_increment {
         Some(increment) => match core::num::NonZeroI64::new(increment) {
             Some(step) => {
-                let rounded = unrounded.round_to_increment(step, input.rounding_mode)?;
+                let rounded = unrounded.round_to_increment(step, CASH_ROUNDING)?;
                 (rounded, rounded.checked_sub(unrounded)?)
             }
             None => (unrounded, Money::zero(currency)),
@@ -933,6 +983,259 @@ pub fn settle(total_due: Money, payments: &[Payment]) -> Result<Settlement, Doma
     })
 }
 
+/// The fee rules each part of a split bill keeps
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6): the rules the bill
+/// froze when it opened, one list per part of `parts`, which are the lines each part covers.
+///
+/// A percentage and a fee per unit are kept by every part as they are, and each part charges them
+/// on its own lines. A fee per bill is not charged in full on every part: its amount is allocated
+/// across the parts in proportion to the nets of the lines it counts on each, so together they
+/// charge exactly what the whole bill would have (`Money::allocate`), and each part keeps the rule
+/// for its share alone. A part that counts none of its lines, or whose share is nothing, does not
+/// keep it. When every line it counts is free, the parts that count one share it evenly.
+///
+/// A rule that [`FrozenFee::violations`] faults is kept by every part as it is: it applies to
+/// nothing on the whole bill, and to nothing on a part.
+///
+/// A fee waived on the bill stays waived on every part (ADR-0159 decision 5): a waive follows the
+/// fee's `fee_id`, not the rule's amount, so each part keeps the bill's
+/// [`BillInput::waived_fee_ids`] as they are, and whatever share of a waived fee per bill it keeps
+/// charges nothing.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] if the nets a rule counts overflow.
+pub fn split_fee_rules(
+    rules: &[FrozenFee],
+    parts: &[Vec<BillLine>],
+) -> Result<Vec<Vec<FrozenFee>>, DomainError> {
+    let mut kept: Vec<Vec<FrozenFee>> = vec![Vec::with_capacity(rules.len()); parts.len()];
+    for rule in rules {
+        let Some(amount) = per_bill_amount(rule) else {
+            for part in &mut kept {
+                part.push(rule.clone());
+            }
+            continue;
+        };
+        let mut counts = Vec::with_capacity(parts.len());
+        let mut weights = Vec::with_capacity(parts.len());
+        for lines in parts {
+            let counted: Vec<&BillLine> = lines
+                .iter()
+                .filter(|line| rule.counts_item(line.menu_item_id))
+                .collect();
+            counts.push(!counted.is_empty());
+            let weight = counted.iter().try_fold(0_i64, |sum, line| {
+                sum.checked_add(line.net.amount_minor.max(0))
+                    .ok_or(MoneyError::Overflow)
+            })?;
+            weights.push(weight);
+        }
+        if weights.iter().all(|weight| *weight == 0) {
+            weights = counts.iter().map(|counts| i64::from(*counts)).collect();
+        }
+        // The parts after the last that weighs anything take nothing, so what the allocation
+        // leaves over lands on a part that counts the rule's lines.
+        while weights.last() == Some(&0) {
+            weights.pop();
+        }
+        if weights.is_empty() {
+            continue;
+        }
+        for (part, share) in kept.iter_mut().zip(amount.allocate(&weights)?) {
+            if !share.is_zero() {
+                part.push(FrozenFee {
+                    amount: Some(share),
+                    ..rule.clone()
+                });
+            }
+        }
+    }
+    Ok(kept)
+}
+
+/// A rule's amount when it is a fee per bill this release can apply, and `None` otherwise.
+fn per_bill_amount(rule: &FrozenFee) -> Option<Money> {
+    (rule.kind() == Some(FeeKind::AmountPerBill) && rule.violations().is_empty())
+        .then_some(rule.amount)
+        .flatten()
+}
+
+/// The amount a fee per bill's shares are parts of
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6): what it came to on
+/// the bill they were first split from. A bill split from no other holds each fee per bill whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeWhole {
+    /// The fee per bill.
+    pub fee_id: FeeId,
+    /// What it came to on the bill its shares were first split from.
+    pub amount: Money,
+}
+
+/// The wholes of a bill split from no other: each fee per bill it holds, at its own amount. A part
+/// of a split keeps its source's instead, which is what lets a merge put the parts back together.
+#[must_use]
+pub fn fee_wholes(rules: &[FrozenFee]) -> Vec<FeeWhole> {
+    rules
+        .iter()
+        .filter_map(|rule| {
+            per_bill_amount(rule).map(|amount| FeeWhole {
+                fee_id: rule.fee_id,
+                amount,
+            })
+        })
+        .collect()
+}
+
+/// One bill a merge folds together: the fee rules it holds, and the wholes its fees per bill are
+/// shares of.
+#[derive(Debug, Clone, Copy)]
+pub struct MergingBill<'a> {
+    /// The rules the bill holds, a fee per bill at its share.
+    pub fee_rules: &'a [FrozenFee],
+    /// The wholes of its fees per bill ([`fee_wholes`] for a bill split from no other).
+    pub fee_wholes: &'a [FeeWhole],
+    /// The fees waived on it (ADR-0159 decision 5).
+    pub waived_fee_ids: &'a [FeeId],
+}
+
+/// What a merged bill holds: its fee rules, and the wholes its fees per bill are shares of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedFees {
+    /// The rules the merged bill is computed from.
+    pub fee_rules: Vec<FrozenFee>,
+    /// The wholes it keeps, so a later split or merge puts the shares together again.
+    pub fee_wholes: Vec<FeeWhole>,
+    /// The fees waived on the merged bill: every fee waived on any bill merged, the holder's
+    /// first, each once (ADR-0159 decision 5). A waive follows the fee, so a fee waived on one
+    /// part of a split stays waived once the parts are put back together.
+    pub waived_fee_ids: Vec<FeeId>,
+}
+
+/// The fee rules a bill holds once `absorbed` are merged into it, the `holder` being the bill the
+/// cashier holds ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6).
+///
+/// The merged bill keeps the holder's rules, so a percentage and a fee per unit are charged as the
+/// holder's say, on every line it now owes. A fee per bill is charged once on the merged bill, at
+/// the sum of the merged bills' shares of it, capped at its whole:
+///
+/// - merging every part of a split back together restores the whole the bill opened with;
+/// - merging some of the parts charges the sum of their shares;
+/// - merging bills split from no common bill charges it once, never once per bill;
+/// - a fee per bill the holder dropped, its share being nothing, is still charged on the lines of
+///   the bills that carry it, which join the holder's rules after its own.
+///
+/// Where bills split from different bills hold different wholes, after a publish between their
+/// openings, the cap is the largest of them. The merged bill keeps every whole any of them held,
+/// at the largest, for the next split or merge.
+///
+/// A fee waived on any of the bills stays waived on the merged bill
+/// ([`MergedFees::waived_fee_ids`]): a waive is not undone by putting bills together, so the
+/// merged bill charges it nothing, on every line it now owes.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] if the shares of a fee overflow or are in different currencies.
+pub fn merge_fee_rules(
+    holder: MergingBill<'_>,
+    absorbed: &[MergingBill<'_>],
+) -> Result<MergedFees, DomainError> {
+    let bills: Vec<MergingBill<'_>> = core::iter::once(holder)
+        .chain(absorbed.iter().copied())
+        .collect();
+    let mut fee_rules = holder.fee_rules.to_vec();
+    for bill in absorbed {
+        for rule in bill.fee_rules {
+            if per_bill_amount(rule).is_some()
+                && !fee_rules.iter().any(|kept| kept.fee_id == rule.fee_id)
+            {
+                fee_rules.push(rule.clone());
+            }
+        }
+    }
+    let mut fee_wholes: Vec<FeeWhole> = Vec::new();
+    for whole in bills.iter().flat_map(|bill| bill.fee_wholes) {
+        match fee_wholes
+            .iter_mut()
+            .find(|kept| kept.fee_id == whole.fee_id)
+        {
+            Some(kept) => {
+                if kept.amount.currency_code == whole.amount.currency_code
+                    && whole.amount.amount_minor > kept.amount.amount_minor
+                {
+                    kept.amount = whole.amount;
+                }
+            }
+            None => fee_wholes.push(*whole),
+        }
+    }
+    for rule in &mut fee_rules {
+        let Some(own) = per_bill_amount(rule) else {
+            continue;
+        };
+        let mut shares = Money::zero(own.currency_code);
+        for bill in &bills {
+            if let Some(share) = bill
+                .fee_rules
+                .iter()
+                .find(|held| held.fee_id == rule.fee_id)
+                .and_then(per_bill_amount)
+            {
+                shares = shares.checked_add(share)?;
+            }
+        }
+        let capped = match fee_wholes.iter().find(|whole| whole.fee_id == rule.fee_id) {
+            Some(whole)
+                if whole.amount.currency_code == shares.currency_code
+                    && whole.amount.amount_minor < shares.amount_minor =>
+            {
+                whole.amount
+            }
+            _ => shares,
+        };
+        rule.amount = Some(capped);
+    }
+    let mut waived_fee_ids: Vec<FeeId> = Vec::new();
+    for fee_id in bills.iter().flat_map(|bill| bill.waived_fee_ids) {
+        if !waived_fee_ids.contains(fee_id) {
+            waived_fee_ids.push(*fee_id);
+        }
+    }
+    Ok(MergedFees {
+        fee_rules,
+        fee_wholes,
+        waived_fee_ids,
+    })
+}
+
+/// The rule for `fee_id` as one bill may waive it
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5): one of the rules
+/// the bill froze, `rules`, not already among its `waived` fees, and published as waivable.
+///
+/// Asked before anybody is asked to approve the waive, so a fee that could never be waived costs
+/// nobody a PIN.
+///
+/// # Errors
+///
+/// [`DomainError::FeeNotOnBill`] if the bill froze no rule under `fee_id`, or has waived it
+/// already; [`DomainError::FeeNotWaivable`] if the rule does not let staff waive it.
+pub fn waivable_fee<'a>(
+    rules: &'a [FrozenFee],
+    waived: &[FeeId],
+    fee_id: FeeId,
+) -> Result<&'a FrozenFee, DomainError> {
+    let rule = rules
+        .iter()
+        .find(|rule| rule.fee_id == fee_id)
+        .filter(|_| !waived.contains(&fee_id))
+        .ok_or(DomainError::FeeNotOnBill)?;
+    if rule.waivable {
+        Ok(rule)
+    } else {
+        Err(DomainError::FeeNotWaivable)
+    }
+}
+
 /// Splits a total into `parts` amounts summing **exactly** to it (`pos-spec.md` §14.3).
 ///
 /// A thin domain wrapper over `Money::split_into`, here so the split law is a domain operation with
@@ -959,14 +1262,18 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 #[cfg(test)]
 mod tests {
     use super::{
-        BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, Payment, assemble,
-        settle, split_by_weights, split_evenly,
+        BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, FeeWhole, MergedFees,
+        MergingBill, Payment, assemble, fee_wholes, merge_fee_rules, settle, split_by_weights,
+        split_evenly, split_fee_rules, waivable_fee,
     };
+    use core::num::NonZeroI64;
+
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
-    use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
+    use pos_proto::locale::{LocaleSettings, TaxComponent, TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::money::{Money, Ratio, Rounding};
     use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
     use pos_proto::wire_enum::Open;
     use pos_proto::{
         CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId, Ulid,
@@ -1006,9 +1313,10 @@ mod tests {
             rates,
             sales_channel: SalesChannel::DineIn,
             cash_rounding_increment: None,
-            rounding_mode: Rounding::HalfUp,
+            tax_rounding: Rounding::HalfUp,
             prices_include_tax: false,
             fee_rules: &[],
+            waived_fee_ids: &[],
             lines: &[],
         }
     }
@@ -1449,6 +1757,7 @@ mod tests {
         FrozenFee {
             fee_id: FeeId::new(Ulid::from_u128(id)),
             code: FeeCode::new("FEE"),
+            display_name: DisplayName::new("Fee"),
             kind: kind.into(),
             rate: percent.then(|| Ratio::basis_points(value).expect("a rate")),
             amount: (!percent).then_some(vnd(value)),
@@ -1524,9 +1833,21 @@ mod tests {
         rates: &TaxRateTable,
         adjust: impl FnOnce(&mut BillInput<'_>),
     ) -> Result<BillTotals, DomainError> {
+        assemble_waiving(lines, rules, &[], rates, adjust)
+    }
+
+    /// [`assemble_with`], with the fees `waived` waived on the bill.
+    fn assemble_waiving(
+        lines: &[BillLine],
+        rules: &[FrozenFee],
+        waived: &[FeeId],
+        rates: &TaxRateTable,
+        adjust: impl FnOnce(&mut BillInput<'_>),
+    ) -> Result<BillTotals, DomainError> {
         let bases = bases_of(lines);
         let mut input = base_input(&bases, rates);
         input.fee_rules = rules;
+        input.waived_fee_ids = waived;
         input.lines = lines;
         adjust(&mut input);
         assemble(&input)
@@ -1545,9 +1866,12 @@ mod tests {
         // lines, not of the lines and the first fee. Each part carries its class's rate.
         let ten = FeeLine {
             fee_id: FeeId::new(Ulid::from_u128(1)),
+            code: FeeCode::new("FEE"),
+            display_name: DisplayName::new("Fee"),
             amount: vnd(27_000),
             class_shares: vec![share(food(), 18_000, 1_800), share(alcohol(), 9_000, 1_350)],
             tax: vnd(1_800 + 1_350),
+            waivable: false,
         };
         assert_eq!(totals.fee_lines.first(), Some(&ten));
         assert_eq!(
@@ -1694,7 +2018,7 @@ mod tests {
         let rates = rates();
         let charge = |lines: &[BillLine], rule: FrozenFee, mode: Rounding, discount: i64| {
             let set = |input: &mut BillInput<'_>| {
-                input.rounding_mode = mode;
+                input.tax_rounding = mode;
                 input.bill_discount = vnd(discount);
             };
             let rules = [untaxed(rule)];
@@ -1719,6 +2043,131 @@ mod tests {
         let tiny = [line(0, 1, 1, food()), line(1, 1, 2, food())];
         let first = only(FeeItems::Include, 0, fee(1, FeeKind::Percent, 7_500));
         assert_eq!(charge(&tiny, first, Rounding::HalfEven, 1), vnd(0));
+    }
+
+    // ---- ADR-0160: the store's tax rounding ---------------------------------------------------
+
+    /// One line of `net` đồng of food at 10 %, its tax rounded by `mode`, its price including that
+    /// tax where `inclusive` says so.
+    fn food_at_ten_percent(net: i64, mode: Rounding, inclusive: bool) -> BillTotals {
+        assemble_with(&[line(0, 1, net, food())], &[], &rates(), |input| {
+            input.tax_rounding = mode;
+            input.prices_include_tax = inclusive;
+        })
+        .expect("assembles")
+    }
+
+    #[test]
+    fn a_store_that_rounds_tax_down_drops_the_fraction_on_a_tie_and_off_one() {
+        // 10 % of 25 is 2.5, a tie; of 27, 2.7; of 21, 2.1; of 30, exactly 3.
+        for (net, half_up, down) in [(25, 3, 2), (27, 3, 2), (21, 2, 2), (30, 3, 3)] {
+            let up = food_at_ten_percent(net, Rounding::HalfUp, false);
+            let dropped = food_at_ten_percent(net, Rounding::TowardZero, false);
+            assert_eq!(up.tax_total, vnd(half_up), "{net}");
+            assert_eq!(dropped.tax_total, vnd(down), "{net}");
+            assert_eq!(dropped.total_due, vnd(net + down), "{net}");
+            assert_reconciles(&dropped);
+        }
+    }
+
+    #[test]
+    fn a_tax_inside_the_price_drops_its_fraction_and_the_guest_still_pays_the_price() {
+        // 10 % inside 1,000 is 90.9…: 91 half-up, 90 down. The guest pays 1,000 either way, and the
+        // base the invoice prints keeps what the tax does not.
+        let up = food_at_ten_percent(1_000, Rounding::HalfUp, true);
+        let down = food_at_ten_percent(1_000, Rounding::TowardZero, true);
+        assert_eq!((up.tax_total, down.tax_total), (vnd(91), vnd(90)));
+        assert_eq!((up.total_due, down.total_due), (vnd(1_000), vnd(1_000)));
+        let base = |totals: &BillTotals| totals.tax_lines.first().map(|line| line.taxable_base);
+        assert_eq!((base(&up), base(&down)), (Some(vnd(909)), Some(vnd(910))));
+        assert_reconciles(&down);
+    }
+
+    #[test]
+    fn a_tax_lines_named_parts_share_the_tax_as_it_rounded() {
+        // Two halves of 18 %. On 105 the tax is 18.9: 19 half-up and 18 down, and the parts share
+        // whichever it is.
+        let halves = TaxRateTable::new().with_components(
+            food(),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        let parts = |mode: Rounding| -> Vec<Money> {
+            let totals = assemble_with(&[line(0, 1, 105, food())], &[], &halves, |input| {
+                input.tax_rounding = mode;
+            })
+            .expect("assembles");
+            totals
+                .tax_lines
+                .iter()
+                .flat_map(|line| line.components.iter().map(|part| part.tax))
+                .collect()
+        };
+        assert_eq!(parts(Rounding::HalfUp), [vnd(9), vnd(10)]);
+        assert_eq!(parts(Rounding::TowardZero), [vnd(9), vnd(9)]);
+    }
+
+    #[test]
+    fn a_fee_and_the_tax_on_it_drop_their_fractions_at_a_store_that_rounds_down() {
+        let rates = rates();
+        let charged = |lines: &[BillLine], rule: FrozenFee, mode: Rounding| {
+            let rules = [rule];
+            assemble_with(lines, &rules, &rates, |input| input.tax_rounding = mode)
+                .expect("assembles")
+        };
+        // 10 % of 27 is 2.7: 3 half-up, 2 down.
+        let small = [line(0, 1, 27, food())];
+        let ten = || untaxed(fee(1, FeeKind::Percent, 1_000));
+        assert_eq!(
+            charged(&small, ten(), Rounding::HalfUp).service_charge,
+            vnd(3)
+        );
+        assert_eq!(
+            charged(&small, ten(), Rounding::TowardZero).service_charge,
+            vnd(2)
+        );
+        // Half a unit at 3,001 is 1,500.5.
+        let half = [BillLine {
+            quantity: Quantity::HALF,
+            ..line(0, 1, 40_000, food())
+        }];
+        let box_fee = untaxed(fee(1, FeeKind::AmountPerUnit, 3_001));
+        assert_eq!(
+            charged(&half, box_fee, Rounding::TowardZero).service_charge,
+            vnd(1_500)
+        );
+        // A fee of 25 taxed at alcohol, 15 %, on a bill with no alcohol is taxed 3.75 on a line of
+        // its own: 4 half-up, 3 down.
+        let food_only = [line(0, 1, 100, food())];
+        let cover = || taxed_at(alcohol(), fee(1, FeeKind::AmountPerBill, 25));
+        let fee_tax = |mode: Rounding| {
+            charged(&food_only, cover(), mode)
+                .fee_lines
+                .first()
+                .map(|line| line.tax)
+        };
+        assert_eq!(fee_tax(Rounding::HalfUp), Some(vnd(4)));
+        assert_eq!(fee_tax(Rounding::TowardZero), Some(vnd(3)));
+    }
+
+    #[test]
+    fn the_total_still_rounds_half_up_to_the_coins_at_a_store_that_rounds_tax_down() {
+        // 10 % of 100,228 is 10,022.8, which is 10,022 down. The total, 110,250, is half way between
+        // two 500-đồng steps and rounds up to 110,500, as every store's total does: the coins decide
+        // it, not the tax.
+        let totals = assemble_with(&[line(0, 1, 100_228, food())], &[], &rates(), |input| {
+            input.tax_rounding = Rounding::TowardZero;
+            input.cash_rounding_increment = Some(500);
+        })
+        .expect("assembles");
+        assert_eq!(totals.tax_total, vnd(10_022));
+        assert_eq!(totals.rounding_adjustment, vnd(250));
+        assert_eq!(totals.total_due, vnd(110_500));
+        assert_reconciles(&totals);
     }
 
     #[test]
@@ -1819,6 +2268,252 @@ mod tests {
         assert_reconciles(&totals);
     }
 
+    /// What each fee charged on a bill, by rule, in đồng: zero for a rule that charged nothing.
+    fn charged_by_rule(totals: &BillTotals, rules: &[FrozenFee]) -> Vec<i64> {
+        rules
+            .iter()
+            .map(|rule| {
+                totals
+                    .fee_lines
+                    .iter()
+                    .filter(|line| line.fee_id == rule.fee_id)
+                    .map(|line| line.amount.amount_minor)
+                    .sum()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_split_shares_a_fee_per_bill_and_each_part_charges_the_rest_on_its_own_lines() {
+        let rates = rates();
+        let rules = [
+            untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+            untaxed(only(
+                FeeItems::Include,
+                1,
+                fee(3, FeeKind::AmountPerBill, 5_000),
+            )),
+            untaxed(only(
+                FeeItems::Include,
+                0,
+                fee(4, FeeKind::AmountPerUnit, 3_000),
+            )),
+        ];
+        let parts = [
+            vec![line(0, 2, 200_000, food())],
+            vec![line(1, 1, 100_000, alcohol())],
+        ];
+        let kept = split_fee_rules(&rules, &parts).expect("splits");
+        let charged: Vec<Vec<i64>> = parts
+            .iter()
+            .zip(&kept)
+            .map(|(lines, kept)| {
+                let totals = assemble_with(lines, kept, &rates, |_| {}).expect("a part assembles");
+                assert_reconciles(&totals);
+                charged_by_rule(&totals, &rules)
+            })
+            .collect();
+        // The 10,000 per bill falls 2:1 as the parts' nets do, and the 5,000 that counts only the
+        // wine falls on the wine; the percentage and the boxes are charged on each part's own
+        // lines. Together the parts charge what the whole bill does.
+        assert_eq!(
+            charged,
+            vec![vec![6_666, 20_000, 0, 6_000], vec![3_334, 10_000, 5_000, 0]]
+        );
+        let whole = assemble_with(&dinner(), &rules, &rates, |_| {}).expect("assembles");
+        assert_eq!(
+            charged_by_rule(&whole, &rules),
+            vec![10_000, 30_000, 5_000, 6_000]
+        );
+        // A part keeps a fee per bill only for its share: the pizzas have no wine to charge for.
+        let ids: Vec<Vec<u128>> = kept
+            .iter()
+            .map(|rules| {
+                rules
+                    .iter()
+                    .map(|rule| rule.fee_id.as_ulid().to_u128())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(ids, vec![vec![1, 2, 4], vec![1, 2, 3, 4]]);
+    }
+
+    /// The amount of the fee per bill numbered `id` a merged bill holds, if it holds one.
+    fn per_bill(merged: &MergedFees, id: u128) -> Option<Money> {
+        merged
+            .fee_rules
+            .iter()
+            .find(|rule| rule.fee_id == FeeId::new(Ulid::from_u128(id)))
+            .and_then(|rule| rule.amount)
+    }
+
+    /// Merges bills holding `bills`' rules, the first being the holder, every fee per bill a share
+    /// of the wholes in `wholes`.
+    fn merged(wholes: &[FeeWhole], bills: &[&[FrozenFee]]) -> MergedFees {
+        let mut merging = bills.iter().map(|fee_rules| MergingBill {
+            fee_rules,
+            fee_wholes: wholes,
+            waived_fee_ids: &[],
+        });
+        let holder = merging.next().expect("a holder");
+        let absorbed: Vec<MergingBill<'_>> = merging.collect();
+        merge_fee_rules(holder, &absorbed).expect("merges")
+    }
+
+    #[test]
+    fn a_merge_charges_a_fee_per_bill_once_and_puts_a_split_back_together() {
+        let rules = [
+            untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+        ];
+        let wholes = fee_wholes(&rules);
+        let thirds = [
+            vec![line(0, 1, 100_000, food())],
+            vec![line(0, 1, 100_000, food())],
+            vec![line(0, 1, 100_000, food())],
+        ];
+        let kept = split_fee_rules(&rules, &thirds).expect("splits");
+        let [first, second, third] = kept.as_slice() else {
+            panic!("three parts: {kept:?}");
+        };
+        // 10,000 split three ways is 3,333, 3,333 and 3,334. Every part back together is the
+        // whole again, and some of them the sum of their shares; the percentage is the holder's.
+        let all = merged(&wholes, &[first, second, third]);
+        assert_eq!(per_bill(&all, 1), Some(vnd(10_000)));
+        assert_eq!(all.fee_rules.get(1), rules.get(1));
+        assert_eq!(
+            per_bill(&merged(&wholes, &[third, first]), 1),
+            Some(vnd(6_667))
+        );
+        // Two bills split from no common bill charge it once, not once each.
+        assert_eq!(
+            per_bill(&merged(&wholes, &[&rules, &rules]), 1),
+            Some(vnd(10_000))
+        );
+
+        // A cover on the food alone: the drinks' part drops it, its share being nothing, and
+        // holding that part while absorbing the food's keeps the cover, after the drinks' rules.
+        let food_cover = [
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+            only(
+                FeeItems::Include,
+                0,
+                untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            ),
+        ];
+        let parts = [
+            vec![line(1, 1, 40_000, alcohol())],
+            vec![line(0, 1, 100_000, food())],
+        ];
+        let kept = split_fee_rules(&food_cover, &parts).expect("splits");
+        let [drinks, dishes] = kept.as_slice() else {
+            panic!("two parts: {kept:?}");
+        };
+        assert_eq!(
+            drinks.len(),
+            1,
+            "the drinks keep the percentage alone: {drinks:?}"
+        );
+        let held = merged(&fee_wholes(&food_cover), &[drinks, dishes]);
+        assert_eq!(per_bill(&held, 1), Some(vnd(10_000)));
+        let order: Vec<u128> = held
+            .fee_rules
+            .iter()
+            .map(|rule| rule.fee_id.as_ulid().to_u128())
+            .collect();
+        assert_eq!(order, [2, 1]);
+    }
+
+    #[test]
+    fn a_waived_fee_charges_and_taxes_nothing_and_leaves_the_rest_as_they_were() {
+        // ADR-0159 decision 5. Waiving the service charge leaves the cover as it was, and the bill
+        // is the bill that never froze a service charge at all.
+        let rates = rates();
+        let service = altered(fee(1, FeeKind::Percent, 1_000), |rule| rule.waivable = true);
+        let cover = fee(2, FeeKind::AmountPerBill, 10_000);
+        let rules = [service.clone(), cover.clone()];
+        let without = assemble_waiving(&dinner(), &rules, &[service.fee_id], &rates, |_| {})
+            .expect("assembles");
+        let cover_alone = assemble_with(&dinner(), &[cover], &rates, |_| {}).expect("assembles");
+        assert_eq!(without, cover_alone);
+        assert_reconciles(&without);
+
+        // Charged, the service charge says it may be waived, and the cover that it may not.
+        let charged = assemble_with(&dinner(), &rules, &rates, |_| {}).expect("assembles");
+        let waivable: Vec<bool> = charged.fee_lines.iter().map(|fee| fee.waivable).collect();
+        assert_eq!(waivable, [true, false]);
+
+        // Every fee waived is a bill that froze none.
+        let every = [service.fee_id, FeeId::new(Ulid::from_u128(2))];
+        let bare = assemble_waiving(&dinner(), &rules, &every, &rates, |_| {}).expect("assembles");
+        assert!(bare.fee_lines.is_empty());
+        assert_eq!(
+            bare,
+            assemble_with(&dinner(), &[], &rates, |_| {}).expect("assembles")
+        );
+    }
+
+    #[test]
+    fn only_a_waivable_fee_the_bill_charges_is_waived() {
+        let service = altered(fee(1, FeeKind::Percent, 1_000), |rule| rule.waivable = true);
+        let cover = fee(2, FeeKind::AmountPerBill, 10_000);
+        let rules = [service.clone(), cover.clone()];
+        assert_eq!(waivable_fee(&rules, &[], service.fee_id), Ok(&service));
+        assert_eq!(
+            waivable_fee(&rules, &[], cover.fee_id),
+            Err(DomainError::FeeNotWaivable)
+        );
+        assert_eq!(
+            waivable_fee(&rules, &[service.fee_id], service.fee_id),
+            Err(DomainError::FeeNotOnBill),
+            "waived already"
+        );
+        assert_eq!(
+            waivable_fee(&rules, &[], FeeId::new(Ulid::from_u128(9))),
+            Err(DomainError::FeeNotOnBill),
+            "a rule the bill never froze"
+        );
+    }
+
+    #[test]
+    fn a_fee_waived_on_any_merged_bill_stays_waived_on_the_merge() {
+        // ADR-0159 decision 5: a waive follows the fee's id through a merge, the holder's first.
+        let rules = [
+            fee(1, FeeKind::Percent, 1_000),
+            fee(2, FeeKind::AmountPerBill, 10_000),
+        ];
+        let wholes = fee_wholes(&rules);
+        let service = [FeeId::new(Ulid::from_u128(1))];
+        let cover = [FeeId::new(Ulid::from_u128(2))];
+        let bill = |waived_fee_ids| MergingBill {
+            fee_rules: &rules,
+            fee_wholes: &wholes,
+            waived_fee_ids,
+        };
+        let merged = merge_fee_rules(bill(&cover), &[bill(&[]), bill(&service), bill(&cover)])
+            .expect("merges");
+        assert_eq!(
+            merged.waived_fee_ids,
+            [
+                FeeId::new(Ulid::from_u128(2)),
+                FeeId::new(Ulid::from_u128(1))
+            ]
+        );
+        let none = merge_fee_rules(bill(&[]), &[bill(&[])]).expect("merges");
+        assert!(none.waived_fee_ids.is_empty());
+    }
+
+    /// The modes a bill's tax and fees may round by in a property test: the two a store chooses
+    /// between (ADR-0160), and half-even, which the arithmetic takes as well.
+    fn modes() -> impl Strategy<Value = Rounding> {
+        prop_oneof![
+            Just(Rounding::HalfUp),
+            Just(Rounding::TowardZero),
+            Just(Rounding::HalfEven),
+        ]
+    }
+
     /// A rule from a property test's choices of kind, tax treatment, item scope and value.
     fn chosen(id: u128, kind: u8, tax: u8, scope: u8, value: i64) -> FrozenFee {
         let kind = match kind {
@@ -1903,7 +2598,7 @@ mod tests {
             discount_percent in 0_i64..=50,
             service_charge in prop_oneof![Just(0_i64), 1_i64..=50_000],
             choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=3),
-            half_even in any::<bool>(),
+            mode in modes(),
             cash_rounding in any::<bool>(),
         ) {
             let class = |is_food: bool| if is_food { food() } else { alcohol() };
@@ -1921,7 +2616,7 @@ mod tests {
             let totals = assemble_with(&lines, &rules, &rates, |input| {
                 input.bill_discount = vnd(discount);
                 input.service_charge = vnd(service_charge);
-                input.rounding_mode = if half_even { Rounding::HalfEven } else { Rounding::HalfUp };
+                input.tax_rounding = mode;
                 input.cash_rounding_increment = cash_rounding.then_some(500);
             })
             .expect("assembles");
@@ -1973,6 +2668,225 @@ mod tests {
                 }
             }
             prop_assert_eq!(placed, i128::from(taxed), "every fee part is in its class's base");
+        }
+
+        /// ADR-0159 decision 5: a waived fee is the rule left off the bill, whatever the rules, the
+        /// lines and the reductions, so it charges nothing, taxes nothing and moves no other fee.
+        #[test]
+        fn waiving_a_fee_is_assembling_the_bill_without_it(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
+            waiving in prop::collection::vec(any::<bool>(), 4),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let waived: Vec<FeeId> = rules
+                .iter()
+                .zip(&waiving)
+                .filter(|(_, waive)| **waive)
+                .map(|(rule, _)| rule.fee_id)
+                .collect();
+            let kept: Vec<FrozenFee> = rules
+                .iter()
+                .filter(|rule| !waived.contains(&rule.fee_id))
+                .cloned()
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = vnd(sold_total * discount_percent / 100);
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let with_waives = assemble_waiving(&lines, &rules, &waived, &rates, |input| {
+                input.bill_discount = discount;
+            })
+            .expect("assembles");
+            let without_rules = assemble_with(&lines, &kept, &rates, |input| {
+                input.bill_discount = discount;
+            })
+            .expect("assembles");
+            prop_assert_eq!(&with_waives, &without_rules);
+            prop_assert!(
+                with_waives.fee_lines.iter().all(|fee| !waived.contains(&fee.fee_id)),
+                "a waived fee charges nothing"
+            );
+        }
+
+        /// ADR-0159 decision 6: the parts of a split bill charge a fee per bill together exactly as
+        /// the whole would have, and a percentage or a fee per unit on their own lines, so those
+        /// come to the whole within a minor unit per part, each part rounding once. Merged back,
+        /// any of the parts charge a fee per bill at the sum of their shares, whichever of them
+        /// holds the rest, and all of them at the whole.
+        #[test]
+        fn the_parts_of_a_split_bill_charge_what_the_whole_would_have(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 0_i64..=5_000_000, any::<bool>(), 0_usize..3),
+                1..=8,
+            ),
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
+            mode in modes(),
+            merging in prop::collection::vec(any::<bool>(), 3),
+            holding in 0_usize..3,
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let mut lines = Vec::new();
+            let mut parts: Vec<Vec<BillLine>> = vec![Vec::new(); 3];
+            for (n, units, net, is_food, part) in &sold {
+                let sold_line = line(*n, *units, *net, class(*is_food));
+                lines.push(sold_line);
+                if let Some(part) = parts.get_mut(*part) {
+                    part.push(sold_line);
+                }
+            }
+            parts.retain(|part| !part.is_empty());
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let round = |input: &mut BillInput<'_>| input.tax_rounding = mode;
+
+            let whole = assemble_with(&lines, &rules, &rates, round).expect("assembles");
+            let kept = split_fee_rules(&rules, &parts).expect("splits");
+            prop_assert_eq!(kept.len(), parts.len());
+            let mut together = vec![0_i64; rules.len()];
+            for (part, kept) in parts.iter().zip(&kept) {
+                let totals = assemble_with(part, kept, &rates, round).expect("a part assembles");
+                assert_reconciles(&totals);
+                for (sum, charged) in together.iter_mut().zip(charged_by_rule(&totals, &rules)) {
+                    *sum += charged;
+                }
+            }
+            let per_part = i64::try_from(parts.len()).expect("a few parts");
+            let wholes = charged_by_rule(&whole, &rules);
+            for ((rule, whole), together) in rules.iter().zip(&wholes).zip(together) {
+                if rule.kind() == Some(FeeKind::AmountPerBill) {
+                    prop_assert_eq!(together, *whole, "a fee per bill is shared, never repeated");
+                } else {
+                    prop_assert!((together - whole).abs() <= per_part, "{} for {}", together, whole);
+                }
+            }
+
+            // Some of the parts merged back, or all of them when none is picked.
+            let mut picked: Vec<usize> = (0..parts.len())
+                .filter(|index| merging.get(*index) == Some(&true))
+                .collect();
+            if picked.is_empty() {
+                picked = (0..parts.len()).collect();
+            }
+            let holder = holding % picked.len();
+            picked.rotate_left(holder);
+            let part_wholes = fee_wholes(&rules);
+            let held: Vec<&[FrozenFee]> = picked
+                .iter()
+                .map(|index| kept.get(*index).map_or(&[][..], Vec::as_slice))
+                .collect();
+            let merged_fees = merged(&part_wholes, &held);
+            let merged_lines: Vec<BillLine> = picked
+                .iter()
+                .filter_map(|index| parts.get(*index))
+                .flatten()
+                .copied()
+                .collect();
+            let totals = assemble_with(&merged_lines, &merged_fees.fee_rules, &rates, round)
+                .expect("the merged bill assembles");
+            assert_reconciles(&totals);
+            let charged = charged_by_rule(&totals, &rules);
+            for ((rule, charged), whole) in rules.iter().zip(charged).zip(&wholes) {
+                if rule.kind() != Some(FeeKind::AmountPerBill) {
+                    continue;
+                }
+                let shares: i64 = held
+                    .iter()
+                    .filter_map(|rules| rules.iter().find(|kept| kept.fee_id == rule.fee_id))
+                    .filter_map(|kept| kept.amount)
+                    .map(|amount| amount.amount_minor)
+                    .sum();
+                prop_assert_eq!(charged, shares, "the merged parts' shares");
+                prop_assert!(charged <= *whole, "never more than the whole");
+                if picked.len() == parts.len() {
+                    prop_assert_eq!(charged, *whole, "every part back together is the whole");
+                }
+            }
+        }
+
+        /// ADR-0160 (the tax rounding on `locale`): a store whose `locale` node sets no mode, sets
+        /// `TAX_ROUNDING_HALF_UP`, or carries `TAX_ROUNDING_UNSPECIFIED` or a mode from a newer
+        /// release assembles every bill exactly as before the setting existed. Every caller passed
+        /// [`Rounding::HalfUp`] as the one mode for the tax, the fees and the cash rounding, so the
+        /// figures through the setting are the figures with that mode, and the grand total is the
+        /// unrounded total rounded half-up to the increment, as that one mode rounded it.
+        #[test]
+        fn a_store_on_half_up_assembles_every_bill_as_before(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            comps_percent in 0_i64..=20,
+            service_charge in prop_oneof![Just(0_i64), 1_i64..=50_000],
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=3),
+            inclusive in any::<bool>(),
+            cash_increment in prop_oneof![Just(None), Just(Some(500_i64)), Just(Some(1_000_i64))],
+            node in 0_usize..4,
+        ) {
+            let settings = LocaleSettings {
+                tax_rounding: match node {
+                    0 => Open::default(),
+                    1 => Open::from_known(TaxRounding::HalfUp),
+                    2 => Open::from_known(TaxRounding::Unspecified),
+                    _ => Open::parse("TAX_ROUNDING_HALF_EVEN"),
+                },
+            };
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let comps = (sold_total - discount) * comps_percent / 100;
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let bill = |mode: Rounding| {
+                assemble_with(&lines, &rules, &rates, |input| {
+                    input.bill_discount = vnd(discount);
+                    input.comps = vnd(comps);
+                    input.service_charge = vnd(service_charge);
+                    input.prices_include_tax = inclusive;
+                    input.cash_rounding_increment = cash_increment;
+                    input.tax_rounding = mode;
+                })
+            };
+
+            let through_the_setting = bill(settings.tax_rounding().rounding());
+            let with_the_one_mode = bill(Rounding::HalfUp);
+            prop_assert_eq!(&through_the_setting, &with_the_one_mode);
+            if let Ok(totals) = with_the_one_mode {
+                assert_reconciles(&totals);
+                let unrounded = totals
+                    .total_due
+                    .checked_sub(totals.rounding_adjustment)
+                    .expect("one currency");
+                let rounded = match cash_increment.and_then(NonZeroI64::new) {
+                    Some(step) => unrounded
+                        .round_to_increment(step, Rounding::HalfUp)
+                        .expect("in range"),
+                    None => unrounded,
+                };
+                prop_assert_eq!(totals.total_due, rounded);
+            }
         }
     }
 }

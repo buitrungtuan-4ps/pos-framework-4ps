@@ -26,12 +26,13 @@ use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, OrderId, TableId};
+use pos_proto::events::BillFeeLine;
+use pos_proto::ids::{BillId, DeviceId, OrderId, TableId};
 use pos_proto::money::Money;
 
-use crate::app::{AppError, Edge, PreBill};
+use crate::app::{AppError, Edge, EdgeSession, PreBill, fee_records_in};
 use crate::http::{bad_request, error_response, parse_ulid};
-use crate::printing::{PrintOutcome, Printers, short_reference};
+use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
 /// What a table owes, as the till shows it.
 #[derive(Debug, Serialize)]
@@ -48,16 +49,54 @@ pub(crate) struct CheckResponse {
     tax_total: Money,
     /// What the guest owes — the figure the bill will settle against.
     total_due: Money,
+    /// Each fee charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
+    /// in rule order: the rule, its code and its name, what it charged and the tax on it, as the
+    /// settle records them, except that the name is the store's display language where the
+    /// current rule translates it. Part by part for a table whose bill is split, as each part
+    /// computes its own. Empty where no fee applies, which is every bill at a store with no
+    /// `fees` node. The till shows each line, and its total is still `total_due`. A fee waived on
+    /// the bill charges nothing and is not listed (decision 5).
+    fee_lines: Vec<CheckFeeLine>,
 }
 
-impl From<&BillTotals> for CheckResponse {
-    fn from(totals: &BillTotals) -> Self {
+/// One fee as the till shows it: the line the settle records, and whether staff may waive it.
+#[derive(Debug, Serialize)]
+pub(crate) struct CheckFeeLine {
+    #[serde(flatten)]
+    line: BillFeeLine,
+    /// Whether the fee's rule, as the bill froze it, lets staff waive it on one bill
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
+    /// **Waive** only on an open bill's waivable fee, and the edge refuses any other.
+    waivable: bool,
+}
+
+/// Each fee on `totals` as the till shows it, named in the store's display language.
+pub(crate) fn check_fee_lines(totals: &BillTotals, session: &EdgeSession) -> Vec<CheckFeeLine> {
+    totals
+        .fee_lines
+        .iter()
+        .zip(fee_records_in(
+            totals,
+            session,
+            session.display_language.as_deref(),
+        ))
+        .map(|(fee, line)| CheckFeeLine {
+            line,
+            waivable: fee.waivable,
+        })
+        .collect()
+}
+
+impl CheckResponse {
+    /// The till's reading of `totals`, its fees named in the store's display language.
+    pub(crate) fn of(totals: &BillTotals, session: &EdgeSession) -> Self {
         Self {
             subtotal: totals.subtotal,
             discount_total: totals.discount_total,
             comp_total: totals.comp_total,
             tax_total: totals.tax_total,
             total_due: totals.total_due,
+            fee_lines: check_fee_lines(totals, session),
         }
     }
 }
@@ -71,8 +110,8 @@ pub(crate) struct BillCheckResponse {
     /// The order lines it covers ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)
     /// decision 1), so a till can show a guest what their part of a split table is for.
     order_line_ids: Vec<String>,
-    /// The same five figures the table and order reads answer with, so a till draws all three the
-    /// same way.
+    /// The same figures and fee lines the table and order reads answer with, so a till draws all
+    /// three the same way.
     #[serde(flatten)]
     totals: CheckResponse,
 }
@@ -89,7 +128,11 @@ where
         return bad_request("a table id is a ULID");
     };
     match edge.check_totals(table_id) {
-        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
+        Ok(totals) => (
+            StatusCode::OK,
+            Json(CheckResponse::of(&totals, &edge.session())),
+        )
+            .into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
         // a configuration error, and the till showing it beats the till inventing a number.
         Err(error) => error_response(&error),
@@ -114,7 +157,11 @@ where
         return bad_request("an order id is a ULID");
     };
     match edge.order_totals(order_id) {
-        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
+        Ok(totals) => (
+            StatusCode::OK,
+            Json(CheckResponse::of(&totals, &edge.session())),
+        )
+            .into_response(),
         Err(error) => error_response(&error),
     }
 }
@@ -145,7 +192,7 @@ where
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                totals: CheckResponse::from(&check.totals),
+                totals: CheckResponse::of(&check.totals, &edge.session()),
             }),
         )
             .into_response(),
@@ -186,7 +233,14 @@ where
         return error_response(&AppError::NothingToPrint);
     };
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(printers.as_deref(), &edge, order_id, pre_bills).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bills,
+    )
+    .await
 }
 
 /// `POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order
@@ -207,7 +261,14 @@ where
         return error_response(&refused);
     }
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(printers.as_deref(), &edge, order_id, pre_bills).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bills,
+    )
+    .await
 }
 
 /// `POST /api/bills/{id}/check/print` — one open bill's pre-bill, for the guest paying that part of
@@ -231,17 +292,25 @@ where
         return error_response(&AppError::UnknownBill);
     };
     let pre_bill = edge.pre_bill_for_bill(bill_id).map(|one| vec![one]);
-    print_all(printers.as_deref(), &edge, order_id, pre_bill).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bill,
+    )
+    .await
 }
 
-/// Prints each pre-bill under the order's short reference — the one its kitchen tickets carry — and
-/// says what came of each.
+/// Prints each pre-bill under the order's short reference — the one its kitchen tickets carry — at
+/// the printer of the till `device` is, and says what came of each.
 ///
 /// Nothing to print is a `409 NOTHING_TO_PRINT` rather than an empty success, because a till that
 /// pressed the button and got a blank list would tell the server the paper is on its way.
 async fn print_all<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
+    device: DeviceId,
     order_id: OrderId,
     pre_bills: Result<Vec<PreBill>, AppError>,
 ) -> Response
@@ -257,6 +326,12 @@ where
     };
     let reference = short_reference(&order_id.to_string());
     let session = edge.session();
+    // The till's own receipt printer and languages, where its terminal names them (ADR-0160
+    // decision 4), the same for each part of a split table.
+    let till = match printers {
+        Some(printers) => printers.till_for(&session, device).await,
+        None => TillPrinting::STORE,
+    };
     let mut prints = Vec::with_capacity(pre_bills.len());
     for pre_bill in &pre_bills {
         let outcome = match printers {
@@ -265,6 +340,7 @@ where
                 printers
                     .print_pre_bill(
                         &session,
+                        &till,
                         edge.store_id(),
                         edge.print_job_id(),
                         &reference,

@@ -1,7 +1,8 @@
 // People & access (ADR-0070, Track M1), on the F2 CRUD kit. The operator's place to onboard a store's
 // employees, set their sign-in PIN, author role templates over the pos-core permission catalogue, and
-// assign people to a store with a role — all by name, no ULID typed. Tenant-scoped to the picker's
-// context; assignments also need a store chosen in the top bar.
+// assign people a role at a store, a store group or every store (ADR-0158 decision 3) — all by name,
+// no ULID typed. Tenant-scoped to the picker's context; assignments also need a store chosen in the
+// top bar, whose staff the card lists.
 //
 // This is the console's first T1 Restricted data (employee name, code, PIN). The PIN is set/reset,
 // never read: it is hashed server-side and this screen only ever learns whether one is set. Reading
@@ -10,12 +11,31 @@
 // holding console.people.manage (owner/admin) — the server re-checks every route; the gate here only
 // hides what a role cannot do.
 
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
+import type {
+  Assignment,
+  AssignmentTarget,
+  Employee,
+  Page,
+  PermissionInfo,
+  PermissionsPublishReport,
+  RoleTemplate,
+  StoreGroup,
+  WrittenSetting,
+} from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
+import {
+  grantLists,
+  grantsOf,
+  NO_GRANTS,
+  type RoleGrants,
+  setApproval,
+  toggleGrant,
+} from "../lib/role-grants";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
@@ -43,6 +63,28 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+
+/** The most digits a PIN may have, and the fewest while the tenant asks for no more (ADR-0160). */
+const PIN_MOST_DIGITS = 8;
+const PIN_FEWEST_DIGITS = 4;
+
+/**
+ * The fewest digits the tenant lets a PIN have, as the cloud reads it: the number written for
+ * `session.pin_min_length` when it is a whole number from 4 to 8, else 4. The setting is written
+ * for the whole tenant and nowhere narrower, and `values` is the tenant's own list, so its one
+ * tenant-scope row is the value.
+ */
+function pinFewestOf(values: readonly WrittenSetting[]): number {
+  const fewest = values.find(
+    (row) => row.setting_key === "session.pin_min_length" && row.scope === "SETTING_SCOPE_TENANT",
+  )?.value;
+  return typeof fewest === "number" &&
+    Number.isInteger(fewest) &&
+    fewest >= PIN_FEWEST_DIGITS &&
+    fewest <= PIN_MOST_DIGITS
+    ? fewest
+    : PIN_FEWEST_DIGITS;
+}
 
 export function People() {
   // One page of the roster, not the whole thing (ADR-0098, #299). The table below is the only reader
@@ -82,6 +124,13 @@ export function People() {
   // PIN reset (a Modal over one employee).
   const [pinFor, setPinFor] = createSignal<Employee | null>(null);
   const [pinValue, setPinValue] = createSignal("");
+  // The fewest digits the tenant lets a PIN have, read each time the modal opens so a minimum raised
+  // a moment ago is the one it names. Four until the read answers, and if it fails: the cloud holds
+  // every PIN to the tenant's minimum whatever this says, so a failed read costs the operator a
+  // refusal from the cloud, never a PIN shorter than the tenant asks for.
+  const [pinFewest, setPinFewest] = createSignal(PIN_FEWEST_DIGITS);
+  let pinReadSeq = 0;
+  const pinRange = () => ({ min: pinFewest(), max: PIN_MOST_DIGITS });
 
   // Archive/restore.
   const [pendingArchive, setPendingArchive] = createSignal<Employee | null>(null);
@@ -92,15 +141,20 @@ export function People() {
   // The version the role drawer opened on (ADR-0094). Empty for a new role, which has none yet.
   const [roleDraftEtag, setRoleDraftEtag] = createSignal("");
   const [roleName, setRoleName] = createSignal("");
-  const [rolePermissions, setRolePermissions] = createSignal<string[]>([]);
+  // Every permission the role grants, and which of them only with approval (ADR-0158 decision 4).
+  const [roleGrants, setRoleGrants] = createSignal<RoleGrants>(NO_GRANTS);
   // Held as the typed text, not a number, so an empty box and a typed `0` stay apart: the first is
   // "no ceiling configured" and the second is "this role discounts nothing". Both mean a manager is
   // needed today, and they are different things to have said.
   const [roleCeiling, setRoleCeiling] = createSignal("");
 
-  // Assign form (store from the top-bar context).
+  // Assign form. "Where" is the top-bar store, one of the tenant's store groups, or every store
+  // (ADR-0158 decision 3).
   const [assignEmployee, setAssignEmployee] = createSignal("");
   const [assignRole, setAssignRole] = createSignal("");
+  const [assignWhere, setAssignWhere] = createSignal<AssignmentTarget["kind"]>("store");
+  const [assignGroup, setAssignGroup] = createSignal("");
+  const [groups, setGroups] = createSignal<StoreGroup[]>([]);
   // The assign picker searches the roster on the server rather than filtering a loaded copy of it
   // (ADR-0098, B3-4). `assignChoice` holds the whole chosen row, not just the id, so the picker can
   // name who is selected without going back to a list it no longer keeps.
@@ -110,6 +164,8 @@ export function People() {
   let assignSearchTimer: ReturnType<typeof setTimeout> | undefined;
   let assignSearchSeq = 0;
   const [pendingRemove, setPendingRemove] = createSignal<Assignment | null>(null);
+  // Stores an immediate publish failed at, until they are published again (ADR-0158 decision 7).
+  const [unpublished, setUnpublished] = createSignal<readonly string[]>([]);
 
   // A `412` means somebody else saved this person or role while the form was open (ADR-0094). The
   // screen reloads rather than offering a retry: retrying would re-apply the overwrite the refusal
@@ -125,6 +181,36 @@ export function People() {
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
+  };
+
+  // Removing an assignment and archiving a person or a role publish to every store they reach at
+  // once (ADR-0158 decision 7). The change is saved whatever the stores answered, but a store whose
+  // publish failed keeps its old roster until it is published again, so the operator is told and
+  // offered the publish.
+  const reportFailedStores = (report: PermissionsPublishReport | null) => {
+    const failed = (report?.stores ?? [])
+      .filter((row) => row.outcome === "PERMISSIONS_PUBLISH_FAILED")
+      .map((row) => row.store_id);
+    if (failed.length > 0) {
+      setUnpublished((current) => [...new Set([...current, ...failed])]);
+      toast.error(t("people.publishFailedStores", { count: failed.length }));
+    }
+  };
+
+  /** Publishes again to each store an immediate publish failed at, one at a time. */
+  const publishAgain = async () => {
+    setBusy(true);
+    try {
+      for (const store of unpublished()) {
+        await api.publishPermissions(tenantId(), store);
+        setUnpublished((current) => current.filter((id) => id !== store));
+      }
+      toast.ok(t("people.republished"));
+    } catch (caught) {
+      await fail(caught);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /** How many employees the table shows at once. The pager reads `total` for the rest. */
@@ -161,12 +247,14 @@ export function People() {
     setError("");
     setBusy(true);
     try {
-      const [loadedRoles, loadedCatalogue] = await Promise.all([
+      const [loadedRoles, loadedCatalogue, loadedGroups] = await Promise.all([
         api.listRoles(tenantId()),
         api.permissionCatalogue(),
+        api.listStoreGroups(tenantId()),
       ]);
       setRoles(loadedRoles);
       setCatalogue(loadedCatalogue);
+      setGroups(loadedGroups);
       await loadRoster();
       await loadAssignments();
     } catch (caught) {
@@ -184,8 +272,13 @@ export function People() {
     setAssignments(await api.listAssignmentsByStore(tenantId(), storeId()));
   };
 
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+  // Load on open and whenever the tenant changes — never with an empty context (F0). Another
+  // tenant's stores are not this one's to publish again.
+  onScopedContext("tenant", () => {
+    setUnpublished([]);
+    setAssignGroup("");
+    void load();
+  });
   // Reload just the assignments when the store selection changes.
   onScopedContext("store", () => void loadAssignments().catch(fail));
 
@@ -195,6 +288,17 @@ export function People() {
   const assignmentLabel = (row: Assignment) =>
     row.employee_name ? `${row.employee_name} (${row.employee_code ?? ""})`.trim() : row.employee_id;
   const roleLabel = (id: string) => roles().find((role) => role.role_template_id === id)?.name ?? id;
+  // Where an assignment reaches, as its row shows it: this store, its group by name, or every store.
+  const scopeLabel = (row: Assignment) => {
+    if (row.scope_kind === "ASSIGNMENT_SCOPE_TENANT") {
+      return t("people.scope.tenant");
+    }
+    if (row.scope_kind === "ASSIGNMENT_SCOPE_STORE_GROUP") {
+      const id = row.store_group_id ?? "";
+      return groups().find((group) => group.group_id === id)?.name ?? id;
+    }
+    return t("people.scope.store");
+  };
 
   const createEmployee = async () => {
     const code = newCode().trim();
@@ -214,14 +318,29 @@ export function People() {
     });
   };
 
+  const openPin = (employee: Employee) => {
+    setPinFor(employee);
+    setPinValue("");
+    setPinFewest(PIN_FEWEST_DIGITS);
+    const seq = ++pinReadSeq;
+    void api.listSettingValues(tenantId()).then(
+      (values) => {
+        if (seq === pinReadSeq) {
+          setPinFewest(pinFewestOf(values));
+        }
+      },
+      () => undefined,
+    );
+  };
+
   const savePin = async () => {
     const employee = pinFor();
     if (!employee) {
       return;
     }
     const pin = pinValue().trim();
-    if (!/^\d{4,8}$/.test(pin)) {
-      setError(t("people.pinInvalid"));
+    if (!/^\d+$/.test(pin) || pin.length < pinFewest() || pin.length > PIN_MOST_DIGITS) {
+      setError(t("people.pinInvalid", pinRange()));
       return;
     }
     setBusy(true);
@@ -246,7 +365,7 @@ export function People() {
   ) => {
     setBusy(true);
     try {
-      await api.updateEmployee(
+      const report = await api.updateEmployee(
         employee.employee_id,
         tenantId(),
         { name: employee.name, status },
@@ -254,6 +373,7 @@ export function People() {
       );
       setPendingArchive(null);
       toast.ok(doneMessage);
+      reportFailedStores(report);
       // Archiving changes a status, not membership: the row stays on the page it was on.
       await loadRoster();
     } catch (caught) {
@@ -267,7 +387,7 @@ export function People() {
     setRoleDraftId("");
     setRoleDraftEtag("");
     setRoleName("");
-    setRolePermissions([]);
+    setRoleGrants(NO_GRANTS);
     setRoleCeiling("");
     setRoleOpen(true);
   };
@@ -275,7 +395,7 @@ export function People() {
     setRoleDraftId(role.role_template_id);
     setRoleDraftEtag(role.etag);
     setRoleName(role.name);
-    setRolePermissions([...role.permissions]);
+    setRoleGrants(grantsOf(role));
     setRoleCeiling(
       role.discount_ceiling_minor === undefined || role.discount_ceiling_minor === null
         ? ""
@@ -283,10 +403,23 @@ export function People() {
     );
     setRoleOpen(true);
   };
-  const togglePermission = (id: string, on: boolean) => {
-    setRolePermissions((current) =>
-      on ? [...current, id] : current.filter((existing) => existing !== id),
+  // A link may name one role to edit, `?role=` — the readiness panel on Settings links each role it
+  // lists here (ADR-0158, Rollout). Its editor opens once the roles are read, once per link, and
+  // only for a role that may edit roles.
+  const [params] = useSearchParams<{ role?: string }>();
+  let openedFor = "";
+  createEffect(() => {
+    const wanted = params.role ?? "";
+    const role = roles().find(
+      (row) => row.role_template_id.toUpperCase() === wanted.toUpperCase(),
     );
+    if (wanted && wanted !== openedFor && role && canManage()) {
+      openedFor = wanted;
+      openEditRole(role);
+    }
+  });
+  const togglePermission = (info: PermissionInfo, on: boolean) => {
+    setRoleGrants((current) => toggleGrant(current, info, on));
   };
 
   /**
@@ -320,6 +453,7 @@ export function People() {
       setError(t(ceiling.error));
       return;
     }
+    const lists = grantLists(roleGrants());
     setBusy(true);
     try {
       if (roleDraftId()) {
@@ -328,7 +462,7 @@ export function People() {
           tenantId(),
           {
             name,
-            permissions: rolePermissions(),
+            ...lists,
             discountCeilingMinor: ceiling.value,
             status: "active",
           },
@@ -336,7 +470,7 @@ export function People() {
         );
         toast.ok(t("people.roleUpdated"));
       } else {
-        await api.createRole(tenantId(), name, rolePermissions(), ceiling.value);
+        await api.createRole(tenantId(), name, lists, ceiling.value);
         toast.ok(t("people.roleCreated"));
       }
       setRoleOpen(false);
@@ -351,20 +485,21 @@ export function People() {
   const archiveRole = async (role: RoleTemplate) => {
     setBusy(true);
     try {
-      await api.updateRole(
+      const report = await api.updateRole(
         role.role_template_id,
         tenantId(),
         {
           name: role.name,
-          permissions: [...role.permissions],
-          // Carried through unchanged: archiving is a status change, and a PATCH that left this out
-          // would quietly wipe a ceiling somebody configured.
+          // Carried through unchanged: archiving is a status change. Both lists go as they stand,
+          // and a PATCH that left the ceiling out would quietly wipe one somebody configured.
+          ...grantLists(grantsOf(role)),
           discountCeilingMinor: role.discount_ceiling_minor ?? null,
           status: role.status === "archived" ? "active" : "archived",
         },
         role.etag,
       );
       toast.ok(t("people.roleUpdated"));
+      reportFailedStores(report);
       await load();
     } catch (caught) {
       await fail(caught);
@@ -424,12 +559,25 @@ export function People() {
       setError(t("people.assignNeedsBoth"));
       return;
     }
+    const where = assignWhere();
+    if (where === "group" && !assignGroup()) {
+      setError(t("people.assignNeedsGroup"));
+      return;
+    }
+    const target: AssignmentTarget =
+      where === "group"
+        ? { kind: "group", groupId: assignGroup() }
+        : where === "tenant"
+          ? { kind: "tenant" }
+          : { kind: "store", storeId: storeId() };
     setBusy(true);
     try {
-      await api.createAssignment(tenantId(), assignEmployee(), storeId(), assignRole());
+      // One to a group or to every store publishes at once, and says how each store's went.
+      const created = await api.createAssignment(tenantId(), assignEmployee(), target, assignRole());
       clearAssignee();
       setAssignRole("");
       toast.ok(t("people.assigned"));
+      reportFailedStores(created.stores ? { stores: created.stores } : null);
       await loadAssignments();
     } catch (caught) {
       await fail(caught);
@@ -461,9 +609,10 @@ export function People() {
     }
     setBusy(true);
     try {
-      await api.removeAssignment(tenantId(), assignment.assignment_id);
+      const report = await api.removeAssignment(tenantId(), assignment.assignment_id);
       setPendingRemove(null);
       toast.ok(t("people.unassigned"));
+      reportFailedStores(report);
       await loadAssignments();
     } catch (caught) {
       await fail(caught);
@@ -491,6 +640,29 @@ export function People() {
       .filter((role) => role.status === "active")
       .map((role) => ({ value: role.role_template_id, label: role.name })),
   );
+  // An archived group takes no new assignments; the server refuses one too.
+  const activeGroupOptions = createMemo(() =>
+    groups()
+      .filter((group) => group.status === "active")
+      .map((group) => ({ value: group.group_id, label: group.name })),
+  );
+  const whereOptions = () => [
+    { value: "store", label: t("people.scope.store") },
+    { value: "group", label: t("people.scope.group") },
+    { value: "tenant", label: t("people.scope.tenant") },
+  ];
+  // Removing a wider assignment offboards the person from every store it reached, so the
+  // confirmation says so.
+  const unassignMessage = () => {
+    const kind = pendingRemove()?.scope_kind;
+    if (kind === "ASSIGNMENT_SCOPE_TENANT") {
+      return t("people.unassignTenantMessage");
+    }
+    if (kind === "ASSIGNMENT_SCOPE_STORE_GROUP") {
+      return t("people.unassignGroupMessage");
+    }
+    return t("people.unassignMessage");
+  };
 
   // `sortField` is the server's token (`EmployeeSort`), `sortValue` the local comparator. Both are
   // given: the table is server-sorted, so only `sortField` is consulted, and `sortValue` is what the
@@ -551,8 +723,18 @@ export function People() {
     {
       key: "permissions",
       header: t("people.permissionCount"),
-      sortValue: (row) => row.permissions.length,
-      cell: (row) => <span class="text-ink-muted">{row.permissions.length}</span>,
+      sortValue: (row) => grantsOf(row).granted.length,
+      cell: (row) => (
+        <span class="text-ink-muted">
+          {grantsOf(row).granted.length}
+          <Show when={grantsOf(row).withApproval.length > 0}>
+            {" · "}
+            {t("people.permissionCountWithApproval", {
+              count: grantsOf(row).withApproval.length,
+            })}
+          </Show>
+        </span>
+      ),
     },
     {
       key: "status",
@@ -581,6 +763,19 @@ export function People() {
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={unpublished().length > 0}>
+            <div class="flex flex-col gap-2">
+              <Banner
+                tone="danger"
+                message={t("people.unpublishedStores", { count: unpublished().length })}
+              />
+              <div>
+                <Button variant="secondary" disabled={busy()} onClick={() => void publishAgain()}>
+                  {t("people.publishAgain")}
+                </Button>
+              </div>
+            </div>
+          </Show>
 
           <Card
             title={t("people.employees")}
@@ -637,10 +832,7 @@ export function People() {
                         <Button
                           variant="secondary"
                           disabled={busy()}
-                          onClick={() => {
-                            setPinFor(row);
-                            setPinValue("");
-                          }}
+                          onClick={() => openPin(row)}
                         >
                           {t("people.setPin")}
                         </Button>
@@ -802,6 +994,21 @@ export function People() {
                       onChange={setAssignRole}
                       placeholder={t("people.choose")}
                     />
+                    <SelectField
+                      label={t("people.where")}
+                      value={assignWhere()}
+                      options={whereOptions()}
+                      onChange={(value) => setAssignWhere(value as AssignmentTarget["kind"])}
+                    />
+                    <Show when={assignWhere() === "group"}>
+                      <SelectField
+                        label={t("people.storeGroup")}
+                        value={assignGroup()}
+                        options={activeGroupOptions()}
+                        onChange={setAssignGroup}
+                        placeholder={t("people.choose")}
+                      />
+                    </Show>
                     <Button disabled={busy()} onClick={() => void createAssignment()}>
                       {t("people.assign")}
                     </Button>
@@ -819,6 +1026,13 @@ export function People() {
                       header: t("people.role"),
                       cell: (row: Assignment) => (
                         <span class="text-ink-muted">{roleLabel(row.role_template_id)}</span>
+                      ),
+                    },
+                    {
+                      key: "where",
+                      header: t("people.where"),
+                      cell: (row: Assignment) => (
+                        <span class="text-ink-muted">{scopeLabel(row)}</span>
                       ),
                     },
                   ]}
@@ -883,13 +1097,13 @@ export function People() {
           }
         >
           <div class="flex flex-col gap-3">
-            <p class="text-sm text-ink-muted">{t("people.pinHint")}</p>
+            <p class="text-sm text-ink-muted">{t("people.pinHint", pinRange())}</p>
             <TextField
               label={t("people.pin")}
               type="password"
               value={pinValue()}
               onInput={setPinValue}
-              placeholder={t("people.pinPlaceholder")}
+              placeholder={t("people.pinPlaceholder", pinRange())}
             />
           </div>
         </Modal>
@@ -935,19 +1149,52 @@ export function People() {
                       <div class="flex flex-col gap-1">
                         <For each={bucket.items}>
                           {(info) => (
-                            <CheckboxField
-                              label={info.id}
-                              checked={rolePermissions().includes(info.id)}
-                              onChange={(on) => togglePermission(info.id, on)}
-                              caption={
-                                <span>
-                                  <span class="text-sm font-medium text-ink">{info.id}</span>
-                                  <span class="block text-xs text-ink-muted">
-                                    {info.description}
+                            <div>
+                              <CheckboxField
+                                label={info.id}
+                                checked={roleGrants().granted.includes(info.id)}
+                                onChange={(on) => togglePermission(info, on)}
+                                caption={
+                                  <span>
+                                    <span class="text-sm font-medium text-ink">{info.id}</span>
+                                    <span class="block text-xs text-ink-muted">
+                                      {info.description}
+                                    </span>
                                   </span>
-                                </span>
-                              }
-                            />
+                                }
+                              />
+                              {/* A PIN-flagged permission the role grants is granted one of two
+                                  ways (ADR-0158 decision 4); any other is only ever direct, and
+                                  one stored with approval anyway keeps the choice, so it can be
+                                  set back. */}
+                              <Show
+                                when={
+                                  roleGrants().granted.includes(info.id) &&
+                                  (info.pin_required || roleGrants().withApproval.includes(info.id))
+                                }
+                              >
+                                <div class="mb-2 ml-7">
+                                  <SelectField
+                                    label={t("people.grantHow", { permission: info.id })}
+                                    value={
+                                      roleGrants().withApproval.includes(info.id)
+                                        ? "approval"
+                                        : "direct"
+                                    }
+                                    options={[
+                                      { value: "approval", label: t("people.grantWithApproval") },
+                                      { value: "direct", label: t("people.grantDirectly") },
+                                    ]}
+                                    onChange={(value) =>
+                                      setRoleGrants((current) =>
+                                        setApproval(current, info.id, value === "approval"),
+                                      )
+                                    }
+                                    hint={t("people.grantWithApprovalHint")}
+                                  />
+                                </div>
+                              </Show>
+                            </div>
                           )}
                         </For>
                       </div>
@@ -980,7 +1227,7 @@ export function People() {
         <ConfirmDialog
           open={pendingRemove() !== null}
           title={t("people.unassignTitle")}
-          message={t("people.unassignMessage")}
+          message={unassignMessage()}
           confirmLabel={t("people.unassign")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}

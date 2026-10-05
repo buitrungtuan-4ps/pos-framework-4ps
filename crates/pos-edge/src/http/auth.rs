@@ -103,14 +103,21 @@ async fn gate(
     next: Next,
 ) -> Response {
     let Some(device_id) = presented.and_then(|token| pairing.device_for(&token)) else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "pair this device to reach the edge",
-        )
-            .into_response();
+        return not_paired();
     };
     request.extensions_mut().insert(device_id);
     next.run(request).await
+}
+
+/// The `401` a caller whose token the edge does not accept is told: absent, malformed, unknown and
+/// retired all read the same. One function, so the gates and the token probe
+/// (`GET /api/pair/this_device`) cannot drift into telling a probe which of those it hit.
+pub(crate) fn not_paired() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        "pair this device to reach the edge",
+    )
+        .into_response()
 }
 
 /// Refuses a request from a paired device that has no employee signed in, and resolves the signed-in
@@ -127,11 +134,7 @@ pub(crate) async fn require_signed_in(
     next: Next,
 ) -> Response {
     let Some(device_id) = request.extensions().get::<DeviceId>().copied() else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "pair this device to reach the edge",
-        )
-            .into_response();
+        return not_paired();
     };
     let now = SystemClock.now();
     let Some(employee_id) = sessions.employee_for(device_id, now) else {
@@ -257,6 +260,18 @@ pub(crate) struct SessionState {
     /// The permission ids the signed-in person holds only with approval, sorted: the till asks for
     /// an approver before sending the act.
     permissions_with_approval: Vec<&'static str>,
+    /// How many seconds an attended till may sit untouched before it signs its person out and
+    /// locks, from the store's `session` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
+    /// `0` never locks. A fact about the store rather than the person, so it is sent whoever is
+    /// signed in. The till keeps the time, because what counts as a touch is what happens on its
+    /// screen.
+    idle_lock_seconds: u32,
+    /// The float the Shift screen fills in when a shift opens, in the store currency's minor unit,
+    /// from the store's `shift` node (ADR-0160 decision 2); `0` fills in nothing. A store fact like
+    /// the idle lock, sent whoever is signed in. The cashier may change it, and the shift opens with
+    /// what they send.
+    opening_float_minor: i64,
 }
 
 /// The ids of the permissions in `set`, sorted, as the session read reports them.
@@ -385,6 +400,8 @@ where
     let session = deps.edge.session();
     let sign_in_ready = session.staff.sign_in_ready();
     let permissions_enforced = session.permissions_enforced;
+    let idle_lock_seconds = session.session_settings.idle_lock_seconds();
+    let opening_float_minor = session.shift.opening_float_minor();
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
@@ -401,6 +418,8 @@ where
             permissions_with_approval: permission_ids(
                 session.staff.permissions_with_approval_for(employee_id),
             ),
+            idle_lock_seconds,
+            opening_float_minor,
         },
         None => SessionState {
             signed_in: false,
@@ -410,6 +429,8 @@ where
             permissions_enforced,
             permissions: Vec::new(),
             permissions_with_approval: Vec::new(),
+            idle_lock_seconds,
+            opening_float_minor,
         },
     };
     Json(state).into_response()

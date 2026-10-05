@@ -95,6 +95,10 @@ interface NodeKind {
  */
 const MENU_NODE: NodeKind = { key: "menu", label: "storeGroups.node.menu", source: "menu" };
 
+// The two flags of the one rule a switch the console does not offer takes part in.
+const PAY_FIRST = "pay_first_enabled";
+const TABLES = "tables_enabled";
+
 const NODE_KINDS: readonly NodeKind[] = [
   MENU_NODE,
   { key: "tax", label: "storeGroups.node.tax", source: "authored" },
@@ -181,8 +185,9 @@ async function copyArguments(
     if (!read) {
       return null;
     }
+    // The guardrails only. Whether QR ordering is on is the switch (ADR-0160 decision 5), copied
+    // with the capability switches; sent here as `enabled`, it would switch every member too.
     return {
-      enabled: read.enabled,
       staff_confirmation_required: read.staff_confirmation_required,
       per_table_limit: read.per_table_limit,
       rate_window_secs: read.rate_window_secs,
@@ -204,6 +209,14 @@ async function copyArguments(
   }
   if (Object.keys(flags).length === 0) {
     return null;
+  }
+  // Table service excludes pay-first (§10), and the console no longer offers pay-first (ADR-0160
+  // decision 5). A copy that turns tables on therefore carries pay-first off with it, which is the
+  // source's own value, since no store holds both: a member with pay-first on would otherwise be
+  // refused, and nothing here could clear it. Nothing reads pay-first, so no member behaves
+  // differently.
+  if (flags[TABLES] === true && flags[PAY_FIRST] === undefined) {
+    flags[PAY_FIRST] = false;
   }
   return { flags };
 }
@@ -322,15 +335,24 @@ export function StoreGroups() {
     if (!subject) {
       return;
     }
+    // A store that joins or leaves a group some assignment names is published its staff at once
+    // (ADR-0158); one whose publish failed keeps its old roster until it is published again.
+    let failed = 0;
     void membership
-      .run(() =>
-        conditional(() =>
+      .run(async () => {
+        const saved = await conditional(() =>
           api.setStoreGroupMembers(tenantId(), subject.group_id, members(), subject.etag),
-        ),
-      )
+        );
+        failed = (saved.stores ?? []).filter(
+          (row) => row.outcome === "PERMISSIONS_PUBLISH_FAILED",
+        ).length;
+      })
       .then((saved) => {
         if (saved) {
           toast.ok(t("storeGroups.membersSaved", { count: String(members().length) }));
+          if (failed > 0) {
+            toast.error(t("people.publishFailedStores", { count: failed }));
+          }
           void cohorts.refetch();
         }
       });

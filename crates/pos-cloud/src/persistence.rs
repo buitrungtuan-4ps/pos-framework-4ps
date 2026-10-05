@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use store_postgres::PostgresDataMigrations;
 use store_postgres::{
     AdminInviteRow, AdminLoginRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow,
     AuditLogRow, AuditOrder, BrandRow, CampaignRow, CatalogCourseRow, CatalogItemRow,
@@ -42,6 +43,7 @@ use store_postgres::{
 use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
+use store_postgres::{FeeRuleRow, FeeRuleSlot as FeeRuleRowSlot, FeeRuleWrite, PostgresFeeRules};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresSettings, SettingSlot};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
@@ -61,10 +63,11 @@ use pos_ports::dynamic::BoxFuture;
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::chain::ChainHash;
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -72,6 +75,7 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::{TaxComponent, TaxRate};
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::settings::SettingScope;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -113,6 +117,7 @@ use crate::devices::{
 use pos_core::lease::LeaseGeneration;
 
 use crate::connections::{Connection, ConnectionStore, ConnectionStoreError};
+use crate::fees::{FeeRule, FeeRuleSlot, FeeRuleStore, FeeRuleStoreError, FeeScope};
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
@@ -133,10 +138,10 @@ use crate::ota::{
 };
 use crate::paging::{Page, PageRequest};
 use crate::people::{
-    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
-    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
-    RoleTemplateStoreError, RoleTemplateUpdate,
+    Assignment, AssignmentId, AssignmentScope, AssignmentStore, AssignmentStoreError, Employee,
+    EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId,
+    RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
 };
 use crate::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
@@ -1552,6 +1557,11 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 station_id: row.station_id,
                 agent_device_id: row.agent_device_id,
                 drawer_attached: row.drawer_attached,
+                paper_width: row.paper_width,
+                cuts_paper: row.cuts_paper,
+                receipt_printer_id: row.receipt_printer_id,
+                receipt_language: row.receipt_language,
+                receipt_second_language: row.receipt_second_language,
                 status: row.status,
                 version: row.version,
             })
@@ -1612,21 +1622,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             PostgresDeviceProposals::set_agent(self, &tenant, &id, agent.as_deref(), expected)
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        if changed.is_some() {
-            return Ok(DeviceWriteOutcome::Updated);
-        }
-        // Nothing changed, and the two reasons need different answers: the caller is stale, or the
-        // device is not there at all. A second read is the only way to tell, and it is only ever
-        // paid on the failing path.
-        let present = self
-            .version_of(&tenant, &id)
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        Ok(if present.is_some() {
-            DeviceWriteOutcome::VersionMismatch
-        } else {
-            DeviceWriteOutcome::NotFound
-        })
+        device_write_outcome(self, &tenant, &id, changed).await
     }
 
     async fn set_drawer(
@@ -1642,20 +1638,82 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             PostgresDeviceProposals::set_drawer(self, &tenant, &id, drawer_attached, expected)
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        if changed.is_some() {
-            return Ok(DeviceWriteOutcome::Updated);
-        }
-        // The agent pick's second read, for the same two answers: stale, or not there.
-        let present = self
-            .version_of(&tenant, &id)
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        Ok(if present.is_some() {
-            DeviceWriteOutcome::VersionMismatch
-        } else {
-            DeviceWriteOutcome::NotFound
-        })
+        device_write_outcome(self, &tenant, &id, changed).await
     }
+
+    async fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let changed = PostgresDeviceProposals::set_paper(
+            self,
+            &tenant,
+            &id,
+            paper_width,
+            cuts_paper,
+            expected,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+
+    async fn set_receipt(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        printer: Option<DeviceProposalId>,
+        language: Option<ReceiptLanguage>,
+        second_language: Option<ReceiptSecondLanguage>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let printer = printer.map(|printer| printer.to_string());
+        let changed = PostgresDeviceProposals::set_receipt(
+            self,
+            &tenant,
+            &id,
+            printer.as_deref(),
+            language,
+            second_language,
+            expected,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+}
+
+/// What a conditional write to an approved device did, given the version it `changed` the row to.
+///
+/// Nothing changed has two reasons, and they need different answers: the caller is stale, or the
+/// device is not there at all. A second read is the only way to tell, and it is only ever paid on
+/// the failing path.
+async fn device_write_outcome(
+    devices: &PostgresDeviceProposals,
+    tenant: &str,
+    id: &str,
+    changed: Option<String>,
+) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+    if changed.is_some() {
+        return Ok(DeviceWriteOutcome::Updated);
+    }
+    let present = devices
+        .version_of(tenant, id)
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+    Ok(if present.is_some() {
+        DeviceWriteOutcome::VersionMismatch
+    } else {
+        DeviceWriteOutcome::NotFound
+    })
 }
 
 impl TranslationStore for PostgresTranslations {
@@ -2867,6 +2925,120 @@ impl SettingsStore for PostgresSettings {
     }
 }
 
+impl crate::data_migrations::DataMigrations for PostgresDataMigrations {
+    async fn recorded_time(
+        &self,
+        name: &str,
+    ) -> Result<Option<Timestamp>, crate::data_migrations::DataMigrationError> {
+        let unavailable = |error: String| crate::data_migrations::DataMigrationError::new(error);
+        Self::recorded_time(self, name)
+            .await
+            .map_err(|error| unavailable(error.to_string()))?
+            .map(|ms| {
+                Timestamp::from_milliseconds_since_epoch(ms)
+                    .map_err(|error| unavailable(error.to_string()))
+            })
+            .transpose()
+    }
+
+    async fn record(
+        &self,
+        name: &str,
+        at: Timestamp,
+    ) -> Result<(), crate::data_migrations::DataMigrationError> {
+        Self::record(self, name, at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| crate::data_migrations::DataMigrationError::new(error.to_string()))
+    }
+}
+
+impl FeeRuleStore for PostgresFeeRules {
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<FeeRule>, FeeRuleStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))?;
+        rows.iter().map(fee_rule_from_row).collect()
+    }
+
+    async fn put(&self, tenant_id: TenantId, rule: &FeeRule) -> Result<(), FeeRuleStoreError> {
+        rule.check_storable()?;
+        let doc_json = crate::fees::authored_json(rule)
+            .map(|document| document.to_string())
+            .map_err(|error| {
+                FeeRuleStoreError::new(format!("could not serialize a fee rule: {error}"))
+            })?;
+        let fee_id = rule.rule.fee_id.to_string();
+        let slot = FeeRuleRowSlot {
+            scope: rule.scope.as_wire(),
+            scope_id: &rule.scope_id,
+            fee_id: &fee_id,
+        };
+        let write = FeeRuleWrite {
+            doc_json: &doc_json,
+            update_time_ms: rule.update_time.as_milliseconds_since_epoch(),
+            updated_by: &rule.updated_by,
+        };
+        self.upsert(&tenant_id.to_string(), slot, write)
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        slot: FeeRuleSlot<'_>,
+    ) -> Result<bool, FeeRuleStoreError> {
+        let fee_id = slot.fee_id.to_string();
+        let row_slot = FeeRuleRowSlot {
+            scope: slot.scope.as_wire(),
+            scope_id: slot.scope_id,
+            fee_id: &fee_id,
+        };
+        PostgresFeeRules::delete(self, &tenant_id.to_string(), row_slot)
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))
+    }
+}
+
+/// One stored fee rule, read back into the cloud's shape. The rule is parsed from the row's JSON
+/// text ([`crate::fees::rule_from_authored`]: a money amount reads only from text). A row whose
+/// scope, rule or time does not read back, or whose rule names another fee than the row's key, is
+/// an error rather than a rule quietly dropped from a store's list.
+fn fee_rule_from_row(row: &FeeRuleRow) -> Result<FeeRule, FeeRuleStoreError> {
+    let scope = FeeScope::from_wire(&row.scope)
+        .filter(|scope| FeeScope::WRITABLE.contains(scope))
+        .ok_or_else(|| {
+            FeeRuleStoreError::new(format!(
+                "a stored fee rule has an unknown scope `{}`",
+                row.scope
+            ))
+        })?;
+    let (rule, item_category_ids) =
+        crate::fees::rule_from_authored(&row.doc_json).map_err(|error| {
+            FeeRuleStoreError::new(format!("a stored fee rule could not be decoded: {error}"))
+        })?;
+    if rule.fee_id.to_string() != row.fee_id {
+        return Err(FeeRuleStoreError::new(
+            "a stored fee rule's id is not the id it is kept under",
+        ));
+    }
+    let update_time =
+        Timestamp::from_milliseconds_since_epoch(row.update_time_ms).map_err(|error| {
+            FeeRuleStoreError::new(format!(
+                "a stored fee rule has an invalid update time: {error}"
+            ))
+        })?;
+    Ok(FeeRule {
+        scope,
+        scope_id: row.scope_id.clone(),
+        rule,
+        item_category_ids,
+        update_time,
+        updated_by: row.updated_by.clone(),
+    })
+}
+
 impl InventoryStore for PostgresInventory {
     async fn list_ingredients(
         &self,
@@ -3815,7 +3987,7 @@ impl EmployeeStore for PostgresPeople {
 }
 
 /// Converts a stored role-template row into the domain [`RoleTemplate`], parsing the ids, status, and
-/// the `jsonb` permission array.
+/// the two `jsonb` permission arrays.
 fn role_template_record(
     row: RoleTemplateRow,
 ) -> Result<Versioned<RoleTemplate>, RoleTemplateStoreError> {
@@ -3839,6 +4011,12 @@ fn role_template_record(
                 "stored role-template permissions are not JSON: {error}"
             ))
         })?;
+    let permissions_with_approval: Vec<String> =
+        serde_json::from_str(&row.permissions_with_approval_json).map_err(|error| {
+            RoleTemplateStoreError::new(format!(
+                "stored role-template permissions with approval are not JSON: {error}"
+            ))
+        })?;
     let version = Version::new(row.version);
     Ok(Versioned::new(
         RoleTemplate {
@@ -3846,6 +4024,7 @@ fn role_template_record(
             tenant_id,
             name: row.name,
             permissions,
+            permissions_with_approval,
             discount_ceiling_minor: row.discount_ceiling_minor,
             status: EntityStatus::from_db(&row.status),
         },
@@ -3853,16 +4032,24 @@ fn role_template_record(
     ))
 }
 
+/// A list of permission ids as the JSON array text a role's `jsonb` columns take.
+fn permission_ids_json(ids: &[String]) -> Result<String, RoleTemplateStoreError> {
+    serde_json::to_string(ids).map_err(|error| {
+        RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
+    })
+}
+
 impl RoleTemplateStore for PostgresPeople {
     async fn create(&self, template: &NewRoleTemplate) -> Result<Version, RoleTemplateStoreError> {
-        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
-            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
-        })?;
+        let permissions_json = permission_ids_json(&template.permissions)?;
+        let permissions_with_approval_json =
+            permission_ids_json(&template.permissions_with_approval)?;
         self.insert_role_template(
             &template.role_template_id.to_string(),
             &template.tenant_id.to_string(),
             &template.name,
             &permissions_json,
+            &permissions_with_approval_json,
             template.discount_ceiling_minor,
         )
         .await
@@ -3898,14 +4085,15 @@ impl RoleTemplateStore for PostgresPeople {
         template: &RoleTemplateUpdate,
         expected: &Version,
     ) -> Result<UpdateOutcome, RoleTemplateStoreError> {
-        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
-            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
-        })?;
+        let permissions_json = permission_ids_json(&template.permissions)?;
+        let permissions_with_approval_json =
+            permission_ids_json(&template.permissions_with_approval)?;
         self.set_role_template(
             &template.tenant_id.to_string(),
             &template.role_template_id.to_string(),
             &template.name,
             &permissions_json,
+            &permissions_with_approval_json,
             template.status.as_str(),
             template.discount_ceiling_minor,
             expected.as_str(),
@@ -3916,65 +4104,111 @@ impl RoleTemplateStore for PostgresPeople {
     }
 }
 
-/// Converts a stored assignment row into the domain [`Assignment`], parsing the four ids.
+/// Parses one stored assignment id, naming the field in the error for the server log.
+fn parse_assignment_ulid(text: &str, what: &str) -> Result<Ulid, AssignmentStoreError> {
+    text.parse::<Ulid>().map_err(|error| {
+        AssignmentStoreError::new(format!("stored {what} id is not a ULID: {error}"))
+    })
+}
+
+/// The scope a stored row names: `STORE` with its store, `STORE_GROUP` with its group, or `TENANT`
+/// with neither (`employee_scope_assignments`, migration 0077).
+fn stored_scope(row: &AssignmentRow) -> Result<AssignmentScope, AssignmentStoreError> {
+    match (
+        row.scope_kind.as_str(),
+        row.store_id.as_deref(),
+        row.store_group_id.as_deref(),
+    ) {
+        ("STORE", Some(store_id), None) => Ok(AssignmentScope::Store(StoreId::new(
+            parse_assignment_ulid(store_id, "store")?,
+        ))),
+        ("STORE_GROUP", None, Some(store_group_id)) => Ok(AssignmentScope::StoreGroup(
+            StoreGroupId::new(parse_assignment_ulid(store_group_id, "store-group")?),
+        )),
+        ("TENANT", None, None) => Ok(AssignmentScope::Tenant),
+        (kind, _, _) => Err(AssignmentStoreError::new(format!(
+            "stored assignment scope {kind} does not carry the id it needs"
+        ))),
+    }
+}
+
+/// Converts a stored assignment row into the domain [`Assignment`], parsing its ids and scope.
 fn assignment_record(row: &AssignmentRow) -> Result<Assignment, AssignmentStoreError> {
-    let assignment_id = row
-        .id
-        .parse::<Ulid>()
-        .map(AssignmentId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored assignment id is not a ULID: {error}"))
-        })?;
-    let tenant_id = row
-        .tenant_id
-        .parse::<Ulid>()
-        .map(TenantId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored tenant id is not a ULID: {error}"))
-        })?;
-    let employee_id = row
-        .employee_id
-        .parse::<Ulid>()
-        .map(EmployeeId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored employee id is not a ULID: {error}"))
-        })?;
-    let store_id = row
-        .store_id
-        .parse::<Ulid>()
-        .map(StoreId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored store id is not a ULID: {error}"))
-        })?;
-    let role_template_id = row
-        .role_template_id
-        .parse::<Ulid>()
-        .map(RoleTemplateId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored role-template id is not a ULID: {error}"))
-        })?;
     Ok(Assignment {
-        assignment_id,
-        tenant_id,
-        employee_id,
-        store_id,
-        role_template_id,
+        assignment_id: AssignmentId::new(parse_assignment_ulid(&row.id, "assignment")?),
+        tenant_id: TenantId::new(parse_assignment_ulid(&row.tenant_id, "tenant")?),
+        employee_id: EmployeeId::new(parse_assignment_ulid(&row.employee_id, "employee")?),
+        scope: stored_scope(row)?,
+        role_template_id: RoleTemplateId::new(parse_assignment_ulid(
+            &row.role_template_id,
+            "role-template",
+        )?),
         employee_name: row.employee_name.clone(),
         employee_code: row.employee_code.clone(),
     })
 }
 
+/// Converts a list of stored assignment rows, failing on the first that does not parse.
+fn assignment_records(
+    rows: Result<Vec<AssignmentRow>, PortError>,
+) -> Result<Vec<Assignment>, AssignmentStoreError> {
+    rows.map_err(|error| AssignmentStoreError::new(error.to_string()))?
+        .iter()
+        .map(assignment_record)
+        .collect()
+}
+
 impl AssignmentStore for PostgresPeople {
     async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
-        self.insert_assignment(
-            &assignment.assignment_id.to_string(),
-            &assignment.tenant_id.to_string(),
-            &assignment.employee_id.to_string(),
-            &assignment.store_id.to_string(),
-            &assignment.role_template_id.to_string(),
-        )
-        .await
-        .map_err(|error| AssignmentStoreError::new(error.to_string()))
+        let assignment_id = assignment.assignment_id.to_string();
+        let tenant_id = assignment.tenant_id.to_string();
+        let employee_id = assignment.employee_id.to_string();
+        let role_template_id = assignment.role_template_id.to_string();
+        // A one-store grant is a row of the table it always was, so a release without the wider
+        // scopes still reads it; a wider one is a row of its own table (migration 0077).
+        let written = match assignment.scope {
+            AssignmentScope::Store(store_id) => {
+                self.insert_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    &store_id.to_string(),
+                    &role_template_id,
+                )
+                .await
+            }
+            AssignmentScope::StoreGroup(store_group_id) => {
+                self.insert_scope_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    "STORE_GROUP",
+                    Some(&store_group_id.to_string()),
+                    &role_template_id,
+                )
+                .await
+            }
+            AssignmentScope::Tenant => {
+                self.insert_scope_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    "TENANT",
+                    None,
+                    &role_template_id,
+                )
+                .await
+            }
+        };
+        // The adapter reports the unique index refusing a second row as `already_exists`: the
+        // person is assigned there already, which is a conflict and not an outage.
+        written.map_err(|error| {
+            if error.status() == ErrorStatus::AlreadyExists {
+                AssignmentStoreError::AlreadyAssigned(error.message().to_owned())
+            } else {
+                AssignmentStoreError::new(error.to_string())
+            }
+        })
     }
 
     async fn list_for_store(
@@ -3982,11 +4216,31 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_store(&tenant.to_string(), &store_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_store(&tenant.to_string(), &store_id.to_string())
+                .await,
+        )
+    }
+
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        assignment_records(
+            self.fetch_assignments_for_group(&tenant.to_string(), &store_group_id.to_string())
+                .await,
+        )
+    }
+
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        assignment_records(
+            self.fetch_tenant_wide_assignments(&tenant.to_string())
+                .await,
+        )
     }
 
     async fn list_for_employee(
@@ -3994,11 +4248,10 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         employee_id: EmployeeId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_employee(&tenant.to_string(), &employee_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_employee(&tenant.to_string(), &employee_id.to_string())
+                .await,
+        )
     }
 
     async fn list_for_role(
@@ -4006,11 +4259,10 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         role_template_id: RoleTemplateId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_role(&tenant.to_string(), &role_template_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_role(&tenant.to_string(), &role_template_id.to_string())
+                .await,
+        )
     }
 
     async fn get(
@@ -4197,6 +4449,22 @@ impl TableStore for PostgresFloor {
     }
 }
 
+/// A station's late threshold as its `integer` column holds it.
+///
+/// # Errors
+///
+/// [`FloorStoreError`] for a threshold no `integer` holds, which the route's bounds never let
+/// through.
+fn late_after_column(seconds: Option<u32>) -> Result<Option<i32>, FloorStoreError> {
+    seconds
+        .map(|seconds| {
+            i32::try_from(seconds).map_err(|_| {
+                FloorStoreError::new("a station's late threshold does not fit its column")
+            })
+        })
+        .transpose()
+}
+
 /// Reads one queried row into a [`Station`].
 fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError> {
     let backup_station_id = row
@@ -4211,6 +4479,12 @@ fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError
         name: row.name,
         backup_station_id,
         is_default: row.is_default,
+        // A column the route only ever writes within its bounds; a value that is not a `u32` reads
+        // as unset, the default, rather than refusing the whole list.
+        late_after_seconds: row
+            .late_after_seconds
+            .and_then(|seconds| u32::try_from(seconds).ok()),
+        ticket_language: row.ticket_language,
         status: EntityStatus::from_db(&row.status),
     };
     Ok(Versioned::new(record, Version::new(row.version)))
@@ -4249,6 +4523,8 @@ impl StationStore for PostgresFloor {
             &station.name,
             backup.as_deref(),
             station.is_default,
+            late_after_column(station.late_after_seconds)?,
+            station.ticket_language.map(ReceiptLanguage::as_wire),
         )
         .await
         .map(Version::new)
@@ -4291,6 +4567,8 @@ impl StationStore for PostgresFloor {
             &station.name,
             backup.as_deref(),
             station.is_default,
+            late_after_column(station.late_after_seconds)?,
+            station.ticket_language.map(ReceiptLanguage::as_wire),
             station.status.as_str(),
             expected.as_str(),
         )

@@ -27,9 +27,11 @@
 // that doc examples compile under the same rules has to be stated separately.
 #![doc(test(attr(deny(warnings))))]
 
+pub mod backup;
 pub mod campaign;
 pub mod chain;
 pub mod channels;
+pub mod counter;
 pub mod determinism;
 pub mod devices;
 pub mod display;
@@ -48,14 +50,18 @@ pub mod money;
 pub mod origins;
 pub mod people;
 pub mod pii;
+pub mod printing;
 pub mod protocol;
+pub mod qr;
 pub mod quantity;
 pub mod reason_codes;
+pub mod retention;
 pub mod session;
 pub mod settings;
 pub mod shift;
 pub mod snapshot;
 pub mod store_profile;
+pub mod tender_keys;
 pub mod text;
 pub mod time;
 pub mod ulid;

@@ -9,9 +9,11 @@
 //! # What is and is not known
 //!
 //! The edge answers three questions for the app. `/healthz` (no credential) says whether it is up and
-//! which release it runs. `GET /api/pair/devices` (the paired-device gate only) says whether this
-//! device is still paired, and asking it touches nobody's sign-in. `/api/sync` and `/api/printers`
-//! sit behind the **signed-in** gate too, which has two consequences the monitor respects:
+//! which release it runs. `GET /api/pair/this_device` (the paired-device gate only) says whether this
+//! device is still paired, naming no other device, and asking it touches nobody's sign-in. An edge
+//! older than that route is asked `GET /api/pair/devices` instead, behind the same gate.
+//! `/api/sync` and `/api/printers` sit behind the **signed-in** gate too, which has two consequences
+//! the monitor respects:
 //!
 //! - with nobody signed in on this device they answer `403`, so the reading is
 //!   [`NotRead::SignInNeeded`] rather than a guess;

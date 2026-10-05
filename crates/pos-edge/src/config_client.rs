@@ -44,23 +44,30 @@ use pos_ports::config_store::{ConfigDocument, ConfigSnapshot, ConfigStore, Confi
 use pos_ports::error::PortError;
 use pos_ports::event_store::EventStore;
 use pos_ports::tx::TxContext;
+use pos_proto::backup::PublishedBackup;
 use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::LayoutBook;
+use pos_proto::fees::PublishedFees;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::inventory::PublishedInventory;
-use pos_proto::locale::{NumberFormat, TaxRateTable};
+use pos_proto::locale::{LocaleSettings, PublishedLocale, PublishedNumberFormat, TaxRateTable};
 use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
-use pos_proto::people::PublishedPermissions;
+use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
+use pos_proto::printing::PublishedPrinting;
+use pos_proto::qr::PublishedQr;
 use pos_proto::reason_codes::PublishedReasonCodes;
+use pos_proto::retention::PublishedRetention;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::tender_keys::PublishedTenderKeys;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 use crate::device_revocations::DeviceRevocations;
@@ -71,80 +78,6 @@ use crate::origins::Origins;
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
 
-/// The published `locale` node: the store's currency, IANA timezone, and business-date cutoff hour
-/// (ADR-0074, Track M4). Each field is applied only if it parses, so a bad value leaves that setting
-/// as the base has it rather than blanking it.
-#[derive(serde::Deserialize)]
-struct PublishedLocale {
-    currency_code: String,
-    /// How many decimal places the currency has (ADR-0134). `#[serde(default)]` because a cloud
-    /// that predates the field must still publish a locale node this edge can apply, and `None`
-    /// then means "leave what the session has" — not zero, which would be the very silent default
-    /// that record is about.
-    #[serde(default)]
-    currency_exponent: Option<u8>,
-    timezone: String,
-    cutoff_hour: u8,
-    /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
-    /// node published before this field existed still applies, as the exclusive posture it meant.
-    #[serde(default)]
-    prices_include_tax: bool,
-    /// What the grand total is rounded to in cash, in minor units (ADR-0105). Absent means no
-    /// rounding, which is what every store did before the field existed.
-    #[serde(default)]
-    cash_rounding_increment: Option<i64>,
-    /// The notes the till offers as quick-cash keys, in minor units. Absent means the exact amount
-    /// only, which is the front end's own fallback, so an older publish changes nothing.
-    #[serde(default)]
-    cash_denominations: Vec<i64>,
-    /// How many days the store keeps a personal record before its own sweep scrubs it (ADR-0107).
-    /// Absent leaves the session's current figure — the country pack's default — rather than zero,
-    /// which would scrub a buyer the moment the invoice was printed.
-    #[serde(default)]
-    default_retention_days: Option<u16>,
-    /// How this store's country writes a number
-    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Absent for a
-    /// cloud that predates the field, which leaves the session's own — the `en-US`-shaped default
-    /// every surface used before the node could say otherwise.
-    #[serde(default)]
-    number_format: Option<PublishedNumberFormat>,
-}
-
-/// A published number format, in the permissive shape the rest of this struct uses.
-///
-/// Separators are `String` rather than `char` and are narrowed on the way in, for the reason
-/// `currency_code` is a `String` here and a `CurrencyCode` after: a value this struct cannot
-/// deserialize takes the **whole** locale node down with it, and a store that loses its currency and
-/// its timezone because somebody published a two-character group separator is a worse outcome than
-/// one that keeps the format it had.
-#[derive(Debug, Clone, serde::Deserialize)]
-struct PublishedNumberFormat {
-    decimal_separator: String,
-    group_separator: String,
-    digits_per_group: u8,
-}
-
-impl PublishedNumberFormat {
-    /// The domain form, or `None` when the publish does not describe one.
-    ///
-    /// A separator has to be exactly one character — not zero, which would run the digits together,
-    /// and not two, which no formatter here can place. A group of zero digits would loop forever in
-    /// any grouping routine that trusted it.
-    fn validate(&self) -> Option<NumberFormat> {
-        let mut decimal = self.decimal_separator.chars();
-        let mut group = self.group_separator.chars();
-        let (decimal_separator, group_separator) = (decimal.next()?, group.next()?);
-        if decimal.next().is_some() || group.next().is_some() || self.digits_per_group == 0 {
-            return None;
-        }
-        Some(NumberFormat {
-            decimal_separator,
-            group_separator,
-            digits_per_group: self.digits_per_group,
-        })
-    }
-}
-
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
 /// `pos-core` catalogue (§9) does not know — an older edge simply ignores a permission it predates
 /// rather than failing to apply the whole node.
@@ -152,6 +85,51 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
     ids.iter()
         .filter_map(|id| Permission::ALL.iter().copied().find(|p| p.meta().id == id))
         .collect()
+}
+
+/// The staff roster a published `staff` list makes, the one the edge authorises sign-ins against
+/// (ADR-0070), with each discount ceiling in the store's `currency`.
+fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> StaffRoster {
+    let mut roster = StaffRoster::new();
+    for member in staff {
+        let permissions = permission_set_from_ids(&member.permissions);
+        // Held directly wins: a permission listed both ways is one the person acts on alone, so the
+        // with-approval set never overlaps it.
+        let listed_with_approval = permission_set_from_ids(&member.permissions_with_approval);
+        let with_approval: PermissionSet = Permission::ALL
+            .iter()
+            .copied()
+            .filter(|permission| {
+                listed_with_approval.contains(*permission) && !permissions.contains(*permission)
+            })
+            .collect();
+        roster.insert(
+            member.code,
+            StaffAuth {
+                // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
+                // malformed id leaves it `None`, and the roster then refuses to sign that code in
+                // rather than acting as a fabricated identity.
+                employee_id: member
+                    .id
+                    .as_deref()
+                    .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
+                permissions,
+                permissions_with_approval: with_approval,
+                // Given the store's own currency here rather than carried as one: a role is a
+                // tenant's and has no currency, a store has exactly one (its `locale` node), and the
+                // only thing this figure is ever compared against is a bill in that currency. A
+                // negative figure is refused at the cloud's route and by the column, so it cannot
+                // arrive; if one somehow did, dropping it is the safe reading — the ceiling goes back
+                // to being absent, which needs a manager.
+                discount_ceiling: member
+                    .discount_ceiling_minor
+                    .filter(|minor| *minor >= 0)
+                    .map(|minor| Money::new(currency, minor)),
+                pin_phc: member.pin_phc,
+            },
+        );
+    }
+    roster
 }
 
 /// `book` with every channel's names resolved to `language` (ADR-0074), as
@@ -175,14 +153,15 @@ fn localized_book(book: &MenuBook, language: &str) -> MenuBook {
 /// catalog for the session's channel as its menu, and the `permissions` node (ADR-0070) into the
 /// staff roster the edge authorises against. Any node that is absent or does not parse is left as
 /// the base has it — a bad or partial publish never blanks a field, it just does not change it. The
-/// exception is a node of settings (ADR-0160), such as `shift`: absent, it means its defaults.
+/// exceptions are a node of settings (ADR-0160), such as `shift`, and the `fees` node (ADR-0159):
+/// absent, each means its defaults, which for fees is none.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "a flat series of independent, self-contained node branches (menu, permissions, \
-              capabilities, floor, stations, tax, campaigns, inventory, channels, tender, qr, \
-              locale, fleet_update, device_ota, lease); each is a few lines and reads better inline \
-              behind a helper indirection"
+              capabilities, floor, stations, tax, campaigns, inventory, reason codes, fees, \
+              channels, tender, qr, locale, fleet_update, device_ota, lease); each is a few lines \
+              and reads better inline behind a helper indirection"
 )]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
@@ -221,55 +200,23 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // apply step to be resolved in, so the read needs the language itself (ADR-0074).
     session.display_language.clone_from(&display_language);
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
-    // authorises sign-ins against, replacing any local roster.
-    if let Some(published) = document
-        .get(PublishedPermissions::NODE)
+    // authorises sign-ins against, replacing any local roster, when it carries a `staff` list.
+    let permissions_node = document.get(PublishedPermissions::NODE);
+    if let Some(published) = permissions_node
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<PublishedPermissions>(&text).ok())
     {
-        let mut roster = StaffRoster::new();
         // The rollout switch rides the node (ADR-0158): the cloud writes it on the Tenant layer and
         // the merge puts it beside the staff. A node without it keeps the store-wide set.
         session.permissions_enforced = published.enforced;
-        for member in published.staff {
-            let permissions = permission_set_from_ids(&member.permissions);
-            // Held directly wins: a permission listed both ways is one the person acts on alone,
-            // so the with-approval set never overlaps it.
-            let listed_with_approval = permission_set_from_ids(&member.permissions_with_approval);
-            let with_approval: PermissionSet = Permission::ALL
-                .iter()
-                .copied()
-                .filter(|permission| {
-                    listed_with_approval.contains(*permission) && !permissions.contains(*permission)
-                })
-                .collect();
-            roster.insert(
-                member.code,
-                StaffAuth {
-                    // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
-                    // malformed id leaves it `None`, and the roster then refuses to sign that code in
-                    // rather than acting as a fabricated identity.
-                    employee_id: member
-                        .id
-                        .as_deref()
-                        .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
-                    permissions,
-                    permissions_with_approval: with_approval,
-                    // Given the store's own currency here rather than carried as one: a role is a
-                    // tenant's and has no currency, a store has exactly one (its `locale` node), and
-                    // the only thing this figure is ever compared against is a bill in that
-                    // currency. A negative figure is refused at the cloud's route and by the column,
-                    // so it cannot arrive; if one somehow did, dropping it is the safe reading —
-                    // the ceiling goes back to being absent, which needs a manager.
-                    discount_ceiling: member
-                        .discount_ceiling_minor
-                        .filter(|minor| *minor >= 0)
-                        .map(|minor| Money::new(session.currency, minor)),
-                    pin_phc: member.pin_phc,
-                },
-            );
+        // A node with no `staff` list at all is the switch alone: the Tenant layer's setting with no
+        // people node beside it, which is a store the people publish has not reached, or one whose
+        // people node a rollback took away. It sets the switch and keeps the roster, because an
+        // absent list says nothing about who works here. A `staff` list that is present but empty
+        // is a people publish that assigned nobody, and it still empties the roster.
+        if permissions_node.is_some_and(|node| node.get("staff").is_some()) {
+            session.staff = roster_from(published.staff, session.currency);
         }
-        session.staff = roster;
     }
     // The capability flags the config document carries (ADR-0071): top-level booleans keyed by each
     // capability's key (`tables_enabled`, `pay_first_enabled`, …), read the same way the cloud
@@ -287,6 +234,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             document.get(key).and_then(serde_json::Value::as_bool)
         });
     }
+    // And which of the flags this document sets, from the document whole (ADR-0160 decision 5): the
+    // profile above reads an unset flag as its default, which cannot tell "off" from "never chosen".
+    session.published_flags = Capability::ALL
+        .iter()
+        .filter_map(|capability| {
+            document
+                .get(capability.meta().key)
+                .and_then(serde_json::Value::as_bool)
+                .map(|on| (*capability, on))
+        })
+        .collect();
     // The `floor` and `stations` nodes the floor publish writes (ADR-0072): the store's areas/tables
     // and its kitchen stations + item→station routing. Parsed via JSON text like the `menu` node; an
     // absent or unparseable node leaves that plan as the base has it — a bad publish never blanks a
@@ -381,6 +339,37 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             }
         }
     }
+    // The `printing` node (ADR-0160), read as the `shift` node is: absent puts the defaults back,
+    // unparseable keeps the last.
+    match document.get(PublishedPrinting::NODE) {
+        None => session.printing = PublishedPrinting::default(),
+        Some(value) => {
+            if let Some(printing) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedPrinting>(&text).ok())
+            {
+                session.printing = printing;
+            }
+        }
+    }
+    // The settings on the `qr` node (ADR-0160 item 2), read as the `shift` node is: absent puts the
+    // defaults back, unparseable keeps the last. The node's guardrails are read below, field by
+    // field, as they always were.
+    match document.get(PublishedQr::NODE) {
+        None => session.qr = PublishedQr::default(),
+        Some(value) if value.is_object() => {
+            if let Some(qr) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedQr>(&text).ok())
+            {
+                session.qr = qr;
+            }
+        }
+        // A node that is not an object keeps the last too, as it carries no guardrail either
+        // ([`PublishedQr::guardrails`]): the whole node is read only as an object, where serde alone
+        // would read an array positionally into the node's fields.
+        Some(_) => {}
+    }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
     // default; a store now bills the authored rates. Absent or unparseable leaves the base table
@@ -445,6 +434,23 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.reason_codes = published;
     }
+    // The `fees` node ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1):
+    // every fee rule a bill may apply. Absent means no rule, as for a node of settings: the cloud
+    // sends the whole document, so a node it no longer sends is fees somebody removed, and an empty
+    // list is the same answer. An unparseable node keeps the rules the store had, as every node
+    // here does, so a bad publish never changes what a trading store charges. A bill freezes the
+    // rules in force when it opens, so neither reaches a bill already on a table.
+    match document.get(PublishedFees::NODE) {
+        None => session.fees = PublishedFees::default(),
+        Some(value) => {
+            if let Some(fees) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedFees>(&text).ok())
+            {
+                session.fees = fees;
+            }
+        }
+    }
     // The `channels` node the channels publish writes (ADR-0080, Track M7): the sales channels a store
     // accepts. A present node is authoritative — the edge refuses an order on a channel it does not
     // list; an absent node leaves `None` (no restriction), so a store that never published one trades
@@ -466,26 +472,80 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.accepted_tender = Some(accepted_tender(&published));
     }
+    // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
+    // settings like `shift`, so absent puts the defaults back and a node that is not an object keeps
+    // the last; a field it carries that nobody can read is that field's default
+    // ([`PublishedTenderKeys`]).
+    match document.get(PublishedTenderKeys::NODE) {
+        None => session.tender_keys = PublishedTenderKeys::default(),
+        Some(value) => {
+            if let Some(keys) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedTenderKeys>(&text).ok())
+            {
+                session.tender_keys = keys;
+            }
+        }
+    }
+    // The `counter` node (ADR-0160 decision 2): the channel the counter opens a walk-in on when the
+    // till names none. A node of settings like `tender_keys`, so absent puts takeaway back and a node
+    // that is not an object keeps the last; a value that is not a token is takeaway
+    // ([`PublishedCounter`]).
+    match document.get(PublishedCounter::NODE) {
+        None => session.counter = PublishedCounter::default(),
+        Some(value) => {
+            if let Some(counter) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedCounter>(&text).ok())
+            {
+                session.counter = counter;
+            }
+        }
+    }
+    // The `backup` node (ADR-0160 decision 6): how often the store archives its database. A node
+    // of settings like `counter`, so absent leaves the box on its own interval and an unparseable
+    // one keeps the last. The archive loop reads it as it schedules each archive
+    // ([`crate::backup_client`]), so it applies from the next archive.
+    match document.get(PublishedBackup::NODE) {
+        None => session.backup = PublishedBackup::default(),
+        Some(value) => {
+            if let Some(backup) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedBackup>(&text).ok())
+            {
+                session.backup = backup;
+            }
+        }
+    }
     // The `qr` guardrail node (P11b, authored via ADR-0080, Track M7): the edge reads only
     // `staff_confirmation_required` — whether a table-bearing QR order waits for staff before the
-    // kitchen sees it. The cloud reads the same node for its own guardrails (enabled/hours/rate). An
-    // absent field leaves the base value (default `true`, ADR-0057), so a store that never published
-    // the node still holds guest orders for staff.
-    if let Some(required) = document
-        .get("qr")
-        .and_then(|node| node.get("staff_confirmation_required"))
-        .and_then(serde_json::Value::as_bool)
+    // kitchen sees it. The cloud reads the same node for its own guardrails (hours, rate). Whether
+    // the store takes QR orders at all is not on this node: it is the `qr_ordering_enabled` flag,
+    // read with the capabilities above (ADR-0160 decision 5), with `qr.enabled` below to tell it
+    // from the flag as it was before the switch. An absent field leaves the base value (default
+    // `true`, ADR-0057), so a store that never published the node still holds guest orders for
+    // staff. Read field by field, apart from the node's setting above
+    // ([`PublishedQr::guardrails`]), so one malformed field takes no other down.
+    let guardrails = document
+        .get(PublishedQr::NODE)
+        .and_then(PublishedQr::guardrails);
+    if let Some(required) = guardrails
+        .as_ref()
+        .and_then(|qr| qr.staff_confirmation_required)
     {
         session.qr_staff_confirmation_required = required;
     }
+    // `qr.enabled` as this document sets it, read only beside QR ordering's switch: a cloud that
+    // knows the switch publishes it equal to the switch, so a `false` switch beside a `qr.enabled`
+    // that is not `false` is the flag from before the switch (`EdgeSession::qr_ordering_switched_off`).
+    session.qr_enabled_published = guardrails.and_then(|qr| qr.enabled);
     // The `retention` node (ADR-0145): how many days this store keeps a synced event. Outside the
-    // range, or absent, leaves the value it had, so a malformed publish never shortens a log.
+    // range, or absent, leaves the value it had, so a malformed publish never shortens a log
+    // ([`PublishedRetention::event_log_days`]).
     if let Some(days) = document
-        .get("retention")
-        .and_then(|node| node.get("event_log_days"))
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|days| u16::try_from(days).ok())
-        .filter(|days| crate::app::EVENT_LOG_DAYS.contains(days))
+        .get(PublishedRetention::NODE)
+        .and_then(PublishedRetention::read)
+        .and_then(|retention| retention.event_log_days())
     {
         session.event_log_days = days;
     }
@@ -493,6 +553,8 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
     // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
     // rather than resetting the store's business date to UTC (the never-blank rule, per field).
+    // Read through the country's view of the node ([`PublishedLocale`]), whose required fields keep a
+    // node carrying only settings out of this branch.
     if let Some(locale) = document
         .get("locale")
         .and_then(|value| serde_json::to_string(value).ok())
@@ -542,6 +604,26 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             .and_then(PublishedNumberFormat::validate)
         {
             session.number_format = format;
+        }
+        // Applied as stated, absent included: a locale that names no country language leaves a
+        // country receipt nothing to follow but the display language, whatever an earlier one said.
+        session.country_language = locale
+            .country_language
+            .map(|language| language.trim().to_owned())
+            .filter(|language| !language.is_empty());
+    }
+    // The settings on the `locale` node (ADR-0160), read as the `qr` node's are: absent puts the
+    // default back, unparseable keeps the last. Read apart from the country's fields above, so a
+    // store whose locale the cloud has not published yet still rounds as its settings say.
+    match document.get(LocaleSettings::NODE) {
+        None => session.tax_rounding = LocaleSettings::default().tax_rounding(),
+        Some(value) => {
+            if let Some(settings) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<LocaleSettings>(&text).ok())
+            {
+                session.tax_rounding = settings.tax_rounding();
+            }
         }
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
@@ -1294,6 +1376,151 @@ mod tests {
     }
 
     #[test]
+    fn a_qr_node_s_table_order_is_read_beside_its_guardrails_and_an_absent_node_resets_it() {
+        use pos_proto::qr::{PublishedQr, TableOrder};
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.qr.table_order(),
+            TableOrder::Separate,
+            "a guest's order is its own order, as it always was"
+        );
+        let joining = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": {
+                "enabled": true,
+                "staff_confirmation_required": false,
+                "table_order": "TABLE_ORDER_JOIN",
+            } }),
+        );
+        assert_eq!(joining.qr.table_order(), TableOrder::Join);
+        assert!(
+            !joining.qr_staff_confirmation_required,
+            "the guardrail beside it is read as before"
+        );
+
+        let broken = serde_json::json!({ "qr": { "table_order": 7 } });
+        assert_eq!(session_from_config(&joining, &broken).qr, joining.qr);
+
+        let cleared = session_from_config(&joining, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.qr, PublishedQr::default());
+    }
+
+    #[test]
+    fn a_printing_node_is_applied_a_malformed_one_keeps_the_last_and_an_absent_one_resets() {
+        use pos_proto::printing::{PublishedPrinting, ReceiptLanguage};
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.printing,
+            PublishedPrinting::default(),
+            "prints as it always has"
+        );
+        let english = session_from_config(
+            &base,
+            &serde_json::json!({ "printing": {
+                "receipt_language": "RECEIPT_LANGUAGE_EN",
+                "receipt_printed_on_settle": false,
+            } }),
+        );
+        assert_eq!(
+            english.printing.receipt_language(),
+            ReceiptLanguage::English
+        );
+        assert!(!english.printing.receipt_printed_on_settle());
+
+        let broken = serde_json::json!({ "printing": { "receipt_printed_on_settle": "no" } });
+        assert_eq!(
+            session_from_config(&english, &broken).printing,
+            english.printing
+        );
+
+        let cleared = session_from_config(&english, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.printing, PublishedPrinting::default());
+    }
+
+    #[test]
+    fn the_country_language_is_what_the_locale_node_says_and_nothing_once_it_says_none() {
+        let locale = |language: Option<&str>| {
+            let mut node = serde_json::json!({
+                "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh", "cutoff_hour": 4,
+            });
+            if let Some(language) = language {
+                node["country_language"] = serde_json::json!(language);
+            }
+            serde_json::json!({ "locale": node })
+        };
+        let vietnam = session_from_config(&EdgeSession::bootstrap(), &locale(Some("vi")));
+        assert_eq!(vietnam.country_language.as_deref(), Some("vi"));
+        // A locale published before the field existed, or for a country the cloud has no pack for.
+        assert_eq!(
+            session_from_config(&vietnam, &locale(None)).country_language,
+            None
+        );
+        assert_eq!(
+            session_from_config(&vietnam, &locale(Some(" "))).country_language,
+            None
+        );
+    }
+
+    /// The store's tax rounding (ADR-0160) is what its `locale` node's setting says: down where it
+    /// says down, beside the country's fields or without them, and half-up where it says nothing,
+    /// says something this release does not know, or the node is gone. A node the setting cannot
+    /// be read from keeps the mode the store had.
+    #[test]
+    fn the_tax_rounding_is_what_the_locale_node_says_and_half_up_otherwise() {
+        use pos_proto::locale::TaxRounding;
+
+        let rounding = |base: &EdgeSession, locale: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "locale": locale })).tax_rounding
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.tax_rounding, TaxRounding::HalfUp);
+
+        let japan = serde_json::json!({
+            "currency_code": "JPY", "timezone": "Asia/Tokyo", "cutoff_hour": 4,
+            "prices_include_tax": true, "tax_rounding": "TAX_ROUNDING_DOWN",
+        });
+        let down = session_from_config(&base, &serde_json::json!({ "locale": japan }));
+        assert_eq!(down.tax_rounding, TaxRounding::Down);
+        assert!(
+            down.prices_include_tax,
+            "the country's fields still apply beside it"
+        );
+        // The setting alone, which a store has before its locale is first published.
+        assert_eq!(
+            rounding(
+                &base,
+                serde_json::json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })
+            ),
+            TaxRounding::Down
+        );
+
+        for half_up in [
+            serde_json::json!({ "currency_code": "JPY", "timezone": "Asia/Tokyo", "cutoff_hour": 4 }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_HALF_UP" }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_UNSPECIFIED" }),
+            serde_json::json!({ "tax_rounding": "TAX_ROUNDING_HALF_EVEN" }),
+        ] {
+            assert_eq!(
+                rounding(&down, half_up.clone()),
+                TaxRounding::HalfUp,
+                "{half_up}"
+            );
+        }
+        assert_eq!(
+            session_from_config(&down, &serde_json::json!({})).tax_rounding,
+            TaxRounding::HalfUp,
+            "a document with no locale node carries no setting"
+        );
+        assert_eq!(
+            rounding(&down, serde_json::json!({ "tax_rounding": 5 })),
+            TaxRounding::Down,
+            "a setting that cannot be read keeps the mode the store had"
+        );
+    }
+
+    #[test]
     fn a_synced_menu_node_becomes_the_sessions_catalog() {
         let base = EdgeSession::bootstrap(); // empty menu, DineIn channel
         assert!(
@@ -1468,6 +1695,43 @@ mod tests {
         assert!(!session_from_config(&rebuilt, &without).permissions_enforced);
     }
 
+    /// A `permissions` node with no `staff` key is the Tenant layer's switch with no people node
+    /// merged beside it (ADR-0160): it sets the switch and keeps the roster, rather than replacing a
+    /// real roster with nobody.
+    #[test]
+    fn a_permissions_node_without_a_staff_list_sets_the_switch_and_keeps_the_roster() {
+        let staffed = session_from_config(&EdgeSession::bootstrap(), &document_with_permissions());
+        assert_eq!(staffed.staff.len(), 2);
+        assert!(!staffed.permissions_enforced);
+
+        let switched = session_from_config(
+            &staffed,
+            &serde_json::json!({ "permissions": { "enforced": true } }),
+        );
+        assert!(switched.permissions_enforced, "the switch applies");
+        assert_eq!(switched.staff.len(), 2, "and the roster is kept");
+        assert!(switched.authorise_staff("C01", "2468").is_some());
+
+        // A node that carries neither still says the switch is off, and still keeps the roster.
+        let cleared = session_from_config(&switched, &serde_json::json!({ "permissions": {} }));
+        assert!(!cleared.permissions_enforced);
+        assert_eq!(cleared.staff.len(), 2);
+    }
+
+    /// A `staff` list that is present and empty is a people publish that assigned nobody to the
+    /// store, so it empties the roster, as it always has.
+    #[test]
+    fn a_permissions_node_with_an_empty_staff_list_still_empties_the_roster() {
+        let staffed = session_from_config(&EdgeSession::bootstrap(), &document_with_permissions());
+        let emptied = session_from_config(
+            &staffed,
+            &serde_json::json!({ "permissions": { "enforced": true, "staff": [] } }),
+        );
+        assert!(emptied.permissions_enforced);
+        assert!(emptied.staff.is_empty(), "nobody is assigned here any more");
+        assert!(emptied.authorise_staff("C01", "2468").is_none());
+    }
+
     #[test]
     fn an_absent_or_malformed_permissions_node_leaves_the_roster_unchanged() {
         use crate::app::{StaffAuth, StaffRoster};
@@ -1530,6 +1794,50 @@ mod tests {
     }
 
     #[test]
+    fn qr_ordering_s_switch_is_read_as_published_and_only_its_false_beside_qr_enabled_is_off() {
+        use pos_core::capability::Capability;
+
+        let read =
+            |document: serde_json::Value| session_from_config(&EdgeSession::bootstrap(), &document);
+
+        // Not published: the flag reads as its default in the profile, and as unset here.
+        let unset = read(serde_json::json!({ "qr": { "enabled": true } }));
+        assert_eq!(unset.explicit(Capability::QrOrdering), None);
+        assert!(!unset.qr_ordering_switched_off());
+
+        // Published off, by a cloud that knows the switch: `qr.enabled` is off beside it.
+        let off = read(serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+        }));
+        assert_eq!(off.explicit(Capability::QrOrdering), Some(false));
+        assert!(off.qr_ordering_switched_off());
+
+        // The flag's `false` from before the switch, beside a guest page that was on, or unset.
+        for stale in [
+            serde_json::json!({ "qr_ordering_enabled": false }),
+            serde_json::json!({ "qr_ordering_enabled": false, "qr": { "enabled": true } }),
+        ] {
+            let session = read(stale.clone());
+            assert_eq!(session.explicit(Capability::QrOrdering), Some(false));
+            assert!(
+                !session.qr_ordering_switched_off(),
+                "a flag nothing read is not the switch: {stale}"
+            );
+        }
+
+        let on =
+            read(serde_json::json!({ "qr_ordering_enabled": true, "qr": { "enabled": true } }));
+        assert_eq!(on.explicit(Capability::QrOrdering), Some(true));
+        assert!(!on.qr_ordering_switched_off());
+
+        // Each document is read whole: one that no longer sets the flag sets nothing here.
+        let later = session_from_config(&off, &serde_json::json!({ "tips_enabled": true }));
+        assert_eq!(later.explicit(Capability::QrOrdering), None);
+        assert!(!later.qr_ordering_switched_off());
+    }
+
+    #[test]
     fn a_document_naming_no_capability_flags_leaves_the_profile_unchanged() {
         use pos_core::capability::{Capability, CapabilityContext};
 
@@ -1571,6 +1879,8 @@ mod tests {
                 station_id,
                 name: DisplayName::new("Oven"),
                 backup_station_id: None,
+                late_after_seconds: None,
+                ticket_language: pos_proto::wire_enum::Open::default(),
             })
             .with_rule(RoutingRule {
                 station_id,
@@ -1774,6 +2084,195 @@ mod tests {
         assert!(!unchanged.tender_accepted(PaymentMethod::Card));
     }
 
+    /// The tip keys are what the `tender_keys` node sets: the defaults where it sets nothing or the
+    /// node is gone, each key as set, once, a key at `0` left out, and a value out of range or
+    /// unreadable read as its default. A node that is not an object keeps the keys the store had.
+    #[test]
+    fn the_tip_keys_are_what_the_tender_keys_node_sets_and_today_s_keys_otherwise() {
+        let keys = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "tender_keys": node }))
+                .tender_keys
+                .tip_percents()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.tender_keys.tip_percents(), vec![5, 10, 15]);
+        assert_eq!(keys(&base, serde_json::json!({})), vec![5, 10, 15]);
+
+        let set = serde_json::json!({
+            "first_tip_percent": 10, "second_tip_percent": 0, "third_tip_percent": 20,
+        });
+        let store = session_from_config(&base, &serde_json::json!({ "tender_keys": set }));
+        assert_eq!(store.tender_keys.tip_percents(), vec![10, 20]);
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 10, "second_tip_percent": 10, "third_tip_percent": 15,
+                })
+            ),
+            vec![10, 15],
+            "a percentage an earlier key offers is offered once"
+        );
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 0, "second_tip_percent": 0, "third_tip_percent": 0,
+                })
+            ),
+            Vec::<u8>::new(),
+            "every key hidden"
+        );
+        assert_eq!(
+            keys(
+                &base,
+                serde_json::json!({
+                    "first_tip_percent": 101, "second_tip_percent": "ten", "third_tip_percent": -5,
+                })
+            ),
+            vec![5, 10, 15],
+            "out of range or unreadable reads as the default"
+        );
+
+        assert_eq!(
+            session_from_config(&store, &serde_json::json!({}))
+                .tender_keys
+                .tip_percents(),
+            vec![5, 10, 15],
+            "a document with no tender_keys node carries no setting"
+        );
+        assert_eq!(
+            keys(&store, serde_json::json!("not a node")),
+            vec![10, 20],
+            "a node that cannot be read keeps the keys the store had"
+        );
+        assert_eq!(
+            store.accepted_tender, None,
+            "the keys say nothing about the tender a store takes"
+        );
+    }
+
+    /// The most ways an even split offers is what the `tender_keys` node sets, from 2 to 12, and six
+    /// where it sets none, sets one outside that, or sets one nobody can read.
+    #[test]
+    fn the_split_ways_are_what_the_tender_keys_node_sets_and_six_otherwise() {
+        let ways = |node: serde_json::Value| {
+            session_from_config(
+                &EdgeSession::bootstrap(),
+                &serde_json::json!({ "tender_keys": node }),
+            )
+            .tender_keys
+            .split_ways_max()
+        };
+        assert_eq!(EdgeSession::bootstrap().tender_keys.split_ways_max(), 6);
+        assert_eq!(ways(serde_json::json!({ "split_ways_max": 8 })), 8);
+        assert_eq!(ways(serde_json::json!({ "split_ways_max": 12 })), 12);
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "split_ways_max": 1 }),
+            serde_json::json!({ "split_ways_max": 13 }),
+            serde_json::json!({ "split_ways_max": "8" }),
+        ] {
+            assert_eq!(ways(unread.clone()), 6, "{unread}");
+        }
+    }
+
+    /// A walk-in opens on the channel the `counter` node sets: takeaway where it sets none, sets one
+    /// nobody can read, or is gone, and the channel it had where the node is not an object.
+    #[test]
+    fn a_walk_in_opens_on_the_channel_the_counter_node_sets_and_takeaway_otherwise() {
+        let opens_on = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "counter": node }))
+                .counter
+                .walk_in_channel()
+                .sales_channel()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.counter.walk_in_channel().sales_channel(),
+            SalesChannel::Takeaway
+        );
+        let eats_in = session_from_config(
+            &base,
+            &serde_json::json!({ "counter": { "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" } }),
+        );
+        assert_eq!(
+            eats_in.counter.walk_in_channel().sales_channel(),
+            SalesChannel::DineIn
+        );
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "walk_in_channel": "WALK_IN_CHANNEL_DRIVE_THROUGH" }),
+            serde_json::json!({ "walk_in_channel": 2 }),
+        ] {
+            assert_eq!(
+                opens_on(&eats_in, unread.clone()),
+                SalesChannel::Takeaway,
+                "{unread}"
+            );
+        }
+        assert_eq!(
+            session_from_config(&eats_in, &serde_json::json!({}))
+                .counter
+                .walk_in_channel()
+                .sales_channel(),
+            SalesChannel::Takeaway,
+            "a document with no counter node carries no setting"
+        );
+        assert_eq!(
+            opens_on(&eats_in, serde_json::json!("not a node")),
+            SalesChannel::DineIn,
+            "a node that cannot be read keeps the channel the store had"
+        );
+        assert_eq!(
+            eats_in.enabled_channels, None,
+            "the walk-in channel says nothing about the channels a store accepts"
+        );
+    }
+
+    /// The `backup` node's interval reaches the session the archive loop reads: none where the node
+    /// sets none, sets one out of bounds, or is gone, and the last where it cannot be read
+    /// (ADR-0160 decision 6).
+    #[test]
+    fn the_backup_node_sets_the_archive_interval_and_none_otherwise() {
+        let interval = |base: &EdgeSession, node: serde_json::Value| {
+            session_from_config(base, &serde_json::json!({ "backup": node }))
+                .backup
+                .interval_hours()
+        };
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.backup.interval_hours(), None, "the box's own interval");
+        let six = session_from_config(
+            &base,
+            &serde_json::json!({ "backup": { "interval_hours": 6 } }),
+        );
+        assert_eq!(six.backup.interval_hours(), Some(6));
+        for unread in [
+            serde_json::json!({}),
+            serde_json::json!({ "interval_hours": 0 }),
+            serde_json::json!({ "interval_hours": 169 }),
+        ] {
+            assert_eq!(interval(&six, unread.clone()), None, "{unread}");
+        }
+        assert_eq!(
+            session_from_config(&six, &serde_json::json!({}))
+                .backup
+                .interval_hours(),
+            None,
+            "a document with no backup node carries no setting"
+        );
+        for unreadable in [
+            serde_json::json!("not a node"),
+            serde_json::json!({ "interval_hours": "6" }),
+        ] {
+            assert_eq!(
+                interval(&six, unreadable.clone()),
+                Some(6),
+                "a node that cannot be read keeps the interval the store had: {unreadable}"
+            );
+        }
+    }
+
     #[test]
     fn a_qr_node_toggles_staff_confirmation_and_defaults_on() {
         // The bootstrap holds guest orders for staff (ADR-0057).
@@ -1792,9 +2291,147 @@ mod tests {
         assert!(!unchanged.qr_staff_confirmation_required);
     }
 
+    /// The `qr` guardrails and the `retention` node, read through their types in `pos-proto`, leave
+    /// the session's value wherever a field is absent or malformed, as their field-by-field
+    /// reading did before the types; a malformed setting beside the guardrails still does not stop
+    /// them being read; and a `qr` node that is not an object sets nothing, its setting included.
+    #[test]
+    fn a_typed_node_leaves_the_sessions_value_where_its_field_is_absent_or_malformed() {
+        let mut base = EdgeSession::bootstrap();
+        base.qr_staff_confirmation_required = false;
+        base.event_log_days = 45;
+        for document in [
+            serde_json::json!({ "other": true }),
+            serde_json::json!({ "qr": {}, "retention": {} }),
+            serde_json::json!({
+                "qr": { "staff_confirmation_required": "no", "enabled": 1 },
+                "retention": { "event_log_days": "90" },
+            }),
+            serde_json::json!({ "qr": [true], "retention": [90] }),
+            serde_json::json!({ "qr": null, "retention": { "event_log_days": 4_000 } }),
+            serde_json::json!({ "qr": "on", "retention": { "event_log_days": 90.0 } }),
+            // An array is not an object, whatever it holds: serde would read one positionally.
+            serde_json::json!({ "qr": ["TABLE_ORDER_JOIN", true] }),
+            serde_json::json!({ "qr": ["TABLE_ORDER_JOIN"] }),
+        ] {
+            let kept = session_from_config(&base, &document);
+            assert!(!kept.qr_staff_confirmation_required, "{document}");
+            assert_eq!(kept.qr_enabled_published, None, "{document}");
+            assert_eq!(kept.qr, base.qr, "{document}");
+            assert_eq!(kept.event_log_days, 45, "{document}");
+        }
+
+        let beside = session_from_config(
+            &base,
+            &serde_json::json!({ "qr": {
+                "table_order": 7,
+                "staff_confirmation_required": true,
+                "enabled": false,
+            } }),
+        );
+        assert!(beside.qr_staff_confirmation_required);
+        assert_eq!(beside.qr_enabled_published, Some(false));
+        assert_eq!(beside.qr, base.qr, "the setting keeps what it had");
+    }
+
+    /// The `locale` node, read through the country's view of it in `pos-proto` (`PublishedLocale`),
+    /// leaves the session's value where a field is absent or malformed, as the edge's own struct did:
+    /// whole, and then field by field, with the four fields the node states outright still applied
+    /// as stated.
+    #[test]
+    fn a_typed_locale_node_leaves_the_sessions_value_where_its_field_is_absent_or_malformed() {
+        // A node that does not parse as the country's view, whether it lacks a required field,
+        // carries only settings, or holds a value of the wrong kind, leaves every field the session
+        // has.
+        let store = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "INR",
+                "currency_exponent": 2,
+                "timezone": "Asia/Kolkata",
+                "cutoff_hour": 6,
+                "prices_include_tax": true,
+                "cash_rounding_increment": 100,
+                "cash_denominations": [1_000, 2_000],
+                "default_retention_days": 180,
+                "number_format": {
+                    "decimal_separator": ",",
+                    "group_separator": " ",
+                    "digits_per_group": 2,
+                },
+                "country_language": "hi",
+            }}),
+        );
+        let country = |session: &EdgeSession| {
+            (
+                session.currency,
+                session.currency_exponent,
+                session.timezone.iana_name().map(str::to_owned),
+                session.cutoff,
+                session.prices_include_tax,
+                session.cash_rounding_increment,
+                session.cash_denominations.clone(),
+                session.retention_days,
+                session.number_format.clone(),
+                session.country_language.clone(),
+            )
+        };
+        for document in [
+            serde_json::json!({ "locale": { "tax_rounding": "TAX_ROUNDING_DOWN" } }),
+            serde_json::json!({ "locale": { "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" } }),
+            serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": "4",
+            }}),
+            serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+                "cash_rounding_increment": "1000",
+            }}),
+            serde_json::json!({ "locale": null }),
+        ] {
+            assert_eq!(
+                country(&session_from_config(&store, &document)),
+                country(&store),
+                "{document}"
+            );
+        }
+
+        // A node that parses applies field by field: a field it leaves out, or one that does not
+        // narrow to the session's type, leaves the session's value...
+        let partial = session_from_config(
+            &store,
+            &serde_json::json!({ "locale": {
+                "currency_code": "dong",
+                "timezone": "Mars/Olympus_Mons",
+                "cutoff_hour": 24,
+                "default_retention_days": 0,
+                "number_format": {
+                    "decimal_separator": "",
+                    "group_separator": ".",
+                    "digits_per_group": 3,
+                },
+            }}),
+        );
+        assert_eq!(partial.currency, store.currency);
+        assert_eq!(partial.currency_exponent, store.currency_exponent);
+        assert_eq!(partial.timezone.iana_name(), store.timezone.iana_name());
+        assert_eq!(partial.cutoff, store.cutoff);
+        assert_eq!(partial.retention_days, store.retention_days);
+        assert_eq!(partial.number_format, store.number_format);
+        // ...and the four it states outright apply as stated, absent included, as before the type.
+        assert!(!partial.prices_include_tax);
+        assert_eq!(partial.cash_rounding_increment, None);
+        assert!(partial.cash_denominations.is_empty());
+        assert_eq!(partial.country_language, None);
+    }
+
     #[test]
     fn the_edge_bounds_event_retention_as_the_cloud_does() {
-        // `pos_cloud::http::EVENT_LOG_DAYS` holds the same numbers, pinned by its own test.
+        // Both sides take the bounds from the `retention` node's type in `pos-proto`; this pins the
+        // numbers, as `pos_cloud`'s own test does.
         assert_eq!(crate::app::EVENT_LOG_DAYS, 30..=3650);
     }
 
@@ -1904,14 +2541,13 @@ mod tests {
 
     /// Every field a published `locale` node carries lands somewhere on the session.
     ///
-    /// The edge half of the pair. `pos-cloud` has a test asserting its node carries exactly the keys
-    /// on a written-down list; this asserts that each of those keys actually *does* something here.
-    ///
-    /// Two lists rather than one, because no crate depends on both and adding a dependency to make a
-    /// test possible is the wrong trade. What each list buys is that its own side is checked against
-    /// real behaviour instead of against nothing: a key the cloud stopped sending fails there, and a
-    /// key this struct stopped applying fails here. What neither can catch is a field added to both
-    /// lists and to neither implementation — which is what the per-field tests above are for.
+    /// The edge half of the pair. `pos-cloud` has a test asserting its node parses as
+    /// `pos_proto::locale::PublishedLocale`, the type this branch reads, states every field the type
+    /// reads, and sends nothing else but the cloud's own; this asserts that each of those fields
+    /// actually *does* something here. Each side is checked against real behaviour instead of
+    /// against nothing: a key the cloud stopped sending fails there, and a field this branch stopped
+    /// applying fails here. What neither can catch is a field added to the type that this branch
+    /// never applies and this test never names — which is what the per-field tests above are for.
     ///
     /// Every value below differs from `EdgeSession::bootstrap`, deliberately: a field that silently
     /// stopped applying would still match a bootstrap this test had copied.
@@ -1934,6 +2570,7 @@ mod tests {
                     "group_separator": " ",
                     "digits_per_group": 2,
                 },
+                "country_language": "hi",
             }}),
         );
 
@@ -1967,6 +2604,10 @@ mod tests {
         assert_ne!(
             store.number_format, bootstrap.number_format,
             "number_format"
+        );
+        assert_ne!(
+            store.country_language, bootstrap.country_language,
+            "country_language"
         );
     }
 
@@ -2589,6 +3230,52 @@ mod tests {
                 framework,
                 "document {bad} should have left the framework set standing"
             );
+        }
+    }
+
+    /// The `fees` node (ADR-0159 decision 1) replaces the store's rules when it parses; absent, or
+    /// an empty list, it means no fee; unparseable, it leaves the rules the store had.
+    #[test]
+    fn a_fees_node_installs_its_rules_an_absent_one_means_none_and_a_bad_one_changes_nothing() {
+        let rule = serde_json::json!({
+            "fee_id": "01JQ0000000000000000000003",
+            "code": "SERVICE",
+            "display_name": "Service charge",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+        });
+        let installed = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "fees": { "fees": [rule] } }),
+        );
+        let codes: Vec<&str> = installed
+            .fees
+            .fees
+            .iter()
+            .map(|fee| fee.code.as_str())
+            .collect();
+        assert_eq!(codes, ["SERVICE"]);
+
+        for bad in [
+            serde_json::json!({ "fees": "SERVICE" }),
+            serde_json::json!({ "fees": null }),
+            serde_json::json!({ "fees": { "fees": "not a list" } }),
+            // A rule without the id every rule needs.
+            serde_json::json!({ "fees": { "fees": [{ "code": "SERVICE" }] } }),
+        ] {
+            let kept = session_from_config(&installed, &bad);
+            assert_eq!(
+                kept.fees, installed.fees,
+                "document {bad} should change nothing"
+            );
+        }
+        for none in [
+            serde_json::json!({}),
+            serde_json::json!({ "fees": {} }),
+            serde_json::json!({ "fees": { "fees": [] } }),
+        ] {
+            let cleared = session_from_config(&installed, &none);
+            assert!(cleared.fees.fees.is_empty(), "document {none} means no fee");
         }
     }
 }

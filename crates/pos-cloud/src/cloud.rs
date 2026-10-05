@@ -124,6 +124,38 @@ pub struct DailyRevenue {
     pub net: i64,
     /// Gross ordered mix, keyed by `menu_item_id`, ordered by key for determinism.
     pub by_item: BTreeMap<String, ItemMix>,
+    /// The fees the day's settled bills charged, keyed by the fee's `code` and ordered by it
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+    ///
+    /// Folded from each `billing.bill.settled`'s `fee_lines`, whose amounts sum to that bill's
+    /// `service_charge`. So on a day whose every bill recorded its fee lines, these amounts sum to
+    /// [`service_charge`](Self::service_charge). A bill settled by an edge from before fee lines
+    /// records none, and adds to `service_charge` alone. There is no entry for that difference: a
+    /// bucket for it would read as a fee nobody wrote, so the gap is left as the gap between the
+    /// two figures.
+    ///
+    /// Bounded by the store's fee rules, not by its trade: one entry per code a rule charged that
+    /// day, and the cloud refuses a second active fee under a code a store already runs
+    /// ([`crate::fees::shares_code_with`]).
+    ///
+    /// `#[serde(default)]`, so a day stored before this field loads with no fees and gains them
+    /// from the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay
+    /// lever) folds every settled bill on the log into it.
+    #[serde(default)]
+    pub by_fee: BTreeMap<String, FeeTotal>,
+}
+
+/// One fee's total on a trading day, under its code (part of [`DailyRevenue`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct FeeTotal {
+    /// The most recent name a settled bill recorded for the fee, for a human-readable report.
+    pub name: String,
+    /// Settled bills that charged the fee.
+    pub bills: u64,
+    /// Sum of what the fee charged, minor units.
+    pub amount: i64,
+    /// Sum of the tax on it, minor units.
+    pub tax: i64,
 }
 
 /// One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).

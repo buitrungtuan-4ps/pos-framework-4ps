@@ -28,7 +28,7 @@
 
 use crate::error::DomainError;
 
-/// The six permission groups `docs/pos-spec.md` §9 names.
+/// The permission groups `docs/pos-spec.md` §9 names.
 ///
 /// The dashboard renders permissions grouped by these, so the grouping is data the framework owns
 /// rather than a UI convention.
@@ -41,6 +41,8 @@ pub enum PermissionGroup {
     Billing,
     /// Cash drawer and shift lifecycle.
     CashAndShifts,
+    /// What a store has taken, as the till shows it.
+    Reports,
     /// Menu and inventory maintenance.
     MenuAndInventory,
     /// Store-level administration: devices, configuration, staff at the store.
@@ -57,6 +59,7 @@ impl PermissionGroup {
             Self::Sales => "SALES",
             Self::Billing => "BILLING",
             Self::CashAndShifts => "CASH_AND_SHIFTS",
+            Self::Reports => "REPORTS",
             Self::MenuAndInventory => "MENU_AND_INVENTORY",
             Self::StoreAdministration => "STORE_ADMINISTRATION",
             Self::CloudAdministration => "CLOUD_ADMINISTRATION",
@@ -390,6 +393,20 @@ permissions! {
         default_roles: [Cashier, Server, Supervisor, Manager, Owner],
         description: "Take a payment and settle a bill",
     },
+    /// Waive a waivable fee on one bill, citing a reason
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// Money forgiven, as a discount above the ceiling is, so it is PIN-flagged and goes by default
+    /// to the roles that may exceed the ceiling; any other role can be granted it with approval
+    /// (ADR-0158 decision 4).
+    WaiveFee {
+        id: "billing.fee.waive",
+        group: Billing,
+        risk: High,
+        pin: true,
+        default_roles: [Manager, Owner],
+        description: "Waive a waivable fee on one bill; requires a reason",
+    },
 
     // ---- Cash and shifts ----
     /// Open the cash drawer outside a sale.
@@ -427,6 +444,27 @@ permissions! {
         pin: false,
         default_roles: [Cashier, Supervisor, Manager, Owner],
         description: "Record a paid-in or paid-out with a reason",
+    },
+
+    // ---- Reports ----
+    /// See what the store has taken today, on the Today screen
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    ///
+    /// The store's figure and nothing finer: the sum of the day's settled bills and how many there
+    /// were, never by person or by till, because takings per person would be monitoring staff.
+    /// Takings are confidential, so out of the box only the approvers who close shifts hold it: the
+    /// supervisor, the manager and the owner. A cashier, or any other role, sees takings only where
+    /// an owner grants it. Migration 0079 gave it once, on the same rule, to every role that existed
+    /// and granted both `cash.shift.close` and a PIN-flagged permission directly, so an existing
+    /// tenant and a new one agree on who holds it.
+    ViewTakings {
+        id: "reports.takings.view",
+        group: Reports,
+        risk: Medium,
+        pin: false,
+        default_roles: [Supervisor, Manager, Owner],
+        description: "See what the store has taken today, as one figure for the store",
     },
 
     // ---- Menu and inventory ----
@@ -759,6 +797,7 @@ mod tests {
         assert!(!cook.contains(Permission::IssueRefund));
         assert!(!cook.contains(Permission::OpenDrawerNoSale));
         assert!(!cook.contains(Permission::TakePayment));
+        assert!(!cook.contains(Permission::ViewTakings));
         // But does get to record waste, 86 an item and bump a ticket.
         assert!(cook.contains(Permission::RecordWaste));
         assert!(cook.contains(Permission::MarkItemUnavailable));
@@ -797,6 +836,7 @@ mod tests {
             Permission::IssueRefund,
             Permission::OpenDrawerNoSale,
             Permission::OverridePrice,
+            Permission::WaiveFee,
         ] {
             assert!(
                 permission.meta().pin_required,
@@ -804,6 +844,63 @@ mod tests {
                 permission.meta().id
             );
         }
+    }
+
+    #[test]
+    fn a_fee_is_waived_by_default_by_whoever_may_exceed_the_discount_ceiling() {
+        // ADR-0159 decision 5: waiving a fee forgives money as a discount above the ceiling does,
+        // so the same roles hold it directly out of the box, and migration 0076 gave it to the
+        // roles that existed on the same terms.
+        assert_eq!(
+            Permission::WaiveFee.meta().default_roles,
+            Permission::OverrideDiscountCeiling.meta().default_roles
+        );
+        assert_eq!(Permission::WaiveFee.meta().id, "billing.fee.waive");
+    }
+
+    #[test]
+    fn the_takings_are_seen_by_default_by_whoever_runs_the_floors_money() {
+        // ADR-0160 decision 2: who sees takings is a permission. Out of the box the owner, the
+        // manager and the supervisor; never a cashier, a server or a cook, until an owner says so.
+        let takings = Permission::ViewTakings.meta();
+        assert_eq!(takings.id, "reports.takings.view");
+        assert_eq!(
+            takings.default_roles,
+            [Role::Supervisor, Role::Manager, Role::Owner]
+        );
+        assert!(!takings.pin_required, "seeing a figure asks nobody's PIN");
+        assert_eq!(takings.group.as_token(), "REPORTS");
+        assert_eq!(takings.risk.as_token(), "MEDIUM");
+        for role in [Role::Cashier, Role::Server, Role::Cook] {
+            assert!(
+                !default_grants(role).contains(Permission::ViewTakings),
+                "{}",
+                role.as_token()
+            );
+        }
+    }
+
+    #[test]
+    fn the_approvers_who_close_a_shift_are_exactly_the_roles_that_see_takings_by_default() {
+        // ADR-0160 decision 2: migration 0079 gave takings to every existing role that grants
+        // closing a shift and a PIN-flagged permission directly. Applied to the starting roles, the
+        // same rule must pick exactly the roles that hold takings out of the box, so an existing
+        // tenant and a new one agree on who sees the store's money.
+        let mut approvers_who_close: Vec<Role> = Role::ALL
+            .iter()
+            .copied()
+            .filter(|role| {
+                let direct = default_grants(*role);
+                direct.contains(Permission::CloseShift)
+                    && Permission::ALL.iter().any(|permission| {
+                        permission.meta().pin_required && direct.contains(*permission)
+                    })
+            })
+            .collect();
+        approvers_who_close.sort_unstable();
+        let mut see_takings = Permission::ViewTakings.meta().default_roles.to_vec();
+        see_takings.sort_unstable();
+        assert_eq!(approvers_who_close, see_takings);
     }
 
     #[test]

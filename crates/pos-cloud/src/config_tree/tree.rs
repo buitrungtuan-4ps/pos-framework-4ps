@@ -143,6 +143,22 @@ impl ConfigTreeState {
     pub fn layer(&self, level: ConfigLevel) -> &Value {
         &self.layers[level.index()]
     }
+
+    /// The four layers merged as they stand: the composition [`ConfigTree::effective`] makes, read
+    /// from the state, and so the document the store runs once it holds the current version.
+    ///
+    /// A node is read from here rather than from the layer it is written on when the question is
+    /// what the store runs: a rollback writes the restored version onto the Tenant layer and empties
+    /// the others ([`ConfigTree::restore_with`]), so one layer alone can hold none of it.
+    #[must_use]
+    pub fn effective(&self) -> Value {
+        merge_layers(&[
+            &self.layers[0],
+            &self.layers[1],
+            &self.layers[2],
+            &self.layers[3],
+        ])
+    }
 }
 
 /// A store's configuration authority: its four layers, its published history, and its validator.
@@ -337,11 +353,27 @@ impl<V: ConfigValidator> ConfigTree<V> {
         version_id: ConfigVersionId,
         new_version_id: ConfigVersionId,
     ) -> Option<ConfigVersionId> {
+        self.restore_with(version_id, new_version_id, |_document| {})
+    }
+
+    /// [`restore`](Self::restore), with the restored document passed through `settle` first.
+    ///
+    /// For a document whose meaning has moved since it was published: QR ordering's switch, for
+    /// one, is a flag that decided nothing before ADR-0160 decision 5, so a version from then is
+    /// restored with the switch it ran (`crate::qr_ordering::settle`) rather than the flag's old
+    /// value. `settle` is trusted as the restore is: it must leave a document that validates.
+    pub fn restore_with(
+        &mut self,
+        version_id: ConfigVersionId,
+        new_version_id: ConfigVersionId,
+        settle: impl FnOnce(&mut Value),
+    ) -> Option<ConfigVersionId> {
         let restored = self
             .history
             .iter()
             .find(|version| version.id == version_id)?;
-        let effective = restored.effective.clone();
+        let mut effective = restored.effective.clone();
+        settle(&mut effective);
         // A restore replaces the whole effective document, so every node in it is republished —
         // not just whichever nodes the version being restored happened to name. Reading the keys
         // off the document is the honest answer, and it is what keeps a restored store from

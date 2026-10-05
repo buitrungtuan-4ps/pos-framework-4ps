@@ -249,7 +249,9 @@ export async function startCloud() {
         // version they were just handed, which is what an operator's screen does.
         // Quoted, because a conditional write asserts a *strong* entity-tag and the route refuses
         // a bare one (ADR-0094) — the same shape `api/client.ts` sends.
-        ...(etag === undefined ? {} : { "if-match": `"${etag}"` }),
+        // `*` is the exception: it is what a first write of a collection asserts (ADR-0095), and it
+        // is never quoted.
+        ...(etag === undefined ? {} : { "if-match": etag === "*" ? "*" : `"${etag}"` }),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -338,6 +340,25 @@ export async function seedFixtures(cloud) {
     cash_rounding_increment: null,
     cash_denominations: [],
   });
+  // A rate for the item's tax class on the channel it is priced on, published with the table: a
+  // line with no rate cannot be priced, and the fee flow's sample bill prices one. Written before
+  // the table is published, as the console's own order has it.
+  await cloud.call(
+    "PUT",
+    "/admin/catalog/tax-rates",
+    {
+      tenant_id: tenant.tenant_id,
+      rates: [
+        {
+          tax_class_id: taxClass.tax_class_id,
+          sales_channel: "SALES_CHANNEL_DINE_IN",
+          rate_bps: 800,
+          components: [],
+        },
+      ],
+    },
+    "*",
+  );
   await cloud.call("PUT", "/admin/config/tax", {
     tenant_id: tenant.tenant_id,
     store_id: store.store_id,

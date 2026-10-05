@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
@@ -9,7 +9,9 @@ import { money, type Money } from "../lib/money";
 import {
   closeShift,
   countShift,
+  currencyExponent,
   formatAmount,
+  loadShift,
   openDrawerNoSale,
   openShift,
   parseAmount,
@@ -18,6 +20,7 @@ import {
   state,
   storeCurrency,
 } from "../state/store";
+import { openingFloatMinor } from "../state/session";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
@@ -50,8 +53,15 @@ const nonZero = (amount: Money | undefined) => amount !== undefined && amount.am
 // — counting before the expectation is shown (§11.1) — so the count field never sits beside an
 // expected figure. What was paid in and out is shown, because the cashier entered it: it says
 // nothing about the cash taken on bills, which is the part the close keeps to itself.
+//
+// Two of the store's settings change that (ADR-0160 decision 2). `shift.opening_float_minor` fills
+// in the float, which the cashier may change before opening. `shift.blind_close` off has the edge
+// send what the drawer should hold, and then, and only then, the count field shows it.
 export function Shift() {
   const [amount, setAmount] = createSignal("");
+  // The float field holds the store's float until the cashier types, and what they typed from then
+  // on, an emptied field included. Set back after each act, so the next opening fills it in again.
+  const [floatTyped, setFloatTyped] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   // A paid in or out (ADR-0165 decision 1): the amount is typed first, then **Paid in** or **Paid
   // out** says which way, then a reason records it. Two taps after the number.
@@ -70,15 +80,41 @@ export function Shift() {
   const shift = () => state.shift;
   const phase = () => shift()?.state ?? "NONE";
 
+  // What the drawer should hold, as the edge reports it to a store whose count is not blind. Read
+  // again when the screen opens on a shift still trading, so it includes the cash taken since the
+  // shift was last read. A closed shift is left as it is, so its variance stays on screen.
+  onMount(() => {
+    const current = state.shift;
+    if (current !== null && current.state !== "SHIFT_STATE_CLOSED") {
+      void loadShift();
+    }
+  });
+
   const run = async (action: () => Promise<unknown>) => {
     setError(null);
     try {
       await action();
       setAmount("");
+      setFloatTyped(false);
     } catch (caught) {
       setError(errorMessage(caught));
     }
   };
+
+  // The store's float as the cashier would type it: whole units of the currency, which is all the
+  // keypad types. A store that sets none fills in nothing, as before the setting, and so does a
+  // float that is not a whole number of units, rather than open the shift on a different amount.
+  const storeFloat = () => {
+    const minor = openingFloatMinor();
+    const unit = 10 ** currencyExponent();
+    return minor > 0 && minor % unit === 0 ? String(minor / unit) : "";
+  };
+  const floatText = () => (floatTyped() ? amount() : storeFloat());
+  const typeFloat = (text: string) => {
+    setFloatTyped(true);
+    setAmount(text);
+  };
+  const floatParsed = () => parseAmount(floatText());
 
   // Parsed in the store's own currency, not a literal (roadmap E5): the minor-unit scale differs
   // between currencies, so parsing a typed figure as VND on a two-decimal currency would be out by
@@ -174,17 +210,17 @@ export function Shift() {
           id="float"
           inputmode="numeric"
           class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-          value={amount()}
-          onInput={(event) => setAmount(event.currentTarget.value)}
+          value={floatText()}
+          onInput={(event) => typeFloat(event.currentTarget.value)}
         />
-        <Keypad value={amount()} onChange={setAmount} data-step="floatKeypad" />
+        <Keypad value={floatText()} onChange={typeFloat} data-step="floatKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={parsed() === null}
+          disabled={floatParsed() === null}
           data-step="openShift"
           onClick={() => {
-            const value = parsed();
+            const value = floatParsed();
             if (value !== null) {
               void run(() => openShift(value));
             }
@@ -196,7 +232,7 @@ export function Shift() {
 
       <Show when={phase() === "SHIFT_STATE_OPEN"}>
         <p class="text-ink-muted" data-outcome="shift-open">
-          {t("shift.open_hint")}
+          {t(shift()?.expected ? "shift.open_hint_not_blind" : "shift.open_hint")}
         </p>
 
         {/*
@@ -310,6 +346,14 @@ export function Shift() {
         <label class="mt-4 block text-sm text-ink-muted" for="count">
           {t("shift.count_label", { currency: storeCurrency() })}
         </label>
+        {/* Only where the store's count is not blind: a blind store is sent no expectation. */}
+        <Show when={shift()?.expected}>
+          {(expected) => (
+            <p class="mt-1 text-sm tabular-nums" data-outcome="shift-expected">
+              {t("shift.expected_now", { amount: formatAmount(expected()) })}
+            </p>
+          )}
+        </Show>
         <input
           id="count"
           inputmode="numeric"

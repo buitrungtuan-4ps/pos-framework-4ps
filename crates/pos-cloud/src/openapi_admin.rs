@@ -129,6 +129,9 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_publish_reason_codes,
         crate::http::admin_admitted_devices,
         crate::http::admin_revoke_device,
+        crate::http::admin_set_printer_paper,
+        crate::http::admin_set_terminal_receipt,
+        crate::http::admin_export_revenue_fees,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -145,6 +148,14 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_effective_settings,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
+        crate::http::admin_permissions_readiness,
+        crate::http::admin_list_fees,
+        crate::http::admin_create_fee,
+        crate::http::admin_put_fee,
+        crate::http::admin_delete_fee,
+        crate::http::admin_effective_fees,
+        crate::http::admin_publish_fees,
+        crate::http::admin_preview_fees,
         crate::http::admin_list_releases,
         crate::http::admin_create_release,
         crate::http::admin_read_release,
@@ -207,6 +218,26 @@ pub(crate) struct ErrorResponse {
                            `/admin/stores/{store_id}/devices`."
         ),
         (
+            name = "printers",
+            description = "What paper each approved printer takes and whether it cuts it \
+                           (ADR-0160 decision 2), and which printer a till's receipts go to and \
+                           the languages they print in (decision 4). The rest of the \
+                           device-onboarding surface is still coverage debt; these writes are \
+                           documented because a route new to this surface is, and because a \
+                           fork's own console needs to know that a printer nobody has set prints \
+                           as 80 mm paper with a cutter, that a till nobody has set prints as the \
+                           store does, and that nothing reaches a store until its devices are \
+                           published."
+        ),
+        (
+            name = "reports",
+            description = "A store's takings over a window of its trading days, read from the \
+                           materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route \
+                           here needs `console.reports.revenue`. The daily reads and the revenue \
+                           export are still coverage debt; the export of fees by code (ADR-0159) \
+                           is documented because a route new to this surface is."
+        ),
+        (
             name = "fleet",
             description = "Where each store runs and how it is standing (ADR-0068, ADR-0110, \
                            ADR-0114). The reads themselves are still coverage debt; the one write \
@@ -221,6 +252,26 @@ pub(crate) struct ErrorResponse {
                            value that reaches it, and every store a write reaches is republished in \
                            the same request. Documented because a fork's own console draws its \
                            settings screen from the catalogue here."
+        ),
+        (
+            name = "people",
+            description = "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and \
+                           assignment routes are still coverage debt; the readiness read is \
+                           documented because it is new to this surface, and because a fork's own \
+                           console needs it before a store enforces each person's own permissions. \
+                           It names roles and counts people, and names no person."
+        ),
+        (
+            name = "fees",
+            description = "The charges a bill adds — a service charge, a packaging fee, a delivery \
+                           fee (ADR-0159). A rule is written once, at the tenant, a brand or one \
+                           store; for each fee a store runs the most specific rule that reaches \
+                           it, and every store a write reaches is republished in the same request. \
+                           An item list may name item categories, which are compiled into items \
+                           when the store is published. Documented because a fork's own console \
+                           draws its fee screen from these routes, and needs to know that a store \
+                           which cannot apply a rule is left as it is rather than sent part of \
+                           its list."
         ),
         (
             name = "config",

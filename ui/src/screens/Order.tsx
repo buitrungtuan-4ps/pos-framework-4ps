@@ -7,7 +7,13 @@ import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
-import type { LayoutButton, LayoutCategory, MenuItemResponse, ModifierGroup } from "../api/types";
+import type {
+  FeeLine,
+  LayoutButton,
+  LayoutCategory,
+  MenuItemResponse,
+  ModifierGroup,
+} from "../api/types";
 import {
   addItem,
   chooseSeat,
@@ -25,6 +31,7 @@ import {
   moveTable,
   openBill,
   openBillFor,
+  openBillsFor,
   reasonsFor,
   releaseTable,
   seatFor,
@@ -36,7 +43,11 @@ import {
   unfiredLinesForTable,
   unsentCoursesForTable,
   voidLine,
+  waiveFee,
+  walkInAsks,
+  walkInEatenIn,
   walkInKey,
+  walkInOrderChannel,
   type OrderLine,
   formatAmount,
 } from "../state/store";
@@ -48,6 +59,10 @@ import { asksApprover, can } from "../state/permissions";
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
 // in the framework's own default set — never appears here, because the edge would refuse it.
 const VOID_LINE = "REASON_ACTION_VOID_LINE";
+
+// The action waiving a fee cites (ADR-0159 decision 5), so the picker offers the reasons the store
+// holds for a waive and nothing else.
+const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 
 // A table's order: the running check on the left, the menu on the right (the tablet layout with a
 // sliding bill). Tapping a menu item adds it optimistically; a fresh line can be fired to the
@@ -99,7 +114,7 @@ export function Order() {
       .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
       .join(","),
   );
-  const [check] = createResource(priceable, () => loadCheck(key()));
+  const [check, { refetch: refetchCheck }] = createResource(priceable, () => loadCheck(key()));
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
@@ -251,6 +266,54 @@ export function Order() {
     setApproverPin("");
   };
 
+  // Waiving a fee from the check (ADR-0159 decision 5), on the one bill open on the table: a split
+  // table's fees are each part's, and the pay screen waives them part by part. The manager fields
+  // are the void's, and only one of the two panels is open at a time. A waive changes no line, so
+  // the check is read again once it lands.
+  const [waiving, setWaiving] = createSignal<FeeLine | null>(null);
+  const [waivedFee, setWaivedFee] = createSignal<string | null>(null);
+  const openBillOnly = () => {
+    const bills = openBillsFor(key());
+    return bills.length === 1 ? bills[0] : undefined;
+  };
+  const waiveAsks = () => asksApprover("billing.fee.waive");
+  const readyToWaive = () =>
+    !waiveAsks() || (approverCode().trim() !== "" && approverPin() !== "");
+  const canWaive = (fee: FeeLine) =>
+    fee.waivable === true &&
+    openBillOnly() !== undefined &&
+    can("billing.fee.waive") &&
+    reasonsFor(WAIVE_FEE).length > 0;
+  const closeWaive = () => {
+    setWaiving(null);
+    setApproverCode("");
+    setApproverPin("");
+  };
+  const askWaiveFee = (fee: FeeLine) => {
+    setError(null);
+    setWaivedFee(null);
+    closeVoid();
+    setWaiving(fee);
+  };
+  const waiveFeeReason = (fee: FeeLine, reasonCodeId: string) =>
+    guard(async () => {
+      const bill = openBillOnly();
+      if (bill === undefined) {
+        return;
+      }
+      await waiveFee(
+        bill,
+        fee.fee_id,
+        reasonCodeId,
+        waiveAsks()
+          ? { approver_code: approverCode().trim(), approver_pin: approverPin() }
+          : undefined,
+      );
+      setWaivedFee(fee.display_name);
+      closeWaive();
+      void refetchCheck();
+    });
+
   // The first tap: open the picker for this line. Not a void of its own — nothing is written until a
   // reason is chosen, which is what makes the reason mandatory rather than a follow-up question.
   const askVoid = (line: OrderLine) => {
@@ -275,8 +338,10 @@ export function Order() {
 
   // The price book this order is sold from. A walk-in is priced by the edge at its own channel, so
   // it shows that channel's book (ADR-0066); a table is the dining room's.
-  const menuItems = () => (walkIn() ? state.walkInMenu : state.menu);
-  const menuGroups = () => (walkIn() ? state.walkInModifierGroups : state.modifierGroups);
+  const channel = () => walkInOrderChannel(params.id);
+  const menuItems = () => (walkIn() ? (state.walkInMenu[channel()] ?? []) : state.menu);
+  const menuGroups = () =>
+    walkIn() ? (state.walkInModifierGroups[channel()] ?? []) : state.modifierGroups;
 
   // Pre-index menu items by ID using createMemo to allow O(1) lookups instead of O(N) linear scans.
   const menuItemMap = createMemo(
@@ -562,6 +627,15 @@ export function Order() {
           <h1 class="text-lg font-semibold" data-outcome="order-open">
             {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
           </h1>
+          {/* What the guest answered, where the store asks each walk-in (ADR-0160 decision 2). */}
+          <Show when={walkIn() && walkInAsks() && walkInEatenIn(params.id) !== undefined}>
+            <span
+              class="rounded-token bg-surface-muted px-2 text-sm font-semibold"
+              data-outcome="walk-in-channel"
+            >
+              {t(walkInEatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
+            </span>
+          </Show>
           <Show when={!walkIn()}>
             <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
           </Show>
@@ -1084,6 +1158,36 @@ export function Order() {
                     <span>{t("order.subtotal")}</span>
                     <span class="tabular-nums">{formatAmount(totals().subtotal)}</span>
                   </div>
+                  {/* Each fee under its own name, as the receipt prints it (ADR-0159): one that
+                      charged nothing is left off, as it is on paper. A fee its rule lets staff
+                      waive carries **Waive** once a bill is open to waive it on (decision 5). */}
+                  <For
+                    each={(totals().fee_lines ?? []).filter(
+                      (fee) => fee.amount.amount_minor !== 0,
+                    )}
+                  >
+                    {(fee) => (
+                      <div
+                        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+                        data-outcome="check-fee"
+                      >
+                        <span>{fee.display_name}</span>
+                        <span class="flex items-center gap-2">
+                          <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                          <Show when={canWaive(fee) && waiving() === null}>
+                            <button
+                              type="button"
+                              class="min-h-touch rounded-token border border-line px-3 text-sm"
+                              data-step="askWaiveFee"
+                              onClick={() => askWaiveFee(fee)}
+                            >
+                              {t("order.waive_fee")}
+                            </button>
+                          </Show>
+                        </span>
+                      </div>
+                    )}
+                  </For>
                   <div class="flex justify-between text-sm text-ink-muted">
                     <span>{t("order.tax")}</span>
                     <span class="tabular-nums">{formatAmount(totals().tax_total)}</span>
@@ -1098,6 +1202,61 @@ export function Order() {
               )}
             </Show>
           </div>
+
+          {/*
+            Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
+            the manager's badge and PIN where the person needs an approver, the reasons disabled
+            until it is typed — the void's shape, beside the check it changes.
+          */}
+          <Show when={waiving()}>
+            {(fee) => (
+              <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                <h2 class="font-semibold">{t("order.waive_title", { fee: fee().display_name })}</h2>
+                <Show when={waiveAsks()}>
+                  <p class="mt-1 text-sm text-ink-muted">{t("order.waive_manager")}</p>
+                  <ApproverFields
+                    id="waive-fee-approver"
+                    code={approverCode()}
+                    pin={approverPin()}
+                    onCode={setApproverCode}
+                    onPin={setApproverPin}
+                    codeLabel={t("order.approver_code")}
+                    pinLabel={t("order.approver_pin")}
+                  />
+                </Show>
+                <p class="mt-3 text-sm text-ink-muted">{t("order.waive_reason")}</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <For each={reasonsFor(WAIVE_FEE)}>
+                    {(reason) => (
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                        disabled={!readyToWaive()}
+                        data-step="waiveFeeReason"
+                        onClick={() => void waiveFeeReason(fee(), reason.reason_code_id)}
+                      >
+                        {reason.display_name}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                  onClick={() => closeWaive()}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            )}
+          </Show>
+          <Show when={waivedFee()}>
+            {(name) => (
+              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="check-fee-waived">
+                {t("order.fee_waived", { fee: name() })}
+              </p>
+            )}
+          </Show>
 
           {/*
             The two acts that end this screen, anchored to the bottom of a phone.

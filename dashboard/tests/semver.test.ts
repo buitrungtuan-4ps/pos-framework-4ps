@@ -9,10 +9,18 @@
 //     operator is setting up — would lose every setting. Unknown is its own answer, and the screen
 //     shows the setting with a note;
 //   * **equal read as older.** The release a setting is honoured *from* honours it.
+//
+// And one way it says something untrue: a setting the cloud applies, honoured from `0.0.0`, noted as
+// one a store that has not reported may not honour yet.
 
 import { describe, expect, it } from "vitest";
 
-import { compareReleases, parseRelease, releaseStanding } from "../src/lib/semver";
+import {
+  compareReleases,
+  honouredByEveryRelease,
+  parseRelease,
+  releaseStanding,
+} from "../src/lib/semver";
 
 describe("reading a release", () => {
   it("takes MAJOR.MINOR.PATCH as three numbers", () => {
@@ -72,5 +80,15 @@ describe("whether a store honours a setting", () => {
     expect(releaseStanding(null, "0.14.1")).toBe("unknown");
     expect(releaseStanding(undefined, "0.14.1")).toBe("unknown");
     expect(releaseStanding("a build nobody tagged", "0.14.1")).toBe("unknown");
+  });
+
+  it("honours a setting every release honours, whatever the store reports", () => {
+    expect(honouredByEveryRelease("0.0.0")).toBe(true);
+    expect(honouredByEveryRelease("v0.0.0")).toBe(true);
+    expect(honouredByEveryRelease("0.14.1")).toBe(false);
+    const reported = ["0.0.0", "0.14.0", "1.0.0", null, undefined, "a build nobody tagged"];
+    for (const installed of reported) {
+      expect(releaseStanding(installed, "0.0.0")).toBe("honours");
+    }
   });
 });

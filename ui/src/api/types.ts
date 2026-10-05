@@ -123,6 +123,10 @@ export interface LiveOrder {
   // its bill has been split (ADR-0128). `bill_id` names only the newest. Absent from an edge older
   // than the field, which never had a way to show a till a split table anyway.
   open_bill_ids?: string[];
+  // The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book of
+  // its channel, and whether the guest eats in (ADR-0160 decision 2). Absent from an edge older than
+  // the field, and for an order the edge cannot name a channel for.
+  sales_channel?: string;
   lines: LiveLine[];
 }
 
@@ -155,6 +159,10 @@ export interface KitchenStation {
   station_id: string;
   name: string;
   backup_station_id?: string | null;
+  // How long a ticket at this station waits, in seconds, before the board marks it late. The edge
+  // sends the threshold the station's board uses (ADR-0160 decision 2): the station's own, or ten
+  // minutes where it sets none. Absent from an edge that predates the field.
+  late_after_seconds?: number;
 }
 
 export interface StationRoutingRule {
@@ -251,6 +259,32 @@ export interface MenuResponse {
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.
   accepted_tender: string[] | null;
+  // The tip keys the pay screen offers, each a whole percentage of the bill, in the store's order,
+  // without a key set to 0 or to a percentage an earlier key offers (ADR-0160 decision 2). Empty when
+  // no key is left, and the pay screen then shows no tip row. Absent from an edge older than the
+  // setting, and the till then offers the three keys it always did.
+  tip_percents?: number[];
+  // The most guests the pay screen's even split offers: every number from two up to it (ADR-0160
+  // decision 2). Absent from an edge older than the setting, and the till then offers two to six.
+  split_ways_max?: number;
+  // The channel the counter opens a walk-in on (ADR-0160 decision 2): `WALK_IN_CHANNEL_TAKEAWAY`,
+  // `WALK_IN_CHANNEL_DINE_IN`, or `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. The
+  // counter shows the book of that channel. Absent from an edge older than the setting, which opens
+  // every walk-in for takeaway, and the counter then shows the takeaway book, as it always did.
+  walk_in_channel?: string;
+}
+
+// One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display
+// language, what it charged and the tax on it. The edge computes every figure; the till shows them.
+export interface FeeLine {
+  fee_id: string;
+  code: string;
+  display_name: string;
+  amount: Money;
+  tax: Money;
+  // Whether the fee's rule lets staff waive it on one bill (ADR-0159 decision 5). Absent from an
+  // edge older than the waive, which offers none.
+  waivable?: boolean;
 }
 
 // What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the
@@ -264,6 +298,9 @@ export interface CheckResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+  // Each fee, in the order of its rules. Absent from an edge older than fees, and empty where no
+  // fee applies; `total_due` already includes every one.
+  fee_lines?: FeeLine[];
 }
 
 // One bill read back, from `GET /api/bills/{id}/check`: the five figures, where the bill has got to,
@@ -307,6 +344,8 @@ export interface DiscountResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+  // As on the check: a fee taken after discounts moves with the discount.
+  fee_lines?: FeeLine[];
 }
 
 // One line of a counter order, as the counter list shows it: what it is and how many, so a cashier
@@ -397,6 +436,10 @@ export interface ApproverRequest {
 // act needs one, and the edge decides which — an unfired line is an ordinary cancel, a fired one
 // and every bill need a manager.
 export type VoidRequest = { reason_code_id: string } & Partial<ApproverRequest>;
+
+// A fee waived on one bill, as the till asks for it (ADR-0159 decision 5): the reason, and an
+// approver where the person needs one. The edge answers with the bill as it now stands.
+export type WaiveFeeRequest = { reason_code_id: string } & Partial<ApproverRequest>;
 
 // The state a voided bill came to rest in, so the screen can say so without re-reading.
 export interface VoidBillResponse {
@@ -710,6 +753,28 @@ export interface TestPrintResponse {
   print: string;
 }
 
+/**
+ * One of the store's tills, from `GET /api/print/agent`
+ * ([ADR-0112](../../../docs/adr/0112-print-agents.md)): a `TERMINAL` entry the console created, and
+ * who holds it. `held` is `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`, and never says which other
+ * device.
+ */
+export interface TerminalEntry {
+  agent_device_id: string;
+  name: string;
+  held: string;
+}
+
+/** The store's tills, in the order the store published them. */
+export interface TerminalsResponse {
+  terminals: TerminalEntry[];
+}
+
+/** What a bind came to: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`. */
+export interface BindResponse {
+  outcome: string;
+}
+
 /** What printing pre-bills came to: one outcome per document, in the order they were sent. */
 export interface PrintResponse {
   prints: string[];
@@ -737,6 +802,18 @@ export interface SettledBill {
   settle_clock?: string;
   /** How many copies have been printed. */
   copies: number;
+}
+
+/**
+ * What the store has taken today, for the Today screen's tile (ADR-0160 decision 2): the bills
+ * settled in the current business day, at what their guests paid, and how many. The store's figure
+ * and nothing finer, never anyone's own. Served only to a person whose role grants
+ * `reports.takings.view`.
+ */
+export interface TakingsResponse {
+  business_date: string;
+  takings_amount: Money;
+  bill_count: number;
 }
 
 /** What a copy's press reports (ADR-0164): which copy it was, and what came of the printing. */
