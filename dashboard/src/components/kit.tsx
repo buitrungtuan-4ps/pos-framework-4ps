@@ -284,9 +284,9 @@ export function DataTable<T>(props: {
       return base;
     }
     const direction = ascending() ? 1 : -1;
-    // Optimization: Pre-extract sort values once in an O(N) pass to avoid re-evaluating
-    // `sortValue` O(N log N) times during sorting, and reuse a single Intl.Collator
-    // instance to avoid localeCompare setup overhead in the comparison loop.
+    // Each row's value is read once rather than on every comparison, and text compares the way it
+    // is read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that
+    // tie keep the order they came in, because the sort is stable.
     const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     const decorated = base.map((row) => ({ row, val: value(row) }));
     decorated.sort((a, b) => {

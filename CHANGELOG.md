@@ -16,10 +16,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-### Changed
-
-- **Optimize client-side sorting in DataTable.** Pre-extract sort keys in an $O(N)$ pass and reuse a single `Intl.Collator` instance during table column sorting in `dashboard/src/components/kit.tsx`.
-
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
@@ -130,6 +126,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `2001:1::/32` as `ForbiddenReason::Reserved`. Its anycast addresses reach a nearby network service, never a webhook receiver. **Upgrade note:** none.
 
 ### Changed
+
+- **A console table sorted by a text column puts numbers in order, and sorts a long table faster.**
+  Sorting compares text the way people read it: "Table 2" now comes before "Table 10", and case and
+  accents no longer split names that read the same ("pho" sorts with "Phở"; rows that tie keep their
+  order). Each row's sort value is read once instead of on every comparison
+  (`DataTable` in `dashboard/src/components/kit.tsx`). No upgrade note: nothing on the wire changes.
 
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
