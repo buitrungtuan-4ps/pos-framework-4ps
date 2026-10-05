@@ -44,6 +44,8 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, TxContext};
+use pos_proto::backup::PublishedBackup;
+use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
@@ -72,11 +74,12 @@ use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
-use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable};
+use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable, TaxRounding};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
@@ -343,12 +346,11 @@ impl StaffRoster {
 }
 
 /// The range a store's [`EdgeSession::event_log_days`] may take
-/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
-///
-/// Thirty days at least, so a typo cannot have a store forget last month; ten years at most, so a
-/// stray zero cannot keep a log forever. The cloud refuses a publish outside it, and the edge
-/// ignores one that arrives anyway, keeping what it had.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u16> = 30..=3650;
+/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): the
+/// one the cloud refuses a publish outside, from the `retention` node's own type
+/// ([`pos_proto::retention`]). The edge ignores a value outside it that arrives anyway, keeping what
+/// it had.
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
@@ -419,6 +421,15 @@ pub struct EdgeSession {
     /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
     /// unconditionally until the `locale` node could say otherwise.
     pub cash_rounding_increment: Option<i64>,
+    /// How each tax amount and each fee rounds to the minor unit: the `locale` node's
+    /// `tax_rounding`, a setting
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2), read through `LocaleSettings::tax_rounding`.
+    ///
+    /// Half-up in the bootstrap and wherever the node does not say otherwise, which is what every
+    /// bill did before the setting existed. A bill is computed with the mode the session holds when
+    /// it is computed; the cash rounding of its total is half-up whatever this says.
+    pub tax_rounding: TaxRounding,
     /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
     /// the `default_retention_days` a `LocalePack` has carried since
     /// [ADR-0027](../../../docs/adr/0027-country-modules.md) and which, until
@@ -571,6 +582,21 @@ pub struct EdgeSession {
     /// The payment methods this store accepts, from the `tender` config node (ADR-0080, M7). `None`
     /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
+    /// The keys the pay screen offers, from the `tender_keys` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): its tip keys and how many guests its even split offers. The defaults, five, ten
+    /// and fifteen percent and up to six guests, in the bootstrap and wherever the node sets none.
+    pub tender_keys: PublishedTenderKeys,
+    /// How the counter opens an order for a walk-in guest, from the `counter` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
+    /// before the setting, in the bootstrap and wherever the node sets none.
+    pub counter: PublishedCounter,
+    /// How often the store archives its database off the box, from the `backup` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
+    /// archive loop on this box's own interval ([`crate::backup_client`]).
+    pub backup: PublishedBackup,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
@@ -712,6 +738,8 @@ impl EdgeSession {
             // till that has not synced yet (ADR-0105).
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            // Half-up until the `locale` node says otherwise, as every bill was before the setting.
+            tax_rounding: TaxRounding::HalfUp,
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
@@ -741,6 +769,9 @@ impl EdgeSession {
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
+            tender_keys: PublishedTenderKeys::default(),
+            counter: PublishedCounter::default(),
+            backup: PublishedBackup::default(),
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,
@@ -1747,6 +1778,12 @@ pub struct LiveOrderView {
     /// and none of the others. It paid that one, found the table still awaiting payment, and had no
     /// id to settle the rest with — asking for a bill again is refused while one is open.
     pub open_bill_ids: Vec<BillId>,
+    /// The channel it was opened on, or `None` for an order this build never saw open or whose
+    /// channel it does not know. The counter shows a walk-in the book of its channel, and whether
+    /// the guest eats in or takes away, so a till that reloads on one learns the channel here
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    pub sales_channel: Option<SalesChannel>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
 }
@@ -1844,6 +1881,7 @@ struct LiveSnapshot {
     table_id: Option<TableId>,
     bill_id: Option<BillId>,
     open_bill_ids: Vec<BillId>,
+    sales_channel: Option<SalesChannel>,
     /// Each line with its id and whether a station has bumped it.
     lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
@@ -6180,6 +6218,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: projection.table_for_order(order_id),
                 bill_id: projection.bill_for_order(order_id),
                 open_bill_ids: projection.open_bills_for_order(order_id),
+                sales_channel: projection.order_channel(order_id),
                 lines: projection
                     .identified_lines_for_order(order_id)
                     .into_iter()
@@ -6204,6 +6243,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: order.table_id,
                 bill_id: order.bill_id,
                 open_bill_ids: order.open_bill_ids,
+                sales_channel: order.sales_channel,
                 lines: order
                     .lines
                     .into_iter()
@@ -8026,7 +8066,7 @@ impl<S: EventStore> Edge<S> {
             // on it.
             sales_channel: order.sales_channel,
             cash_rounding_increment: session.cash_rounding_increment,
-            rounding_mode: Rounding::HalfUp,
+            tax_rounding: session.tax_rounding.rounding(),
             prices_include_tax: session.prices_include_tax,
             fee_rules,
             waived_fee_ids,
@@ -8329,7 +8369,7 @@ mod tests {
         BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId,
         StoreId, TableId,
     };
-    use pos_proto::locale::{TaxRate, TaxRateTable};
+    use pos_proto::locale::{TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
@@ -9025,6 +9065,53 @@ mod tests {
             applied_to_bill: vnd(minor),
             tip: vnd(0),
         }
+    }
+
+    /// Seats a table, sells one line at `unit_price`, opens its bill and settles it for exactly what
+    /// it comes to; the bill, settled.
+    async fn a_settled_bill_at(edge: &Edge<FakeStore>, table: TableId, unit_price: i64) -> BillId {
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        let line = LineDraft {
+            unit_price: vnd(unit_price),
+            line_total: vnd(unit_price),
+            ..a_line()
+        };
+        edge.add_line(actor(), table, line).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        let owed = edge
+            .bill_totals(opened.bill_id)
+            .expect("assembles")
+            .total_due;
+        edge.settle_bill(actor(), opened.bill_id, vec![cash(owed.amount_minor)], None)
+            .await
+            .expect("settles");
+        opened.bill_id
+    }
+
+    /// ADR-0160: a store whose `locale` sets `TAX_ROUNDING_DOWN` drops the half đồng of tax a store
+    /// on half-up rounds up, so it settles the same bill one đồng lower, and records it so.
+    #[test]
+    fn a_store_that_rounds_tax_down_settles_half_a_unit_of_tax_one_unit_lower() {
+        pos_fakes::executor::run_ready(async {
+            // 10 % of 150,005 is 15,000.5.
+            let recorded = |edge: &Edge<FakeStore>, bill_id: BillId| {
+                let projection = edge.lock_projection();
+                let receipt = projection.settled.get(&bill_id).expect("recorded");
+                (receipt.tax_total, receipt.total_due)
+            };
+            let half_up = edge();
+            let bill =
+                a_settled_bill_at(&half_up, TableId::new(Ulid::from_u128(341)), 150_005).await;
+            assert_eq!(recorded(&half_up, bill), (vnd(15_001), vnd(165_006)));
+
+            let down = edge();
+            down.apply_session(EdgeSession {
+                tax_rounding: TaxRounding::Down,
+                ..EdgeSession::bootstrap()
+            });
+            let bill = a_settled_bill_at(&down, TableId::new(Ulid::from_u128(342)), 150_005).await;
+            assert_eq!(recorded(&down, bill), (vnd(15_000), vnd(165_005)));
+        });
     }
 
     #[test]

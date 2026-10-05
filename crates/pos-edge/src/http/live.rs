@@ -108,6 +108,11 @@ struct LiveOrderResponse {
     /// once its bill has been split (ADR-0128). `bill_id` names only the newest, so a device that
     /// reloads mid-split finds the other parts here. Always present, empty when nothing is open.
     open_bill_ids: Vec<String>,
+    /// The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book
+    /// of its channel, and whether the guest eats in or takes away (ADR-0160 decision 2). Absent for
+    /// an order the edge cannot name a channel for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sales_channel: Option<&'static str>,
     lines: Vec<LiveLineResponse>,
 }
 
@@ -147,6 +152,7 @@ fn respond(orders: Vec<crate::app::LiveOrderView>) -> Response {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
+            sales_channel: order.sales_channel.map(WireEnum::as_wire),
             lines: order
                 .lines
                 .into_iter()

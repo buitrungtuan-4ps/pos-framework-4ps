@@ -179,8 +179,9 @@ where
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// A walk-in order as the counter asks for it (ADR-0146). The channel defaults to takeaway, the
-/// ordinary counter order.
+/// A walk-in order as the counter asks for it (ADR-0146). Without a channel it takes the store's
+/// walk-in channel, `counter.walk_in_channel`: takeaway, the ordinary counter order, unless the store
+/// sets its walk-ins to be eaten in (ADR-0160 decision 2).
 #[derive(Debug, Default, Deserialize)]
 struct OpenOrderRequest {
     #[serde(default)]
@@ -197,6 +198,10 @@ struct OpenedOrderResponse {
 
 /// `POST /api/orders` — the counter opens a tableless order and gives it the day's next queue
 /// number, as a relayed takeaway order gets one (ADR-0146).
+///
+/// The channel the till names wins. A till that names none gets the store's walk-in channel, which
+/// is takeaway under `WALK_IN_CHANNEL_ASK` too: there the till names the guest's answer, so only a
+/// till from before the setting names none, and it gets the takeaway order it always opened.
 async fn open_order<S, Q>(
     State(deps): State<Arc<CounterDeps<S, Q>>>,
     Extension(actor): Extension<Actor>,
@@ -207,8 +212,9 @@ where
     Q: QueueNumberAuthority + 'static,
 {
     let request = body.map(|Json(request)| request).unwrap_or_default();
+    let walk_in = deps.edge.session().counter.walk_in_channel();
     let channel = match request.channel.map(|channel| channel.require()) {
-        None => SalesChannel::Takeaway,
+        None => walk_in.sales_channel(),
         Some(Ok(channel)) => channel,
         // A token this build does not know: refused, never guessed, since the channel sets the tax.
         Some(Err(_)) => return bad_request("channel is not a sales channel this edge knows"),

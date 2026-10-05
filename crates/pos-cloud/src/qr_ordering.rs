@@ -59,6 +59,7 @@ use pos_proto::SalesChannel;
 use pos_proto::channels::PublishedChannels;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
+use pos_proto::qr::PublishedQr;
 use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::WireEnum;
 
@@ -99,11 +100,14 @@ pub fn switch_of(document: &Value) -> bool {
 /// Whether `qr.enabled` reads as on, the way the cloud's guest intake read it before the switch: on
 /// unless it is `false`, so an absent or unreadable value is on.
 fn qr_enabled_reads_on(document: &Value) -> bool {
-    document
-        .get(QR_NODE)
-        .and_then(|qr| qr.get(QR_ENABLED))
-        .and_then(Value::as_bool)
-        != Some(false)
+    enabled_named_by(document.get(QR_NODE)) != Some(false)
+}
+
+/// The `enabled` a `qr` node names, read as the edge reads the node ([`PublishedQr::guardrails`]):
+/// `None` where it names none, or names something other than `true` or `false`.
+fn enabled_named_by(qr: Option<&Value>) -> Option<bool> {
+    qr.and_then(PublishedQr::guardrails)
+        .and_then(|qr| qr.enabled)
 }
 
 /// A `channels` node's list as the edge reads it, every token as written: `None` for a node the
@@ -244,8 +248,7 @@ pub fn align(
             .map(|(_, value)| value.clone())
     };
     let written_switch = value_of(&nodes, SWITCH).and_then(|value| value.as_bool());
-    let named_by_qr =
-        value_of(&nodes, QR_NODE).and_then(|qr| qr.get(QR_ENABLED).and_then(Value::as_bool));
+    let named_by_qr = enabled_named_by(value_of(&nodes, QR_NODE).as_ref());
     let on = written_switch
         .or(named_by_qr)
         .unwrap_or_else(|| switch_of(&document));

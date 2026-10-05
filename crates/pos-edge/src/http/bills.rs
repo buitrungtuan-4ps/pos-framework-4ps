@@ -27,7 +27,7 @@ use pos_proto::ids::{BillId, FeeId, OrderId, OrderLineId, ReasonCodeId, TableId}
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
-use pos_proto::ids::EventId;
+use pos_proto::ids::{DeviceId, EventId};
 
 use crate::app::{Approval, BillView, BuyerDetails, Edge};
 use crate::http::check::{CheckFeeLine, CheckResponse, check_fee_lines};
@@ -270,7 +270,14 @@ where
         response.drawer_open = Some(opened.as_wire().to_owned());
     }
     if view.print_receipt {
-        let printed = print_receipt_for(printers.as_deref(), &edge, &view, buyer.as_ref()).await;
+        let printed = print_receipt_for(
+            printers.as_deref(),
+            &edge,
+            actor.device_id,
+            &view,
+            buyer.as_ref(),
+        )
+        .await;
         response.receipt_print = Some(printed.as_wire().to_owned());
     }
     Json(response).into_response()
@@ -317,8 +324,11 @@ where
     };
     let printed = match printers.as_deref() {
         Some(printers) => {
+            // At the printer of the till the copy was asked for at (ADR-0160 decision 4).
+            let session = edge.session();
+            let till = printers.till_for(&session, actor.device_id).await;
             printers
-                .print_receipt_copy(&edge.session(), edge.store_id(), &copy, buyer.as_ref())
+                .print_receipt_copy(&session, &till, edge.store_id(), &copy, buyer.as_ref())
                 .await
         }
         None => PrintOutcome::NoPrinter,
@@ -343,13 +353,14 @@ fn tax_code_is_well_formed(tax_code: &str) -> bool {
         .all(|module| module.is_valid_tax_code(tax_code))
 }
 
-/// Runs the receipt effect and says what came of it.
+/// Runs the receipt effect at the printer of the till `device` is, and says what came of it.
 ///
 /// A composition with no dispatcher layered in — the fakes-backed example, a route test that does not
 /// care — reports `NO_PRINTER`, which is the truth for it: there is nothing to print on.
 async fn print_receipt_for<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
+    device: DeviceId,
     view: &BillView,
     buyer: Option<&BuyerDetails>,
 ) -> PrintOutcome
@@ -361,9 +372,14 @@ where
     else {
         return PrintOutcome::NoPrinter;
     };
+    // The till's own receipt printer and languages, where its terminal names them (ADR-0160
+    // decision 4). The drawer above is the store's whichever till this is.
+    let session = edge.session();
+    let till = printers.till_for(&session, device).await;
     printers
         .print_receipt(
-            &edge.session(),
+            &session,
+            &till,
             edge.store_id(),
             // The bill's own id as the idempotency key: a settle retried after an ambiguous failure
             // reuses it and the adapter prints once, which is the same promise the receipt number

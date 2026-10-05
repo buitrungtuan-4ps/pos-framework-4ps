@@ -734,8 +734,9 @@ pub trait AssignmentStore {
     ///
     /// # Errors
     ///
-    /// [`AssignmentStoreError`] if the write fails (including a second assignment of the same
-    /// employee at the same store or group, or tenant-wide twice).
+    /// [`AssignmentStoreError::AlreadyAssigned`] for a second assignment of the same employee at the
+    /// same store or group, or tenant-wide twice, which writes nothing; [`AssignmentStoreError`] of
+    /// the other kind if the write fails.
     fn assign(
         &self,
         assignment: &NewAssignment,
@@ -828,17 +829,28 @@ pub trait AssignmentStore {
     ) -> impl Future<Output = Result<bool, AssignmentStoreError>> + Send;
 }
 
-/// A failure of the assignment store — the database is unreachable or a write violated a constraint
-/// (e.g. the same employee assigned to the same store, or the same group, twice).
+/// A failure of the assignment store: the person already holds an assignment where a new one would
+/// go, or the store itself failed.
+///
+/// The two are kept apart because they ask different things of the caller. A duplicate is a
+/// conflict the operator resolves by changing or removing the assignment that is there, and a retry
+/// can never succeed; a failure of the store is an outage, and a retry may.
 #[derive(Debug, thiserror::Error)]
-#[error("the assignment store failed: {0}")]
-pub struct AssignmentStoreError(String);
+pub enum AssignmentStoreError {
+    /// The person already holds an assignment at that scope: one per store, one per group and one
+    /// tenant-wide. Nothing was written.
+    #[error("the employee is already assigned there: {0}")]
+    AlreadyAssigned(String),
+    /// The store could not read or write: the database is unreachable, or a row would not parse.
+    #[error("the assignment store failed: {0}")]
+    Failed(String),
+}
 
 impl AssignmentStoreError {
-    /// Wraps a message (for the server's log).
+    /// A failure of the store, wrapping a message (for the server's log).
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self::Failed(message.into())
     }
 }
 

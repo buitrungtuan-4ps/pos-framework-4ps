@@ -1826,6 +1826,154 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
   }
 });
 
+// A store's own tip keys (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=tender-keys` publishes keys of ten, nothing and twenty percent, so the row offers
+// two keys in the store's order, without the one it hid: 9,790₫ and 19,580₫ of the salad's 97,900₫.
+// Then the edge says the store hides every key, and the row is not drawn at all — with no amount to
+// type, a lone "No tip" would offer nothing — while the cash tender still takes the money.
+test("a store's own tip keys are offered in its order, and a store that hides them all has no tip row", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["9,790₫", "19,580₫"]);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toBeVisible();
+
+    let hidden = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.tip_percents = [];
+      hidden += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]').first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toHaveCount(0);
+    expect(hidden, "the price book the till read hid every key").toBeGreaterThan(0);
+
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no tip keys or split ways, and an edge too old to send them, both offer what the
+// till always offered: tip keys of five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the
+// salad's 97,900₫, and an even split of two to six guests.
+//
+// The second half is the one only a browser can see. An edge from before the settings sends no
+// `tip_percents` and no `split_ways_max`, and the till must fall back to its own rather than offer
+// none. The price book is read from the real edge and the fields taken out on the way, which is what
+// an older edge's answer is.
+test("a store that sets nothing, and an edge too old to send the settings, offer today's keys and split", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    const today = ["4,895₫", "9,790₫", "14,685₫"];
+    const twoToSix = ["2", "3", "4", "5", "6"];
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    await expect(page.locator('[data-step="splitEvenly"]')).toHaveText(twoToSix);
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.tip_percents;
+      delete book.split_ways_max;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    await expect(page.locator('[data-step="splitEvenly"]')).toHaveText(twoToSix);
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that splits a bill more ways keeps the split in one row (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=tender-keys` lets an even split go up to twelve guests, the most a store may
+// set: eleven keys, which a phone's width cannot hold. A second line of them would push the tenders
+// down on every bill, split or not, so the row scrolls sideways instead, as the kitchen board's
+// station tabs do: every key on one line, the last one reached by scrolling the row, and the first
+// tender still on a phone's screen with the page where it opened. Then the edge says eight, and the
+// row offers two to eight the same way.
+test("a store that splits up to twelve ways keeps one row that scrolls, and the tenders on screen", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+
+    const ways = page.locator('[data-step="splitEvenly"]');
+    const offersInOneRow = async (most) => {
+      await expect(ways).toHaveText(Array.from({ length: most - 1 }, (_, index) => `${index + 2}`));
+      const lines = await ways.evaluateAll(
+        (keys) => new Set(keys.map((key) => Math.round(key.getBoundingClientRect().top))).size,
+      );
+      expect(lines, "every guest count sits on one line").toBe(1);
+      await expect(page.locator('[data-step="setTender"]').first()).toBeInViewport();
+    };
+
+    await offersInOneRow(12);
+    const row = await ways
+      .first()
+      .evaluate((key) => ({ content: key.parentElement.scrollWidth, box: key.parentElement.clientWidth }));
+    expect(row.content, "the row scrolls sideways rather than wrapping").toBeGreaterThan(row.box);
+    await ways.last().click();
+    await expect(ways.last()).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator('[data-outcome="share-due"]')).toBeVisible();
+
+    let rewritten = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.split_ways_max = 8;
+      rewritten += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/table/${table}/pay`);
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await offersInOneRow(8);
+    expect(rewritten, "the price book the till read said eight").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A bill larger than the largest note takes any amount the guest hands over.
 //
 // The quick-cash keys were "every note at least as large as the bill". That is the same answer while
@@ -2682,6 +2830,223 @@ test("a counter tip on a bill that is not a round number still settles", async (
   }
 });
 
+// The counter's pay pad offers the store's own tip keys, in its order, and no tip row where the store
+// hides every key (ADR-0160 decision 2), as the table pay screen does.
+//
+// It offered five, ten and fifteen percent at every store after the table pay screen took the
+// store's keys. `POS_DEMO_PROFILE=tender-keys` publishes keys of ten, nothing and twenty percent, so a
+// walk-in's salad, 97,900₫, offers 9,790₫ and 19,580₫ and settles in cash with the first. Then the
+// edge says the store hides every key: the next walk-in's pad draws no tip row, and the cash tender
+// still takes the money.
+test("the counter's pay pad offers the store's own tip keys, and no tip row where it hides them all", async ({
+  page,
+}) => {
+  const edge = await startEdge("tender-keys");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["9,790₫", "19,580₫"]);
+    await page.locator('[data-step="setTip"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    let hidden = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      book.tip_percents = [];
+      hidden += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]').first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Tip", exact: true })).toHaveCount(0);
+    expect(hidden, "the price book the till read hid every key").toBeGreaterThan(0);
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no tip keys, and an edge too old to send them, offer the counter's guest what it
+// always offered: five, ten and fifteen percent, 4,895₫, 9,790₫ and 14,685₫ of the salad's 97,900₫.
+// The second half is the price book read with `tip_percents` taken out, which is an older edge's
+// answer, and the same order's pad is opened again.
+test("a store that sets no tip keys, and an edge too old to send them, offer today's keys at the counter", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    const today = ["4,895₫", "9,790₫", "14,685₫"];
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.tip_percents;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("97,900₫", { exact: true }).first()).toBeVisible();
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+/** Adds the garden salad to the walk-in on screen, after seeing the counter offer it at `price`. */
+async function sellTheSalad(page, price) {
+  await page.locator("#menu-search").fill("salad");
+  await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  await expect(page.locator('[data-step="onItem"]')).toContainText(price);
+  await page.locator('[data-step="onItem"]').click();
+  await expectLineAdded(page);
+}
+
+// A store whose walk-ins are eaten in sells them from the dining room's book (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=walk-in-dine-in` prices the garden salad at 89,000₫ in the dining room and
+// 79,000₫ to take away, and sets `counter.walk_in_channel` to dine-in. New order opens the walk-in at
+// once, as on every store, and the counter offers the salad at the dining room's price: the book of
+// the channel the edge opened it on, which charges 97,900₫ with its tax.
+test("a store whose walk-ins are eaten in sells them from the dining room's book", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-dine-in");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await expect(page.locator('[data-outcome="walk-in-channel"]')).toHaveCount(0);
+    await sellTheSalad(page, "89,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("97,900₫");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that sets no walk-in channel, and an edge too old to send one, sell a walk-in from the
+// takeaway book, as the counter always has.
+//
+// `POS_DEMO_PROFILE=walk-in-takeaway` prices the salad at 79,000₫ to take away and publishes no
+// `counter` node, so the edge opens a walk-in for takeaway and charges 86,900₫ for it. Then the price
+// book is read with `walk_in_channel` taken out, which is an older edge's answer, and the counter
+// still offers the takeaway book's price.
+test("a store that sets no walk-in channel, and an edge too old to send one, sell from the takeaway book", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-takeaway");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await expect(page.locator('[data-outcome="walk-in-channel"]')).toHaveCount(0);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.walk_in_channel;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await startWalkIn(page);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that asks each walk-in guest opens the order on their answer (ADR-0160 decision 2).
+//
+// `POS_DEMO_PROFILE=walk-in-ask` prices the salad at 89,000₫ in the dining room and 79,000₫ to take
+// away, and sets `counter.walk_in_channel` to ask. New order offers two large answers instead of
+// opening the order. Eat in opens it on the dining room's channel: the header says so, the counter
+// offers the dining room's price and the edge charges 97,900₫. It still says so after a reload, which
+// the till learns from the live orders. Take away opens the next one on takeaway, at 79,000₫ and
+// 86,900₫, with the next queue number.
+//
+// Then the price book is read with `walk_in_channel` taken out, which is an older edge's answer: New
+// order opens the order at one tap, as it always did, with no answer on the header, from the
+// takeaway book, and the edge opens it for takeaway because the till named no channel.
+test("a store that asks each walk-in guest opens the order eaten in or taken away, as they answer", async ({
+  page,
+}) => {
+  const edge = await startEdge("walk-in-ask");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const answer = page.locator('[data-outcome="walk-in-channel"]');
+    const opensOn = async (step, label, price, total) => {
+      await navigateTo(page, "/counter");
+      // Collapsed, rather than absent, once the till has read that the store asks.
+      await expect(page.locator('[data-step="newOrder"]')).toHaveAttribute("aria-expanded", "false");
+      await page.locator('[data-step="newOrder"]').click();
+      await expect(page.locator('[data-step="eatIn"]')).toBeVisible();
+      await expect(page.locator('[data-step="takeAway"]')).toBeVisible();
+      await page.locator(`[data-step="${step}"]`).click();
+      await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+      await expect(answer).toHaveText(label);
+      await sellTheSalad(page, price);
+      await expect(page.locator('[data-outcome="check-total"]')).toContainText(total);
+    };
+
+    await opensOn("eatIn", "Eat in", "89,000₫", "97,900₫");
+    await page.reload();
+    await expect(answer).toHaveText("Eat in");
+    await page.locator("#menu-search").fill("salad");
+    await expect(page.locator('[data-step="onItem"]')).toContainText("89,000₫");
+    await page.locator("#menu-search").fill("");
+
+    await opensOn("takeAway", "Take away", "79,000₫", "86,900₫");
+    await navigateTo(page, "/counter");
+    await expect(page.locator('[data-step="charge"]')).toHaveCount(2);
+    await expect(page.getByText("No. 2", { exact: true })).toBeVisible();
+
+    let older = 0;
+    await page.route("**/api/menu*", async (route) => {
+      const response = await route.fetch();
+      const book = await response.json();
+      delete book.walk_in_channel;
+      older += 1;
+      await route.fulfill({ response, json: book });
+    });
+    await page.goto(`${edge.baseURL}/counter`);
+    await startWalkIn(page);
+    await expect(answer).toHaveCount(0);
+    await sellTheSalad(page, "79,000₫");
+    await expect(page.locator('[data-outcome="check-total"]')).toContainText("86,900₫");
+    expect(older, "the price book the till read came from the older edge").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The till draws money with the exponent the store published, not one it guessed.
 //
 // `ui/src/lib/money.ts` used to hold `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect: it is
@@ -3038,6 +3403,165 @@ test("the Today screen shows no takings to a person whose role does not grant th
     await navigateTo(page, "/today");
     await expect(page.locator('[data-outcome="today-shift"]')).toBeVisible();
     await expect(page.locator('[data-outcome="today-takings"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A manager makes this device one of the store's tills on its Devices screen (ADR-0112, ADR-0160
+// decision 4). The `tills` store publishes two terminals and the edge decides every answer: the
+// bind, this device refused a second till, a second device refused the till this one is, and a
+// release that asks first and then frees the till for the other device. The second device is a
+// second browser, paired with a code this manager gets on the same screen.
+test("a manager binds this device to a till, and releases it for another device", async ({
+  page,
+  browser,
+}) => {
+  const edge = await startEdge("tills");
+  const other = await browser.newPage();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    const status = card.locator('[data-outcome="till-status"]');
+    const outcome = card.locator('[data-outcome="till-outcome"]');
+    const till = (name) => card.locator("button[aria-pressed]").filter({ hasText: name });
+    await expect(status).toHaveText("This device is not one of the store's tills yet.");
+
+    await till("Bar till").click();
+    await card.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(outcome).toHaveText("Bound.");
+    await expect(status).toHaveText("This device is Bar till.");
+    await expect(till("Bar till")).toContainText("This device");
+
+    await till("Counter till").click();
+    await card.getByRole("button", { name: "Bind this device to Counter till" }).click();
+    await expect(outcome).toHaveText("This device is already another till. Release that one first.");
+    await expect(status).toHaveText("This device is Bar till.");
+
+    await page.getByRole("button", { name: "Get a pairing code" }).click();
+    const link = page.getByText(/\/pair\?code=\d{6}$/);
+    const code = /code=(\d{6})/.exec((await link.textContent()) ?? "")?.[1];
+    await other.goto(`${edge.baseURL}/pair?code=${code}`);
+    await other.locator("#pair-submit").click();
+    await expect(other).toHaveURL(/\/signin$/);
+    await signIn(other, edge);
+    await navigateTo(other, "/devices");
+    const otherCard = other.locator('[data-outcome="till"]');
+    const otherTill = (name) => otherCard.locator("button[aria-pressed]").filter({ hasText: name });
+    const otherOutcome = otherCard.locator('[data-outcome="till-outcome"]');
+    await expect(otherTill("Bar till")).toContainText("Another device is this till");
+    await otherTill("Bar till").click();
+    await otherCard.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(otherOutcome).toHaveText(
+      "Another device is already that till. Release it on that device first.",
+    );
+
+    // Release asks first, and nothing is released until the answer.
+    const releases = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/print/agent/revoke") {
+        releases.push(request.postDataJSON());
+      }
+    });
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(card.getByText("Release Bar till? This device stops being that till.")).toBeVisible();
+    expect(releases).toHaveLength(0);
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(outcome).toHaveText("Released.");
+    await expect(status).toHaveText("This device is not one of the store's tills yet.");
+    expect(releases).toHaveLength(1);
+    expect(releases[0]).toEqual({ agent_device_id: expect.any(String) });
+
+    await otherCard.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(otherOutcome).toHaveText("Bound.");
+    await expect(otherCard.locator('[data-outcome="till-status"]')).toHaveText(
+      "This device is Bar till.",
+    );
+  } finally {
+    await other.close();
+    await edge.stop();
+  }
+});
+
+// The card is drawn only for a person who may manage devices, as retiring one is (ADR-0158
+// decision 8). Where the store enforces each person's own permissions, somebody whose role does not
+// grant `admin.device.manage` is offered no Devices destination, and the screen reached by its
+// address draws without the card.
+test("the This device card is not drawn for a person who may not manage devices", async ({
+  page,
+}) => {
+  const edge = await startEdge("tills");
+  try {
+    await aSessionThatSays(page, true, () => ["sales.line.add", "sales.table.manage"]);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await page.goto(`${edge.baseURL}/devices`);
+    // The destinations are drawn once the session read has landed, so this waits for what the
+    // person may do rather than passing on a bar not drawn yet.
+    await expect
+      .poll(async () => {
+        const drawn = await destinations(page);
+        return drawn.includes("/") && !drawn.includes("/devices");
+      })
+      .toBe(true);
+    await expect(page.locator('[data-outcome="integrations"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="till"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The store server decides who may see the tills from the person's own role in every store, so in
+// a store that does not enforce each person's own set it refuses somebody the till offers the card
+// to. The card is then not drawn, and the screen carries no error for it. The refusal is the
+// store server's own words, because the demo's one employee holds every permission.
+test("a person the store server refuses the tills to sees no card and no error", async ({ page }) => {
+  const edge = await startEdge("tills");
+  try {
+    await page.route("**/api/print/agent", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        headers: { "pos-error-reason": "PERMISSION_DENIED" },
+        body: "binding a print agent needs a manager signed in on this device",
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    const read = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/print/agent" &&
+        response.request().method() === "GET",
+    );
+    await navigateTo(page, "/devices");
+    await read;
+    await expect(page.locator('[data-outcome="integrations"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="till"]')).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that publishes no terminal has no till to bind to, and the card says where tills come
+// from in one line.
+test("a store that publishes no till says where tills are created", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    await expect(card.locator('[data-outcome="till-empty"]')).toHaveText(
+      "The store has no tills yet: they are created in the console under Devices → Terminals.",
+    );
+    await expect(card.locator("button")).toHaveCount(0);
+    await expect(card.locator('[data-outcome="till-status"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }

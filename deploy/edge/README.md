@@ -488,6 +488,46 @@ applies from the next request and the key is ignored. Remove the key then.
 |---|---|---|
 | `WARN config.toml sets sign_in_idle_timeout_minutes, which is deprecated, and it is the sign-in idle timeout in use` (`minutes`) | Logged at start-up when the file's value is the window in use. | Set `session.sign_in_idle_timeout_minutes` for the store in the console's shared settings, then remove the key. |
 
+### `backup_interval_hours` is deprecated, except `0`
+
+How many hours apart the store ships a sealed archive of its database off the box
+([ADR-0124](../../docs/adr/0124-a-store-that-can-be-restored.md)) is a setting of the store's
+configuration now, `backup.interval_hours`, from 1 to 168, written in the console's shared settings
+([`docs/configuration.md`](../../docs/configuration.md),
+[ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 6). A number in `config.toml` is still read, so a box that sets one keeps its interval, but
+only while the store's configuration sets none. Once the console sets one, it applies from the next
+archive and the number is ignored. Remove the key then. A box that sets neither archives once a day.
+
+`backup_interval_hours = 0` is not deprecated. It is the one way to switch archiving off, for a box on
+a metered link whose operator has arranged something else, and it wins: no published value switches
+archiving off, and none switches it back on.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN config.toml sets backup_interval_hours, which is deprecated, and it is the value in use because the store's configuration sets no backup.interval_hours` (`value`) | Logged when the archive loop starts, and when the interval changes, while the file's number is the interval in use. | Set `backup.interval_hours` for the store in the console's shared settings, then remove the key. |
+| `INFO backup.interval_hours is set by the store's configuration, which overrides config.toml's deprecated backup_interval_hours` (`value`) | The published interval is in force, and the file's number is ignored. | Remove the key. |
+| `INFO backup.interval_hours in force` (`value`, `from`) | The interval in force, in hours, and where it comes from. Logged when the archive loop starts and whenever the interval changes. | Nothing. |
+| `WARN backup_interval_hours = 0: this store ships no off-box archive of its database, so a failed disk loses everything since the last one taken by hand` | Archiving is off in this box's file. Logged at every start. | Nothing, if that is intended. Otherwise remove the line, and the store archives at the interval its configuration sets, or once a day. |
+
+### `font_size_dots` is deprecated
+
+How large the edge draws a line a printer cannot print in its own characters
+([ADR-0102](../../docs/adr/0102-printing-any-script.md)) is a setting of the store's configuration
+now, `printing.font_size_dots`, from 16 to 48 printer dots per em, written in the console's shared
+settings ([`docs/configuration.md`](../../docs/configuration.md),
+[ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 6). The key in `config.toml` is still read, so a box that sets it keeps its size, but only
+while the store's configuration sets none. Once the console sets one, it applies from the next print
+and the key is ignored. Remove the key then. A box that sets neither draws at 24. A line the
+printer's own character set covers prints in the printer's font either way.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN config.toml sets font_size_dots, which is deprecated, and it is the value in use because the store's configuration sets no printing.font_size_dots` (`value`) | Logged at start-up, and at the first print after the size changes, while the file's size is the one in use. | Set `printing.font_size_dots` for the store in the console's shared settings, then remove the key. |
+| `INFO printing.font_size_dots is set by the store's configuration, which overrides config.toml's deprecated font_size_dots` (`value`) | The published size is in force, and the file's is ignored. | Remove the key. |
+| `INFO printing.font_size_dots in force` (`value`, `from`) | The size in force and where it comes from, at start-up and at the first print after it changes. Not logged on a box with no fonts, which draws nothing. | Nothing. |
+
 ### The clock is measured against a time server
 
 Every fifteen minutes the edge asks a time server what time it is, over SNTP (outbound UDP 123), and
@@ -541,8 +581,11 @@ somewhere else — a font kept with the application, say — with:
 
 ```toml
 font_directories = ["/opt/pos-edge/fonts"]
-font_size_dots   = 24   # printer dots per em; 24 is a comfortable receipt body at 203 dpi
 ```
+
+How large a line is drawn is the store's `printing.font_size_dots` setting, 24 printer dots per em
+unless the console sets 16 to 48; the file's `font_size_dots` is deprecated (see "`font_size_dots`
+is deprecated" above).
 
 Directories are scanned recursively, in order, and that order is the fallback order. Within a
 directory the plain sans-serif families (DejaVu Sans, Noto Sans, Arial, Segoe UI, Tahoma, Liberation
@@ -628,12 +671,26 @@ nothing:
 2. **The printer's device entry names that terminal** as its agent, and the config is published.
    Under **Devices → Print agents**: pick the terminal beside the printer, then publish.
 3. **This machine is paired with the store's edge**, which is what mints the device token below.
-4. **A manager binds this device to the terminal entry**, at the till, signed in. The binding is
+4. **A manager binds this device to the terminal entry**, signed in on the till that runs with this
+   machine's pairing, under **Devices → This device**: pick the terminal, then **Bind**. On a PC
+   that is POS Station, whose till window and print agent share one pairing. The binding is
    exclusive: one terminal, one machine, refused rather than promoted, because two machines holding
    one identity split a kitchen's tickets between them and nobody notices until service.
 
 Until (4) the agent runs and is told, on every claim, that it answers for no print agent. That is the
 honest state rather than a fault, and the log line says exactly that.
+
+### A till's own receipt printer
+
+A till can print its receipts, receipt copies and pre-bills at a printer of its own, in languages of
+its own: the bar's bill at the bar
+([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 4). That takes (1), (3) and (4) above and nothing else, in a store whose edge is in the shop
+too: no printer has to name the terminal and no agent has to be installed, because the edge writes
+to the till's printer itself. Under **Devices → Terminals**, **Receipts** picks the printer and the
+languages; publish; then bind the till's paired device to the terminal entry, as in (4): on the till,
+under **Devices → This device**, signed in. A device bound to no terminal prints at the store's
+receipt printer, as before, and every cash payment still opens the store's drawer.
 
 ### Linux
 
