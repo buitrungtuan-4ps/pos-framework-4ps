@@ -230,7 +230,7 @@ export function ContextPicker() {
         aria-haspopup="dialog"
         aria-expanded={open()}
         onClick={toggle}
-        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <span class="text-ink-muted">{t("context.workingIn")}</span>
         <span class="font-medium">{tenantName() || t("context.chooseTenant")}</span>
@@ -293,7 +293,7 @@ export function ContextPicker() {
                           <button
                             type="button"
                             onClick={() => chooseTenant(tenant)}
-                            class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised ${
+                            class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                               tenant.tenant_id === tenantId() ? "bg-surface-raised" : ""
                             }`}
                           >
@@ -368,7 +368,7 @@ export function ContextPicker() {
                             <button
                               type="button"
                               onClick={() => chooseStore(store)}
-                              class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised ${
+                              class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                                 store.store_id === storeId() ? "bg-surface-raised" : ""
                               }`}
                             >

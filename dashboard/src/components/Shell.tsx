@@ -168,7 +168,7 @@ export function Shell(props: ParentProps) {
           aria-expanded={navOpen()}
           aria-controls="console-nav"
           onClick={() => setNavOpen(!navOpen())}
-          class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink md:hidden"
+          class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden"
         >
           <Icon name="menu" class="h-5 w-5 shrink-0" />
         </button>

@@ -127,6 +127,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Header navigation keyboard focus-visible indicators.**
+  Added explicit focus-visible outline indicators (`focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent`) and hover transitions to account menu, context picker, and mobile nav toggle in `dashboard/src/components/`.
+
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
   consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
