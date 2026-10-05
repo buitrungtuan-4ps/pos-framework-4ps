@@ -305,8 +305,8 @@ export function StoreHub() {
                           rows={2}
                           value={reason()}
                           onInput={setReason}
+                          hint={t("hub.region.acknowledgeHint")}
                         />
-                        <p class="text-xs text-ink-muted">{t("hub.region.acknowledgeHint")}</p>
                         <Show when={refusal()}>
                           {(message) => <p class="text-xs text-danger">{message()}</p>}
                         </Show>

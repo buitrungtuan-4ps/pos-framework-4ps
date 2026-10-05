@@ -142,6 +142,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   order). Each row's sort value is read once instead of on every comparison
   (`DataTable` in `dashboard/src/components/kit.tsx`). No upgrade note: nothing on the wire changes.
 
+- **A screen reader reads the hint under a multi-line field.** The store's address on Store settings
+  and the reason on the store hub's region acknowledgement carry their hint as the field's
+  description (`aria-describedby`), as a single-line field's hint already was: `TextArea` takes a
+  `hint`, drawn as `TextField` draws one. No upgrade note: nothing on the wire changes.
+
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
   consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
