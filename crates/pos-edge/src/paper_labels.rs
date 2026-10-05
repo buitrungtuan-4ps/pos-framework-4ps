@@ -132,12 +132,20 @@ impl PaperLabels {
         if !can_rasterise {
             return &ENGLISH;
         }
+        language.and_then(Self::in_language).unwrap_or(&ENGLISH)
+    }
+
+    /// The table written in `language`, or `None` for a language the edge has no labels in.
+    #[must_use]
+    pub fn in_language(language: &str) -> Option<&'static Self> {
         let primary = language
-            .and_then(|tag| tag.split(['-', '_']).next())
+            .split(['-', '_'])
+            .next()
             .map(str::to_ascii_lowercase);
         match primary.as_deref() {
-            Some("vi") => &VIETNAMESE,
-            _ => &ENGLISH,
+            Some("vi") => Some(&VIETNAMESE),
+            Some("en") => Some(&ENGLISH),
+            _ => None,
         }
     }
 }
@@ -159,6 +167,8 @@ mod tests {
     fn a_language_with_no_table_or_no_language_reads_english() {
         assert_eq!(PaperLabels::for_store(Some("ja-JP"), true), &ENGLISH);
         assert_eq!(PaperLabels::for_store(None, true), &ENGLISH);
+        assert_eq!(PaperLabels::in_language("ja-JP"), None);
+        assert_eq!(PaperLabels::in_language("en-GB"), Some(&ENGLISH));
     }
 
     #[test]

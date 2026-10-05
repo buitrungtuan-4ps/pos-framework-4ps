@@ -21,7 +21,10 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
-use pos_core::billing::{self, BillInput, BillTotals, ClassBase, Payment};
+use pos_core::billing::{
+    self, BillInput, BillLine, BillTotals, ClassBase, FeeLine, FeeWhole, MergedFees, MergingBill,
+    Payment, TaxLine,
+};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::{Capability, CapabilityContext};
@@ -41,34 +44,42 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, TxContext};
+use pos_proto::backup::PublishedBackup;
+use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened,
-    CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    BillFeeLine, BillTaxLine, BillingBillMerged, BillingBillOpened, BillingBillSettled,
+    BillingBillSplit, BillingBillVoided, BillingDiscountApplied, BillingFeeWaived,
+    BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened, CashDrawerPaidIn,
+    CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
     DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
     InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
     SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
     SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
+    SalesTableMerged, SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden,
+    StoreChainAnchored,
 };
+use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
-    ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    BillId, BrandId, CourseId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderId, OrderLineId,
+    PaymentId, ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::integrations::PublishedIntegrations;
+use pos_proto::printing::PublishedPrinting;
+use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
-use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable};
+use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable, TaxRounding};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
@@ -215,6 +226,20 @@ impl StaffRoster {
         self.member(employee_id).map(|auth| auth.permissions)
     }
 
+    /// Whether the person's own roles grant `permission` directly, whatever the store's
+    /// enforcement switch says.
+    ///
+    /// For the acts a store decides from the person's own role in every store: managing devices
+    /// (ADR-0118, ADR-0112) and seeing the day's takings (ADR-0160). Read from the roster the cloud
+    /// published, never from anything a request carried: the store authorises against the set the
+    /// console published and invents nothing (ADR-0070). `false` for an identity the roster does not
+    /// know.
+    #[must_use]
+    pub fn grants(&self, employee_id: EmployeeId, permission: Permission) -> bool {
+        self.permissions_for(employee_id)
+            .is_some_and(|granted| granted.contains(permission))
+    }
+
     /// What a signed-in person may do only with another person's approval
     /// ([`StaffAuth::permissions_with_approval`]). Empty for an id no published member holds, which
     /// grants nothing either way.
@@ -321,12 +346,11 @@ impl StaffRoster {
 }
 
 /// The range a store's [`EdgeSession::event_log_days`] may take
-/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
-///
-/// Thirty days at least, so a typo cannot have a store forget last month; ten years at most, so a
-/// stray zero cannot keep a log forever. The cloud refuses a publish outside it, and the edge
-/// ignores one that arrives anyway, keeping what it had.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u16> = 30..=3650;
+/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): the
+/// one the cloud refuses a publish outside, from the `retention` node's own type
+/// ([`pos_proto::retention`]). The edge ignores a value outside it that arrives anyway, keeping what
+/// it had.
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
@@ -337,6 +361,16 @@ pub struct EdgeSession {
     pub granted: PermissionSet,
     /// The store's capability profile (§10).
     pub capabilities: CapabilityContext,
+    /// The capability flags the store's published configuration sets, each with the value it sets
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 5), read through [`Self::explicit`].
+    ///
+    /// [`Self::capabilities`] reads a flag the document leaves out as its declared default, which
+    /// cannot tell a store that chose a value from one that never chose. This records only what the
+    /// document says, so it is read from each document whole: one that sets no flag leaves it empty,
+    /// even where the profile keeps its last value. At most one entry per flag in
+    /// [`Capability::ALL`].
+    pub published_flags: BTreeMap<Capability, bool>,
     /// The store's display language, from the `locale` node
     /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)), or `None` when the store has
     /// set none.
@@ -346,6 +380,10 @@ pub struct EdgeSession {
     /// picker offers, which the framework ships and a publish replaces, and which therefore cannot
     /// be pre-resolved the way a compiled menu is.
     pub display_language: Option<String>,
+    /// The language of the store's country, as its `locale` node states it from the cloud's country
+    /// pack (ADR-0105), or `None` where the node states none. What a receipt prints in under
+    /// `RECEIPT_LANGUAGE_COUNTRY` (ADR-0160).
+    pub country_language: Option<String>,
     /// The store's currency.
     pub currency: CurrencyCode,
     /// How many decimal places that currency has
@@ -383,6 +421,15 @@ pub struct EdgeSession {
     /// all because the 1-yen coin circulates. `None` in the bootstrap, which is what the edge did
     /// unconditionally until the `locale` node could say otherwise.
     pub cash_rounding_increment: Option<i64>,
+    /// How each tax amount and each fee rounds to the minor unit: the `locale` node's
+    /// `tax_rounding`, a setting
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2), read through `LocaleSettings::tax_rounding`.
+    ///
+    /// Half-up in the bootstrap and wherever the node does not say otherwise, which is what every
+    /// bill did before the setting existed. A bill is computed with the mode the session holds when
+    /// it is computed; the cash rounding of its total is half-up whatever this says.
+    pub tax_rounding: TaxRounding,
     /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
     /// the `default_retention_days` a `LocalePack` has carried since
     /// [ADR-0027](../../../docs/adr/0027-country-modules.md) and which, until
@@ -505,6 +552,14 @@ pub struct EdgeSession {
     /// wrong PINs lock a person out for five minutes, and the sign-in window is the local file's
     /// or thirty minutes ([`crate::auth::Sessions`]).
     pub session_settings: PublishedSession,
+    /// How the store prints the paper it hands a guest, from the `printing` config node (ADR-0160):
+    /// the receipt's language and whether a settle prints it. The defaults in the bootstrap, which
+    /// are what the edge did before the node existed.
+    pub printing: PublishedPrinting,
+    /// The settings on the `qr` config node (ADR-0160 item 2): what a guest's order does at a table
+    /// that already has an open order. The defaults in the bootstrap, which are what the edge did
+    /// before the node carried them.
+    pub qr: PublishedQr,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -527,11 +582,32 @@ pub struct EdgeSession {
     /// The payment methods this store accepts, from the `tender` config node (ADR-0080, M7). `None`
     /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
+    /// The keys the pay screen offers, from the `tender_keys` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): its tip keys and how many guests its even split offers. The defaults, five, ten
+    /// and fifteen percent and up to six guests, in the bootstrap and wherever the node sets none.
+    pub tender_keys: PublishedTenderKeys,
+    /// How the counter opens an order for a walk-in guest, from the `counter` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
+    /// before the setting, in the bootstrap and wherever the node sets none.
+    pub counter: PublishedCounter,
+    /// How often the store archives its database off the box, from the `backup` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
+    /// archive loop on this box's own interval ([`crate::backup_client`]).
+    pub backup: PublishedBackup,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
     /// edge reads it from the published `qr` node so an operator can disable the hold.
     pub qr_staff_confirmation_required: bool,
+    /// The `qr` node's `enabled` as the store's published configuration sets it, or `None` where it
+    /// sets none. Not a switch: QR ordering's switch is the `qr_ordering_enabled` flag, and a cloud
+    /// that knows the switch publishes `enabled` equal to it (ADR-0160 decision 5). Read only to
+    /// tell the switch published off from the flag's `false` from before the switch
+    /// ([`Self::qr_ordering_switched_off`]).
+    pub qr_enabled_published: Option<bool>,
     /// The managed reason-code list this store validates a rejection against
     /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///
@@ -541,6 +617,14 @@ pub struct EdgeSession {
     /// the refusal impossible. A published `reason_codes` node replaces this set wholesale
     /// (ADR-0115 slice 4).
     pub reason_codes: PublishedReasonCodes,
+    /// The fee rules a bill may apply, from the `fees` config node
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
+    ///
+    /// Empty in the bootstrap and whenever the node is absent, and empty charges no fee, which is
+    /// what every bill charged before the node existed. A bill does not read this as it goes: it
+    /// freezes the rules in force on its channel when it opens and is computed from those
+    /// (decision 3), so a publish during a meal reaches the next bill, not the one on the table.
+    pub fees: PublishedFees,
     /// The rollout the cloud has published for the fleet, from the `fleet_update` config node
     /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
     /// itself against — target version, lowest eligible ring, canary ramp, signing key, kill switch
@@ -636,6 +720,7 @@ impl EdgeSession {
         Self {
             granted: Permission::ALL.iter().copied().collect(),
             capabilities: CapabilityContext::full_service(),
+            published_flags: BTreeMap::new(),
             currency: CurrencyCode::VND,
             // Zero, because the bootstrap currency is the đồng and the đồng has no subunit. A
             // *named* fallback for a named currency, not a default standing in for an unknown one:
@@ -653,6 +738,8 @@ impl EdgeSession {
             // till that has not synced yet (ADR-0105).
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            // Half-up until the `locale` node says otherwise, as every bill was before the setting.
+            tax_rounding: TaxRounding::HalfUp,
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
@@ -676,13 +763,22 @@ impl EdgeSession {
             profile: StoreProfile::default(),
             shift: PublishedShift::default(),
             session_settings: PublishedSession::default(),
+            printing: PublishedPrinting::default(),
+            qr: PublishedQr::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
+            tender_keys: PublishedTenderKeys::default(),
+            counter: PublishedCounter::default(),
+            backup: PublishedBackup::default(),
             display_language: None,
+            country_language: None,
             qr_staff_confirmation_required: true,
+            qr_enabled_published: None,
             reason_codes: PublishedReasonCodes::framework_default(),
+            // No fee until a `fees` node is published: what every bill charged before it existed.
+            fees: PublishedFees::default(),
             // No rollout published and no placement: a bootstrap store installs nothing, which is
             // the only safe answer before the cloud has said anything about updates.
             fleet_update: None,
@@ -757,6 +853,21 @@ impl EdgeSession {
         })
     }
 
+    /// The name the store's current rule for `fee_id` gives the fee in `language`, if it translates
+    /// it ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+    ///
+    /// A bill freezes only the rule's own name, so paper or a screen in another language looks the
+    /// translation up here, as a receipt does an item's in the menu, and keeps the frozen name where
+    /// the rule has none, or is gone.
+    #[must_use]
+    pub fn fee_translation(&self, fee_id: FeeId, language: &str) -> Option<&DisplayName> {
+        self.fees
+            .fees
+            .iter()
+            .find(|rule| rule.fee_id == fee_id)
+            .and_then(|rule| rule.display_name_translations.get(language))
+    }
+
     /// Installs a channel-keyed tax table, for a test or the example.
     #[must_use]
     pub fn with_tax_rates(mut self, tax_rates: TaxRateTable) -> Self {
@@ -795,6 +906,29 @@ impl EdgeSession {
         self.enabled_channels
             .as_ref()
             .is_none_or(|set| set.contains(&channel))
+    }
+
+    /// The value the store's published configuration sets for `capability`, or `None` where it sets
+    /// none, which [`Self::capabilities`] reads as the flag's declared default.
+    #[must_use]
+    pub fn explicit(&self, capability: Capability) -> Option<bool> {
+        self.published_flags.get(&capability).copied()
+    }
+
+    /// Whether the store's configuration switches QR ordering off, so that the intake refuses a QR
+    /// order (ADR-0160 decision 5).
+    ///
+    /// Only the switch published `false` does, with `qr.enabled` `false` beside it, which is how a
+    /// cloud that knows the switch always publishes it off. A configuration that does not carry the
+    /// switch decides by the channel list alone ([`Self::channel_enabled`]), as the edge did before
+    /// the switch, so an edge that updates before its cloud refuses nothing it took. Nor does a
+    /// `false` beside a `qr.enabled` that is not `false`: that is the flag as it was before the
+    /// switch, when the console's capability form published every flag, this one included, while
+    /// nothing read it and the store took QR orders.
+    #[must_use]
+    pub fn qr_ordering_switched_off(&self) -> bool {
+        self.explicit(Capability::QrOrdering) == Some(false)
+            && self.qr_enabled_published == Some(false)
     }
 
     /// Whether this store accepts `method` as tender (ADR-0080, M7). Same opt-in rule as
@@ -957,6 +1091,16 @@ pub enum AppError {
     /// exists to make impossible.
     #[error("bills on different tables cannot be merged")]
     BillsOnDifferentTables,
+    /// A merge named a bill of another order than the target's
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    ///
+    /// Nothing in the model stops one bill covering two orders' lines, but nothing settles such a
+    /// bill: a settle reads a bill's lines from its own order, so the other order's would be charged
+    /// nothing, and the bill that held them, merged, is terminal, so that order would never be paid.
+    /// Two counter bills share a table, none, so this is what refuses them. Checked after the table,
+    /// so bills on two tables keep [`Self::BillsOnDifferentTables`].
+    #[error("bills on different orders cannot be merged")]
+    BillsOnDifferentOrders,
     /// A command named a shift the edge does not know.
     #[error("no such shift")]
     UnknownShift,
@@ -1243,6 +1387,8 @@ pub struct LineView {
 /// Edge-local, like [`BillTotals`] beside it: it crosses no wire and is not part of any response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiptLine {
+    /// The item sold, by which a receipt in another language finds the menu's name for it.
+    pub menu_item_id: MenuItemId,
     /// The item's name as the guest saw it when the line was added.
     pub display_name: DisplayName,
     /// How many — a [`Quantity`], because a split item is half of one and a weighed item is not a
@@ -1258,6 +1404,8 @@ pub struct ReceiptLine {
     /// Empty for a line recorded before `sales.order_line.added` carried them: such a receipt
     /// prints neither an id nor a name looked up today, so an old receipt reprints as it was.
     pub modifier_display_names: Vec<DisplayName>,
+    /// The modifiers chosen, in the order of [`Self::modifier_display_names`].
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// What a pre-bill prints: the rows a bill or an open order covers, and what they come to.
@@ -1426,6 +1574,23 @@ pub struct SettledBillView {
     pub settle_time: Timestamp,
     /// How many copies have been printed.
     pub copies: u32,
+}
+
+/// What this store has taken in one business day: the sum of its settled bills and how many there
+/// were, for the Today screen's tile
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+///
+/// The store's figure and nothing finer: no person, no till and no shift, because takings per person
+/// would be monitoring staff, which needs a legal basis this read does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Takings {
+    /// The business day the figure is for.
+    pub business_date: BusinessDate,
+    /// What the day's settled bills came to, each at its `total_due`: what its guests paid.
+    pub takings_amount: Money,
+    /// How many bills settled that day.
+    pub bill_count: u32,
 }
 
 /// A copy of a settled bill's receipt, counted and ready to print (ADR-0164).
@@ -1613,6 +1778,12 @@ pub struct LiveOrderView {
     /// and none of the others. It paid that one, found the table still awaiting payment, and had no
     /// id to settle the rest with — asking for a bill again is refused while one is open.
     pub open_bill_ids: Vec<BillId>,
+    /// The channel it was opened on, or `None` for an order this build never saw open or whose
+    /// channel it does not know. The counter shows a walk-in the book of its channel, and whether
+    /// the guest eats in or takes away, so a till that reloads on one learns the channel here
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    pub sales_channel: Option<SalesChannel>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
 }
@@ -1634,14 +1805,18 @@ pub struct BillCheckView {
 ///
 /// The close is **blind** (§11.1): counting reveals nothing, so `expected_amount` and `variance` are
 /// `None` on an open or counted shift and are populated only once the shift closes — the cashier
-/// counts before the system says what it expected.
+/// counts before the system says what it expected. A store that turns `shift.blind_close` off
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2) is shown `expected_amount` before the close too, so the count can be made against
+/// it; `variance` stays the close's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShiftView {
     /// The shift.
     pub shift_id: ShiftId,
     /// Its state after the command.
     pub state: ShiftState,
-    /// What the system expected in the drawer, revealed only at close.
+    /// What the system expected in the drawer: revealed at close, and before it only where the
+    /// store's count is not blind.
     pub expected_amount: Option<Money>,
     /// What the cashier counted, once counted.
     pub counted_amount: Option<Money>,
@@ -1706,6 +1881,7 @@ struct LiveSnapshot {
     table_id: Option<TableId>,
     bill_id: Option<BillId>,
     open_bill_ids: Vec<BillId>,
+    sales_channel: Option<SalesChannel>,
     /// Each line with its id and whether a station has bumped it.
     lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
@@ -1804,12 +1980,67 @@ impl From<SalesOrderLineAdded> for LineRecord {
     }
 }
 
+/// A bill's fees as the settle records them and the check reads show them
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
+/// in rule order, with the rule, its code and the name the bill froze, what it charged and the tax
+/// on it. One mapping for both, so the till and the log cannot describe a fee differently; the
+/// till's reads name each fee in the store's display language ([`fee_records_in`]).
+pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
+    totals
+        .fee_lines
+        .iter()
+        .map(|line| BillFeeLine {
+            fee_id: line.fee_id,
+            code: line.code.clone(),
+            display_name: line.display_name.clone(),
+            amount: line.amount,
+            tax: line.tax,
+        })
+        .collect()
+}
+
+/// [`fee_records`] for a screen: each fee named in `language` where the store's current rule
+/// translates it ([`EdgeSession::fee_translation`]), and as the bill froze it otherwise.
+pub(crate) fn fee_records_in(
+    totals: &BillTotals,
+    session: &EdgeSession,
+    language: Option<&str>,
+) -> Vec<BillFeeLine> {
+    let mut records = fee_records(totals);
+    if let Some(language) = language {
+        for record in &mut records {
+            if let Some(name) = session.fee_translation(record.fee_id, language) {
+                record.display_name = name.clone();
+            }
+        }
+    }
+    records
+}
+
+/// A bill's tax per class as the settle records it (ADR-0159 decision 4, roadmap-v3 B4.1): each
+/// class's base, rate and tax, rounded once on that whole base and summing to the bill's tax.
+fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
+    totals
+        .tax_lines
+        .iter()
+        .map(|line| BillTaxLine {
+            tax_class_id: line.tax_class_id,
+            taxable_base: line.taxable_base,
+            rate_basis_points: line.rate_basis_points,
+            tax: line.tax,
+        })
+        .collect()
+}
+
 /// One read of an order: its lines, the pre-tax base per tax class those lines fold into, and the
 /// channel to tax them at. Everything downstream of it — the totals, and the receipt's rows — comes
 /// from this one answer, which is what makes the two agree (see [`Edge::order_snapshot`]).
 struct OrderSnapshot {
     lines: Vec<LineRecord>,
     class_bases: Vec<ClassBase>,
+    /// The sold lines as a fee rule matches them, folded from the same lines as `class_bases`, so
+    /// each class's lines always come to its base.
+    bill_lines: Vec<BillLine>,
     sales_channel: SalesChannel,
 }
 
@@ -1856,9 +2087,34 @@ struct BillRecord {
     /// arrives with the first reduction, on the event's own `amount`.
     discount: Option<Money>,
     comp: Option<Money>,
+    /// The fee rules in force for this bill when it opened, frozen
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3): what its
+    /// `billing.bill.opened` recorded, and what it is computed from until it settles. A part of a
+    /// split holds the source's, with a fee per bill cut to its share (decision 6). Empty for a
+    /// bill opened before the field existed, or with no rule in force, which charges no fee.
+    fee_rules: Vec<FrozenFee>,
+    /// The wholes this bill's fees per bill are shares of (ADR-0159 decision 6): its own amounts
+    /// for a bill split from no other, its source's for a part, the largest of each for a merged
+    /// bill. Folded from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
+    /// so a restart rebuilds them, and what lets a merge put a split's shares back together.
+    fee_wholes: Vec<FeeWhole>,
+    /// The fees waived on this bill (ADR-0159 decision 5), in the order they were waived: folded
+    /// from `billing.fee.waived`, a part of a split's taken from its source, and a merged bill's
+    /// from every bill merged. The bill is computed as though their rules were not there.
+    waived_fee_ids: Vec<FeeId>,
 }
 
 impl BillRecord {
+    /// This bill's side of a merge: the fee rules it holds, the wholes of its fees per bill, and
+    /// the fees waived on it.
+    fn merging(&self) -> MergingBill<'_> {
+        MergingBill {
+            fee_rules: &self.fee_rules,
+            fee_wholes: &self.fee_wholes,
+            waived_fee_ids: &self.waived_fee_ids,
+        }
+    }
+
     /// Every reduction on this bill, in the store's currency — the two figures
     /// [`billing::BillInput`] takes.
     fn reductions(&self, currency: CurrencyCode) -> (Money, Money) {
@@ -1958,7 +2214,7 @@ enum StaffStanding {
 /// The figures are the ones `billing.bill.settled` carried, because a copy never prints a figure
 /// the settle did not record: the rate table can change after a bill is paid, and a copy computed
 /// afresh would then disagree with the paper the guest already holds.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SettledReceipt {
     /// The receipt's gapless number, which every copy prints too.
     receipt_number: u64,
@@ -1974,6 +2230,12 @@ struct SettledReceipt {
     rounding_adjustment: Money,
     /// What the guest paid.
     total_due: Money,
+    /// Each fee the bill was charged, as settled ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+    /// decision 4). Empty for a bill settled with no fee, or before the settle recorded them.
+    fee_lines: Vec<BillFeeLine>,
+    /// The tax per class, as settled. Empty for a bill settled before the settle recorded it,
+    /// whose copy recovers the lines by computing them again.
+    tax_lines: Vec<BillTaxLine>,
     /// The corporate buyer, whose details stay in the subject store (ADR-0107).
     buyer_subject_id: Option<SubjectId>,
     /// The business day the bill settled on: a copy is printed only on the same day.
@@ -1994,6 +2256,8 @@ impl SettledReceipt {
             tax_total: event.tax_total,
             rounding_adjustment: event.rounding_adjustment,
             total_due: event.total_due,
+            fee_lines: event.fee_lines.clone(),
+            tax_lines: event.tax_lines.clone(),
             buyer_subject_id: event.buyer_subject_id,
             business_date,
             settle_time,
@@ -2001,12 +2265,38 @@ impl SettledReceipt {
         }
     }
 
-    /// The totals a copy prints: `recomputed` when it agrees with every figure the settle
-    /// recorded, which is every day the rate table has not changed since, and otherwise the
-    /// recorded figures with the tax as one total, because the per-rate lines are not recorded
-    /// yet ([ADR-0162](../../../docs/adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md)
-    /// item 3). Either way the paper adds up to what the guest paid.
+    /// The totals a copy prints
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)
+    /// decision 5). Either way the paper adds up to what the guest paid.
+    ///
+    /// A settle that recorded its fees and its tax per class (ADR-0159 decision 4) is printed from
+    /// them, whatever the rate table or the fee rules say now. It records neither how its
+    /// reductions divide between a discount and a comp nor the named parts of a tax line, so
+    /// those two are taken from `recomputed` where they add up to the recorded figure, and
+    /// otherwise printed as one line.
+    ///
+    /// A settle from before those were recorded prints `recomputed` when it agrees with every
+    /// figure the settle recorded, which is every day the rate table has not changed since, and
+    /// otherwise the recorded figures with the tax as one total.
     fn totals(&self, recomputed: Option<&BillTotals>) -> BillTotals {
+        let (discount_total, comp_total) = self.reductions(recomputed);
+        if !self.tax_lines.is_empty() {
+            return BillTotals {
+                subtotal: self.subtotal,
+                discount_total,
+                comp_total,
+                service_charge: self.service_charge,
+                fee_lines: self.fee_lines.iter().map(Self::fee_line).collect(),
+                tax_lines: self
+                    .tax_lines
+                    .iter()
+                    .map(|line| Self::tax_line(line, recomputed))
+                    .collect(),
+                tax_total: self.tax_total,
+                rounding_adjustment: self.rounding_adjustment,
+                total_due: self.total_due,
+            };
+        }
         let agrees = |totals: &BillTotals| {
             totals.subtotal == self.subtotal
                 && totals
@@ -2021,10 +2311,24 @@ impl SettledReceipt {
         if let Some(totals) = recomputed.filter(|totals| agrees(totals)) {
             return totals.clone();
         }
-        // The event records discounts and comps as one figure. The split is taken from the
-        // recomputation when it still adds up to that figure, and otherwise the copy prints one
-        // line for both rather than guessing how it divided.
-        let (discount_total, comp_total) = recomputed
+        BillTotals {
+            subtotal: self.subtotal,
+            discount_total,
+            comp_total,
+            service_charge: self.service_charge,
+            fee_lines: Vec::new(),
+            tax_lines: Vec::new(),
+            tax_total: self.tax_total,
+            rounding_adjustment: self.rounding_adjustment,
+            total_due: self.total_due,
+        }
+    }
+
+    /// The recorded reductions as a discount and a comp. The event records them as one figure, so
+    /// the split is taken from `recomputed` when it still adds up to that figure, and otherwise the
+    /// copy prints one line for both rather than guessing how it divided.
+    fn reductions(&self, recomputed: Option<&BillTotals>) -> (Money, Money) {
+        recomputed
             .filter(|totals| {
                 totals
                     .discount_total
@@ -2037,19 +2341,42 @@ impl SettledReceipt {
                     Money::zero(self.total_due.currency_code),
                 ),
                 |totals| (totals.discount_total, totals.comp_total),
-            );
-        BillTotals {
-            subtotal: self.subtotal,
-            discount_total,
-            comp_total,
-            service_charge: self.service_charge,
-            // The settle records no fee lines yet (ADR-0159 decision 4); its service charge is
-            // their sum.
-            fee_lines: Vec::new(),
-            tax_lines: Vec::new(),
-            tax_total: self.tax_total,
-            rounding_adjustment: self.rounding_adjustment,
-            total_due: self.total_due,
+            )
+    }
+
+    /// A recorded fee as the copy prints it, under the name the bill froze.
+    fn fee_line(recorded: &BillFeeLine) -> FeeLine {
+        FeeLine {
+            fee_id: recorded.fee_id,
+            code: recorded.code.clone(),
+            display_name: recorded.display_name.clone(),
+            amount: recorded.amount,
+            class_shares: Vec::new(),
+            tax: recorded.tax,
+            // A settled bill owes nothing more to waive.
+            waivable: false,
+        }
+    }
+
+    /// A recorded tax line as the copy prints it, with its named parts (ADR-0104) from `recomputed`
+    /// where the recomputation charged the class the same tax at the same rate, so they sum to it.
+    fn tax_line(recorded: &BillTaxLine, recomputed: Option<&BillTotals>) -> TaxLine {
+        let components = recomputed
+            .and_then(|totals| {
+                totals.tax_lines.iter().find(|line| {
+                    line.tax_class_id == recorded.tax_class_id
+                        && line.rate_basis_points == recorded.rate_basis_points
+                        && line.tax == recorded.tax
+                })
+            })
+            .map(|line| line.components.clone())
+            .unwrap_or_default();
+        TaxLine {
+            tax_class_id: recorded.tax_class_id,
+            taxable_base: recorded.taxable_base,
+            rate_basis_points: recorded.rate_basis_points,
+            tax: recorded.tax,
+            components,
         }
     }
 }
@@ -2093,7 +2420,8 @@ struct Projection {
     staff_decisions: HashMap<OrderId, StaffDecision>,
     /// Orders that ended owing nothing (`sales.order.closed`): a table released with nothing sold
     /// on it (ADR-0163), and a guest order staff refused. A closed order is not live, whatever lines
-    /// it still names.
+    /// it still names. A guest's order that joined the table's (`sales.table.merged`, ADR-0160
+    /// item 2) ends here too: its lines are owed on the order they joined.
     closed_orders: HashSet<OrderId>,
     /// Each settled bill's receipt as the settle recorded it, for printing a copy (ADR-0164). Folded
     /// from the log like the rest, so it holds what the log holds and no more.
@@ -2140,8 +2468,9 @@ struct Projection {
     /// Until it existed those reads filtered `lines` — every line the store had sold since it was
     /// installed — so a store got slower with age, and did it holding the lock every sale takes. At
     /// thirty thousand settled orders `GET /api/orders/live` took ~60 ms and an add-line from a
-    /// second device waited behind it for as long (finding F2). Written only by
-    /// [`Self::add_line`]; a line never changes order, so nothing else has to keep it in step.
+    /// second device waited behind it for as long (finding F2). Written by [`Self::add_line`], and
+    /// by [`Self::merge_order`], the one way a line changes order, which moves it here and on its
+    /// record together.
     ///
     /// Id order rather than insertion order because every reader sorted by id — the bill's rounding
     /// residual and the receipt's row order depend on it — and the two differ after a restart whose
@@ -2298,9 +2627,12 @@ impl Projection {
     /// Derived, never stored: origin from the log, decision from the log, policy from the current
     /// session. An order this build never saw open has no origin and is therefore not held — the
     /// safe answer, because refusing to fire an order whose provenance is unknown would strand a
-    /// pre-upgrade order nobody can release.
+    /// pre-upgrade order nobody can release. Nor is an order that has ended: there is nothing left
+    /// on it to confirm, and a guest's order that joined the table's while nobody was asked would
+    /// otherwise wait, empty, from the moment a store turned the hold on.
     fn awaits_staff_confirmation(&self, order_id: OrderId, session: &EdgeSession) -> bool {
         self.staff_decision(order_id).is_none()
+            && !self.closed_orders.contains(&order_id)
             && self.order_origin(order_id).is_some_and(|origin| {
                 session.holds_for_staff_confirmation(origin.channel, origin.table_id)
             })
@@ -2316,9 +2648,7 @@ impl Projection {
             Some(StaffDecision::Rejected) => StaffStanding::Refused,
             Some(StaffDecision::Confirmed) => StaffStanding::Fireable,
             None => {
-                if self.order_origin(order_id).is_some_and(|origin| {
-                    session.holds_for_staff_confirmation(origin.channel, origin.table_id)
-                }) {
+                if self.awaits_staff_confirmation(order_id, session) {
                     StaffStanding::Waiting
                 } else {
                     StaffStanding::Fireable
@@ -2342,12 +2672,26 @@ impl Projection {
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
         let order_id = record.order_id;
-        // Indexed only when the line is new: a rebuild can run over a projection that already holds
-        // it, and a second copy of an id would sell the line twice on the bill.
-        if self.lines.insert(line_id, record).is_none() {
+        // Indexed only when the line is new, or back on the order it was added to: a rebuild can run
+        // over a projection that already holds it, and a second copy of an id would sell the line
+        // twice on the bill. A line a merge has moved since is put back on its own order, as its
+        // event says, and the merge's own fold moves it again (`sales.table.merged`).
+        let previous = self
+            .lines
+            .insert(line_id, record)
+            .map(|previous| previous.order_id);
+        if previous != Some(order_id) {
+            if let Some(previous) = previous
+                && let Some(ids) = self.order_lines.get_mut(&previous)
+            {
+                ids.retain(|id| *id != line_id);
+            }
             let ids = self.order_lines.entry(order_id).or_default();
             if let Err(at) = ids.binary_search(&line_id) {
                 ids.insert(at, line_id);
+            }
+            if let Some(previous) = previous {
+                self.refresh_live(previous);
             }
         }
         self.refresh_live(order_id);
@@ -2364,6 +2708,98 @@ impl Projection {
             self.table_orders.remove(&table_id);
         }
         self.refresh_live(order_id);
+    }
+
+    /// Folds an order that arrived from outside the store ([`Edge::open_inbound_order`]), in the
+    /// order its events are in, as the replay folds them: seated, then its lines, then joined to
+    /// `joins` where it joined the table's order, which gives the table back to that order.
+    ///
+    /// A QR order names a table, so the floor shows it occupied and staff can open the bill; a
+    /// delivery or public-API order has none. The channel is the one the order actually came in
+    /// on, so the bill is taxed at its rate rather than the session's (B1.2), and is recorded for a
+    /// tableless order too — a delivery order has no table and still has a channel.
+    fn fold_inbound_order(
+        &mut self,
+        order_id: OrderId,
+        (channel, table_id): (Option<SalesChannel>, Option<TableId>),
+        lines: Vec<(OrderLineId, LineRecord)>,
+        joins: Option<OrderId>,
+    ) {
+        if let Some(table_id) = table_id {
+            self.seat_guest_order(table_id, order_id);
+        }
+        self.open_order_origin(order_id, channel, table_id);
+        for (line_id, record) in lines {
+            self.add_line(line_id, record);
+        }
+        if let Some(target_order_id) = joins {
+            self.merge_order(target_order_id, order_id);
+        }
+    }
+
+    /// Folds one order into another (`sales.table.merged`), live and replayed alike: every line of
+    /// `merged` moves onto `target`, a table that pointed at `merged` points at `target`, and
+    /// `merged` has ended.
+    ///
+    /// What a guest's QR order does at a table whose order it joins (ADR-0160 item 2), as it
+    /// arrives or when staff confirm it: from then on its lines are the table's order's, fired,
+    /// billed and voided there like any line added to it. Each keeps its own id and what it was
+    /// added with, and its `sales.order_line.added` still names the order it was ordered on. The
+    /// folded order has no line left and takes none, waits for nobody, and is off every list.
+    fn merge_order(&mut self, target: OrderId, merged: OrderId) {
+        if target == merged {
+            return;
+        }
+        let moved = self.order_lines.remove(&merged).unwrap_or_default();
+        for line_id in &moved {
+            if let Some(record) = self.lines.get_mut(line_id) {
+                record.order_id = target;
+            }
+        }
+        let ids = self.order_lines.entry(target).or_default();
+        for line_id in moved {
+            if let Err(at) = ids.binary_search(&line_id) {
+                ids.insert(at, line_id);
+            }
+        }
+        if let Some(table_id) = self.table_for_order(merged) {
+            self.open_order(table_id, target);
+        }
+        self.closed_orders.insert(merged);
+        self.refresh_live(merged);
+        self.refresh_live(target);
+    }
+
+    /// The order at `table_id` a guest's lines may join (ADR-0160 item 2), other than `excluding`:
+    /// the table's own order, or failing it the newest other order still owing there. `None` when
+    /// none of them can take a line ([`Self::takes_joining_lines`]), and the guest's order is then
+    /// its own order, as before.
+    fn joinable_order_at(
+        &self,
+        table_id: TableId,
+        excluding: Option<OrderId>,
+        session: &EdgeSession,
+    ) -> Option<OrderId> {
+        let at_table = |order_id: &OrderId| {
+            self.order_origin(*order_id)
+                .is_some_and(|origin| origin.table_id == Some(table_id))
+        };
+        self.order_for_table(table_id)
+            .into_iter()
+            .chain(self.live.iter().rev().copied().filter(at_table))
+            .find(|order_id| {
+                Some(*order_id) != excluding && self.takes_joining_lines(*order_id, session)
+            })
+    }
+
+    /// Whether an order can take a guest's joining lines: it has not ended, it is not a guest's
+    /// order staff refused or have still to decide on, and it is on no bill. A line rung after a
+    /// bill opens is on no bill (ADR-0128 decision 9), which is why the floor refuses one then, and
+    /// a paid order's bill is behind it.
+    fn takes_joining_lines(&self, order_id: OrderId, session: &EdgeSession) -> bool {
+        !self.closed_orders.contains(&order_id)
+            && self.staff_standing(order_id, session) == StaffStanding::Fireable
+            && self.bill_for_order(order_id).is_none()
     }
 
     /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
@@ -2660,6 +3096,31 @@ impl Projection {
         }
     }
 
+    /// What the bills settled on `business_date` came to and how many there were, in `currency`.
+    /// A bill the projection no longer holds as settled took nothing, so it is not counted.
+    ///
+    /// Every bill the day settled, and not the most recent [`MAX_SETTLED_LISTED`]: this fold keeps
+    /// each settle the log holds, and a busy day settles more bills than the till lists.
+    fn takings_on(
+        &self,
+        business_date: BusinessDate,
+        currency: CurrencyCode,
+    ) -> Result<(Money, u32), DomainError> {
+        let mut taken = Money::zero(currency);
+        let mut count: u32 = 0;
+        for (bill_id, receipt) in &self.settled {
+            let still_settled = self
+                .bills
+                .get(bill_id)
+                .is_some_and(|bill| bill.state == BillState::Settled);
+            if receipt.business_date == business_date && still_settled {
+                taken = taken.checked_add(receipt.total_due)?;
+                count = count.saturating_add(1);
+            }
+        }
+        Ok((taken, count))
+    }
+
     /// The receipts settled on `business_date`, newest first, at most `limit` of them.
     fn settled_on(
         &self,
@@ -2670,7 +3131,7 @@ impl Projection {
             .settled
             .iter()
             .filter(|(_, receipt)| receipt.business_date == business_date)
-            .map(|(bill_id, receipt)| (*bill_id, *receipt))
+            .map(|(bill_id, receipt)| (*bill_id, receipt.clone()))
             .collect();
         receipts.sort_unstable_by(|(_, a), (_, b)| {
             b.settle_time
@@ -2884,6 +3345,62 @@ impl Projection {
             });
         }
         Ok(())
+    }
+
+    /// Gives each part of a split its source's wholes and waived fees (ADR-0159 decisions 5 and
+    /// 6), after each part's own `billing.bill.opened`: merging the parts back puts their shares
+    /// together again, and a fee waived on the bill stays waived on every part.
+    fn inherit_fees(&mut self, source: BillId, parts: &[BillId]) {
+        let Some((wholes, waived)) = self
+            .bills
+            .get(&source)
+            .map(|bill| (bill.fee_wholes.clone(), bill.waived_fee_ids.clone()))
+        else {
+            return;
+        };
+        for part in parts {
+            if let Some(record) = self.bills.get_mut(part) {
+                record.fee_wholes.clone_from(&wholes);
+                record.waived_fee_ids.clone_from(&waived);
+            }
+        }
+    }
+
+    /// Records a fee waived on a bill (ADR-0159 decision 5), once: a second waive of the same fee
+    /// is refused before it is written, and a replay that meets one anyway changes nothing.
+    fn waive_fee_record(&mut self, bill_id: BillId, fee_id: FeeId) {
+        if let Some(record) = self.bills.get_mut(&bill_id)
+            && !record.waived_fee_ids.contains(&fee_id)
+        {
+            record.waived_fee_ids.push(fee_id);
+        }
+    }
+
+    /// The fee rules and wholes `target` holds once `absorbed` are merged into it, in that order
+    /// (ADR-0159 decision 6), from what each holds now; `None` when the target is unknown.
+    fn merged_fees(
+        &self,
+        target: BillId,
+        absorbed: &[BillId],
+    ) -> Result<Option<MergedFees>, DomainError> {
+        let Some(holder) = self.bills.get(&target) else {
+            return Ok(None);
+        };
+        let absorbed: Vec<MergingBill<'_>> = absorbed
+            .iter()
+            .filter_map(|bill_id| self.bills.get(bill_id))
+            .map(BillRecord::merging)
+            .collect();
+        Ok(Some(billing::merge_fee_rules(holder.merging(), &absorbed)?))
+    }
+
+    /// Records what a merged bill now holds.
+    fn set_bill_fees(&mut self, bill_id: BillId, fees: MergedFees) {
+        if let Some(record) = self.bills.get_mut(&bill_id) {
+            record.fee_rules = fees.fee_rules;
+            record.fee_wholes = fees.fee_wholes;
+            record.waived_fee_ids = fees.waived_fee_ids;
+        }
     }
 
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
@@ -3381,6 +3898,18 @@ impl<S: EventStore> Edge<S> {
     /// `device_id` and no employee — the same shape [`Self::record_activation`] uses. The lines are
     /// already priced by the caller (`pos_core::menu::reprice_line`); this records what it decided.
     ///
+    /// # A guest's order that joins the table's
+    ///
+    /// Where the store sets `qr.table_order` to `TABLE_ORDER_JOIN` (ADR-0160 item 2), a QR order for
+    /// a table whose order can take a line, and that waits for no member of staff, joins that order
+    /// in the same transaction: `sales.table.merged` follows its lines, which are the table's
+    /// order's from then on. The guest's order is still opened, and its own id is the one returned
+    /// and recorded, so each line keeps the order, and through it the channel, it was ordered on,
+    /// and each submission keeps an order of its own for its retries to find. A QR order that waits
+    /// for staff joins the table's when they confirm it ([`Self::confirm_inbound_order`]). A table
+    /// whose order cannot take a line, because its bill is open or paid, keeps the guest's order
+    /// separate, as before.
+    ///
     /// # Errors
     ///
     /// [`AppError`] if the business date cannot be derived, an event cannot be encoded, or the store
@@ -3406,23 +3935,31 @@ impl<S: EventStore> Edge<S> {
         let session = self.session();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
-        let order_id = self.next_order_id();
-
-        let mut envelopes = Vec::with_capacity(lines.len() + 1);
-        let mut messages = Vec::with_capacity(lines.len() + 1);
 
         // Read the channel out before the event takes ownership: the projection needs it too, so
         // the bill is taxed at this order's rate rather than the session's (B1.2).
         let order_channel = channel.require().ok();
+
+        // Asked once, here, from the session snapshot this order was priced against — and handed
+        // back to the caller below rather than recomputed there. The caller holds its own snapshot
+        // taken microseconds earlier, and the config-pull loop can swap the session between the
+        // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
+        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
+
+        let joins =
+            self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
+
+        let order_id = self.next_order_id();
+        // Each event with the frame that announces it once it commits, in the order they are written.
+        let mut events = Vec::with_capacity(lines.len() + 2);
+
         let opened = SalesOrderOpened {
             order_id,
             channel,
             table_id,
             guest_count: None,
         };
-        let (envelope, message) = self.system_prepare(device_id, now, business_date, &opened)?;
-        envelopes.push(envelope);
-        messages.push(message);
+        events.push(self.system_prepare(device_id, now, business_date, &opened)?);
 
         let mut line_records: Vec<(OrderLineId, LineRecord)> = Vec::with_capacity(lines.len());
         let mut line_notes: Vec<(OrderLineId, NoteText)> = Vec::new();
@@ -3452,8 +3989,7 @@ impl<S: EventStore> Edge<S> {
                 attach_note(&mut message, note);
                 line_notes.push((order_line_id, note.clone()));
             }
-            envelopes.push(envelope);
-            messages.push(message);
+            events.push((envelope, message));
             // Built from the event rather than beside it. Restating the same fields in two
             // places is how the projection came to be missing `display_name` and `unit_price` in the
             // first place: the event grew them, the hand-written twin did not, and nothing noticed
@@ -3462,11 +3998,16 @@ impl<S: EventStore> Edge<S> {
             line_records.push((order_line_id, LineRecord::from(added)));
         }
 
-        // Asked once, here, from the session snapshot this order was priced against — and handed
-        // back to the caller below rather than recomputed there. The caller holds its own snapshot
-        // taken microseconds earlier, and the config-pull loop can swap the session between the
-        // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
-        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
+        // Last, so the log reads as it happened: the guest's order, its lines, and the order they
+        // moved to. The same fold replays it.
+        if let Some(target_order_id) = joins {
+            let merged = SalesTableMerged {
+                target_order_id,
+                merged_order_id: order_id,
+            };
+            events.push(self.system_prepare(device_id, now, business_date, &merged)?);
+        }
+        let (envelopes, messages): (Vec<_>, Vec<_>) = events.into_iter().unzip();
 
         // The events AND the idempotency ledger row commit in ONE transaction, so a crash between
         // opening the order and recording it is impossible — either both land or neither
@@ -3506,25 +4047,37 @@ impl<S: EventStore> Edge<S> {
             self.fanout.publish(message);
         }
 
-        {
-            let mut projection = self.lock_projection();
-            // A QR order names a table, so the floor shows it occupied and staff can open the bill;
-            // a delivery or public-API order has none.
-            if let Some(table_id) = table_id {
-                projection.seat_guest_order(table_id, order_id);
-            }
-            // The channel this order actually came in on, so the bill is taxed at its rate rather
-            // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
-            // no table and still has a channel.
-            projection.open_order_origin(order_id, order_channel, table_id);
-            for (line_id, record) in line_records {
-                projection.add_line(line_id, record);
-            }
-        }
+        self.lock_projection().fold_inbound_order(
+            order_id,
+            (order_channel, table_id),
+            line_records,
+            joins,
+        );
         Ok(InboundOrderOpened {
             order_id,
             business_date,
             awaiting_staff_confirmation: holds_for_staff,
+        })
+    }
+
+    /// The table's order a guest's order joins as it arrives (ADR-0160 item 2), if any: a QR order
+    /// at a table, at a store that sets `qr.table_order` to `TABLE_ORDER_JOIN`, that waits for no
+    /// member of staff. One that waits joins when staff confirm it
+    /// ([`Self::confirm_inbound_order`]). Read before the write, as a waiter's line reads the bill
+    /// it must not land after.
+    fn order_joined_on_arrival(
+        &self,
+        session: &EdgeSession,
+        channel: Option<SalesChannel>,
+        table_id: Option<TableId>,
+        holds_for_staff: bool,
+    ) -> Option<OrderId> {
+        let joins = channel == Some(SalesChannel::Qr)
+            && session.qr.table_order() == TableOrder::Join
+            && !holds_for_staff;
+        table_id.filter(|_| joins).and_then(|table_id| {
+            self.lock_projection()
+                .joinable_order_at(table_id, None, session)
         })
     }
 
@@ -3685,6 +4238,12 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::NotAwaitingStaffConfirmation`] rather than writing a second event, so two
     /// devices racing on the same order produce one decision and one audit entry.
     ///
+    /// Where the store sets `qr.table_order` to `TABLE_ORDER_JOIN` (ADR-0160 item 2) and the guest's
+    /// table has an order that can take a line, the confirmed order joins it in the same
+    /// transaction (`sales.table.merged`): its lines are that order's from then on, and the table
+    /// holds that order again. An order with a bill of its own, or at a table with none to join,
+    /// is only confirmed, as before.
+    ///
     /// # Errors
     ///
     /// [`AppError::NotAwaitingStaffConfirmation`] if the order is not a held guest submission or
@@ -3701,10 +4260,41 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::NotAwaitingStaffConfirmation);
         }
 
-        let payload = SalesOrderConfirmedByStaff { order_id };
-        self.commit_and_publish(&ctx, &payload).await?;
-        self.lock_projection()
-            .record_staff_decision(order_id, StaffDecision::Confirmed);
+        // The table's order the guest's lines join, read before the write as a waiter's add-line
+        // reads the bill it must not land after.
+        let session = self.session();
+        let joins = if session.qr.table_order() == TableOrder::Join {
+            let projection = self.lock_projection();
+            projection
+                .order_origin(order_id)
+                .and_then(|origin| origin.table_id)
+                .filter(|_| projection.bill_for_order(order_id).is_none())
+                .and_then(|table_id| {
+                    projection.joinable_order_at(table_id, Some(order_id), &session)
+                })
+        } else {
+            None
+        };
+
+        let confirmed = SalesOrderConfirmedByStaff { order_id };
+        let (envelope, message) = self.prepare(&ctx, &confirmed)?;
+        let mut envelopes = vec![envelope];
+        let mut messages = vec![message];
+        if let Some(target_order_id) = joins {
+            let merged = SalesTableMerged {
+                target_order_id,
+                merged_order_id: order_id,
+            };
+            let (envelope, message) = self.prepare(&ctx, &merged)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+        let mut projection = self.lock_projection();
+        projection.record_staff_decision(order_id, StaffDecision::Confirmed);
+        if let Some(target_order_id) = joins {
+            projection.merge_order(target_order_id, order_id);
+        }
         Ok(())
     }
 
@@ -4161,10 +4751,88 @@ impl<S: EventStore> Edge<S> {
             .reductions(session.currency);
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
+            &bill.waived_fee_ids,
             (discount, comp),
         ))?)
+    }
+
+    /// Waives one of a bill's fees, citing a reason from the store's managed list
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// An act, not an edit: the rule stays published and every other bill is charged it, while
+    /// this one is charged nothing and taxed nothing for it from now on, through every split and
+    /// merge, because the waive follows the fee's id. Only a rule published `waivable` is waived,
+    /// and only on a bill still open. [`Permission::WaiveFee`] is PIN-flagged, so where the store
+    /// does not enforce each person's own set a holder's code and PIN come with every waive, and
+    /// where it does, a person who holds it with approval brings somebody else who holds it
+    /// directly ([`Self::resolve_step_up`]), and one who holds it directly waives alone.
+    ///
+    /// Everything that could never be waived is refused before anybody is asked to approve it: a
+    /// bill that owes nothing any more, a fee the bill does not charge, and a rule that says no.
+    ///
+    /// Answers with the bill as it now stands, so the till redraws it from the edge's arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`]; [`AppError::ReasonCodeNotValid`] if the reason is not one the
+    /// store publishes for waiving a fee; [`AppError::Domain`] with a transition refusal for a bill
+    /// that is not open, [`DomainError::FeeNotOnBill`] or [`DomainError::FeeNotWaivable`], or a
+    /// refusal of the permission; [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
+    /// [`AppError::ApproverLockedOut`] from the step-up; [`AppError::Port`] if the store cannot be
+    /// written.
+    pub async fn waive_fee(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        fee_id: FeeId,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<BillTotals, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        if !session
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::WaiveFee)
+        {
+            return Err(AppError::ReasonCodeNotValid);
+        }
+        Bill::step(bill.state, BillTrigger::Reduce).map_err(DomainError::from)?;
+        billing::waivable_fee(&bill.fee_rules, &bill.waived_fee_ids, fee_id)?;
+        let approver = self.resolve_step_up(&mut ctx, Permission::WaiveFee, approval)?;
+        let _decided = decide_bill(
+            bill.state,
+            BillCommand::WaiveFee {
+                pin_verified: approver.is_some(),
+            },
+            &ctx,
+        )?;
+
+        let waived = BillingFeeWaived {
+            bill_id,
+            fee_id,
+            reason_code_id,
+        };
+        let (envelope, message) = self.prepare(&ctx, &waived)?;
+        let mut envelopes = vec![envelope];
+        let mut messages = vec![message];
+        // One transaction for the waive and the approval that let it through: a log holding the
+        // waive without it would show money forgiven by nobody who could forgive it.
+        if let Some(approver) = approver {
+            let record = Self::override_record(Permission::WaiveFee, approver, None);
+            let (envelope, message) = self.prepare(&ctx, &record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection().waive_fee_record(bill_id, fee_id);
+        self.bill_totals(bill_id)
     }
 
     /// Partitions a bill's lines into two or more new bills
@@ -4222,15 +4890,21 @@ impl<S: EventStore> Edge<S> {
             .map(|_| BillId::new(self.next_ulid()))
             .collect();
 
+        // Each part keeps the rules the bill froze when it opened, not what is in force now, so a
+        // publish during the meal reaches no part of it (ADR-0159 decision 3). A fee per bill is
+        // shared across the parts in proportion to the lines it counts on each, rather than
+        // charged again on every part (decision 6).
+        let part_rules =
+            billing::split_fee_rules(&bill.fee_rules, &self.part_lines(bill.order_id, &parts))?;
+
         let mut envelopes = Vec::new();
         let mut messages = Vec::new();
-        for (part_id, lines) in part_ids.iter().zip(parts.iter()) {
+        for ((part_id, lines), fee_rules) in part_ids.iter().zip(parts.iter()).zip(&part_rules) {
             let opened = BillingBillOpened {
                 bill_id: *part_id,
                 order_id: bill.order_id,
                 order_line_ids: lines.clone(),
-                // No rule is in force until the edge installs the `fees` node (ADR-0159).
-                fee_rules: Vec::new(),
+                fee_rules: fee_rules.clone(),
             };
             let (envelope, message) = self.prepare(&ctx, &opened)?;
             envelopes.push(envelope);
@@ -4247,7 +4921,9 @@ impl<S: EventStore> Edge<S> {
 
         {
             let mut projection = self.lock_projection();
-            for (part_id, lines) in part_ids.iter().zip(parts.into_iter()) {
+            for ((part_id, lines), fee_rules) in
+                part_ids.iter().zip(parts.into_iter()).zip(part_rules)
+            {
                 projection.open_bill_record(
                     *part_id,
                     BillRecord {
@@ -4261,9 +4937,14 @@ impl<S: EventStore> Edge<S> {
                         // Reducing a part is an ordinary discount on an ordinary bill.
                         discount: None,
                         comp: None,
+                        fee_wholes: billing::fee_wholes(&fee_rules),
+                        fee_rules,
+                        waived_fee_ids: Vec::new(),
                     },
                 );
             }
+            // As a replay folds the split after the parts' openings (ADR-0159 decisions 5 and 6).
+            projection.inherit_fees(bill_id, &part_ids);
             projection.set_bill_state(bill_id, decided.next_state);
         }
         Ok(part_ids)
@@ -4276,16 +4957,21 @@ impl<S: EventStore> Edge<S> {
     /// a merge is not a split in reverse and does not need to be. Every absorbed bill must be open,
     /// and each moves to `MERGED`, which is terminal.
     ///
-    /// **Restricted to bills on the same table**, which the model does not require and the floor
-    /// does: settling a bill moves its table from `AwaitingPayment` to `NeedsCleaning`, and a bill
-    /// spanning two tables makes *"which table moved?"* a question with two answers. Two tableless
-    /// counter bills merge freely, having no floor move to disagree about.
+    /// **Restricted to bills of the target's order**, which the model does not require. The floor
+    /// requires the same table: settling a bill moves its table from `AwaitingPayment` to
+    /// `NeedsCleaning`, and a bill spanning two tables makes *"which table moved?"* a question with
+    /// two answers. The money requires the same order: a settle reads a bill's lines from its own
+    /// order, so another order's lines would be charged nothing, and the bill that held them, merged,
+    /// could never be paid. So two tableless counter bills merge only within one order, as the parts
+    /// of a split do. Both are checked before anything is written.
     ///
     /// # Errors
     ///
     /// [`AppError::UnknownBill`] if the target or any absorbed bill is unknown;
-    /// [`AppError::BillsOnDifferentTables`] if they do not share a table; [`AppError::Domain`] if
-    /// the target or an absorbed bill is not open, or the actor lacks `billing.bill.split`.
+    /// [`AppError::BillsOnDifferentTables`] if they do not share a table, or the target is among the
+    /// absorbed; [`AppError::BillsOnDifferentOrders`] if they share a table but not an order;
+    /// [`AppError::Domain`] if the target or an absorbed bill is not open, or the actor lacks
+    /// `billing.bill.split`.
     pub async fn merge_bills(
         &self,
         actor: Actor,
@@ -4317,9 +5003,19 @@ impl<S: EventStore> Edge<S> {
             if record.table_id != target.table_id {
                 return Err(AppError::BillsOnDifferentTables);
             }
+            // Two counter bills share a table — none — and are still two orders. Merged, the
+            // absorbed order's lines would ride on a bill that charges only the target's.
+            if record.order_id != target.order_id {
+                return Err(AppError::BillsOnDifferentOrders);
+            }
             let decided = decide_bill(record.state, BillCommand::Merge, &ctx)?;
             folded.push((*absorbed_id, record, decided.next_state));
         }
+
+        // What the merged bill holds (ADR-0159 decision 6): the target's rules, and each fee per
+        // bill at the sum of the bills' shares of it, capped at its whole. Decided before anything
+        // is written, so a merge whose shares overflow is refused rather than half-recorded.
+        let merged_fees = self.lock_projection().merged_fees(bill_id, &absorbed)?;
 
         let event = BillingBillMerged {
             target_bill_id: bill_id,
@@ -4341,6 +5037,9 @@ impl<S: EventStore> Edge<S> {
             lines.sort_unstable();
             lines.dedup();
             projection.set_bill_lines(bill_id, lines);
+            if let Some(fees) = merged_fees {
+                projection.set_bill_fees(bill_id, fees);
+            }
         }
         Ok(bill_id)
     }
@@ -4353,6 +5052,24 @@ impl<S: EventStore> Edge<S> {
     /// guest owes.
     fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
         self.lock_projection().covered_lines(bill)
+    }
+
+    /// Each proposed part's sold lines as a fee rule matches them, read through
+    /// [`Self::bill_lines`] as a bill's are, so a part's share of a fee per bill is weighed on the
+    /// lines it will owe.
+    fn part_lines(&self, order_id: OrderId, parts: &[Vec<OrderLineId>]) -> Vec<Vec<BillLine>> {
+        let lines = self.lock_projection().identified_lines_for_order(order_id);
+        parts
+            .iter()
+            .map(|part| {
+                let covered: Vec<LineRecord> = lines
+                    .iter()
+                    .filter(|(id, _)| part.contains(id))
+                    .map(|(_, line)| line.clone())
+                    .collect();
+                Self::bill_lines(&covered)
+            })
+            .collect()
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -5172,8 +5889,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// Added rather than assembled again over all their lines at once, because each part computes
     /// its own tax and its own rounding (ADR-0128 decision 4): what the table will be asked for is
-    /// the sum of what each guest is asked for. The tax lines are listed part by part rather than
-    /// merged per class, for the same reason — a merged line would be a figure no bill computed.
+    /// the sum of what each guest is asked for. The fee lines and the tax lines are listed part by
+    /// part rather than merged per fee or per class, for the same reason — a merged line would be
+    /// a figure no bill computed.
     fn totals_of_bills(&self, bill_ids: &[BillId]) -> Result<BillTotals, AppError> {
         let mut sum = Self::nothing_owed(self.session().currency);
         for bill_id in bill_ids {
@@ -5206,6 +5924,7 @@ impl<S: EventStore> Edge<S> {
                 .total_due
                 .checked_add(part.total_due)
                 .map_err(DomainError::from)?;
+            sum.fee_lines.extend(part.fee_lines);
             sum.tax_lines.extend(part.tax_lines);
         }
         Ok(sum)
@@ -5332,8 +6051,9 @@ impl<S: EventStore> Edge<S> {
         }
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))?)
     }
@@ -5498,6 +6218,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: projection.table_for_order(order_id),
                 bill_id: projection.bill_for_order(order_id),
                 open_bill_ids: projection.open_bills_for_order(order_id),
+                sales_channel: projection.order_channel(order_id),
                 lines: projection
                     .identified_lines_for_order(order_id)
                     .into_iter()
@@ -5522,6 +6243,7 @@ impl<S: EventStore> Edge<S> {
                 table_id: order.table_id,
                 bill_id: order.bill_id,
                 open_bill_ids: order.open_bill_ids,
+                sales_channel: order.sales_channel,
                 lines: order
                     .lines
                     .into_iter()
@@ -5806,10 +6528,15 @@ impl<S: EventStore> Edge<S> {
         // the bill when there is one, which is where the figures differ and where the guest's
         // question is actually being answered.
         let nothing_off = (Money::zero(session.currency), Money::zero(session.currency));
+        // No bill has frozen any rule yet, so the order is priced with the rules a bill opening on
+        // its channel now would freeze (ADR-0159 decision 3): the figure the bill will open at.
+        let in_force = session.fees.in_force(order.sales_channel);
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &in_force,
+            // No bill, so nothing waived.
+            &[],
             nothing_off,
         ))?)
     }
@@ -5932,15 +6659,27 @@ impl<S: EventStore> Edge<S> {
         // Every unvoided line on the order, named rather than implied (ADR-0128 decision 9). This
         // is exactly what opening a bill has always meant; writing it down is what lets a split
         // partition it, and what lets the log say which bill owed what without a live projection.
-        let order_line_ids = self.lock_projection().sold_line_ids(order_id);
+        let (order_line_ids, channel) = {
+            let projection = self.lock_projection();
+            (
+                projection.sold_line_ids(order_id),
+                projection.order_channel(order_id),
+            )
+        };
+        // The fee rules in force for this bill, frozen onto it (ADR-0159 decision 3): those for the
+        // channel it is taxed at, which is the order's, so a publish during the meal does not
+        // change what it owes. Opening one again after a void freezes what is in force then.
+        let session = self.session();
+        let fee_rules = session
+            .fees
+            .in_force(channel.unwrap_or(session.sales_channel));
 
         let bill_id = BillId::new(self.next_ulid());
         let payload = BillingBillOpened {
             bill_id,
             order_id,
             order_line_ids: order_line_ids.clone(),
-            // No rule is in force until the edge installs the `fees` node (ADR-0159).
-            fee_rules: Vec::new(),
+            fee_rules: fee_rules.clone(),
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
@@ -5955,6 +6694,9 @@ impl<S: EventStore> Edge<S> {
                     order_line_ids,
                     discount: None,
                     comp: None,
+                    fee_wholes: billing::fee_wholes(&fee_rules),
+                    fee_rules,
+                    waived_fee_ids: Vec::new(),
                 },
             );
             if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
@@ -6032,8 +6774,9 @@ impl<S: EventStore> Edge<S> {
         let order = self.bill_snapshot(&bill, &session)?;
         let totals = billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))?;
 
@@ -6098,10 +6841,10 @@ impl<S: EventStore> Edge<S> {
             rounding_adjustment: totals.rounding_adjustment,
             total_due: totals.total_due,
             buyer_subject_id,
-            // Not recorded yet (ADR-0159 decision 4): the bill charges no fee, and a reader takes
-            // the tax from `tax_total`.
-            fee_lines: Vec::new(),
-            tax_lines: Vec::new(),
+            // Each fee charged and the tax per class (ADR-0159 decision 4), from the same totals
+            // as every figure above, so the lines add up to `service_charge` and `tax_total`.
+            fee_lines: fee_records(&totals),
+            tax_lines: tax_records(&totals),
         };
         let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
         envelopes.push(settled_envelope);
@@ -6145,7 +6888,9 @@ impl<S: EventStore> Edge<S> {
             total_due: Some(totals.total_due),
             totals: Some(totals.clone()),
             table_state,
-            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+            // The domain asks for a receipt on every settle; the store may print none (ADR-0160).
+            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt)
+                && session.printing.receipt_printed_on_settle(),
             open_drawer: cash_taken.amount_minor > 0,
             lines: Self::receipt_lines(&order.lines),
         })
@@ -6183,6 +6928,29 @@ impl<S: EventStore> Edge<S> {
             .collect())
     }
 
+    /// What this store has taken in the current business day ([`Takings`]): every bill settled
+    /// today, each at what its guests paid, and how many. A bill the store no longer holds as
+    /// settled is not in it, as it is not in [`Self::settled_bills`].
+    ///
+    /// Who may read it is the route's to decide, from the person's own role (ADR-0160 decision 2).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Clock`] if the business date cannot be derived, or [`AppError::Domain`] if the
+    /// bills cannot be added up.
+    pub fn takings_today(&self) -> Result<Takings, AppError> {
+        let session = self.session();
+        let today = derive_business_date(self.clock.now(), &session.timezone, session.cutoff)
+            .map_err(|_ignored| AppError::Clock)?;
+        let (takings_amount, bill_count) =
+            self.lock_projection().takings_on(today, session.currency)?;
+        Ok(Takings {
+            business_date: today,
+            takings_amount,
+            bill_count,
+        })
+    }
+
     /// Counts a copy of a settled bill's receipt (`billing.receipt.reprinted`) and hands back what
     /// to print, marked as a copy under the receipt's own number
     /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
@@ -6215,7 +6983,7 @@ impl<S: EventStore> Edge<S> {
         let (bill, receipt) = {
             let projection = self.lock_projection();
             let bill = projection.bill(bill_id).ok_or(AppError::UnknownBill)?;
-            let receipt = projection.settled.get(&bill_id).copied();
+            let receipt = projection.settled.get(&bill_id).cloned();
             (bill, receipt)
         };
         let Some(receipt) = receipt.filter(|_| bill.state == BillState::Settled) else {
@@ -6232,8 +7000,9 @@ impl<S: EventStore> Edge<S> {
         // total alone.
         let recomputed = billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))
         .ok();
@@ -6390,12 +7159,12 @@ impl<S: EventStore> Edge<S> {
         self.commit_and_publish(&ctx, &payload).await?;
 
         let currency = self.session().currency;
-        self.lock_projection()
-            .open_shift_record(shift_id, ShiftRecord::opened(opening_float, currency));
+        let record = ShiftRecord::opened(opening_float, currency);
+        self.lock_projection().open_shift_record(shift_id, record);
         Ok(ShiftView {
             shift_id,
             state: ShiftState::Open,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: None,
             variance: None,
             paid_in: Money::zero(currency),
@@ -6410,15 +7179,19 @@ impl<S: EventStore> Edge<S> {
     ///
     /// Blind (§11.1): neither the expected amount nor the variance is in the view, whatever the
     /// shift's state, because a count entered after reading the expectation is not a blind count.
+    /// The expected amount is there only where the store has turned the blind close off
+    /// ([`Self::expectation_shown`]), and the variance never is.
     #[must_use]
     pub fn current_shift(&self) -> Option<ShiftView> {
-        let projection = self.lock_projection();
-        let shift_id = projection.open_shift?;
-        let record = projection.shift(shift_id)?;
+        let (shift_id, record) = {
+            let projection = self.lock_projection();
+            let shift_id = projection.open_shift?;
+            (shift_id, projection.shift(shift_id)?)
+        };
         Some(ShiftView {
             shift_id,
             state: record.state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: record.counted,
             variance: None,
             paid_in: record.paid_in,
@@ -6431,8 +7204,9 @@ impl<S: EventStore> Edge<S> {
     /// Records the blind count on a shift (`cash.shift.counted`).
     ///
     /// The counted cash is entered **before** the system reveals what it expected, so this returns
-    /// no expectation and no variance — that is what makes the close blind (§11.1). `counted_minor`
-    /// is the physical count in minor units.
+    /// no expectation and no variance — that is what makes the close blind (§11.1). A store that has
+    /// turned the blind close off is shown the expectation ([`Self::expectation_shown`]), never the
+    /// variance. `counted_minor` is the physical count in minor units.
     ///
     /// # Errors
     ///
@@ -6464,7 +7238,7 @@ impl<S: EventStore> Edge<S> {
         Ok(ShiftView {
             shift_id,
             state: decision.next_state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: Some(counted_amount),
             variance: None,
             paid_in: record.paid_in,
@@ -6472,6 +7246,19 @@ impl<S: EventStore> Edge<S> {
             print_shift_report: false,
             report: None,
         })
+    }
+
+    /// What the drawer should hold, for a shift before it closes, where the store shows it: `None`
+    /// while `shift.blind_close` is on, which is the default and what every count was before the
+    /// setting (ADR-0160 decision 2), and the shift's expectation where the store has turned it off.
+    ///
+    /// An expectation that cannot be computed is withheld rather than guessed at: the close computes
+    /// it again and refuses there, where the cashier can act on the refusal.
+    fn expectation_shown(&self, record: &ShiftRecord) -> Option<Money> {
+        if self.session().shift.blind_close() {
+            return None;
+        }
+        record.expected().ok()
     }
 
     /// Closes a counted shift (`cash.shift.closed`), revealing the expected amount and the variance.
@@ -6609,7 +7396,7 @@ impl<S: EventStore> Edge<S> {
         Ok(ShiftView {
             shift_id,
             state: record.state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: record.counted,
             variance: None,
             paid_in: record.paid_in,
@@ -6797,6 +7584,11 @@ impl<S: EventStore> Edge<S> {
                     .add_reduction(event.bill_id, event.kind.known(), event.amount)
                     .map_err(AppError::Domain)?;
             }
+            EventType::BillingFeeWaived => {
+                let event: BillingFeeWaived = envelope.data.decode().map_err(AppError::Encode)?;
+                // So a restart charges what the till showed: the fee stays off the bill.
+                projection.waive_fee_record(event.bill_id, event.fee_id);
+            }
             EventType::BillingBillOpened => {
                 let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 // The bill is recorded whether or not a table is found. A bill event names its
@@ -6816,6 +7608,12 @@ impl<S: EventStore> Edge<S> {
                         order_line_ids: event.order_line_ids,
                         discount: None,
                         comp: None,
+                        // Empty on a bill opened before the field existed: it charges no fee, which
+                        // is what it charged when it was opened.
+                        fee_wholes: billing::fee_wholes(&event.fee_rules),
+                        fee_rules: event.fee_rules,
+                        // A waive is its own event, folded after this one.
+                        waived_fee_ids: Vec::new(),
                     },
                 );
                 if let Some(table_id) = table_id {
@@ -6846,6 +7644,47 @@ impl<S: EventStore> Edge<S> {
             // Unreachable: `fold` delegates only the arms above.
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Folds a split or a merge back onto the projection
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)), with what each does to the
+    /// bills' fees (ADR-0159 decision 6). Extracted from [`fold`](Self::fold) to keep it inside its
+    /// line budget, as [`Self::fold_void`] was.
+    fn fold_regroup(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::BillingBillSplit {
+            let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
+            // Each part's own `billing.bill.opened`, in the same transaction, folded its lines and
+            // its share of each fee; it takes its source's wholes and waived fees here.
+            projection.inherit_fees(event.source_bill_id, &event.resulting_bill_ids);
+            projection.set_bill_state(event.source_bill_id, BillState::Split);
+            return Ok(());
+        }
+        let event: BillingBillMerged = envelope.data.decode().map_err(AppError::Encode)?;
+        // The target takes their lines, rebuilt from what each bill already records rather than from
+        // a field on this event: a bill covers lines from the moment it exists, and carrying the
+        // union here too would make the same fact true in two places.
+        let mut lines = projection
+            .bill(event.target_bill_id)
+            .map(|target| target.order_line_ids)
+            .unwrap_or_default();
+        // The fees from what each bill holds, in the event's order, as the merge decided them.
+        if let Some(fees) = projection.merged_fees(event.target_bill_id, &event.merged_bill_ids)? {
+            projection.set_bill_fees(event.target_bill_id, fees);
+        }
+        for absorbed_id in event.merged_bill_ids {
+            if let Some(absorbed) = projection.bill(absorbed_id) {
+                lines.extend(absorbed.order_line_ids);
+            }
+            projection.set_bill_state(absorbed_id, BillState::Merged);
+        }
+        lines.sort_unstable();
+        lines.dedup();
+        projection.set_bill_lines(event.target_bill_id, lines);
         Ok(())
     }
 
@@ -6937,6 +7776,10 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
+            EventType::SalesTableMerged => {
+                let event: SalesTableMerged = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.merge_order(event.target_order_id, event.merged_order_id);
+            }
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
                     envelope.data.decode().map_err(AppError::Encode)?;
@@ -6959,36 +7802,16 @@ impl<S: EventStore> Edge<S> {
             | EventType::BillingPaymentCaptured
             | EventType::BillingBillSettled
             | EventType::BillingReceiptReprinted
-            | EventType::BillingDiscountApplied => {
+            | EventType::BillingDiscountApplied
+            | EventType::BillingFeeWaived => {
                 Self::fold_billing(projection, envelope, known)?;
             }
             // A split's source and a merge's absorbed bills are terminal, and a store that replayed
             // its log without them would reopen a bill somebody has already been charged for
-            // through its parts (ADR-0128 decision 10). The parts themselves need nothing here:
-            // each has its own `billing.bill.opened` in the same transaction, which the arm above
-            // already folds with the lines it covers.
-            EventType::BillingBillSplit => {
-                let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_bill_state(event.source_bill_id, BillState::Split);
-            }
-            EventType::BillingBillMerged => {
-                let event: BillingBillMerged = envelope.data.decode().map_err(AppError::Encode)?;
-                // The target takes their lines, rebuilt from what each bill already records rather
-                // than from a field on this event: a bill covers lines from the moment it exists,
-                // and carrying the union here too would make the same fact true in two places.
-                let mut lines = projection
-                    .bill(event.target_bill_id)
-                    .map(|target| target.order_line_ids)
-                    .unwrap_or_default();
-                for absorbed_id in event.merged_bill_ids {
-                    if let Some(absorbed) = projection.bill(absorbed_id) {
-                        lines.extend(absorbed.order_line_ids);
-                    }
-                    projection.set_bill_state(absorbed_id, BillState::Merged);
-                }
-                lines.sort_unstable();
-                lines.dedup();
-                projection.set_bill_lines(event.target_bill_id, lines);
+            // through its parts (ADR-0128 decision 10). Each part's own `billing.bill.opened`, in
+            // the same transaction, folds the lines it covers; the split adds its fees' wholes.
+            EventType::BillingBillSplit | EventType::BillingBillMerged => {
+                Self::fold_regroup(projection, envelope, known)?;
             }
             EventType::CashShiftOpened => {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
@@ -7131,9 +7954,11 @@ impl<S: EventStore> Edge<S> {
             (lines, projection.order_channel(order_id))
         };
         let class_bases = Self::class_bases(&lines)?;
+        let bill_lines = Self::bill_lines(&lines);
         Ok(OrderSnapshot {
             lines,
             class_bases,
+            bill_lines,
             sales_channel: channel.unwrap_or(session.sales_channel),
         })
     }
@@ -7157,13 +7982,34 @@ impl<S: EventStore> Edge<S> {
     fn receipt_lines(lines: &[LineRecord]) -> Vec<ReceiptLine> {
         Self::sold_lines(lines)
             .map(|line| ReceiptLine {
+                menu_item_id: line.menu_item_id,
                 display_name: line.display_name.clone(),
                 quantity: line.quantity,
                 unit_price: line.unit_price,
                 line_total: line.line_total,
                 modifier_display_names: line.modifier_display_names.clone(),
+                modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
             })
             .collect()
+    }
+
+    /// The sold lines as a fee rule matches them: its item, quantity, net and class
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 2). The same lines
+    /// [`Self::class_bases`] sums, through the same filter, so each class's lines come to its base
+    /// and [`billing::assemble`] never finds them another bill's.
+    fn bill_lines(lines: &[LineRecord]) -> Vec<BillLine> {
+        Self::sold_lines(lines).map(Self::bill_line).collect()
+    }
+
+    /// One sold line as a fee rule matches it. Its net is the extended total captured at add time,
+    /// the figure [`Self::class_bases`] sums.
+    fn bill_line(line: &LineRecord) -> BillLine {
+        BillLine {
+            menu_item_id: line.menu_item_id,
+            quantity: line.quantity,
+            net: line.line_total,
+            tax_class_id: line.tax_class_id,
+        }
     }
 
     /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
@@ -7189,35 +8035,42 @@ impl<S: EventStore> Edge<S> {
         Ok(bases)
     }
 
-    /// Builds the bill-assembly input from the session's tax configuration. The P5 bootstrap runs
-    /// with no bill-level discount, no service charge and no cash rounding; the cloud config tree
-    /// (P7) supplies those, and the shape here is ready for them.
+    /// Builds the bill-assembly input from the session's tax configuration, one read of the lines,
+    /// and the fee rules the bill is computed from. The P5 bootstrap runs with no bill-level
+    /// discount, no service charge and no cash rounding; the cloud config tree (P7) supplies those,
+    /// and the shape here is ready for them.
+    ///
+    /// The class bases and the lines the rules match come from the same [`OrderSnapshot`], so
+    /// they always describe one bill: [`DomainError::LinesDoNotMatchBases`] cannot follow from a
+    /// read, and answers as a server error if it ever does.
     fn bill_input<'a>(
         session: &'a EdgeSession,
-        class_bases: &'a [ClassBase],
-        sales_channel: SalesChannel,
+        order: &'a OrderSnapshot,
+        fee_rules: &'a [FrozenFee],
+        waived_fee_ids: &'a [FeeId],
         reductions: (Money, Money),
     ) -> BillInput<'a> {
         let currency = session.currency;
         let (bill_discount, comps) = reductions;
         BillInput {
             currency_code: currency,
-            class_bases,
+            class_bases: &order.class_bases,
             bill_discount,
             comps,
             service_charge: Money::zero(currency),
             service_charge_taxable: true,
             service_charge_tax_class: None,
             rates: &session.tax_rates,
-            // The order's channel, passed in — not `session.sales_channel`, which is a store-wide
-            // constant and therefore the wrong rate for every order that did not come in on it.
-            sales_channel,
+            // The order's channel, from the snapshot — not `session.sales_channel`, which is a
+            // store-wide constant and therefore the wrong rate for every order that did not come in
+            // on it.
+            sales_channel: order.sales_channel,
             cash_rounding_increment: session.cash_rounding_increment,
-            rounding_mode: Rounding::HalfUp,
+            tax_rounding: session.tax_rounding.rounding(),
             prices_include_tax: session.prices_include_tax,
-            // No fee rules until the edge installs the `fees` node (ADR-0159), so no lines either.
-            fee_rules: &[],
-            lines: &[],
+            fee_rules,
+            waived_fee_ids,
+            lines: &order.bill_lines,
         }
     }
 
@@ -7347,11 +8200,13 @@ impl<S: EventStore> Edge<S> {
         }
         let gone: Vec<OrderLineId> = {
             let projection = self.lock_projection();
+            // Each line's order as the projection holds it now, rather than the one its note was
+            // held under: a guest's line that joined the table's order is on that order now.
             held.into_iter()
-                .filter(|(order_line_id, order_id)| {
+                .filter(|(order_line_id, _held_under)| {
                     projection.line(*order_line_id).is_some_and(|record| {
                         record.state == OrderLineState::Voided
-                            || (!projection.live.contains(order_id)
+                            || (!projection.live.contains(&record.order_id)
                                 && !projection.still_cooking(*order_line_id, &record))
                     })
                 })
@@ -7514,7 +8369,7 @@ mod tests {
         BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId,
         StoreId, TableId,
     };
-    use pos_proto::locale::{TaxRate, TaxRateTable};
+    use pos_proto::locale::{TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
@@ -8123,6 +8978,8 @@ mod tests {
                     station_id: planned,
                     name: DisplayName::new("Oven"),
                     backup_station_id: None,
+                    late_after_seconds: None,
+                    ticket_language: Open::default(),
                 })
                 .with_rule(RoutingRule {
                     station_id: planned,
@@ -8208,6 +9065,53 @@ mod tests {
             applied_to_bill: vnd(minor),
             tip: vnd(0),
         }
+    }
+
+    /// Seats a table, sells one line at `unit_price`, opens its bill and settles it for exactly what
+    /// it comes to; the bill, settled.
+    async fn a_settled_bill_at(edge: &Edge<FakeStore>, table: TableId, unit_price: i64) -> BillId {
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        let line = LineDraft {
+            unit_price: vnd(unit_price),
+            line_total: vnd(unit_price),
+            ..a_line()
+        };
+        edge.add_line(actor(), table, line).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        let owed = edge
+            .bill_totals(opened.bill_id)
+            .expect("assembles")
+            .total_due;
+        edge.settle_bill(actor(), opened.bill_id, vec![cash(owed.amount_minor)], None)
+            .await
+            .expect("settles");
+        opened.bill_id
+    }
+
+    /// ADR-0160: a store whose `locale` sets `TAX_ROUNDING_DOWN` drops the half đồng of tax a store
+    /// on half-up rounds up, so it settles the same bill one đồng lower, and records it so.
+    #[test]
+    fn a_store_that_rounds_tax_down_settles_half_a_unit_of_tax_one_unit_lower() {
+        pos_fakes::executor::run_ready(async {
+            // 10 % of 150,005 is 15,000.5.
+            let recorded = |edge: &Edge<FakeStore>, bill_id: BillId| {
+                let projection = edge.lock_projection();
+                let receipt = projection.settled.get(&bill_id).expect("recorded");
+                (receipt.tax_total, receipt.total_due)
+            };
+            let half_up = edge();
+            let bill =
+                a_settled_bill_at(&half_up, TableId::new(Ulid::from_u128(341)), 150_005).await;
+            assert_eq!(recorded(&half_up, bill), (vnd(15_001), vnd(165_006)));
+
+            let down = edge();
+            down.apply_session(EdgeSession {
+                tax_rounding: TaxRounding::Down,
+                ..EdgeSession::bootstrap()
+            });
+            let bill = a_settled_bill_at(&down, TableId::new(Ulid::from_u128(342)), 150_005).await;
+            assert_eq!(recorded(&down, bill), (vnd(15_000), vnd(165_005)));
+        });
     }
 
     #[test]
@@ -9201,6 +10105,39 @@ mod tests {
         });
     }
 
+    #[test]
+    fn a_store_that_prints_no_receipt_on_settle_settles_and_numbers_the_bill_without_one() {
+        pos_fakes::executor::run_ready(async {
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                EdgeSession {
+                    printing: pos_proto::printing::PublishedPrinting {
+                        receipt_printed_on_settle: Some(false),
+                        ..Default::default()
+                    },
+                    ..EdgeSession::bootstrap()
+                },
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(301));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            let settled = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles");
+            assert_eq!(
+                settled.receipt_number,
+                Some(1),
+                "the bill is numbered all the same"
+            );
+            assert!(!settled.print_receipt, "and no receipt prints (ADR-0160)");
+        });
+    }
+
     /// An edge at a store whose `shift` node refuses selling while no shift is open (ADR-0160).
     fn edge_refusing_sales_without_a_shift() -> Edge<FakeStore> {
         use pos_proto::shift::{NoShiftSelling, PublishedShift};
@@ -9210,6 +10147,7 @@ mod tests {
             EdgeSession {
                 shift: PublishedShift {
                     no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+                    ..PublishedShift::default()
                 },
                 ..EdgeSession::bootstrap()
             },
@@ -9903,6 +10841,8 @@ mod tests {
             tax_total: vnd(13_000),
             rounding_adjustment: vnd(0),
             total_due: vnd(143_000),
+            fee_lines: Vec::new(),
+            tax_lines: Vec::new(),
             buyer_subject_id: None,
             business_date,
             settle_time: Timestamp::from_milliseconds_since_epoch(settle_ms)
@@ -9913,6 +10853,113 @@ mod tests {
 
     fn a_day(day: u8) -> BusinessDate {
         BusinessDate::from_ymd(2026, 9, day).expect("a real date")
+    }
+
+    /// A bill settled before the settle recorded its lines (ADR-0159 decision 4) is copied as it
+    /// was: its per-rate lines computed again while they give what it recorded, and its recorded
+    /// tax as one total once they do not.
+    #[test]
+    fn a_copy_of_a_settle_that_recorded_no_lines_computes_them_again() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let bill_id = a_settled_pizza(&edge, TableId::new(Ulid::from_u128(331)), None).await;
+            {
+                // What an older settle event folds to.
+                let mut projection = edge.lock_projection();
+                let receipt = projection.settled.get_mut(&bill_id).expect("recorded");
+                receipt.fee_lines.clear();
+                receipt.tax_lines.clear();
+            }
+            let copy = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("a copy");
+            assert_eq!(copy.totals.tax_lines.len(), 1, "the rates still give it");
+
+            let mut session = (*edge.session()).clone();
+            session.tax_rates = TaxRateTable::new().with(
+                EdgeSession::standard_tax_class(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(8),
+            );
+            edge.apply_session(session);
+            let copy = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("a copy");
+            assert!(copy.totals.tax_lines.is_empty(), "no line at 8%");
+            assert_eq!(copy.totals.tax_total, vnd(15_000));
+        });
+    }
+
+    /// The till's reads name a fee in the store's display language where the store's current rule
+    /// translates it, and as the bill froze it otherwise (ADR-0159 decision 4). What the settle
+    /// records keeps the frozen name, whatever language a screen is in.
+    #[test]
+    fn a_screen_names_a_fee_in_its_language_and_the_record_keeps_the_frozen_name() {
+        use pos_core::billing::FeeLine;
+        use pos_proto::events::BillFeeLine;
+        use pos_proto::fees::{FeeCode, PublishedFees};
+        use pos_proto::ids::FeeId;
+
+        let rules: PublishedFees = serde_json::from_str(
+            r#"{"fees": [
+                {"fee_id": "00000000000000000000000001", "code": "SERVICE",
+                 "display_name": "Service fee", "display_name_translations": {"vi": "Phí phục vụ"}}
+            ]}"#,
+        )
+        .expect("a fees node");
+        let session = EdgeSession {
+            fees: rules,
+            ..EdgeSession::bootstrap()
+        };
+        let fee = |seed: u128, code: &str, name: &str, minor: i64| FeeLine {
+            fee_id: FeeId::new(Ulid::from_u128(seed)),
+            code: FeeCode::new(code),
+            display_name: DisplayName::new(name),
+            amount: vnd(minor),
+            class_shares: Vec::new(),
+            tax: vnd(0),
+            waivable: false,
+        };
+        // The first rule is still published and translated; the second is no longer published.
+        let totals = BillTotals {
+            subtotal: vnd(100_000),
+            discount_total: vnd(0),
+            comp_total: vnd(0),
+            service_charge: vnd(15_000),
+            fee_lines: vec![
+                fee(1, "SERVICE", "Service charge", 5_000),
+                fee(2, "COVER", "Cover", 10_000),
+            ],
+            tax_lines: Vec::new(),
+            tax_total: vnd(0),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(115_000),
+        };
+        let names = |records: Vec<BillFeeLine>| -> Vec<String> {
+            records
+                .iter()
+                .map(|record| record.display_name.as_str().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, Some("vi"))),
+            ["Phí phục vụ", "Cover"]
+        );
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, Some("en"))),
+            ["Service charge", "Cover"],
+            "a language the rule does not translate into keeps the frozen name"
+        );
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, None)),
+            ["Service charge", "Cover"]
+        );
+        assert_eq!(
+            names(super::fee_records(&totals)),
+            ["Service charge", "Cover"]
+        );
     }
 
     /// Only today's receipts are copied at the till (ADR-0164 decision 3). One settled on an
@@ -10018,6 +11065,28 @@ mod tests {
         for totals in [&unchanged, &moved, &regrouped, &alone] {
             assert!(adds_up(totals), "{totals:?} does not add up");
         }
+    }
+
+    /// Today's takings are every bill the day settled, at what its guests paid, and none of another
+    /// day's (ADR-0160 decision 2).
+    #[test]
+    fn today_s_takings_are_every_bill_settled_today_and_none_of_another_day() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let earlier = a_settled_pizza(&edge, TableId::new(Ulid::from_u128(341)), None).await;
+            a_settled_pizza(&edge, TableId::new(Ulid::from_u128(342)), None).await;
+            let taken = edge.takings_today().expect("today's takings");
+            assert_eq!((taken.takings_amount, taken.bill_count), (vnd(330_000), 2));
+
+            // One of them settled on another day, as a log folded after the cutoff holds it.
+            edge.lock_projection()
+                .settled
+                .get_mut(&earlier)
+                .expect("recorded")
+                .business_date = BusinessDate::from_ymd(2000, 1, 1).expect("a real date");
+            let taken = edge.takings_today().expect("today's takings");
+            assert_eq!((taken.takings_amount, taken.bill_count), (vnd(165_000), 1));
+        });
     }
 
     /// Today's list is bounded and newest first, with no other day's receipt in it (ADR-0164). Two

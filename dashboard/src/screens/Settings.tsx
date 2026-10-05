@@ -23,7 +23,9 @@
 // A store on a release older than a setting's `since` ignores the value, so for one store the
 // setting is hidden and one line says why. For a wider scope it stays, with a count of the stores it
 // reaches that are too old to honour it. A store whose release is unknown is never treated as older
-// (`lib/semver.ts`): it is shown, with a note.
+// (`lib/semver.ts`): it is shown, with a note. A setting honoured from `0.0.0`, which the register
+// names for one the cloud applies itself, is honoured by every store whatever it runs, so it carries
+// no note and names no release.
 //
 // # A new store's values (decision 1)
 //
@@ -31,8 +33,14 @@
 // store's publish did, the store scope here does both again: one action writes the values the store
 // does not set itself, and one publishes the store again.
 //
-// Nothing on this screen is personal data: setting values, store, brand and group names, and the
-// release each store runs.
+// # Before you turn this on (ADR-0158, Rollout)
+//
+// For one store, `permissions.enforced` carries a panel that lists what each role held there does
+// not grant (`components/PermissionsReadiness.tsx`), whatever the switch says. It reads the store's
+// roles, so it needs `console.people.read`; a role without it is told who can see it.
+//
+// Nothing on this screen is personal data: setting values, store, brand and group names, the
+// release each store runs, and role names with a count of the people holding each.
 
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 
@@ -53,7 +61,7 @@ import { formatCount, formatInstant } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
-import { releaseStanding } from "../lib/semver";
+import { honouredByEveryRelease, releaseStanding } from "../lib/semver";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
   Banner,
@@ -68,6 +76,7 @@ import {
   SwitchField,
 } from "../components/ui";
 import { ConfirmDialog, EmptyState, TechnicalDetails } from "../components/kit";
+import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
 import { toast } from "../components/Toast";
 
 const TENANT: SettingScope = "SETTING_SCOPE_TENANT";
@@ -96,6 +105,9 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_SECONDS: "settings.unit.seconds",
   SETTING_UNIT_MINUTES: "settings.unit.minutes",
   SETTING_UNIT_COUNT: "settings.unit.count",
+  SETTING_UNIT_MINOR_UNITS: "settings.unit.minor_units",
+  SETTING_UNIT_PERCENT: "settings.unit.percent",
+  SETTING_UNIT_HOURS: "settings.unit.hours",
 };
 
 /**
@@ -103,6 +115,12 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
  * publishes. Mirrored so the screen hides what a role cannot do; the server re-checks every route.
  */
 const PUBLISHERS: ReadonlySet<string> = new Set(["owner", "admin", "ops"]);
+
+/** The roles holding `console.people.read`, which the readiness panel's read needs (ADR-0158). */
+const STAFF_READERS: ReadonlySet<string> = new Set(["owner", "admin"]);
+
+/** The setting the readiness panel stands beside. */
+const ENFORCED = "permissions.enforced";
 
 /** How each outcome is drawn. `UNCHANGED` is neutral: the store already ran the value. */
 const OUTCOME: Record<
@@ -294,6 +312,10 @@ export function Settings() {
   const canWrite = () => {
     const role = actingAdmin()?.role;
     return role !== undefined && PUBLISHERS.has(role);
+  };
+  const readsStaff = () => {
+    const role = actingAdmin()?.role;
+    return role !== undefined && STAFF_READERS.has(role);
   };
 
   const catalogue = () => layout.value()?.catalogue ?? [];
@@ -734,7 +756,9 @@ export function Settings() {
         setting().preset === undefined
           ? null
           : t("settings.presetIs", { value: valueLabel(setting(), setting().preset) }),
-        t("settings.sinceIs", { since: setting().since }),
+        honouredByEveryRelease(setting().since)
+          ? null
+          : t("settings.sinceIs", { since: setting().since }),
       ]
         .filter((fact): fact is string => fact !== null)
         .join(" · ");
@@ -915,6 +939,16 @@ export function Settings() {
             </Show>
           </Show>
           <ReportFor about={setting().setting_key} />
+          <Show when={key() === ENFORCED && kind() === STORE && target()}>
+            {(store) => (
+              <Show
+                when={readsStaff()}
+                fallback={<p class="text-sm text-ink-muted">{t("readiness.restricted")}</p>}
+              >
+                <PermissionsReadinessPanel tenant={tenantId()} store={store()} />
+              </Show>
+            )}
+          </Show>
         </div>
       </Card>
     );

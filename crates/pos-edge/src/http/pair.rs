@@ -13,9 +13,10 @@
 //! # Two different gates, on purpose
 //!
 //! `POST /api/pair` is **ungated** — it has to be, because the device presenting a code holds no
-//! credential yet — and `GET /api/pair/devices` sits behind the paired-device gate alone, because POS
-//! Station reads it as its "is my token still accepted" probe with nobody signed in, which the
-//! signed-in gate would answer `403`. [`mint`] and
+//! credential yet. [`this_device`] and [`devices`] sit behind the paired-device gate alone.
+//! [`this_device`] is POS Station's "is my token still accepted" probe, asked with nobody signed in,
+//! which the signed-in gate would answer `403`. [`devices`] stays there because a Station older than
+//! that probe reads the list as its probe instead, until none is left in the fleet. [`mint`] and
 //! [`revoke`] sit behind **both** gates: a paired device *and* a signed-in person whose role grants
 //! `admin.device.manage`, because admitting a device and retiring one are the same managerial act and
 //! the store has a published roster to check that against
@@ -35,9 +36,12 @@ use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
+use pos_proto::ids::DeviceId;
+use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
 use crate::clock::SystemClock;
+use crate::http::auth::not_paired;
 use crate::pairing::{Code, Minter, Pairing, Redeemed};
 use crate::state::AppState;
 
@@ -145,7 +149,7 @@ pub(crate) struct PairedDeviceView {
 /// nothing the id does not.
 pub(crate) async fn devices(
     State(state): State<AppState>,
-    caller: Option<Extension<pos_proto::ids::DeviceId>>,
+    caller: Option<Extension<DeviceId>>,
 ) -> Response {
     // The gate puts the calling device in the extensions; its absence would be a router-wiring
     // mistake, and marking no row beats marking the wrong one.
@@ -164,6 +168,52 @@ pub(crate) async fn devices(
         devices: state.pairing.issued_count(),
         durable: state.pairing.is_durable(),
         paired,
+    })
+    .into_response()
+}
+
+/// The calling device, as [`this_device`] answers for it.
+#[derive(Debug, Serialize)]
+pub(crate) struct ThisDevice {
+    /// Always `true`. A token the edge does not accept never gets this far: it is refused `401`.
+    /// Carried so the answer says what it means, and so a caller can tell it apart from the
+    /// `index.html` an edge older than this route answers for any path it does not know.
+    accepted: bool,
+    /// The calling device's own id.
+    device_id: DeviceId,
+    /// When the calling device paired, RFC 3339 UTC.
+    pair_time: Timestamp,
+}
+
+/// `GET /api/pair/this_device` — whether the calling token is still accepted, and which device it
+/// belongs to.
+///
+/// POS Station's token probe
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 8, step 1). It answers for the calling token **alone**: its device id and when it
+/// paired, and nothing about any other device. [`devices`] answered the same question by handing
+/// every paired device the id of every other, which a probe has no use for and which decision 8
+/// stops once no Station that reads the list is left.
+///
+/// Behind the paired-device gate alone, for the reason the list is: Station asks with nobody signed
+/// in. The route never reaches the signed-in gate, which is the only code that reads or touches a
+/// session, so asking it signs nobody in and resets nobody's idle window.
+///
+/// An unknown or retired token is refused `401` by the gate, before this runs. A token retired in
+/// the moment between the gate and the lookup below is refused the same way, because by the time the
+/// answer is written it is no longer accepted. The device comes from the gate and never from the
+/// request, so a router that lost the gate fails the request `500` rather than answer for nobody.
+pub(crate) async fn this_device(
+    State(state): State<AppState>,
+    Extension(device_id): Extension<DeviceId>,
+) -> Response {
+    let Some(pair_time) = state.pairing.paired_at(device_id) else {
+        return not_paired();
+    };
+    Json(ThisDevice {
+        accepted: true,
+        device_id,
+        pair_time,
     })
     .into_response()
 }
@@ -199,7 +249,7 @@ where
             let Ok(ulid) = text.parse::<pos_proto::ulid::Ulid>() else {
                 return (StatusCode::BAD_REQUEST, "device_id is not a ULID").into_response();
             };
-            let device_id = pos_proto::ids::DeviceId::new(ulid);
+            let device_id = DeviceId::new(ulid);
             tracing::warn!(%device_id, "revoking a paired device");
             deps.pairing.revoke(device_id).await
         }
@@ -371,8 +421,7 @@ where
 fn may_manage_devices<S>(edge: &Edge<S>, actor: Actor) -> bool {
     edge.session()
         .staff
-        .permissions_for(actor.employee_id)
-        .is_some_and(|granted| granted.contains(Permission::ManageDevices))
+        .grants(actor.employee_id, Permission::ManageDevices)
 }
 
 /// The refusal a signed-in person without the permission gets, saying which act it was.

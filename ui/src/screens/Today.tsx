@@ -1,13 +1,13 @@
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, on, onMount } from "solid-js";
 
 import { api } from "../api/client";
-import type { ReprintResponse, SettledBill } from "../api/types";
+import type { ReprintResponse, SettledBill, TakingsResponse } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
-import { can } from "../state/permissions";
+import { can, holdsOwn } from "../state/permissions";
 import { formatAmount, openBillCount, state, tableCounts, tableLabel } from "../state/store";
 
 const ORDER = [
@@ -40,6 +40,11 @@ function paidAt(bill: SettledBill): string {
 // rollups are the cloud's (P7). Numbers, not charts, because this is a working screen on a busy
 // counter.
 //
+// Beside them, what the store has taken today (ADR-0160 decision 2): the day's settled bills at what
+// their guests paid, and how many, for a person whose own role grants `reports.takings.view`. The
+// store's figure and nothing finer — no person, no till — because takings per person would be
+// monitoring staff.
+//
 // Under the figures, the bills paid today, for the guest who comes back for a copy of their receipt
 // (ADR-0164): a tap on the bill, then *Reprint*. Choosing first, rather than a button on every row,
 // so a tap on a crowded list prints the receipt that was meant. The copy is the original under the
@@ -60,6 +65,22 @@ export function Today() {
   // list so a press does not redraw the row the operator is looking at.
   const [copied, setCopied] = createSignal<Readonly<Record<string, number>>>({});
   const [error, setError] = createSignal<string | null>(null);
+  const [takings, setTakings] = createSignal<TakingsResponse | null>(null);
+
+  // Read when the person may see it, and again if that changes while the screen is open. A refusal,
+  // or an edge too old to answer, hides the tile rather than putting an error on a working screen.
+  createEffect(
+    on(
+      () => holdsOwn("reports.takings.view"),
+      (sees) => {
+        if (!sees) {
+          setTakings(null);
+          return;
+        }
+        api.takings().then(setTakings, () => setTakings(null));
+      },
+    ),
+  );
 
   onMount(async () => {
     try {
@@ -118,6 +139,19 @@ export function Today() {
           </p>
           <p class="text-sm text-ink-muted">{t("today.shift")}</p>
         </div>
+        <Show when={takings()}>
+          {(taken) => (
+            <div class="rounded-token border border-line bg-surface p-4" data-outcome="today-takings">
+              <p class="text-2xl font-semibold tabular-nums">
+                {formatAmount(taken().takings_amount)}
+              </p>
+              <p class="text-sm text-ink-muted">{t("today.takings")}</p>
+              <p class="text-sm text-ink-muted tabular-nums">
+                {t("today.takings_bills", { count: taken().bill_count })}
+              </p>
+            </div>
+          )}
+        </Show>
       </div>
 
       {/* The list is there to reprint from (`billing.receipt.reprint`, ADR-0158). */}

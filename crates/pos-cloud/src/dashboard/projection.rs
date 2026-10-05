@@ -312,19 +312,25 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use core::num::NonZeroU32;
+    use std::collections::{BTreeMap, HashMap};
     use std::sync::Mutex;
 
-    use super::{RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, project};
+    use super::{
+        RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, fold_revenue, project,
+        render_revenue_window, revenue,
+    };
 
     use pos_contract_tests::fixtures;
     use pos_fakes::FakeStore;
-    use pos_ports::event_store::EventStore;
+    use pos_ports::event_store::{EventQuery, EventStore};
     use pos_ports::{Transactional as _, TxContext as _};
     use pos_proto::BusinessDate;
-    use pos_proto::envelope::{EventEnvelope, RawPayload};
+    use pos_proto::envelope::{EventEnvelope, EventTypeRef, RawPayload};
+    use pos_proto::events::EventType;
     use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::ulid::Ulid;
+    use serde_json::json;
 
     use crate::cloud::Cloud;
 
@@ -350,6 +356,39 @@ mod tests {
             event.business_date = date;
         }
         events
+    }
+
+    /// A bill settled on 2026-03-`day` with `service_charge` and `fee_lines` as (code, amount,
+    /// tax), none for a bill from an edge before fee lines. Its event id sorts by `seed`, as an
+    /// activation's.
+    fn settled(
+        seed: u32,
+        day: u8,
+        service_charge: i64,
+        fee_lines: &[(&str, i64, i64)],
+    ) -> EventEnvelope<RawPayload> {
+        let vnd = |minor: i64| json!({ "currency_code": "VND", "amount_minor": minor });
+        let id = Ulid::from_u128(u128::from(seed)).to_string();
+        let fee_lines: Vec<_> = fee_lines
+            .iter()
+            .map(|(code, amount, tax)| {
+                json!({
+                    "fee_id": id, "code": code, "display_name": code,
+                    "amount": vnd(*amount), "tax": vnd(*tax),
+                })
+            })
+            .collect();
+        let mut event = dated(seed, 1, 2026, 3, day).remove(0);
+        event.event_type = EventTypeRef::from_known(EventType::BillingBillSettled);
+        event.data = RawPayload::encode(&json!({
+            "bill_id": id, "receipt_number": seed,
+            "subtotal": vnd(100_000), "reduction_total": vnd(0),
+            "service_charge": vnd(service_charge), "tax_total": vnd(8_000),
+            "rounding_adjustment": vnd(0), "total_due": vnd(108_000 + service_charge),
+            "fee_lines": fee_lines,
+        }))
+        .expect("encode the settled bill");
+        event
     }
 
     async fn append(store: &FakeStore, events: &[EventEnvelope<RawPayload>]) {
@@ -398,17 +437,51 @@ mod tests {
         let events = FakeStore::new();
         append(&events, &dated(1, 3, 2026, 3, 15)).await;
         append(&events, &dated(100, 2, 2026, 7, 1)).await;
+        // Revenue too, its fees by code included, and one bill from an edge before fee lines.
+        append(
+            &events,
+            &[
+                settled(200, 15, 7_000, &[("SVC", 5_000, 400), ("PACK", 2_000, 0)]),
+                settled(201, 15, 5_000, &[]),
+            ],
+        )
+        .await;
         let rollups = FakeRollups::default();
 
         project(&events, &rollups, tenant(), store_id())
             .await
             .expect("project");
+        // More bills after that pass, on its day and the next: the cursor folds only them.
+        append(
+            &events,
+            &[
+                settled(300, 15, 5_000, &[("SVC", 5_000, 400)]),
+                settled(301, 16, 2_000, &[("PACK", 2_000, 0)]),
+            ],
+        )
+        .await;
+        project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("project again");
         let materialised = dashboard(&rollups, tenant(), store_id(), &RollupWindow::default())
             .await
             .expect("dashboard");
+        let materialised_revenue =
+            revenue(&rollups, tenant(), store_id(), &RollupWindow::default())
+                .await
+                .expect("revenue");
 
         // The authoritative answer is the full from-log fold. `project` only borrowed `events`, so it
         // can be moved into a Cloud now.
+        let mut rescanned = BTreeMap::new();
+        let log = events
+            .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
+            .await
+            .expect("read the whole log");
+        for event in &log {
+            fold_revenue(&mut rescanned, event);
+        }
+        let authoritative_revenue = render_revenue_window(rescanned, &RollupWindow::default());
         let authoritative = Cloud::new(events)
             .daily_rollups(store_id())
             .await
@@ -416,6 +489,16 @@ mod tests {
         assert_eq!(
             materialised, authoritative,
             "the maintained rollup must match a full re-scan exactly"
+        );
+        assert_eq!(
+            materialised_revenue, authoritative_revenue,
+            "and so must its revenue, fees by code included"
+        );
+        // Not equal by both being empty: each day's fees are there, under their codes.
+        let charged = |day: usize, code: &str| materialised_revenue[day].by_fee[code].amount;
+        assert_eq!(
+            [charged(0, "SVC"), charged(0, "PACK"), charged(1, "PACK")],
+            [10_000, 2_000, 2_000]
         );
     }
 

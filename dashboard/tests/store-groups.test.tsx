@@ -14,7 +14,9 @@
 //     publishing when that shop has never published it — "copy nothing to fifty shops" reaching
 //     the server would be a batch that succeeded at doing nothing;
 //   * the three nodes ADR-0122 §4 excludes are not offerable. `locale` in that picker would be an
-//     operator asking a question the server can only answer with a `400`.
+//     operator asking a question the server can only answer with a `400`;
+//   * a capability copy that turns table service on carries pay-first off with it, as the source
+//     has it, so a member that has pay-first on is not refused (ADR-0160 decision 5).
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,13 +90,16 @@ const REPORT = {
 const publishToStoreGroup = vi.fn();
 const setStoreGroupMembers = vi.fn();
 const readChannels = vi.fn();
+const capabilityCatalogue = vi.fn();
+const effectiveConfig = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
     listStoreGroups: () => Promise.resolve([GROUP]),
     listStores: () => Promise.resolve(STORES),
     listMenus: () => Promise.resolve([MENU]),
-    capabilityCatalogue: () => Promise.resolve({ flags: [], presets: [], rules: [] }),
+    capabilityCatalogue: () => capabilityCatalogue(),
+    effectiveConfig: (...args: unknown[]) => effectiveConfig(...args),
     listStoreGroupBatches: () => Promise.resolve([REPORT]),
     publishToStoreGroup: (...args: unknown[]) => publishToStoreGroup(...args),
     setStoreGroupMembers: (...args: unknown[]) => setStoreGroupMembers(...args),
@@ -122,6 +127,7 @@ describe("publishing to a store group", () => {
     localStorage.clear();
     vi.clearAllMocks();
     publishToStoreGroup.mockResolvedValue(REPORT);
+    capabilityCatalogue.mockResolvedValue({ flags: [], presets: [], rules: [] });
     selectTenant(TENANT.tenant_id, TENANT.name);
   });
   afterEach(cleanup);
@@ -185,6 +191,37 @@ describe("publishing to a store group", () => {
     // The point of doing the read first: nothing reached the fan-out, so no shop was written to
     // with an empty document.
     expect(publishToStoreGroup).not.toHaveBeenCalled();
+  });
+
+  it("carries pay-first off with a capability copy that turns table service on", async () => {
+    capabilityCatalogue.mockResolvedValue({
+      flags: [
+        { key: "tables_enabled", default_on: true, description: "Tables", offered: true },
+        { key: "pay_first_enabled", default_on: false, description: "Pay first", offered: false },
+        { key: "tips_enabled", default_on: true, description: "Tips", offered: true },
+      ],
+      presets: [],
+      rules: [],
+    });
+    const copy = async (source: Record<string, boolean>) => {
+      effectiveConfig.mockResolvedValue(source);
+      publishToStoreGroup.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: messages["storeGroups.publish"]! }));
+      await waitFor(() => expect(publishToStoreGroup).toHaveBeenCalledTimes(1));
+      return publishToStoreGroup.mock.calls[0]?.[3];
+    };
+    await mount();
+    choose(messages["storeGroups.publishTo"]!, GROUP.name);
+    choose(messages["storeGroups.node"]!, messages["storeGroups.node.capabilities"]!);
+    choose(messages["storeGroups.copyFrom"]!, STORES[0]!.name);
+
+    expect(await copy({ tables_enabled: true, tips_enabled: true })).toEqual({
+      flags: { tables_enabled: true, tips_enabled: true, pay_first_enabled: false },
+    });
+    // A copy that does not turn table service on writes nothing it did not read.
+    expect(await copy({ tables_enabled: false, tips_enabled: true })).toEqual({
+      flags: { tables_enabled: false, tips_enabled: true },
+    });
   });
 
   it("saves the whole membership under the version it was read at", async () => {

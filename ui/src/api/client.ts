@@ -11,6 +11,7 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
+  BindResponse,
   ClaimStatus,
   BillResponse,
   BumpRequest,
@@ -47,16 +48,19 @@ import type {
   ReprintResponse,
   SettleRequest,
   SettledBill,
+  TakingsResponse,
   ShiftResponse,
   SplitRequest,
   SplitResponse,
   SyncResponse,
   TableResponse,
+  TerminalsResponse,
   TestPrintResponse,
   TransferResponse,
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
+  WaiveFeeRequest,
 } from "./types";
 
 export class ApiError extends Error {
@@ -145,6 +149,12 @@ async function request<T>(
       response.headers.get("pos-error-reason"),
     );
   }
+  // A `204` has nothing to read, and reading nothing as JSON throws: retiring a device, and sending
+  // or refusing a guest's order, each reported "the store did not respond" after the store had done
+  // it. Releasing a till answers `204` too.
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return (await response.json()) as T;
 }
 
@@ -162,6 +172,14 @@ export interface SessionState {
   // with a PIN. Absent from an edge too old to send it, which the sign-in screen reads as "ready",
   // because a hint that the store has no staff must never be shown on a guess.
   sign_in_ready?: boolean;
+  // How many seconds an attended till may sit untouched before it locks, from the store's
+  // `session.idle_lock_seconds` (ADR-0160); `0` never locks. Absent from an edge too old to send
+  // it, which never locks either.
+  idle_lock_seconds?: number;
+  // The float the Shift screen fills in when a shift opens, in the store currency's minor unit, from
+  // the store's `shift.opening_float_minor` (ADR-0160); `0` fills in nothing. Absent from an edge
+  // too old to send it, which fills in nothing either.
+  opening_float_minor?: number;
   // Whether the store decides with each person's own permissions (ADR-0158 decision 6). Absent or
   // false: every control works as before, whatever the two lists below say.
   permissions_enforced?: boolean;
@@ -319,12 +337,20 @@ export const api = {
   discountBill: (billId: string, request_: DiscountRequest) =>
     request<DiscountResponse>("POST", `/api/bills/${billId}/discount`, request_),
 
+  // One fee off one bill (ADR-0159 decision 5). The answer is the bill as it now stands, as the
+  // discount's is, so the screen never takes the fee off itself and misses its tax.
+  waiveFee: (billId: string, feeId: string, request_: WaiveFeeRequest) =>
+    request<CheckResponse>("POST", `/api/bills/${billId}/fees/${feeId}/waive`, request_),
+
   // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
-  // The counter starts its own order (ADR-0146): a tableless takeaway order and its queue number.
-  openOrder: () => request<OpenedOrder>("POST", "/api/orders", {}),
+  // The counter starts its own order (ADR-0146): a tableless order and its queue number, on
+  // `channel` where the cashier asked the guest, and on the store's walk-in channel without one
+  // (ADR-0160 decision 2).
+  openOrder: (channel?: string) =>
+    request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
   addOrderLine: (orderId: string, line: OrderLineRequest) =>
     request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 
@@ -352,6 +378,9 @@ export const api = {
   // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
   // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
   settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),
+  // What the store has taken today (ADR-0160): `403` unless the person's own role grants
+  // `reports.takings.view`, whether or not the store enforces each person's own set.
+  takings: () => request<TakingsResponse>("GET", "/api/reports/takings"),
   reprintReceipt: (billId: string) =>
     request<ReprintResponse>("POST", `/api/bills/${billId}/receipt/reprint`),
 
@@ -388,6 +417,18 @@ export const api = {
   printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
   testPrinter: (deviceId: string) =>
     request<TestPrintResponse>("POST", `/api/printers/${deviceId}/test`),
+  // The store's tills, and which of them this device, another device or none is (ADR-0112): what
+  // the Devices screen's *This device* card shows. `403` unless the signed-in person's own role
+  // grants `admin.device.manage`, whether or not the store enforces each person's own set.
+  terminals: () => request<TerminalsResponse>("GET", "/api/print/agent"),
+  // Makes this device that till, exclusively. `200` for each of the three outcomes, which are
+  // answers about the store rather than faults in the request, so the screen says which.
+  bindTerminal: (agentDeviceId: string) =>
+    request<BindResponse>("POST", "/api/print/agent", { agent_device_id: agentDeviceId }),
+  // Stops this device being that till: `204` whether or not it was, so a release never says what
+  // another device holds.
+  releaseTerminal: (agentDeviceId: string) =>
+    request<void>("POST", "/api/print/agent/revoke", { agent_device_id: agentDeviceId }),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>

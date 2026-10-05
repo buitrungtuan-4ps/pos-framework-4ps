@@ -80,6 +80,19 @@ impl core::fmt::Debug for PublishedStaffMember {
 }
 
 /// The `permissions` node: one store's staff.
+///
+/// Two layers write it, and the merge puts them together: the people compiler writes [`Self::staff`]
+/// on the store's Store layer, and the settings compile writes [`Self::enforced`] on its Tenant
+/// layer ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+///
+/// # A node without a `staff` key
+///
+/// A node with no `staff` key at all is the switch alone: a store the people publish has not
+/// reached, or one whose people node a rollback took away. The edge sets [`Self::enforced`] from it
+/// and keeps the roster it holds, because an absent list says nothing about who works there. A
+/// `staff` list that is present, even empty, is the roster, and replaces the one held. Both read the
+/// same through this type, whose `staff` defaults to empty, so the edge asks the raw node whether the
+/// key is there. An edge from before 0.14.1 does not ask, and replaces the roster with an empty one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishedPermissions {
     /// The store the node authorises staff for, a ULID string. The edge does not read it; it is
@@ -91,14 +104,16 @@ pub struct PublishedPermissions {
     /// decision 1 and Rollout).
     ///
     /// `false`, which a node without the field reads as, keeps the store-wide set: every
-    /// permission granted, and a PIN-flagged one asking for a holder's PIN, as before. It is a
-    /// setting (`docs/configuration.md`), resolved by the cloud and written beside the staff the
-    /// people compiler publishes, and a temporary one: once every store runs with it on, a later
-    /// change removes it. Skipped from the wire when `false`, so a node written before it existed
-    /// is byte-identical.
+    /// permission granted, and a PIN-flagged one asking for a holder's PIN, as before. It is the
+    /// setting `permissions.enforced` (`docs/configuration.md`), resolved by the cloud and written
+    /// on the store's Tenant layer, beside the staff the people compiler publishes, and a temporary
+    /// one: once every store runs with it on, a later change removes it. Skipped from the wire when
+    /// `false`, so a node written before it existed is byte-identical.
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub enforced: bool,
-    /// The store's staff, sorted by code so two compiles of the same state are byte-identical.
+    /// The store's staff, sorted by code so two compiles of the same state are byte-identical. A
+    /// node with no `staff` key reads as empty here and keeps the edge's roster: see the type's
+    /// documentation.
     #[serde(default)]
     pub staff: Vec<PublishedStaffMember>,
 }

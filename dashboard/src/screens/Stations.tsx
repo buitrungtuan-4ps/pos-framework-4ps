@@ -1,6 +1,7 @@
 // Kitchen stations & routing (ADR-0072, Track M2), on the F2 CRUD kit. The operator's place to define
-// a store's kitchen stations — each with an optional backup (printer failover) and a catch-all default
-// flag — and the rules that route a fired line to a station by item. All by name, no ULID typed.
+// a store's kitchen stations — each with an optional backup (printer failover), a catch-all default
+// flag, when its tickets are late and the language its paper tickets print in (ADR-0160 decision 2) —
+// and the rules that route a fired line to a station by item. All by name, no ULID typed.
 // Stations and routing are per-store, so this screen needs a store chosen in the top bar; items come
 // from the tenant's catalog. None of this is PII.
 //
@@ -13,7 +14,7 @@ import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { RoutingRule, Station } from "../api/types";
-import { t } from "../i18n";
+import { t, tFromServer } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
 import { describePublish } from "../lib/publish-copy";
@@ -42,6 +43,36 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+
+/**
+ * The seconds a station's "Late after" field asks for: `null` for an empty field, which leaves the
+ * station on the store's ten minutes, or a whole number of minutes from 1 to 60 as seconds. Anything
+ * else is `undefined`, a value the form refuses rather than sends (ADR-0160 decision 2).
+ */
+export function lateAfterSecondsFrom(minutes: string): number | null | undefined {
+  const text = minutes.trim();
+  if (text === "") {
+    return null;
+  }
+  const whole = Number(text);
+  return Number.isInteger(whole) && whole >= 1 && whole <= 60 ? whole * 60 : undefined;
+}
+
+/** The language a station that sets none prints its tickets in, and the choice that stands for it. */
+const DISPLAY_LANGUAGE = "RECEIPT_LANGUAGE_DISPLAY";
+
+/** The four languages a station's tickets can print in: the receipt language's own choices. */
+const ticketLanguages = () => [
+  { value: DISPLAY_LANGUAGE, label: t("settings.value.RECEIPT_LANGUAGE_DISPLAY") },
+  { value: "RECEIPT_LANGUAGE_COUNTRY", label: t("settings.value.RECEIPT_LANGUAGE_COUNTRY") },
+  { value: "RECEIPT_LANGUAGE_VI", label: t("settings.value.RECEIPT_LANGUAGE_VI") },
+  { value: "RECEIPT_LANGUAGE_EN", label: t("settings.value.RECEIPT_LANGUAGE_EN") },
+];
+
+/** A station's ticket language in words, the token itself for one a newer cloud knows and this
+ *  console does not. */
+const ticketLanguageName = (token: string | null) =>
+  tFromServer(`settings.value.${token ?? DISPLAY_LANGUAGE}`, token ?? DISPLAY_LANGUAGE);
 
 export function Stations() {
   // The three reads in one state: stations, the rules that name them, and the items the rules point
@@ -83,6 +114,10 @@ export function Stations() {
   const [stationName, setStationName] = createSignal("");
   const [stationBackup, setStationBackup] = createSignal("");
   const [stationDefault, setStationDefault] = createSignal(false);
+  // Minutes as the operator types them; seconds are what the station stores.
+  const [stationLateAfter, setStationLateAfter] = createSignal("");
+  // The display language stands for a station that sets none, and is saved as none.
+  const [stationLanguage, setStationLanguage] = createSignal(DISPLAY_LANGUAGE);
   const [pendingStationArchive, setPendingStationArchive] = createSignal<Station | null>(null);
 
   // New routing rule (station + item + sort) and the pending remove.
@@ -119,6 +154,8 @@ export function Stations() {
     setStationName("");
     setStationBackup("");
     setStationDefault(false);
+    setStationLateAfter("");
+    setStationLanguage(DISPLAY_LANGUAGE);
     setStationOpen(true);
   };
   const openEditStation = (station: Station) => {
@@ -127,6 +164,10 @@ export function Stations() {
     setStationName(station.name);
     setStationBackup(station.backup_station_id ?? "");
     setStationDefault(station.is_default);
+    setStationLateAfter(
+      station.late_after_seconds === null ? "" : String(station.late_after_seconds / 60),
+    );
+    setStationLanguage(station.ticket_language ?? DISPLAY_LANGUAGE);
     setStationOpen(true);
   };
 
@@ -136,6 +177,12 @@ export function Stations() {
       setError(t("stations.nameRequired"));
       return;
     }
+    const lateAfterSeconds = lateAfterSecondsFrom(stationLateAfter());
+    if (lateAfterSeconds === undefined) {
+      setError(t("stations.lateAfterInvalid"));
+      return;
+    }
+    const ticketLanguage = stationLanguage() === DISPLAY_LANGUAGE ? null : stationLanguage();
     setError("");
     setBusy(true);
     try {
@@ -147,6 +194,8 @@ export function Stations() {
             name,
             backupStationId: stationBackup() || null,
             isDefault: stationDefault(),
+            lateAfterSeconds,
+            ticketLanguage,
             status: "active",
           },
           stationDraftEtag(),
@@ -157,6 +206,8 @@ export function Stations() {
           name,
           backupStationId: stationBackup() || null,
           isDefault: stationDefault(),
+          lateAfterSeconds,
+          ticketLanguage,
         });
         toast.ok(t("stations.stationCreated"));
       }
@@ -184,6 +235,8 @@ export function Stations() {
           name: station.name,
           backupStationId: station.backup_station_id,
           isDefault: station.is_default,
+          lateAfterSeconds: station.late_after_seconds,
+          ticketLanguage: station.ticket_language,
           status,
         },
         station.etag,
@@ -288,6 +341,22 @@ export function Stations() {
           {row.backup_station_id ? stationName_(row.backup_station_id) : t("stations.noBackup")}
         </span>
       ),
+    },
+    {
+      key: "lateAfter",
+      header: t("stations.lateAfterColumn"),
+      cell: (row) => (
+        <span class="text-ink-muted">
+          {row.late_after_seconds === null
+            ? t("stations.lateAfterDefault")
+            : t("stations.lateAfterMinutes", { count: row.late_after_seconds / 60 })}
+        </span>
+      ),
+    },
+    {
+      key: "ticketLanguage",
+      header: t("stations.ticketLanguage"),
+      cell: (row) => <span class="text-ink-muted">{ticketLanguageName(row.ticket_language)}</span>,
     },
     {
       key: "default",
@@ -529,6 +598,20 @@ export function Stations() {
                 .map((station) => ({ value: station.station_id, label: station.name }))}
               onChange={setStationBackup}
               placeholder={t("stations.noBackup")}
+            />
+            <TextField
+              label={t("stations.lateAfter")}
+              type="number"
+              value={stationLateAfter()}
+              onInput={setStationLateAfter}
+              hint={t("stations.lateAfterHint")}
+            />
+            <SelectField
+              label={t("stations.ticketLanguage")}
+              value={stationLanguage()}
+              options={ticketLanguages()}
+              onChange={setStationLanguage}
+              hint={t("stations.ticketLanguageHint")}
             />
             <CheckboxField
               label={t("stations.default")}

@@ -5,6 +5,7 @@ import { ApiError, api } from "../api/client";
 import { CodePad } from "../components/CodePad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { signedInAs } from "../state/session";
 import { loadStore } from "../state/store";
 import { errorMessage } from "../lib/errors";
 
@@ -60,9 +61,12 @@ export function SignIn() {
     // what the operator types next must not be thrown away by this attempt's refusal — see the
     // clear below.
     const attempted = pin();
+    const typed = code().trim();
     try {
-      const result = await api.signIn(code().trim(), attempted);
+      const result = await api.signIn(typed, attempted);
       if (result.ok) {
+        // Kept in memory for the idle lock, which reopens with this person's PIN alone.
+        signedInAs(typed, result.employeeId);
         // The device can sell now, so read what it sells: the floor, the price book, the button plan
         // and the money settings. `App`'s boot gate loads the same set, but it runs once on page
         // load and this navigation is client-side — without this a freshly signed-in till drew the

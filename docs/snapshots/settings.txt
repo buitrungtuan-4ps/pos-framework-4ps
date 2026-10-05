@@ -4,6 +4,117 @@
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
 # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+backup.interval_hours
+backup.interval_hours	default=24
+backup.interval_hours	kind=SETTING_KIND_INT
+backup.interval_hours	max=168
+backup.interval_hours	min=1
+backup.interval_hours	scope=SETTING_SCOPE_BRAND
+backup.interval_hours	scope=SETTING_SCOPE_STORE
+backup.interval_hours	scope=SETTING_SCOPE_STORE_GROUP
+backup.interval_hours	scope=SETTING_SCOPE_TENANT
+backup.interval_hours	since=0.14.1
+backup.interval_hours	unit=SETTING_UNIT_HOURS
+counter.walk_in_channel
+counter.walk_in_channel	default=WALK_IN_CHANNEL_TAKEAWAY
+counter.walk_in_channel	kind=SETTING_KIND_CHOICE
+counter.walk_in_channel	scope=SETTING_SCOPE_BRAND
+counter.walk_in_channel	scope=SETTING_SCOPE_STORE
+counter.walk_in_channel	scope=SETTING_SCOPE_STORE_GROUP
+counter.walk_in_channel	scope=SETTING_SCOPE_TENANT
+counter.walk_in_channel	since=0.14.1
+counter.walk_in_channel	value=WALK_IN_CHANNEL_ASK
+counter.walk_in_channel	value=WALK_IN_CHANNEL_DINE_IN
+counter.walk_in_channel	value=WALK_IN_CHANNEL_TAKEAWAY
+locale.tax_rounding
+locale.tax_rounding	default=TAX_ROUNDING_HALF_UP
+locale.tax_rounding	kind=SETTING_KIND_CHOICE
+locale.tax_rounding	scope=SETTING_SCOPE_BRAND
+locale.tax_rounding	scope=SETTING_SCOPE_STORE
+locale.tax_rounding	scope=SETTING_SCOPE_STORE_GROUP
+locale.tax_rounding	scope=SETTING_SCOPE_TENANT
+locale.tax_rounding	since=0.14.1
+locale.tax_rounding	value=TAX_ROUNDING_DOWN
+locale.tax_rounding	value=TAX_ROUNDING_HALF_UP
+permissions.enforced
+permissions.enforced	default=false
+permissions.enforced	kind=SETTING_KIND_BOOL
+permissions.enforced	preset=true
+permissions.enforced	scope=SETTING_SCOPE_BRAND
+permissions.enforced	scope=SETTING_SCOPE_STORE
+permissions.enforced	scope=SETTING_SCOPE_STORE_GROUP
+permissions.enforced	scope=SETTING_SCOPE_TENANT
+permissions.enforced	since=0.14.1
+permissions.enforced	value=false
+permissions.enforced	value=true
+printing.font_size_dots
+printing.font_size_dots	default=24
+printing.font_size_dots	kind=SETTING_KIND_INT
+printing.font_size_dots	max=48
+printing.font_size_dots	min=16
+printing.font_size_dots	scope=SETTING_SCOPE_BRAND
+printing.font_size_dots	scope=SETTING_SCOPE_STORE
+printing.font_size_dots	scope=SETTING_SCOPE_STORE_GROUP
+printing.font_size_dots	scope=SETTING_SCOPE_TENANT
+printing.font_size_dots	since=0.14.1
+printing.font_size_dots	unit=SETTING_UNIT_COUNT
+printing.receipt_language
+printing.receipt_language	default=RECEIPT_LANGUAGE_DISPLAY
+printing.receipt_language	kind=SETTING_KIND_CHOICE
+printing.receipt_language	preset=RECEIPT_LANGUAGE_COUNTRY
+printing.receipt_language	scope=SETTING_SCOPE_BRAND
+printing.receipt_language	scope=SETTING_SCOPE_STORE
+printing.receipt_language	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_language	scope=SETTING_SCOPE_TENANT
+printing.receipt_language	since=0.14.1
+printing.receipt_language	value=RECEIPT_LANGUAGE_COUNTRY
+printing.receipt_language	value=RECEIPT_LANGUAGE_DISPLAY
+printing.receipt_language	value=RECEIPT_LANGUAGE_EN
+printing.receipt_language	value=RECEIPT_LANGUAGE_VI
+printing.receipt_printed_on_settle
+printing.receipt_printed_on_settle	default=true
+printing.receipt_printed_on_settle	kind=SETTING_KIND_BOOL
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_BRAND
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_STORE
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_TENANT
+printing.receipt_printed_on_settle	since=0.14.1
+printing.receipt_printed_on_settle	value=false
+printing.receipt_printed_on_settle	value=true
+printing.receipt_second_language
+printing.receipt_second_language	default=RECEIPT_SECOND_LANGUAGE_NONE
+printing.receipt_second_language	kind=SETTING_KIND_CHOICE
+printing.receipt_second_language	scope=SETTING_SCOPE_BRAND
+printing.receipt_second_language	scope=SETTING_SCOPE_STORE
+printing.receipt_second_language	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_second_language	scope=SETTING_SCOPE_TENANT
+printing.receipt_second_language	since=0.14.1
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_EN
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_NONE
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_VI
+qr.table_order
+qr.table_order	default=TABLE_ORDER_SEPARATE
+qr.table_order	kind=SETTING_KIND_CHOICE
+qr.table_order	preset=TABLE_ORDER_JOIN
+qr.table_order	scope=SETTING_SCOPE_BRAND
+qr.table_order	scope=SETTING_SCOPE_STORE
+qr.table_order	scope=SETTING_SCOPE_STORE_GROUP
+qr.table_order	scope=SETTING_SCOPE_TENANT
+qr.table_order	since=0.14.1
+qr.table_order	value=TABLE_ORDER_JOIN
+qr.table_order	value=TABLE_ORDER_SEPARATE
+session.idle_lock_seconds
+session.idle_lock_seconds	default=0
+session.idle_lock_seconds	kind=SETTING_KIND_INT
+session.idle_lock_seconds	max=3600
+session.idle_lock_seconds	min=0
+session.idle_lock_seconds	preset=120
+session.idle_lock_seconds	scope=SETTING_SCOPE_BRAND
+session.idle_lock_seconds	scope=SETTING_SCOPE_STORE
+session.idle_lock_seconds	scope=SETTING_SCOPE_STORE_GROUP
+session.idle_lock_seconds	scope=SETTING_SCOPE_TENANT
+session.idle_lock_seconds	since=0.14.1
+session.idle_lock_seconds	unit=SETTING_UNIT_SECONDS
 session.lockout_attempts
 session.lockout_attempts	default=5
 session.lockout_attempts	kind=SETTING_KIND_INT
@@ -26,6 +137,14 @@ session.lockout_minutes	scope=SETTING_SCOPE_STORE_GROUP
 session.lockout_minutes	scope=SETTING_SCOPE_TENANT
 session.lockout_minutes	since=0.14.1
 session.lockout_minutes	unit=SETTING_UNIT_MINUTES
+session.pin_min_length
+session.pin_min_length	default=4
+session.pin_min_length	kind=SETTING_KIND_INT
+session.pin_min_length	max=8
+session.pin_min_length	min=4
+session.pin_min_length	scope=SETTING_SCOPE_TENANT
+session.pin_min_length	since=0.0.0
+session.pin_min_length	unit=SETTING_UNIT_COUNT
 session.sign_in_idle_timeout_minutes
 session.sign_in_idle_timeout_minutes	default=30
 session.sign_in_idle_timeout_minutes	kind=SETTING_KIND_INT
@@ -37,6 +156,16 @@ session.sign_in_idle_timeout_minutes	scope=SETTING_SCOPE_STORE_GROUP
 session.sign_in_idle_timeout_minutes	scope=SETTING_SCOPE_TENANT
 session.sign_in_idle_timeout_minutes	since=0.14.1
 session.sign_in_idle_timeout_minutes	unit=SETTING_UNIT_MINUTES
+shift.blind_close
+shift.blind_close	default=true
+shift.blind_close	kind=SETTING_KIND_BOOL
+shift.blind_close	scope=SETTING_SCOPE_BRAND
+shift.blind_close	scope=SETTING_SCOPE_STORE
+shift.blind_close	scope=SETTING_SCOPE_STORE_GROUP
+shift.blind_close	scope=SETTING_SCOPE_TENANT
+shift.blind_close	since=0.14.1
+shift.blind_close	value=false
+shift.blind_close	value=true
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE
@@ -48,3 +177,58 @@ shift.no_shift_selling	scope=SETTING_SCOPE_TENANT
 shift.no_shift_selling	since=0.14.1
 shift.no_shift_selling	value=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	value=NO_SHIFT_SELLING_REFUSE
+shift.opening_float_minor
+shift.opening_float_minor	default=0
+shift.opening_float_minor	kind=SETTING_KIND_INT
+shift.opening_float_minor	max=1000000000
+shift.opening_float_minor	min=0
+shift.opening_float_minor	scope=SETTING_SCOPE_BRAND
+shift.opening_float_minor	scope=SETTING_SCOPE_STORE
+shift.opening_float_minor	scope=SETTING_SCOPE_STORE_GROUP
+shift.opening_float_minor	scope=SETTING_SCOPE_TENANT
+shift.opening_float_minor	since=0.14.1
+shift.opening_float_minor	unit=SETTING_UNIT_MINOR_UNITS
+tender_keys.first_tip_percent
+tender_keys.first_tip_percent	default=5
+tender_keys.first_tip_percent	kind=SETTING_KIND_INT
+tender_keys.first_tip_percent	max=100
+tender_keys.first_tip_percent	min=0
+tender_keys.first_tip_percent	scope=SETTING_SCOPE_BRAND
+tender_keys.first_tip_percent	scope=SETTING_SCOPE_STORE
+tender_keys.first_tip_percent	scope=SETTING_SCOPE_STORE_GROUP
+tender_keys.first_tip_percent	scope=SETTING_SCOPE_TENANT
+tender_keys.first_tip_percent	since=0.14.1
+tender_keys.first_tip_percent	unit=SETTING_UNIT_PERCENT
+tender_keys.second_tip_percent
+tender_keys.second_tip_percent	default=10
+tender_keys.second_tip_percent	kind=SETTING_KIND_INT
+tender_keys.second_tip_percent	max=100
+tender_keys.second_tip_percent	min=0
+tender_keys.second_tip_percent	scope=SETTING_SCOPE_BRAND
+tender_keys.second_tip_percent	scope=SETTING_SCOPE_STORE
+tender_keys.second_tip_percent	scope=SETTING_SCOPE_STORE_GROUP
+tender_keys.second_tip_percent	scope=SETTING_SCOPE_TENANT
+tender_keys.second_tip_percent	since=0.14.1
+tender_keys.second_tip_percent	unit=SETTING_UNIT_PERCENT
+tender_keys.split_ways_max
+tender_keys.split_ways_max	default=6
+tender_keys.split_ways_max	kind=SETTING_KIND_INT
+tender_keys.split_ways_max	max=12
+tender_keys.split_ways_max	min=2
+tender_keys.split_ways_max	scope=SETTING_SCOPE_BRAND
+tender_keys.split_ways_max	scope=SETTING_SCOPE_STORE
+tender_keys.split_ways_max	scope=SETTING_SCOPE_STORE_GROUP
+tender_keys.split_ways_max	scope=SETTING_SCOPE_TENANT
+tender_keys.split_ways_max	since=0.14.1
+tender_keys.split_ways_max	unit=SETTING_UNIT_COUNT
+tender_keys.third_tip_percent
+tender_keys.third_tip_percent	default=15
+tender_keys.third_tip_percent	kind=SETTING_KIND_INT
+tender_keys.third_tip_percent	max=100
+tender_keys.third_tip_percent	min=0
+tender_keys.third_tip_percent	scope=SETTING_SCOPE_BRAND
+tender_keys.third_tip_percent	scope=SETTING_SCOPE_STORE
+tender_keys.third_tip_percent	scope=SETTING_SCOPE_STORE_GROUP
+tender_keys.third_tip_percent	scope=SETTING_SCOPE_TENANT
+tender_keys.third_tip_percent	since=0.14.1
+tender_keys.third_tip_percent	unit=SETTING_UNIT_PERCENT

@@ -19,7 +19,9 @@ use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
 
-use crate::store::{RowUpdate, pool_unavailable, unavailable, window_total};
+use crate::store::{
+    RowUpdate, already_exists_or_unavailable, pool_unavailable, unavailable, window_total,
+};
 
 /// An employee as listed — identity, code, status, and whether a PIN is set. Never the PIN hash.
 #[derive(Clone, Debug)]
@@ -367,8 +369,9 @@ fn employee_row(row: &tokio_postgres::Row) -> EmployeeRow {
     }
 }
 
-/// A role template as listed — identity, name, its permission-id set (as the JSON text stored in the
-/// `jsonb` column), and status ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// A role template as listed — identity, name, its two permission-id sets (each as the JSON text
+/// stored in its `jsonb` column), and status
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 #[derive(Clone, Debug)]
 pub struct RoleTemplateRow {
     /// The role-template id (a ULID string).
@@ -377,8 +380,14 @@ pub struct RoleTemplateRow {
     pub tenant_id: String,
     /// The role name, unique within the tenant.
     pub name: String,
-    /// The granted permission ids, as the JSON array text stored in the `jsonb` column.
+    /// The permission ids the role grants directly, as the JSON array text stored in the `jsonb`
+    /// column.
     pub permissions_json: String,
+    /// The permission ids the role grants only with another person's approval, as the JSON array
+    /// text stored in the `jsonb` column — never one also in [`Self::permissions_json`]
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4, migration 0074).
+    pub permissions_with_approval_json: String,
     /// `active` or `archived`.
     pub status: String,
     /// How much this role may discount without a manager, in the currency's minor unit, or `None`
@@ -392,9 +401,9 @@ pub struct RoleTemplateRow {
     pub version: String,
 }
 
-/// The role-template columns a read returns; `permissions` is read as its `jsonb` text.
-const ROLE_TEMPLATE_COLUMNS: &str =
-    "id, tenant_id, name, permissions::text, status, discount_ceiling_minor, xmin::text";
+/// The role-template columns a read returns; both permission lists are read as their `jsonb` text.
+const ROLE_TEMPLATE_COLUMNS: &str = "id, tenant_id, name, permissions::text, \
+     permissions_with_approval::text, status, discount_ceiling_minor, xmin::text";
 
 /// An assignment as listed — identity plus the three ids it binds.
 #[derive(Clone, Debug)]
@@ -405,9 +414,14 @@ pub struct AssignmentRow {
     pub tenant_id: String,
     /// The assigned employee.
     pub employee_id: String,
-    /// The store.
-    pub store_id: String,
-    /// The role that store grants.
+    /// What the assignment reaches: `STORE`, a row of `employee_store_assignments`, or `STORE_GROUP`
+    /// or `TENANT`, a row of `employee_scope_assignments` (migration 0077).
+    pub scope_kind: String,
+    /// The store, for a `STORE` row; `None` otherwise.
+    pub store_id: Option<String>,
+    /// The group, for a `STORE_GROUP` row; `None` otherwise.
+    pub store_group_id: Option<String>,
+    /// The role it grants wherever it reaches.
     pub role_template_id: String,
     /// The assigned person's name, resolved by the join. `None` only if no employee row matches.
     pub employee_name: Option<String>,
@@ -416,12 +430,20 @@ pub struct AssignmentRow {
 }
 
 /// The assignment columns a read returns, qualified for [`ASSIGNMENT_JOIN`] and in
-/// [`assignment_row`]'s order. `created_at` is qualified at every call site for the same reason the
-/// ids are: both joined tables carry a column of that name.
-const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.store_id, a.role_template_id, \
-     e.name, e.code";
+/// [`assignment_row`]'s order. `create_time` is qualified at every call site like the ids, so each
+/// read says which row it orders by: the joined employee row carries a timestamp of its own.
+const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.scope_kind, a.store_id, \
+     a.store_group_id, a.role_template_id, e.name, e.code";
 
-/// The `FROM` every assignment read uses: the grants, with the assigned person joined in.
+/// The `FROM` every assignment read uses: the grants of every scope, with the assigned person
+/// joined in.
+///
+/// **Both tables, as one.** A one-store grant is a row of `employee_store_assignments` (0024) and a
+/// wider one a row of `employee_scope_assignments` (0077,
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
+/// The `UNION ALL` gives every read the same columns from either, with `scope_kind` saying which, so
+/// a filter on `a.tenant_id` or `a.employee_id` reaches both tables in one statement. An id names one
+/// row in one table: both are ULIDs minted per assignment.
 ///
 /// Resolving the name here rather than in the caller is what lets the console show who an assignment
 /// belongs to without reading the tenant's whole roster to look the id up — the read that stops
@@ -430,9 +452,9 @@ const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.store_id, 
 /// rows and the join is on the employees' primary key, so this costs an index lookup per row and no
 /// second query.
 ///
-/// **`LEFT`, not `INNER`.** `employee_store_assignments` declares no foreign key to `employees`
-/// (migration 0024 has none, and nothing since adds one), so nothing in the schema stops an
-/// assignment outliving the row it points at. An inner join would drop such a row from the list —
+/// **`LEFT`, not `INNER`.** Neither assignment table declares a foreign key to `employees`
+/// (migrations 0024 and 0077 have none, and nothing since adds one), so nothing in the schema stops
+/// an assignment outliving the row it points at. An inner join would drop such a row from the list —
 /// turning a data problem into an invisible one, and quietly removing a grant the operator can still
 /// see the effects of. A left join surfaces it with no name, which the console renders as the raw id,
 /// exactly what it did before this read resolved anything.
@@ -444,12 +466,18 @@ const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.store_id, 
 /// read the roster itself, and the console screen already displayed the name — by fetching the whole
 /// roster to find it. Nothing new is exposed, to nobody new, and `pin_phc` is not selected here any
 /// more than it is anywhere else.
-const ASSIGNMENT_JOIN: &str = "employee_store_assignments a \
+const ASSIGNMENT_JOIN: &str = "(SELECT id, tenant_id, employee_id, 'STORE' AS scope_kind, store_id, \
+         NULL::text AS store_group_id, role_template_id, created_at AS create_time \
+       FROM employee_store_assignments \
+     UNION ALL \
+     SELECT assignment_id, tenant_id, employee_id, scope_kind, NULL::text, store_group_id, \
+         role_template_id, create_time \
+       FROM employee_scope_assignments) a \
      LEFT JOIN employees e ON e.id = a.employee_id AND e.tenant_id = a.tenant_id";
 
 impl PostgresPeople {
-    /// Inserts a role template, its permission set given as JSON array text cast into the `jsonb`
-    /// column.
+    /// Inserts a role template, each of its permission sets given as JSON array text cast into its
+    /// `jsonb` column.
     ///
     /// # Errors
     ///
@@ -461,15 +489,24 @@ impl PostgresPeople {
         tenant_id: &str,
         name: &str,
         permissions_json: &str,
+        permissions_with_approval_json: &str,
         discount_ceiling_minor: Option<i64>,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_one(
-                "INSERT INTO role_templates (id, tenant_id, name, permissions, discount_ceiling_minor) \
-                 VALUES ($1, $2, $3, $4::text::jsonb, $5) \
+                "INSERT INTO role_templates (id, tenant_id, name, permissions, \
+                     permissions_with_approval, discount_ceiling_minor) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5::text::jsonb, $6) \
                  RETURNING xmin::text",
-                &[&id, &tenant_id, &name, &permissions_json, &discount_ceiling_minor],
+                &[
+                    &id,
+                    &tenant_id,
+                    &name,
+                    &permissions_json,
+                    &permissions_with_approval_json,
+                    &discount_ceiling_minor,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -523,17 +560,24 @@ impl PostgresPeople {
         Ok(row.as_ref().map(role_template_row))
     }
 
-    /// Updates a role template's name, permission set, and status. Applies only if the row is still at `expected`.
+    /// Updates a role template's name, both permission sets, ceiling and status. Applies only if
+    /// the row is still at `expected`.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a role row is a flat record of primitive columns plus the version it is written \
+                  at; a params struct would only re-list them"
+    )]
     pub async fn set_role_template(
         &self,
         tenant_id: &str,
         id: &str,
         name: &str,
         permissions_json: &str,
+        permissions_with_approval_json: &str,
         status: &str,
         discount_ceiling_minor: Option<i64>,
         expected: &str,
@@ -542,15 +586,17 @@ impl PostgresPeople {
         let updated = connection
             .query_opt(
                 "UPDATE role_templates \
-                 SET name = $3, permissions = $4::text::jsonb, status = $5, \
-                     discount_ceiling_minor = $6, updated_at = now() \
+                 SET name = $3, permissions = $4::text::jsonb, \
+                     permissions_with_approval = $5::text::jsonb, status = $6, \
+                     discount_ceiling_minor = $7, updated_at = now() \
                  WHERE tenant_id = $1 AND id = $2 \
-                 AND xmin::text = $7 RETURNING xmin::text",
+                 AND xmin::text = $8 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &id,
                     &name,
                     &permissions_json,
+                    &permissions_with_approval_json,
                     &status,
                     &discount_ceiling_minor,
                     &expected,
@@ -579,8 +625,9 @@ impl PostgresPeople {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails (including the
-    /// same employee already assigned to that store).
+    /// [`PortError::already_exists`] if the employee is already assigned to that store (the
+    /// `employee_store_assignments_unique` index), and [`PortError::unavailable`] if the database
+    /// cannot be reached or the insert fails otherwise.
     pub async fn insert_assignment(
         &self,
         id: &str,
@@ -598,11 +645,66 @@ impl PostgresPeople {
                 &[&id, &tenant_id, &employee_id, &store_id, &role_template_id],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                already_exists_or_unavailable(
+                    error,
+                    "the employee is already assigned to that store",
+                )
+            })?;
         Ok(())
     }
 
-    /// Lists the assignments at a store, newest first.
+    /// Inserts an assignment that reaches a store group (`scope_kind` `STORE_GROUP`, with
+    /// `store_group_id`) or every store of the tenant (`TENANT`, with none)
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 3).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::already_exists`] if the employee is already assigned to that group, or already
+    /// tenant-wide (the two partial unique indexes, one per scope), and [`PortError::unavailable`] if
+    /// the database cannot be reached or the insert fails otherwise.
+    pub async fn insert_scope_assignment(
+        &self,
+        id: &str,
+        tenant_id: &str,
+        employee_id: &str,
+        scope_kind: &str,
+        store_group_id: Option<&str>,
+        role_template_id: &str,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO employee_scope_assignments \
+                 (assignment_id, tenant_id, employee_id, scope_kind, store_group_id, role_template_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    &id,
+                    &tenant_id,
+                    &employee_id,
+                    &scope_kind,
+                    &store_group_id,
+                    &role_template_id,
+                ],
+            )
+            .await
+            .map_err(|error| {
+                let duplicate = if scope_kind == "TENANT" {
+                    "the employee is already assigned to every store"
+                } else {
+                    "the employee is already assigned to that store group"
+                };
+                already_exists_or_unavailable(error, duplicate)
+            })?;
+        Ok(())
+    }
+
+    /// Lists every assignment that reaches a store, newest first: the store's own, those naming a
+    /// group the store is a member of, and the tenant-wide ones.
+    ///
+    /// The group membership is read in the same statement, so a store added to a group is reached
+    /// by the group's assignments from the next read on.
     ///
     /// # Errors
     ///
@@ -617,7 +719,11 @@ impl PostgresPeople {
             .query(
                 &format!(
                     "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
-                     WHERE a.tenant_id = $1 AND a.store_id = $2 ORDER BY a.created_at DESC"
+                     WHERE a.tenant_id = $1 AND (a.store_id = $2 OR a.scope_kind = 'TENANT' \
+                       OR (a.scope_kind = 'STORE_GROUP' AND a.store_group_id IN \
+                         (SELECT m.group_id FROM store_group_members m \
+                           WHERE m.tenant_id = $1 AND m.store_id = $2))) \
+                     ORDER BY a.create_time DESC"
                 ),
                 &[&tenant_id, &store_id],
             )
@@ -626,7 +732,57 @@ impl PostgresPeople {
         Ok(rows.iter().map(assignment_row).collect())
     }
 
-    /// Lists the stores a person is assigned to, newest first.
+    /// Lists the assignments that name a store group, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_assignments_for_group(
+        &self,
+        tenant_id: &str,
+        store_group_id: &str,
+    ) -> Result<Vec<AssignmentRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.scope_kind = 'STORE_GROUP' \
+                       AND a.store_group_id = $2 \
+                     ORDER BY a.create_time DESC"
+                ),
+                &[&tenant_id, &store_group_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(assignment_row).collect())
+    }
+
+    /// Lists the tenant-wide assignments, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_tenant_wide_assignments(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<AssignmentRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.scope_kind = 'TENANT' \
+                     ORDER BY a.create_time DESC"
+                ),
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(assignment_row).collect())
+    }
+
+    /// Lists a person's assignments of every scope, newest first.
     ///
     /// # Errors
     ///
@@ -641,7 +797,7 @@ impl PostgresPeople {
             .query(
                 &format!(
                     "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
-                     WHERE a.tenant_id = $1 AND a.employee_id = $2 ORDER BY a.created_at DESC"
+                     WHERE a.tenant_id = $1 AND a.employee_id = $2 ORDER BY a.create_time DESC"
                 ),
                 &[&tenant_id, &employee_id],
             )
@@ -650,8 +806,8 @@ impl PostgresPeople {
         Ok(rows.iter().map(assignment_row).collect())
     }
 
-    /// Lists the assignments that grant a role, at every store, newest first — the stores archiving
-    /// the role must tell at once
+    /// Lists the assignments that grant a role, of every scope, newest first — what reaches the
+    /// stores archiving the role must tell at once
     /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 7).
     ///
@@ -672,7 +828,7 @@ impl PostgresPeople {
                 &format!(
                     "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
                      WHERE a.tenant_id = $1 AND a.role_template_id = $2 \
-                     ORDER BY a.created_at DESC"
+                     ORDER BY a.create_time DESC"
                 ),
                 &[&tenant_id, &role_template_id],
             )
@@ -681,7 +837,7 @@ impl PostgresPeople {
         Ok(rows.iter().map(assignment_row).collect())
     }
 
-    /// Reads one assignment within its tenant, or `None`.
+    /// Reads one assignment of any scope within its tenant, or `None`.
     ///
     /// # Errors
     ///
@@ -705,20 +861,29 @@ impl PostgresPeople {
         Ok(row.as_ref().map(assignment_row))
     }
 
-    /// Removes an assignment within its tenant. Returns whether a row was removed.
+    /// Removes an assignment of any scope within its tenant. Returns whether a row was removed.
+    ///
+    /// One statement over both tables, so the answer is the one row the id names wherever it is.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
     pub async fn delete_assignment(&self, tenant_id: &str, id: &str) -> Result<bool, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let removed = connection
-            .execute(
-                "DELETE FROM employee_store_assignments WHERE tenant_id = $1 AND id = $2",
+        let removed: i64 = connection
+            .query_one(
+                "WITH one_store AS ( \
+                   DELETE FROM employee_store_assignments WHERE tenant_id = $1 AND id = $2 \
+                   RETURNING 1), \
+                 wider AS ( \
+                   DELETE FROM employee_scope_assignments \
+                   WHERE tenant_id = $1 AND assignment_id = $2 RETURNING 1) \
+                 SELECT (SELECT count(*) FROM one_store) + (SELECT count(*) FROM wider)",
                 &[&tenant_id, &id],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(unavailable)?
+            .get(0);
         Ok(removed == 1)
     }
 }
@@ -730,9 +895,10 @@ fn role_template_row(row: &tokio_postgres::Row) -> RoleTemplateRow {
         tenant_id: row.get(1),
         name: row.get(2),
         permissions_json: row.get(3),
-        status: row.get(4),
-        discount_ceiling_minor: row.get(5),
-        version: row.get(6),
+        permissions_with_approval_json: row.get(4),
+        status: row.get(5),
+        discount_ceiling_minor: row.get(6),
+        version: row.get(7),
     }
 }
 
@@ -742,10 +908,12 @@ fn assignment_row(row: &tokio_postgres::Row) -> AssignmentRow {
         id: row.get(0),
         tenant_id: row.get(1),
         employee_id: row.get(2),
-        store_id: row.get(3),
-        role_template_id: row.get(4),
-        employee_name: row.get(5),
-        employee_code: row.get(6),
+        scope_kind: row.get(3),
+        store_id: row.get(4),
+        store_group_id: row.get(5),
+        role_template_id: row.get(6),
+        employee_name: row.get(7),
+        employee_code: row.get(8),
     }
 }
 

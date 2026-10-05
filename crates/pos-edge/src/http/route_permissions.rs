@@ -16,7 +16,12 @@
 //! no longer exists. A second list, [`NOT_ON_A_ROUTE`], names the catalogue's permissions no edge
 //! route checks yet, so every permission is either checked by a route or listed as not yet.
 //!
-//! Read routes (`GET`) are not here: they change nothing, and the signed-in gate covers them.
+//! A read route (`GET`) is here only where a permission decides who may see what it shows: the
+//! day's takings
+//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! decision 2), and which of the store's terminals this device or another holds, which the till's
+//! binding screen reads ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Every other read
+//! changes nothing, and the signed-in gate covers it.
 
 use pos_core::permission::Permission;
 
@@ -32,9 +37,17 @@ pub enum RouteGate {
     NoPerson(&'static str),
 }
 
-/// Every state-changing edge route and what it needs, keyed `METHOD /path` as
-/// `docs/snapshots/routes.txt` writes it, in that file's order.
+/// Every state-changing edge route, and every read a permission gates, and what each needs, keyed
+/// `METHOD /path` as `docs/snapshots/routes.txt` writes it, in that file's order.
 pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
+    (
+        "GET /api/print/agent",
+        RouteGate::Person(&[Permission::ManageDevices]),
+    ),
+    (
+        "GET /api/reports/takings",
+        RouteGate::Person(&[Permission::ViewTakings]),
+    ),
     (
         "POST /api/activate",
         RouteGate::NoPerson(
@@ -51,6 +64,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
             Permission::ApplyDiscount,
             Permission::OverrideDiscountCeiling,
         ]),
+    ),
+    (
+        "POST /api/bills/{id}/fees/{fee_id}/waive",
+        RouteGate::Person(&[Permission::WaiveFee]),
     ),
     (
         "POST /api/bills/{id}/merge",
@@ -273,14 +290,21 @@ mod tests {
 
     use super::{NOT_ON_A_ROUTE, ROUTE_PERMISSIONS, RouteGate};
 
-    /// Every route the edge publishes that is not a read, from the committed route snapshot.
-    fn state_changing_routes() -> BTreeSet<String> {
+    /// Every route the edge publishes, from the committed route snapshot.
+    fn published_routes() -> BTreeSet<String> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/snapshots/routes.txt");
         let text = std::fs::read_to_string(&path).expect("the route snapshot is committed");
         text.lines()
             .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
-            .filter(|line| !line.starts_with("GET "))
             .map(str::to_owned)
+            .collect()
+    }
+
+    /// Every route the edge publishes that is not a read.
+    fn state_changing_routes() -> BTreeSet<String> {
+        published_routes()
+            .into_iter()
+            .filter(|line| !line.starts_with("GET "))
             .collect()
     }
 
@@ -295,17 +319,56 @@ mod tests {
             ROUTE_PERMISSIONS.len(),
             "a route is listed once"
         );
-        let published = state_changing_routes();
-        let untabled: Vec<&String> = published.difference(&tabled).collect();
+        let untabled: Vec<String> = state_changing_routes()
+            .difference(&tabled)
+            .cloned()
+            .collect();
         assert!(
             untabled.is_empty(),
             "a state-changing route must name the permission it needs (ADR-0158) — add these to \
              ROUTE_PERMISSIONS: {untabled:?}"
         );
-        let gone: Vec<&String> = tabled.difference(&published).collect();
+        let gone: Vec<String> = tabled.difference(&published_routes()).cloned().collect();
         assert!(
             gone.is_empty(),
             "ROUTE_PERMISSIONS lists routes the edge does not publish: {gone:?}"
+        );
+    }
+
+    /// A read is in the table only because a permission gates who may see it, so it names one.
+    #[test]
+    fn a_tabled_read_is_gated_by_a_permission() {
+        for (route, gate) in ROUTE_PERMISSIONS {
+            if route.starts_with("GET ") {
+                assert!(
+                    matches!(gate, RouteGate::Person(permissions) if !permissions.is_empty()),
+                    "{route} is a read, so it is here only to name the permission that gates it"
+                );
+            }
+        }
+    }
+
+    /// Seeing which terminal a device holds takes what binding one takes: the read is the binding
+    /// screen's, and it shows what a refused claim would tell the same person.
+    #[test]
+    fn the_binding_read_needs_what_binding_needs() {
+        let gate = |route: &str| {
+            ROUTE_PERMISSIONS
+                .iter()
+                .find(|(tabled, _gate)| *tabled == route)
+                .map(|(_route, gate)| *gate)
+        };
+        let read = gate("GET /api/print/agent");
+        assert_eq!(read, Some(RouteGate::Person(&[Permission::ManageDevices])));
+        assert_eq!(
+            read,
+            gate("POST /api/print/agent"),
+            "as claiming a terminal"
+        );
+        assert_eq!(
+            read,
+            gate("POST /api/print/agent/revoke"),
+            "as releasing one"
         );
     }
 

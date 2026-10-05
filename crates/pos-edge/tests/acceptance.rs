@@ -217,11 +217,13 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         // No fonts: this suite exercises the domain, and printing is an effect it does not compose.
         // A store that does load them still prints ASCII the same way (ADR-0102).
         font_directories: Vec::new(),
-        font_size_dots: 24,
+        // Not set, as on a store whose size is the console's to publish (ADR-0160 decision 6).
+        font_size_dots: None,
         // No archiving: the loop only starts behind a `cloud_url`, and this store has none. The
-        // interval is left at the default rather than zeroed, so the suite exercises the ordinary
-        // configuration and the `0` branch stays what an operator opts into (ADR-0124).
-        backup_interval_hours: 24,
+        // interval is left unset rather than zeroed, so the suite exercises the ordinary
+        // configuration and the `0` branch stays what an operator opts into (ADR-0124); the store's
+        // configuration sets it now (ADR-0160 decision 6).
+        backup_interval_hours: None,
         // Never read here: the clock probe is started by `main`, not by `compose`.
         sntp_server: String::new(),
     };
@@ -1743,6 +1745,133 @@ async fn a_walk_in_is_started_priced_and_charged_at_the_counter() {
     );
 }
 
+/// What the store's one item comes to eaten in, at 10%, and taken away, at 8%, on
+/// [`a_counter_whose_node_is`].
+const EATEN_IN: i64 = 165_000;
+const TAKEN_AWAY: i64 = 162_000;
+
+/// A store that taxes a meal eaten in at 10% and one taken away at 8%, as Japan does, so what a
+/// walk-in owes says which channel it opened on; its `counter` node is `node` (ADR-0160 decision 2).
+async fn a_counter_whose_node_is(node: Value) -> Store {
+    a_store_where(|session| {
+        let class = EdgeSession::standard_tax_class();
+        let mut session = session.with_tax_rates(
+            TaxRateTable::new()
+                .with(class, SalesChannel::DineIn, TaxRate::from_percent(10))
+                .with(class, SalesChannel::Takeaway, TaxRate::from_percent(8)),
+        );
+        session.counter = serde_json::from_value(node).expect("a counter node");
+        session
+    })
+    .await
+}
+
+/// Opens a walk-in at the counter with `body`, adds the store's one item, and answers what the
+/// counter list says the walk-in owes.
+async fn a_walk_in_owes(store: &Store, body: Value) -> Value {
+    let (status, opened) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/orders",
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let order_id = opened["order_id"].clone();
+    let (status, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{}/lines", order_id.as_str().expect("an id")),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    let listed = read(store, "/api/orders/open").await;
+    listed
+        .as_array()
+        .and_then(|orders| orders.iter().find(|order| order["order_id"] == order_id))
+        .map(|order| order["total_due"]["amount_minor"].clone())
+        .expect("the walk-in is on the counter list")
+}
+
+/// A store that sets no walk-in channel opens a walk-in for takeaway, as every counter did, and
+/// tells the till so with its price book (ADR-0160 decision 2).
+#[tokio::test]
+async fn a_walk_in_is_taken_away_where_the_store_sets_no_walk_in_channel() {
+    let store = a_counter_whose_node_is(json!({})).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, TAKEN_AWAY);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_TAKEAWAY"
+    );
+}
+
+/// A store whose walk-ins are eaten in opens them dine-in, and taxes them at the dine-in rate.
+#[tokio::test]
+async fn a_store_whose_walk_ins_are_eaten_in_opens_them_dine_in_and_taxes_them_so() {
+    let store =
+        a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" })).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, EATEN_IN);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_DINE_IN"
+    );
+    assert_eq!(
+        read(&store, "/api/orders/live").await[0]["sales_channel"],
+        "SALES_CHANNEL_DINE_IN",
+        "a till that reloads on the walk-in reads its channel"
+    );
+}
+
+/// A store that asks each guest opens a walk-in the till names no channel for as takeaway. The till
+/// names the guest's answer there, so only a till from before the setting names none, and it gets
+/// the takeaway order it always opened.
+#[tokio::test]
+async fn a_store_that_asks_opens_a_walk_in_named_no_channel_for_takeaway() {
+    let store = a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_ASK" })).await;
+    assert_eq!(a_walk_in_owes(&store, json!({})).await, TAKEN_AWAY);
+    assert_eq!(
+        read(&store, "/api/menu").await["walk_in_channel"],
+        "WALK_IN_CHANNEL_ASK"
+    );
+}
+
+/// A channel the till names wins over the store's walk-in channel, whichever way round.
+#[tokio::test]
+async fn a_channel_the_till_names_wins_over_the_stores_walk_in_channel() {
+    let eats_in =
+        a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_DINE_IN" })).await;
+    let named = json!({ "channel": "SALES_CHANNEL_TAKEAWAY" });
+    assert_eq!(a_walk_in_owes(&eats_in, named).await, TAKEN_AWAY);
+    let asks = a_counter_whose_node_is(json!({ "walk_in_channel": "WALK_IN_CHANNEL_ASK" })).await;
+    let named = json!({ "channel": "SALES_CHANNEL_DINE_IN" });
+    assert_eq!(a_walk_in_owes(&asks, named).await, EATEN_IN);
+}
+
+/// A walk-in channel nobody can read, from a newer release or not a token at all, is takeaway.
+#[tokio::test]
+async fn a_walk_in_channel_nobody_can_read_is_takeaway() {
+    for node in [
+        json!({ "walk_in_channel": "WALK_IN_CHANNEL_DRIVE_THROUGH" }),
+        json!({ "walk_in_channel": 1 }),
+    ] {
+        let store = a_counter_whose_node_is(node.clone()).await;
+        assert_eq!(
+            a_walk_in_owes(&store, json!({})).await,
+            TAKEN_AWAY,
+            "{node}"
+        );
+        assert_eq!(
+            read(&store, "/api/menu").await["walk_in_channel"],
+            "WALK_IN_CHANNEL_TAKEAWAY",
+            "{node}"
+        );
+    }
+}
+
 /// The cash shift, over the composed router: open with a float, count blind, close with the variance.
 #[tokio::test]
 async fn a_cash_shift_opens_counts_and_closes_on_the_composed_edge() {
@@ -1802,6 +1931,7 @@ async fn an_unpaired_caller_reaches_no_domain_route_on_the_composed_edge() {
         ("GET", "/api/session".to_owned()),
         ("POST", "/api/shifts".to_owned()),
         ("GET", "/api/pair/devices".to_owned()),
+        ("GET", "/api/pair/this_device".to_owned()),
     ] {
         let (status, _) = send(store.app.clone(), None, method, &uri, None).await;
         assert_eq!(
@@ -1873,6 +2003,41 @@ async fn a_store_with_tips_off_tells_the_till_not_to_ask_for_one() {
         Value::Bool(false),
         "with the capability off the till is told there is no tip to take"
     );
+}
+
+/// The till is told the store's tip keys (ADR-0160 decision 2): five, ten and fifteen percent until
+/// the store sets its own, and then its own, in order, with a key it set to `0` left out.
+#[tokio::test]
+async fn the_till_is_told_the_stores_tip_keys_in_order_without_the_ones_it_hid() {
+    let unset = read(&a_store().await, "/api/menu").await;
+    assert_eq!(unset["tip_percents"], json!([5, 10, 15]));
+
+    let store = a_store_where(|mut session| {
+        session.tender_keys.first_tip_percent = Some(10);
+        session.tender_keys.second_tip_percent = Some(0);
+        session.tender_keys.third_tip_percent = Some(20);
+        session
+    })
+    .await;
+    assert_eq!(
+        read(&store, "/api/menu").await["tip_percents"],
+        json!([10, 20])
+    );
+}
+
+/// The till is told how many guests the store's even split offers (ADR-0160 decision 2): six until
+/// the store sets its own, and then its own.
+#[tokio::test]
+async fn the_till_is_told_how_many_ways_the_store_splits_a_bill_evenly() {
+    let unset = read(&a_store().await, "/api/menu").await;
+    assert_eq!(unset["split_ways_max"], json!(6));
+
+    let store = a_store_where(|mut session| {
+        session.tender_keys.split_ways_max = Some(12);
+        session
+    })
+    .await;
+    assert_eq!(read(&store, "/api/menu").await["split_ways_max"], json!(12));
 }
 
 /// The till reads a channel's own price book by naming it (ADR-0066), so the counter's buttons
@@ -2010,6 +2175,66 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
     assert_eq!(signed_out["signed_in"], json!(false));
     assert_eq!(signed_out["permissions_enforced"], json!(true));
     assert_eq!(signed_out["permissions"], json!([]));
+}
+
+/// The session read tells the till when it locks (ADR-0160): the store's `idle_lock_seconds`,
+/// whoever is signed in, and `0` — never — where the store publishes none, as every till ran before.
+#[tokio::test]
+async fn the_session_read_says_when_the_till_locks() {
+    let store = a_store_where(|session| session).await;
+    let session = read(&store, "/api/session").await;
+    assert_eq!(
+        session["idle_lock_seconds"],
+        json!(0),
+        "a store that sets none never locks"
+    );
+
+    let mut locking = (*store.edge.session()).clone();
+    locking.session_settings = pos_proto::session::PublishedSession {
+        idle_lock_seconds: Some(120),
+        ..pos_proto::session::PublishedSession::default()
+    };
+    store.edge.apply_session(locking);
+    let session = read(&store, "/api/session").await;
+    assert_eq!(session["signed_in"], json!(true));
+    assert_eq!(session["idle_lock_seconds"], json!(120));
+
+    // Signed out, the till still learns it: the lock is the store's, not the person's.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/session/sign-out",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let signed_out = read(&store, "/api/session").await;
+    assert_eq!(signed_out["signed_in"], json!(false));
+    assert_eq!(signed_out["idle_lock_seconds"], json!(120));
+}
+
+/// The session read tells the Shift screen what float to fill in (ADR-0160 decision 2): the
+/// store's `shift.opening_float_minor`, whoever is signed in, and `0` — nothing — where the store
+/// publishes none, as every Shift screen opened before.
+#[tokio::test]
+async fn the_session_read_says_what_float_the_shift_screen_fills_in() {
+    let store = a_store_where(|session| session).await;
+    let session = read(&store, "/api/session").await;
+    assert_eq!(
+        session["opening_float_minor"],
+        json!(0),
+        "a store that sets none fills in nothing"
+    );
+
+    let mut floated = (*store.edge.session()).clone();
+    floated.shift = pos_proto::shift::PublishedShift {
+        opening_float_minor: Some(500_000),
+        ..pos_proto::shift::PublishedShift::default()
+    };
+    store.edge.apply_session(floated);
+    let session = read(&store, "/api/session").await;
+    assert_eq!(session["signed_in"], json!(true));
+    assert_eq!(session["opening_float_minor"], json!(500_000));
 }
 
 /// The PIN lockout counts against the store's own numbers from its `session` node
@@ -2194,5 +2419,146 @@ async fn a_revoked_device_is_refused_by_the_composed_edge() {
         status,
         StatusCode::UNAUTHORIZED,
         "the retired token stops working at once"
+    );
+}
+
+/// Pairs a second device on `store` the way a till is paired — the signed-in manager mints a code
+/// and the new device redeems it — and returns its token. Nobody signs in on it.
+async fn a_second_device(store: &Store) -> String {
+    let (status, minted) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/pair/codes",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the manager mints a code");
+    let code = Some(json!({ "code": minted["code"] }));
+    let (_, paired) = post(store.app.clone(), None, "/api/pair", code).await;
+    paired["device_token"]
+        .as_str()
+        .expect("the code pairs a second device")
+        .to_owned()
+}
+
+/// Asks POS Station's token probe, `GET /api/pair/this_device`, with `token`.
+async fn probe(store: &Store, token: &str) -> (StatusCode, Value) {
+    send(
+        store.app.clone(),
+        Some(token),
+        "GET",
+        "/api/pair/this_device",
+        None,
+    )
+    .await
+}
+
+/// POS Station's token probe answers for the calling token alone, with nobody signed in
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8,
+/// step 1).
+///
+/// Two devices are paired and nobody signs in on the second. Each probe names its caller and no
+/// other device, which is what lets the list be gated later without taking away a Station's way to
+/// ask about itself. The second device's `200` shows the probe is not behind the signed-in gate on
+/// the composed edge, where it would answer `403`.
+#[tokio::test]
+async fn the_token_probe_answers_for_the_caller_alone_with_nobody_signed_in() {
+    let store = a_store_with_a_manager_signed_in().await;
+    let second_token = a_second_device(&store).await;
+
+    // Each device's id and pairing instant, from the list.
+    let (_, devices) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/pair/devices",
+        None,
+    )
+    .await;
+    let rows = devices["paired"]
+        .as_array()
+        .expect("the devices are listed");
+    assert_eq!(rows.len(), 2, "two devices are paired");
+    let row = |this_device: bool| {
+        rows.iter()
+            .find(|row| row["this_device"] == this_device)
+            .expect("each device has a row")
+    };
+    let (first_row, second_row) = (row(true), row(false));
+
+    for (token, own, other) in [
+        (store.token.as_str(), first_row, second_row),
+        (second_token.as_str(), second_row, first_row),
+    ] {
+        let (status, answer) = probe(&store, token).await;
+        assert_eq!(status, StatusCode::OK, "accepted, signed in or not");
+        let fields: Vec<&str> = answer
+            .as_object()
+            .expect("a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            fields,
+            ["accepted", "device_id", "pair_time"],
+            "the caller and nothing else"
+        );
+        assert_eq!(answer["accepted"], true);
+        assert_eq!(answer["device_id"], own["device_id"], "the caller's own id");
+        let pair_time: pos_proto::time::Timestamp = answer["pair_time"]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .expect("pair_time is RFC 3339");
+        assert_eq!(
+            Some(pair_time.as_milliseconds_since_epoch()),
+            own["paired_at_ms"].as_i64(),
+            "the instant the list gives for the same device"
+        );
+        let other_id = other["device_id"].as_str().expect("a device id");
+        assert!(
+            !answer.to_string().contains(other_id),
+            "no other device: {answer}"
+        );
+    }
+}
+
+/// The probe refuses `401` a token the edge never issued, well-formed or not, and one it retired —
+/// at once, and without touching the device that retired it.
+#[tokio::test]
+async fn the_token_probe_refuses_an_unknown_or_retired_token() {
+    let store = a_store_with_a_manager_signed_in().await;
+    let second_token = a_second_device(&store).await;
+
+    for unknown in ["0123456789abcdef0123456789abcdef", "not-a-token"] {
+        assert_eq!(
+            probe(&store, unknown).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{unknown} is refused"
+        );
+    }
+
+    let (_, answer) = probe(&store, &second_token).await;
+    let retire = Some(json!({ "device_id": answer["device_id"] }));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/pair/revoke",
+        retire,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "the manager retires the second device"
+    );
+    assert_eq!(
+        probe(&store, &second_token).await.0,
+        StatusCode::UNAUTHORIZED,
+        "a retired token"
+    );
+    assert_eq!(
+        probe(&store, &store.token).await.0,
+        StatusCode::OK,
+        "the device that retired it"
     );
 }

@@ -31,6 +31,7 @@ use pos_edge::{
 use pos_fakes::FakeStore;
 use pos_ports::printer::{PrintBlock, PrintDocument, PrintJob, TextStyle};
 use pos_proto::ClockSource;
+use pos_proto::Open;
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::ids::{DeviceId, EventId, StoreId};
 use pos_proto::text::DisplayName;
@@ -98,6 +99,11 @@ impl Harness {
                 station_id: None,
                 agent_device_id: Some(id(TERMINAL)),
                 drawer_attached: false,
+                paper_width: Open::default(),
+                cuts_paper: None,
+                receipt_printer_id: None,
+                receipt_language: Open::default(),
+                receipt_second_language: Open::default(),
             }]),
             ..EdgeSession::bootstrap()
         };

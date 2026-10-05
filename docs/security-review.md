@@ -64,7 +64,10 @@ anywhere except the two bootstrap exchanges, which are single-use by constructio
 | --- | --- | --- |
 | `/api/*` domain routes | Paired **device token**, then a **signed-in employee** | `http/auth.rs` (`require_paired_device` → `require_signed_in`) |
 | `/ws` | The same device token, over `Sec-WebSocket-Protocol` because a browser cannot set a header on an upgrade | `http/auth.rs` |
-| `/api/pair/devices`, `/api/pair/revoke` | Paired device token | `http/pair.rs` |
+| `GET /api/pair/this_device` | Paired device token alone: POS Station's token probe, asked with nobody signed in. It answers for the calling token only and names no other device | `http/pair.rs` |
+| `GET /api/pair/devices` | Paired device token alone, while a POS Station older than `this_device` still reads it as its probe ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` |
+| `POST /api/pair/codes`, `POST /api/pair/revoke` | Both domain gates, and the signed-in person's own role must grant `admin.device.manage` ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` (`manager_routes`) |
+| `GET /api/print/agent`, `POST /api/print/agent`, `POST /api/print/agent/revoke` | Both domain gates, and the signed-in person's own role must grant `admin.device.manage` ([ADR-0112](adr/0112-print-agents.md)). The read lists the store's terminals, each held by this device, another device or none, and never names another device | `http/print_agent.rs` |
 | `POST /api/pair` | The six-digit pairing code — single-use, five-minute TTL, budgeted (see §3) | `pairing.rs` |
 | `POST /api/activate` | The one-time activation code from the setup sheet | [ADR-0050](adr/0050-activation-code-exchange.md) |
 | `/healthz` | None | `http/health.rs` |
@@ -81,7 +84,7 @@ redemption.
 | Super-admin second factor | **Mandatory TOTP**, plus one-time recovery codes | Same limiter; a code is single-use |
 | Console session | A 256-bit CSPRNG token; only its **SHA-256** is stored | Sliding idle TTL, listable and revocable by the owner |
 | API key | A CSPRNG secret; only its **SHA-256** is stored, shown once | Per-tenant limiter on `/v1/orders`, per-connection on `/sync` |
-| Staff PIN | **Argon2id**, 4–8 digits | Per-person attempt lockout at the edge (by default five wrong in a row, five minutes; a store may set 3 to 10 attempts and 1 to 60 minutes, and no value switches it off), counted across sign-in and manager approvals, so an approval prompt is no way round it — the PIN's defence is the cost plus the lockout, never the digit count |
+| Staff PIN | **Argon2id**, 4–8 digits; a tenant may require at least N (`session.pin_min_length`), which the cloud applies when a PIN is set or reset and which leaves a PIN already set working | Per-person attempt lockout at the edge (by default five wrong in a row, five minutes; a store may set 3 to 10 attempts and 1 to 60 minutes, and no value switches it off), counted across sign-in and manager approvals, so an approval prompt is no way round it — the PIN's defence is the cost plus the lockout, never the digit count |
 | Device token (till) | A 128-bit CSPRNG value; only its **SHA-256** reaches disk or the process map ([ADR-0091](adr/0091-durable-edge-auth-state.md)) | Retirable per device (**O1**) |
 | Activation code | Twelve characters from OS entropy; only its **SHA-256** is stored, single-use ([ADR-0050](adr/0050-activation-code-exchange.md)) | 10 exchanges per client per 10 minutes on `/activate`, checked before the code is looked up. A code for another store is refused unspent, with the same answer as an unknown one |
 | Device credential (box) | `posdev_` + a 256-bit CSPRNG secret; only its **SHA-256** is stored, shown once ([ADR-0051](adr/0051-device-credential-provisioning.md)) | Per-connection on `/sync`; archiving the device refuses it ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)) |
@@ -179,6 +182,11 @@ reach it.
   session unchanged rather than blanking a trading store's menu.
 - **Every ULID field parse in the cloud goes through one helper** (177 sites), so a malformed id is a
   named `400`, never a panic and never a silent default.
+- **A CSV export hands a spreadsheet no formula.** An item's name, a translation and a fee's code and
+  name are free text that whoever may author or import them chose, and a spreadsheet runs a cell
+  that starts with `=`, `+`, `-`, `@`, a tab or a carriage return. Each export writes such a cell with
+  one leading `'` (`pos_cloud::export::escape_formula`), and the CSV import takes exactly that `'`
+  back off, so a file exported and imported again is unchanged.
 
 ## 8. Open items
 

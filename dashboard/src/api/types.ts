@@ -77,6 +77,22 @@ export interface PublishDevicesResponse {
   readonly skipped_count: number;
 }
 
+/**
+ * The paper a printer takes (ADR-0160), as its wire token: 80 mm at 42 characters a line, 80 mm at
+ * 48, or 58 mm at 32. The cloud refuses any other.
+ */
+export type PaperWidth =
+  | "PAPER_WIDTH_MILLIMETRES_80"
+  | "PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48"
+  | "PAPER_WIDTH_MILLIMETRES_58";
+
+/** The papers an operator can pick, in the order the printer form offers them. */
+export const PAPER_WIDTHS: readonly PaperWidth[] = [
+  "PAPER_WIDTH_MILLIMETRES_80",
+  "PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48",
+  "PAPER_WIDTH_MILLIMETRES_58",
+];
+
 /** A pending printer/KDS proposal from `GET /admin/devices/proposals` (ADR-0041). */
 export interface DeviceProposalSummary {
   readonly id: string;
@@ -104,6 +120,26 @@ export interface DeviceProposalSummary {
    * it only over USB, from the store's own box, and only once the devices are published.
    */
   readonly drawer_attached: boolean;
+  /**
+   * The paper an operator says this printer takes, as its `PAPER_WIDTH_…` token (ADR-0160).
+   * `null` until somebody says, which the till prints as 80 mm paper, as every store did before.
+   */
+  readonly paper_width: PaperWidth | null;
+  /** Whether an operator says this printer cuts its paper; `null` until somebody says (a cut). */
+  readonly cuts_paper: boolean | null;
+  /**
+   * On a terminal, the printer an operator says its receipts, receipt copies and pre-bills go to
+   * (ADR-0160 decision 4). `null` until somebody says, which the till prints as the store's
+   * receipt printer.
+   */
+  readonly receipt_printer_id: string | null;
+  /** On a terminal, the `RECEIPT_LANGUAGE_…` token its receipts print in; `null` is the store's. */
+  readonly receipt_language: string | null;
+  /**
+   * On a terminal, the `RECEIPT_SECOND_LANGUAGE_…` token its receipts print in second; `null` is
+   * the store's.
+   */
+  readonly receipt_second_language: string | null;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**
@@ -173,6 +209,21 @@ export interface DailyRevenue {
   /** `total_due` summed — the headline revenue figure. */
   readonly net: number;
   readonly by_item: Record<string, ItemMix>;
+  /**
+   * The fees the day's settled bills charged, by fee code (ADR-0159). A bill settled by an edge
+   * from before fee lines is in `service_charge` and under no code.
+   */
+  readonly by_fee: Record<string, FeeTotal>;
+}
+
+/** One fee's total on a trading day, under its code (part of `DailyRevenue`). Minor units. */
+export interface FeeTotal {
+  /** The last name a settled bill recorded for the fee. */
+  readonly name: string;
+  /** Settled bills that charged it. */
+  readonly bills: number;
+  readonly amount: number;
+  readonly tax: number;
 }
 
 /** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
@@ -618,9 +669,9 @@ export const UNITS: readonly UnitOfMeasure[] = [
  * An action a reason must be cited for (`ReasonAction`); wire tokens are prefixed `REASON_ACTION_`
  * (ADR-0115).
  *
- * Eleven, one per event field in the catalogue that declares a `reason_code_id` — `docs/pos-spec.md`
- * §11 item 2 names six and the events demand five more, so an operator can author a reason for a
- * cash paid-in or a stock correction rather than leaving that field unfillable.
+ * Twelve, one per event field in the catalogue that declares a `reason_code_id` — `docs/pos-spec.md`
+ * §11 item 2 names six and the events demand six more, so an operator can author a reason for a
+ * cash paid-in, a stock correction or a waived fee rather than leaving that field unfillable.
  */
 export type ReasonAction =
   | "REASON_ACTION_VOID_LINE"
@@ -633,7 +684,8 @@ export type ReasonAction =
   | "REASON_ACTION_CASH_PAID_IN"
   | "REASON_ACTION_CASH_PAID_OUT"
   | "REASON_ACTION_STOCK_ADJUSTMENT"
-  | "REASON_ACTION_STOCK_WASTE";
+  | "REASON_ACTION_STOCK_WASTE"
+  | "REASON_ACTION_WAIVE_FEE";
 
 /** Every action a reason can be tagged for, in the order the picker lists them. */
 export const REASON_ACTIONS: readonly ReasonAction[] = [
@@ -648,6 +700,7 @@ export const REASON_ACTIONS: readonly ReasonAction[] = [
   "REASON_ACTION_CASH_PAID_OUT",
   "REASON_ACTION_STOCK_ADJUSTMENT",
   "REASON_ACTION_STOCK_WASTE",
+  "REASON_ACTION_WAIVE_FEE",
 ];
 
 /**
@@ -742,9 +795,15 @@ export interface Supplier {
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
 export type SupplierInput = Omit<Supplier, "id" | "etag">;
 
-/** A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree. */
+/**
+ * A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree.
+ *
+ * `enabled` follows QR ordering's switch, {@link QR_ORDERING_SWITCH}, which the cloud writes into it
+ * with every publish (ADR-0160 decision 5). This console never sends it: a value sent here is
+ * written as the switch, which is for an older console and for a cohort copy made by one.
+ */
 export interface QrGuardrails {
-  readonly enabled: boolean;
+  readonly enabled?: boolean;
   readonly staff_confirmation_required: boolean;
   readonly per_table_limit: number;
   readonly rate_window_secs: number;
@@ -1496,7 +1555,14 @@ export interface RoleTemplate {
   readonly role_template_id: string;
   readonly tenant_id: string;
   readonly name: string;
+  /** What the role grants directly: its holder acts on these alone. */
   readonly permissions: readonly string[];
+  /**
+   * What the role grants only with approval: another person who holds one directly enters their
+   * code and PIN for each act (ADR-0158 decision 4). PIN-flagged ids, none also in `permissions`.
+   * Absent from a server too old to send it, which reads as nothing with approval.
+   */
+  readonly permissions_with_approval?: readonly string[];
   /**
    * How much this role may discount before it needs a manager, in the currency's minor unit.
    *
@@ -1511,14 +1577,35 @@ export interface RoleTemplate {
 }
 
 /**
- * An employee's assignment to a store with a role (ADR-0070). It names the person it grants, so it
- * is T1 like the roster and read only with console.people.read (ADR-0158).
+ * Where an assignment grants its role (ADR-0158 decision 3): one store, a store group (ADR-0122), or
+ * every store of the tenant. A kind this console does not know reads as unspecified.
+ */
+export type AssignmentScopeKind =
+  | "ASSIGNMENT_SCOPE_UNSPECIFIED"
+  | "ASSIGNMENT_SCOPE_STORE"
+  | "ASSIGNMENT_SCOPE_STORE_GROUP"
+  | "ASSIGNMENT_SCOPE_TENANT";
+
+/** Where a new assignment grants its role, as the People screen's "Where" chooses it. */
+export type AssignmentTarget =
+  | { readonly kind: "store"; readonly storeId: string }
+  | { readonly kind: "group"; readonly groupId: string }
+  | { readonly kind: "tenant" };
+
+/**
+ * An employee's assignment with a role, at one store, a store group or every store (ADR-0070,
+ * ADR-0158 decision 3). It names the person it grants, so it is T1 like the roster and read only
+ * with console.people.read (ADR-0158).
  */
 export interface Assignment {
   readonly assignment_id: string;
   readonly tenant_id: string;
   readonly employee_id: string;
-  readonly store_id: string;
+  readonly scope_kind: AssignmentScopeKind;
+  /** The store, for an assignment to one store. */
+  readonly store_id?: string;
+  /** The group, for an assignment to a store group. */
+  readonly store_group_id?: string;
   readonly role_template_id: string;
   /**
    * The assigned person's name, resolved by the server as it reads (ADR-0098, B3-4).
@@ -1532,6 +1619,22 @@ export interface Assignment {
   readonly employee_code: string | null;
 }
 
+/** How one store's `permissions` publish went, when a people write publishes at once. */
+export interface PermissionsPublishResult {
+  readonly store_id: string;
+  readonly outcome: "PERMISSIONS_PUBLISH_APPLIED" | "PERMISSIONS_PUBLISH_FAILED";
+  /** The config version the publish produced, for `PERMISSIONS_PUBLISH_APPLIED`. */
+  readonly config_version_id?: string;
+}
+
+/**
+ * The `200` a people write answers when it publishes at once (ADR-0158 decision 7) — removing an
+ * assignment, or archiving a person or a role: every store it reached, and how each publish went.
+ */
+export interface PermissionsPublishReport {
+  readonly stores: readonly PermissionsPublishResult[];
+}
+
 /** One entry of the pos-core permission catalogue the role editor offers (ADR-0070, §9). */
 export interface PermissionInfo {
   readonly id: string;
@@ -1541,9 +1644,51 @@ export interface PermissionInfo {
   readonly description: string;
 }
 
+/** One catalogue permission a role grants neither directly nor with approval (ADR-0158, Rollout). */
+export interface MissingPermission {
+  readonly id: string;
+  readonly group: string;
+  /** `LOW` — an everyday act — `MEDIUM` or `HIGH`. */
+  readonly risk: string;
+}
+
+/** One active role held at a store, and what it does not grant, everyday permissions first. */
+export interface RoleReadiness {
+  readonly role_template_id: string;
+  readonly name: string;
+  /** How many people on the store's roster hold it, each once. */
+  readonly people: number;
+  readonly missing: readonly MissingPermission[];
+}
+
+/**
+ * `GET /admin/stores/{store_id}/permissions/readiness` (ADR-0158, Rollout): what each role held at
+ * a store does not grant, read before the store enforces each person's own permissions. It names
+ * roles and counts people, and names no person.
+ */
+export interface PermissionsReadiness {
+  readonly store_id: string;
+  /** What the store runs for `permissions.enforced`. */
+  readonly enforced: boolean;
+  /** The level of the value the store runs; absent when it runs the default. */
+  readonly enforced_scope?: SettingScope;
+  readonly enforced_scope_id?: string;
+  readonly roles: readonly RoleReadiness[];
+  /** People at the store who hold no active role there: enforced, they can do nothing. */
+  readonly people_without_role: number;
+}
+
 /** The `201 { id }` body a people create returns (employee / role / assignment). */
 export interface CreatedId {
   readonly id: string;
+}
+
+/**
+ * The `201` a new assignment answers: its id and, for one to a group or to every store, which
+ * publishes at once (ADR-0158 decision 7), how each store's publish went.
+ */
+export interface CreatedAssignment extends CreatedId {
+  readonly stores?: readonly PermissionsPublishResult[];
 }
 
 // --- Floor & kitchen (ADR-0072, Track M2): per-store areas/tables and kitchen stations/routing ---
@@ -1581,6 +1726,12 @@ export interface Station {
   readonly name: string;
   readonly backup_station_id: string | null;
   readonly is_default: boolean;
+  /** How long a ticket waits, in seconds, before the station's kitchen display marks it late, or
+   *  `null` where nobody has said, which the store reads as ten minutes (ADR-0160 decision 2). */
+  readonly late_after_seconds: number | null;
+  /** The `RECEIPT_LANGUAGE_…` token the station's kitchen tickets print in, or `null` where nobody
+   *  has said, which the store reads as its display language (ADR-0160 decision 2). */
+  readonly ticket_language: string | null;
   readonly status: EntityStatus;
   readonly etag: ETag;
 }
@@ -1623,6 +1774,12 @@ export interface CapabilityFlag {
   readonly key: string;
   readonly default_on: boolean;
   readonly description: string;
+  /**
+   * Whether the console offers the flag as a switch (ADR-0160 decision 5). `false` for a flag no
+   * release reads yet, so turning it on would change nothing at any store. Absent from a cloud older
+   * than the field, which offered every flag.
+   */
+  readonly offered?: boolean;
 }
 
 /** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */
@@ -1640,6 +1797,14 @@ export interface CapabilityRule {
   readonly id: string;
   readonly description: string;
 }
+
+/**
+ * QR ordering's one switch (ADR-0160 decision 5): the capability flag the cloud's guest intake and
+ * the edge read, off unless a store's configuration turns it on. `qr.enabled` and the QR sales
+ * channel follow it. It is offered on Channels & payments, beside the QR guardrails, and nowhere
+ * else, so the Config screen's capability form leaves it out.
+ */
+export const QR_ORDERING_SWITCH = "qr_ordering_enabled";
 
 /** The whole capability catalogue `GET /admin/capabilities` serves for the form editor. */
 export interface CapabilityCatalogue {
@@ -1804,8 +1969,9 @@ export interface SettingDefinition {
   /** For a whole number, the largest value it takes. */
   readonly max?: number;
   /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES` or `_COUNT` — which the
-   * console names in the operator's language.
+   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_HOURS`, `_COUNT`,
+   * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
+   * percentage — which the console names in the operator's language.
    */
   readonly unit?: string;
   /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */
@@ -1869,4 +2035,167 @@ export interface SettingPublishReport {
 export interface SettingPresetsReport extends SettingPublishReport {
   /** The keys of the settings written at the store's own scope. Empty when it set them all already. */
   readonly applied: readonly string[];
+}
+
+// --- Fees (ADR-0159) ------------------------------------------------------------------------------
+
+/** Where a fee rule is written: every store of the tenant, every store of one brand, or one store. */
+export type FeeScope = "FEE_SCOPE_TENANT" | "FEE_SCOPE_BRAND" | "FEE_SCOPE_STORE";
+
+/** How a fee is charged: a share of its lines, an amount per bill, or an amount per unit. */
+export type FeeKind = "FEE_KIND_PERCENT" | "FEE_KIND_AMOUNT_PER_BILL" | "FEE_KIND_AMOUNT_PER_UNIT";
+
+/** Which lines a fee counts: every line, only those listed, or every line but those listed. */
+export type FeeItems = "FEE_ITEMS_ALL" | "FEE_ITEMS_INCLUDE" | "FEE_ITEMS_EXCLUDE";
+
+/** How a fee is taxed: not at all, the way its lines are, or at one named tax class. */
+export type FeeTax = "FEE_TAX_NOT_TAXABLE" | "FEE_TAX_FOLLOW_LINES" | "FEE_TAX_TAX_CLASS";
+
+/** An exact ratio (`pos-proto` `Ratio`): 5 % is `{ numerator: 5, denominator: 100 }`. Never a float. */
+export interface Ratio {
+  readonly numerator: number;
+  readonly denominator: number;
+}
+
+/**
+ * A fee rule's own fields, as `/admin/fees` reads and writes them: the wire `PublishedFee`, plus
+ * the item categories an include or exclude list names, which the cloud compiles into items when it
+ * publishes a store. A field left out reads as the owner's default.
+ */
+export interface FeeRuleFields {
+  /** Absent on a create, which mints it. */
+  readonly fee_id?: string;
+  readonly code: string;
+  readonly display_name: string;
+  readonly display_name_translations?: Readonly<Record<string, string>>;
+  readonly kind?: FeeKind | string;
+  readonly rate?: Ratio;
+  readonly amount?: Money;
+  /** Empty, or absent, is every channel. */
+  readonly channels?: readonly (SalesChannel | string)[];
+  readonly item_scope?: FeeItems | string;
+  readonly menu_item_ids?: readonly string[];
+  readonly item_category_ids?: readonly string[];
+  readonly base_discounted?: boolean;
+  readonly base_tax_inclusive?: boolean;
+  readonly tax?: FeeTax | string;
+  readonly tax_class_id?: string;
+  readonly waivable?: boolean;
+  readonly active?: boolean;
+}
+
+/** One rule as written, at one scope, from `GET /admin/fees`. */
+export interface FeeRule {
+  readonly scope: FeeScope | string;
+  /** The tenant, brand or store the rule is written for. */
+  readonly scope_id: string;
+  readonly rule: FeeRuleFields & { readonly fee_id: string };
+  /** RFC 3339. */
+  readonly update_time: string;
+  /** The console admin who last wrote it, by id. */
+  readonly updated_by: string;
+}
+
+/** How one store's fee publish went. */
+export type FeePublishOutcome =
+  | "FEE_PUBLISH_APPLIED"
+  | "FEE_PUBLISH_UNCHANGED"
+  | "FEE_PUBLISH_REFUSED"
+  | "FEE_PUBLISH_FAILED";
+
+/** One rule a store cannot apply, as a refused publish reports it: `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`. */
+export interface FeeFault {
+  readonly fee_id: string;
+  readonly reason: string;
+}
+
+/** One store's row in a fee write or publish. */
+export interface FeePublishResult {
+  readonly store_id: string;
+  readonly outcome: FeePublishOutcome | string;
+  /** The config version the publish produced, for `FEE_PUBLISH_APPLIED`. */
+  readonly config_version_id?: string;
+  /** For `FEE_PUBLISH_REFUSED`: each rule the store cannot apply, and why. */
+  readonly faults?: readonly FeeFault[];
+}
+
+/**
+ * What a fee write, delete or republish did at every store it reached. A `200` is not "every store
+ * charges it": a refused or failed store keeps the fees it had until it is published again.
+ */
+export interface FeePublishReport {
+  /** The fee written; absent for a delete or a republish. */
+  readonly fee_id?: string;
+  readonly stores: readonly FeePublishResult[];
+}
+
+/** One fee as one store runs it, from `GET /admin/fees/effective`. */
+export interface EffectiveFee {
+  readonly fee_id: string;
+  /** The scope the rule in force was written at, and what for. */
+  readonly scope: FeeScope | string;
+  readonly scope_id: string;
+  /** The rule as written. */
+  readonly rule: FeeRuleFields;
+  /** The rule as the store is sent it, its categories compiled into items. */
+  readonly published: FeeRuleFields;
+  /** Why the store cannot apply it, when it cannot. */
+  readonly faults?: readonly string[];
+}
+
+/** What one store runs, and whether it can be published to as it stands. */
+export interface EffectiveFees {
+  readonly store_id: string;
+  readonly fees: readonly EffectiveFee[];
+  readonly publishable: boolean;
+}
+
+/** One rule a preview writes in place, as a `PUT` sends it. */
+export interface PreviewFeeRule {
+  readonly scope: FeeScope;
+  readonly scope_id: string;
+  readonly rule: FeeRuleFields;
+}
+
+/** One line of a sample bill: an item on the store's menu, and how many. */
+export interface SampleLineInput {
+  readonly menu_item_id: string;
+  readonly quantity: number;
+}
+
+/** A sample bill as the store would assemble it, from `POST /admin/fees/preview`. */
+export interface SampleBill {
+  readonly store_id: string;
+  readonly sales_channel: string;
+  readonly lines: readonly {
+    readonly menu_item_id: string;
+    readonly display_name: string;
+    readonly quantity: number;
+    readonly unit_price: Money;
+    readonly line_total: Money;
+    readonly tax_class_id: string;
+  }[];
+  readonly subtotal: Money;
+  readonly fee_lines: readonly {
+    readonly fee_id: string;
+    readonly code: string;
+    readonly display_name: string;
+    readonly amount: Money;
+    readonly tax: Money;
+    readonly class_shares: readonly {
+      readonly tax_class_id: string;
+      readonly amount: Money;
+      readonly tax: Money;
+    }[];
+  }[];
+  readonly service_charge: Money;
+  readonly tax_lines: readonly {
+    readonly tax_class_id: string;
+    readonly taxable_base: Money;
+    readonly rate_basis_points: number;
+    readonly tax: Money;
+  }[];
+  readonly tax_total: Money;
+  readonly rounding_adjustment: Money;
+  readonly total_due: Money;
 }

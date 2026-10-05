@@ -228,6 +228,25 @@ const AFTER_STEP = {
   },
 };
 
+/**
+ * What a flow needs in place before its first click, keyed by task.
+ *
+ * A precondition, not a click (see the top of this file). The fee flow's sample bill is made from
+ * the store's published menu, and the seed cannot publish one: `PublishBar` marks a menu published
+ * once any publish has landed, so a menu published at seed time would hand the price flow its
+ * outcome before its own publish ran. The menu is published here instead, as an operator would have
+ * published it before writing a fee — and `walk` runs this, so every test that walks the flow has it.
+ */
+const PRECONDITIONS = {
+  "Add a fee, try it on a sample bill and publish it": async () => {
+    await cloud.call("POST", "/admin/catalog/publish", {
+      tenant_id: fixtures.tenant.tenant_id,
+      store_id: fixtures.store.store_id,
+      menu_id: fixtures.menu.menu_id,
+    });
+  },
+};
+
 const replayed = TASKS.filter((declared) => declared.unreplayable === undefined);
 const skipped = TASKS.filter((declared) => declared.unreplayable !== undefined);
 
@@ -238,6 +257,7 @@ const skipped = TASKS.filter((declared) => declared.unreplayable !== undefined);
  * the flow's own outcome. It defaults to the whole declaration, which is what the replay wants.
  */
 async function walk(page, declared, upTo = declared.steps.length) {
+  await PRECONDITIONS[declared.task]?.();
   for (const [index, step] of declared.steps.slice(0, upTo).entries()) {
     const description = `step ${index + 1} of "${declared.task}"`;
     if (step.nav !== undefined) {
@@ -351,6 +371,27 @@ test("a price in a two-decimal currency is typed as the price", async ({ browser
     "inputmode",
     "decimal",
   );
+  await context.close();
+});
+
+// A fee is tried on a sample bill before it is saved (ADR-0159's consequences).
+//
+// The declared flow asserts where it ends — the publish report — and walks past the sample bill on
+// the way. This one stops on the bill, so a preview that draws nothing, or draws a refusal, fails
+// here rather than passing unseen under a save that worked anyway. What it asserts is that the bill
+// came back from the cloud and carries the fee that was typed (the harness types `150000` as its
+// name): the arithmetic is `pos_core`'s and is tested there and in the cloud's own suite.
+test("a fee is tried on a sample bill before it is saved", async ({ browser }) => {
+  const declared = replayed.find((task) => task.task.startsWith("Add a fee"));
+  expect(declared, "the fee flow is the one with a sample bill in it").toBeDefined();
+
+  const { context, page } = await openConsole(browser);
+  // Every declared click but the last, which would save: the seventh shows the bill.
+  await walk(page, declared, declared.steps.length - 1);
+
+  const bill = page.locator('[data-preview="sample-bill"]').first();
+  await expect(bill, "the seventh click asked for a sample bill, and none was drawn").toBeVisible();
+  await expect(bill, "the sample bill carries the fee the editor holds").toContainText("150000");
   await context.close();
 });
 

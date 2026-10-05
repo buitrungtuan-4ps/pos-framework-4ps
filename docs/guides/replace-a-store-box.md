@@ -41,7 +41,7 @@ Bump before you activate: in that order the spare takes the current generation o
 |---|---|
 | Sales the old box synced | Safe in the cloud. |
 | Receipt numbers the cloud has seen | Never reused: the spare numbers above them. |
-| Sales made after the newest archive and not yet synced | Lost with the old box, unless its disk can be read. The archive interval bounds this; a store that wants a tighter bound sets `backup_interval_hours = 1`. |
+| Sales made after the newest archive and not yet synced | Lost with the old box, unless its disk can be read. The archive interval bounds this; a store that wants a tighter bound sets `backup.interval_hours` to `1` in the console's shared settings. |
 | Receipt numbers the old box issued **offline and never synced** | Unknown to the cloud, so the spare **can** reuse them. Closing this needs disjoint number ranges per lease generation, which changes the printed number and waits for legal to confirm the format (ADR-0149). |
 
 A warm standby that follows the old box's writes continuously is not built; ADR-0149 records why.

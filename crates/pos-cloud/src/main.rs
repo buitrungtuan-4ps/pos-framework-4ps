@@ -26,6 +26,7 @@ use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
 use pos_cloud::release_source::GithubReleases;
 use pos_cloud::retention::{self, RetentionPolicy};
+use pos_cloud::starting_roles::RoleSeeder;
 use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
@@ -70,6 +71,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
+    // QR ordering's one switch (ADR-0160 decision 5): once, before anything serves, every store's
+    // switch is published from what it did. A store that could not be set is logged by id where it
+    // failed; the run aborts the boot only when the stores cannot be listed or the run recorded.
+    let one_switch = pos_cloud::qr_ordering::run_once(
+        &store.registry(),
+        &store.config_trees(),
+        &store.data_migrations(),
+        &SystemClock,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if let Some(report) = &one_switch.report {
+        tracing::info!(
+            published = report.published,
+            unchanged = report.unchanged,
+            unconfigured = report.unconfigured,
+            failed = report.failed.len(),
+            "set every store's QR ordering switch from what it did"
+        );
+    }
     // One pool, seven views of it: the event-store application layer, the materialised-rollup read
     // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
@@ -119,7 +140,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .with_sync_rate_limit(config.sync_max_requests, config.sync_window_secs)
     .with_trusted_proxy_hops(config.trusted_proxy_hops)
     .with_admin_setup_token(config.admin_setup_token.clone())
-    .with_internal_shared_secret(config.internal_shared_secret.clone());
+    .with_internal_shared_secret(config.internal_shared_secret.clone())
+    .with_qr_switch_since(one_switch.since);
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
@@ -596,6 +618,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+            // A tenant created here starts with six roles (ADR-0158), written into the same people
+            // store the people routes edit.
+            Arc::new(RoleSeeder::new(store.people())),
         ))
         // Store groups (ADR-0122): the named cohorts a tenant publishes to as one, and the batch
         // publish that fans one node out over a cohort's membership. A group holds no configuration
@@ -612,6 +637,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // already hold, which is what makes the batch the same code path rather than a second one:
         // it calls each node's own compiler and the shared config-tree write, so a document a batch
         // produces is byte-for-byte the document that route would have produced.
+        //
+        // The people store is here because an assignment can name a group (ADR-0158): a store that
+        // joins or leaves such a group gains or loses its people, and is published at once.
         .merge(http::store_group_router(
             store.store_groups(),
             store.registry(),
@@ -625,6 +653,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.people(),
                 store.floor(),
             ),
+            store.people(),
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
@@ -675,14 +704,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
         ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
-        // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
-        // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.
-        // The registry checks an assignment's store, and the config trees take the `permissions`
-        // node that removing an assignment or archiving a person or role publishes at once
-        // (ADR-0158 decision 7).
+        // assignments to a store, a store group or every store, with PIN set/reset. Every write is
+        // audited (id/code/role, never the name or PIN). `store.people()` is the employee,
+        // role-template, and assignment seam at once. The registry checks an assignment's store and
+        // the store groups its group, both say which stores a wider one reaches, and the config
+        // trees take the `permissions` node that removing an assignment, archiving a person or role,
+        // or assigning someone to a group or every store publishes at once (ADR-0158 decisions 3
+        // and 7). Setting a PIN reads the tenant's settings for the fewest digits a PIN may have
+        // (ADR-0160).
         .merge(http::people_router(
             store.people(),
             store.registry(),
+            store.store_groups(),
+            store.settings(),
             store.config_trees(),
             store.admin(),
             SystemClock,
@@ -697,6 +731,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+        ))
+        // Permissions readiness (ADR-0158, Rollout): before a store enforces each person's own
+        // permissions, what each role held there does not grant, beside what the store runs for
+        // `permissions.enforced`. It reads the people store and resolves the setting the way the
+        // settings routes do; it writes nothing.
+        .merge(http::permissions_readiness_router(
+            store.people(),
+            store.settings(),
+            store.registry(),
+            store.store_groups(),
+            store.admin(),
+            SystemClock,
         ))
         // Floor & kitchen master data (ADR-0072, Track M2): a store's areas + tables and its kitchen
         // stations + item→station routing rules. Reads behind Read; writes behind the new ManageFloor
@@ -810,6 +856,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.settings(),
             store.registry(),
             store.store_groups(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Fees (ADR-0159 decision 1): a rule written once, at the tenant, a brand or one store,
+        // and every store it reaches republished in the same request, its rules resolved per fee,
+        // compiled, and written whole as the `fees` node on its Store layer. A rule's figures are
+        // prices, so reads are console.reports.revenue; a write publishes, so
+        // console.config.publish.
+        .merge(http::fees_router(
+            store.fee_rules(),
+            store.registry(),
+            store.catalog(),
             store.config_trees(),
             store.admin(),
             SystemClock,

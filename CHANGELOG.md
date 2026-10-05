@@ -22,6 +22,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
+  text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return as a formula, and the
+  exports wrote names as they were authored or imported. So an item named
+  `=HYPERLINK("http://evil","click")` was a live link in the file of whoever exported and opened it,
+  and older Excel could be made to run a command (OWASP, CSV injection).
+  - Each free-text cell of the exports that starts with one of those characters is written with
+    one leading `'`: an item's name in `items.csv`; a translation's key, locale and string in
+    `translations.csv`; and a fee's code and name in `revenue-fees.csv`. A cell that already starts
+    with `'`s and then one of them gets one more `'`. Ids, tokens, dates and numbers are written as
+    they are, so a negative amount stays a number. `rollups.csv` and `revenue.csv` carry no free
+    text and do not change.
+  - The item and translation imports take that `'` back off, after trimming a cell as they always
+    have, so an exported file imports as what it was made from.
+  - **Upgrade note:** an exported text cell that starts with a formula character now begins with
+    `'`, so a spreadsheet shows the text instead of running it, and importing the same file gives
+    back the original. An imported cell that starts with `'`s and then one of those characters now
+    loses one `'`, so a name typed as `'=Special` into a file of the operator's own imports as
+    `=Special`. Headers, columns, quoting, file names and the audit records do not change; no route,
+    migration, permission or protocol change.
+
 - **Retiring a device needs a signed-in manager**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8).
   `POST /api/pair/revoke` needed only a paired device, so any tablet in the shop could retire
@@ -111,6 +131,144 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
+  consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
+  reader was a private struct the cloud checked against a list of field names, and a test on each
+  side pinned the retention bounds the other used.
+  - `pos_proto::locale::PublishedLocale` is the country's view of the `locale` node, moved from the
+    edge with its fields and its parse unchanged: `currency_code`, `timezone` and `cutoff_hour` stay
+    required, so a node carrying only settings is not read as a country's locale, and
+    `LocaleSettings` stays beside it as the register's view. The cloud's test of the node it
+    publishes reads it through the type instead of the list.
+  - `pos_proto::qr::PublishedQr` carries the guardrails the console's QR form writes beside
+    `table_order`: `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`
+    and `business_hours`. Each is read field by field, as before: a field holding anything but its
+    JSON type reads as absent and takes no other field down, and the guardrails are read apart from
+    `table_order`, so a malformed setting does not stop them. The edge's guardrails and the cloud's
+    guest intake and QR switch read through it.
+  - `pos_proto::retention::PublishedRetention` is the `retention` node, and `EVENT_LOG_DAYS`
+    (30 to 3650 days) is one constant both sides use; `pos_edge::EVENT_LOG_DAYS` and
+    `pos_cloud::http::EVENT_LOG_DAYS` re-export it. `PUT /admin/config/retention` keeps its body,
+    its `400` and its message.
+  - **Upgrade note:** no wire change. The cloud builds and publishes these nodes as before, so no
+    store's configuration version or checksum changes, and a v0.14.0 edge reads them as it did. One
+    intended difference: a `qr` node that is not an object no longer sets `table_order`; earlier
+    releases read a single-value array positionally. No writer produces such a node. A crate that
+    builds a `PublishedQr` field by field adds `..PublishedQr::default()`.
+
+- **The console offers only the capability switches a release reads**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). The Config screen offered `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` and
+  `queue_number_enabled`, and none of them changed anything at any store: no tab, pay-first flow or
+  barcode field exists, and queue numbers are always issued for tableless orders, whatever the switch
+  says.
+  - `GET /admin/capabilities` marks each flag `offered`, and those four `false`. The Config screen
+    leaves them out of its switches and of what a preset or a publish sets, and no longer offers the
+    Retail preset, which named only barcode entry and so would only have turned every switch off. A
+    store that has one on is shown it as set but not used by this release.
+  - Table service still turns on. A store whose stored `pay_first_enabled` is on, as the Counter
+    preset left it, has it turned off by a publish that turns tables on, which the screen says
+    before the publish, and by a store-group copy that turns tables on. Nothing reads the flag, and
+    the cloud's rule that pay-first excludes tables is unchanged.
+  - **Upgrade note:** nothing changes for any store. Queue numbers are issued for tableless orders as
+    before. A store's stored values are kept and sent as before, the cloud's rules and presets are
+    unchanged, and a console reading an older cloud offers every switch and preset as it did. No
+    route, event, migration, permission or protocol change.
+
+- **QR ordering is one switch, `qr_ordering_enabled`**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). Three values decided whether a store took a guest's QR order: the capability flag
+  `qr_ordering_enabled`, which nothing read; `qr.enabled`, which only the cloud's guest page read,
+  and read as on when absent; and the QR channel in a published `channels` list, without which the
+  edge refused the order. The flag is the switch now, and the other two follow it.
+  - **The guest page and the edge read the switch.** While it is off, `POST /v1/qr/orders` answers
+    `404`, and a store whose configuration does not set it takes no guest order, which is the
+    flag's declared default. The edge refuses an order on the `QR` channel, relayed or sent to
+    `POST /v1/orders`, with `FAILED_PRECONDITION` naming the flag, where the store's configuration
+    switches QR ordering off: the switch published `false` with `qr.enabled` `false` beside it, as
+    the cloud on this release always publishes it. Where the configuration does not carry the
+    switch, the edge decides by the channel list alone, as before. So it does for a `false` beside
+    a `qr.enabled` that is not `false`, which is the flag as the console's capability form wrote it,
+    with every other flag, while nothing read it. The channel list still applies with the switch on.
+  - **`qr.enabled` and the QR channel follow it.** Every publish of the switch, of the `qr` node or
+    of the `channels` list, a cohort's and a scheduled one included, sets `qr.enabled` to the switch
+    and puts the `QR` channel in a published list while the switch is on, and takes it out while it
+    is off, so an edge on an earlier release agrees with it. What a list means does not change: a
+    store with no list is given none, an empty list stays empty, and a list holding only `QR` keeps
+    it. The publish preview shows what follows.
+  - **`PUT /admin/config/qr` no longer needs `enabled`.** Sent, it is written as the switch, so an
+    older console and a cohort copy made by one still do what they did. Left out, the node takes
+    the store's switch.
+  - **The console** offers the switch on Channels & payments, on a card above the QR guardrails,
+    which no longer carry an on and off. The channels card's QR box shows the switch, a cohort's
+    copy of a store's QR guardrails copies the guardrails only, and the Config screen's capability
+    form leaves the switch out, so a preset there cannot switch a store's QR ordering off.
+  - **A rollback** to a version published before this release gives it the switch the store ran
+    then, not the flag's value from when the flag did nothing. A version published since is
+    restored as it is.
+  - **Upgrade note:** the cloud and the stores can be upgraded in either order. An edge treats a
+    missing switch as before, and refuses QR orders only where its configuration switches them off,
+    so an edge that updates first takes what it took. At its first boot, before it serves, the
+    cloud sets every store's switch from what the store did, once, behind the `data_migrations`
+    marker `qr_ordering_one_switch`. A store took QR orders when its `qr.enabled` was not `false`
+    and its published list, if it had one, held `QR`. Each store whose switch, `qr.enabled` and list
+    did not already agree is published a new configuration version, which its edge pulls; no tree
+    row is written by SQL. A store that agreed and a store with nothing published are left alone. A
+    store the cloud cannot publish to is logged by tenant and store id (`could not publish a
+    store's QR ordering switch`): set its switch in Channels & payments. The run is recorded even
+    then, because run again it would read a store created since as one taking QR orders. A store
+    created from now on starts with QR ordering off, where before a store that had published no
+    `qr` node took guest orders once its codes were printed. Two shapes change, neither at the
+    guest page, which already refused them, and both only for a QR-channel order sent to
+    `POST /v1/orders`:
+    - a store whose guest page was off while its list named `QR` beside another channel has `QR`
+      taken out of the list and its switch published off, so such an order is refused at every
+      release;
+    - a store whose guest page was off with no list keeps no list, so an edge on an earlier
+      release still takes such an order. An edge on this release takes it too, unless the store's
+      configuration carries the flag, as it does where the capability form was ever published:
+      the flag is then off beside `qr.enabled` off, as it was or as the cloud publishes it, which
+      this edge reads as the switch off.
+
+    The raw layer editor (`PUT /admin/stores/{id}/config/{level}`) writes what it is given, and
+    nothing follows a switch written there. No route is removed, and no event, permission,
+    protocol or SQL migration changes.
+
+- **A role says which permissions it grants with approval**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4). A role
+  grants each permission either directly, which its holder acts on alone, or with approval, where
+  another person who holds it directly enters their code and PIN for each act. Only a PIN-flagged
+  permission can be granted with approval.
+  - **The role editor** shows, for every PIN-flagged permission a role grants, a choice of **With
+    approval** or **Directly**. A permission newly ticked starts with approval, the catalogue's
+    default, and the editor always sends both lists. The roles list counts what each role grants
+    with approval. When removing an assignment or archiving a person or a role fails to publish to a
+    store, People says how many stores and offers **Publish again to the stores that failed**.
+  - **`POST /admin/roles` and `PATCH /admin/roles/{role_id}` take `permissions_with_approval`**
+    beside `permissions`, which stays the list granted directly, and a role read carries both. An
+    id there that is unknown (`INVALID_ENUM_VALUE`), not PIN-flagged (`INVALID_VALUE`) or also in
+    `permissions` (`MUTUALLY_EXCLUSIVE`, naming both fields) is refused `400`.
+  - **A request that leaves the field out works as before.** A create grants every permission in
+    `permissions` directly and reads back as it was sent; an update keeps what the role grants with
+    approval, less anything `permissions` now grants directly. `role.create` and `role.update`
+    record both lists as stored.
+  - **The `permissions` node lists both for each person**: the union of their active roles'
+    with-approval grants, less everything they hold directly. An archived role contributes neither.
+  - **Upgrade note:** migration `0074_role_permissions_with_approval.sql` adds
+    `role_templates.permissions_with_approval` (`jsonb`, default `[]`) and, once, behind a
+    `data_migrations` marker as `0073` does, gives every existing role, archived ones included, each
+    PIN-flagged permission it does not grant directly, with approval. What a role grants directly is
+    unchanged byte for byte, so a store that does not enforce each person's own set decides exactly
+    as before; its next `permissions` publish adds each person's `permissions_with_approval`, which
+    such a store only reports in `GET /api/session`. A request without `permissions_with_approval`
+    grants every permission it lists directly, as before; the role editor starts a newly ticked
+    PIN-flagged permission with approval. The holders of a permission granted with approval cannot
+    approve it, at any store, so a role whose holders approve an act for others grants it
+    **Directly**. A console tab holding a role open across the upgrade gets a version conflict on
+    its next save and reloads. No event, permission or protocol change: the node field is the one
+    the edge already reads.
+
 - **What the console authors is what the store enforces**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3 and 7).
   - **An archived role grants nothing.** It went on contributing every permission and its ceiling
@@ -133,8 +291,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     `config_version_id` — where it answered `204`, and `PATCH /admin/employees/{employee_id}` and
     `PATCH /admin/roles/{role_id}` answer the same, with their `ETag`, when the update archives; any
     other update still answers `204`. A failed store keeps its old node until it is published again.
-    The `assignment.remove` audit entry now records the ids it removed. The console treats every
-    success alike, so its screens are unchanged.
+    The `assignment.remove` audit entry now records the ids it removed. People reads the answer to
+    offer a failed store's publish again (the entry above).
 
 - **Every role that exists keeps every till action it has**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). The seven
@@ -245,6 +403,88 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Assigning a person where they already hold an assignment answers `409`, not `503`.** A person
+  holds at most one assignment per store, one per group and one tenant-wide (ADR-0158 decision 3),
+  and the database refused a second with its unique index. The cloud read that refusal as the
+  database failing, so the console said the people service was unavailable and a retry could never
+  succeed.
+  - The store says which: a unique violation (SQLSTATE `23505`) on either assignment insert is
+    `already_exists`, and every other failure stays `unavailable`.
+  - `POST /admin/assignments` answers `409` `ALREADY_EXISTS`, naming `store_id`, `store_group_id`
+    or `scope_kind`, with a message that says to change or remove the assignment that is there. The
+    refused request writes nothing, records nothing in the audit trail and publishes nothing. The
+    People screen shows the message as it shows every refusal.
+
+  **Upgrade note:** a duplicate assignment now answers `409` instead of `503`. No route, event,
+  migration, permission or setting changes, and the admin OpenAPI document does not list this route.
+
+- **Retiring a device, and sending a guest's order to the kitchen or refusing it, no longer say the
+  store did not respond.** The edge answers each with `204` and no body, and the till read every
+  answer as JSON. So a retirement that had worked said "The store did not respond." and left the
+  device on the list, and a guest's order that had been sent stayed on screen under the same
+  sentence until the queue next refreshed. The till now reads a `204` as done, which the new
+  **Release** on the Devices screen relies on too.
+
+- **The console offers a printer's paper only to a store whose release reads it**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). Only an edge from 0.14.1 reads the paper and cutter the Devices screen sets, and an
+  older one prints on 80 mm paper with a cutter whatever is saved. So a 58 mm printer set for a
+  store still on 0.14.0 went on shearing its receipts, and nothing on screen said why.
+  - For a store whose edge reports a release older than 0.14.1, no printer offers **Paper**, and
+    one line on the card says the store does not read a printer's paper yet and prints on 80 mm
+    paper with a cutter until it updates. The Paper column still shows what was saved.
+  - A store that has not reported its release is offered **Paper** with a note, as Shared settings
+    notes one. A store on 0.14.1 or later sees no change.
+
+- **After a rollback, revoking a device no longer un-revokes the devices retired before it, and
+  the OTA kill switch halts the store's rollout.** A rollback restores a version onto the store's
+  Tenant layer and empties its other layers. A revocation read the deny-list from the Store layer
+  alone, so after a rollback it wrote a list holding only the new device; a list replaces when
+  layers merge, so the store stopped refusing every device retired before the rollback, and a
+  stolen tablet could trade again. The kill switch read the rollout from the Store layer too, and
+  refused a rolled-back store as having no rollout to halt. Both now read the node as the store
+  runs it, its layers composed, and write it where they always did with the change applied. The
+  rollout and placement reads and the fleet row's country read the same way.
+  - **Upgrade note:** no stored data changes. A store that was rolled back and then had a device
+    revoked should be checked: re-revoke any device missing from its list. The console shows the
+    list.
+
+- **After a rollback, the console reads a store's nodes as the store runs them.** A rollback
+  restores a version onto the store's Tenant layer and empties its Store layer, and the console's
+  node forms and three of its checks read a node from the Store layer alone. Until each node was
+  published again, the forms for channels, tender, origins, QR guardrails, event retention and
+  vendor policies showed nothing while the store ran the restored values, and saving one wrote
+  defaults over them; a `menu` batch skipped the store and a release carrying a menu was refused,
+  as if the store had no `tax` or `locale`; and a wall-clock release refused the store as having no
+  timezone. They now read the node from the store's four layers composed, as the store runs it,
+  without the fields the settings register puts on it, so a node holding nothing but settings
+  still reads as unpublished.
+  - **Upgrade note:** no stored data, wire format or route changes. Reads after a rollback now
+    show what the store runs. Where a tenant or brand layer carries a node's own fields, the forms
+    and checks now read them with the store's, because the store runs them.
+
+- **The counter's pay pad offers the store's own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). After the table pay screen took the store's `tender_keys`, the counter's pad still
+  offered 5, 10 and 15 percent at every store. It now offers the same keys in the same order, draws
+  no tip row where the store hides every key, and keeps the cash snap from making two keys the same
+  in whatever order the store sets them. No protocol, migration or permission change.
+
+- **A merge refuses bills on different orders**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+  `POST /api/bills/{id}/merge` checked only that the bills shared a table, and two counter bills
+  share one: none. So the bills of two counter orders merged, and the survivor charged only its own
+  order's lines, because a settle reads a bill's lines from its own order. The other order's food
+  was charged nothing, and its bill, merged, was terminal, so that order was never paid.
+  - A bill of another order is now refused `409 BILLS_ON_DIFFERENT_ORDERS` before anything is
+    written, and both bills stay open. A bill on another table still answers `409
+    BILLS_ON_DIFFERENT_TABLES`, and the parts of a split, at a table or the counter, merge back as
+    before.
+  - The till merges only to undo a split, so it never sent such a merge. It names the new refusal
+    in English and Vietnamese for any caller that does.
+  - A merge of two orders' bills that a store has already recorded replays as it was written. No
+    event, migration, permission or protocol change.
+
 - **A discount within the ceiling records no override when the till sends a manager's approval
   anyway.** `POST /api/bills/{id}/discount` checked any approval it was sent and wrote
   `security.permission.overridden` for it, so a discount under a published ceiling, sent with a
@@ -352,6 +592,838 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager makes a device one of the store's tills on the till's Devices screen**
+  ([ADR-0112](docs/adr/0112-print-agents.md)). A paired device is a till through the print-agent
+  binding, `POST /api/print/agent`, and nothing on a screen called it, so a till's own receipt
+  printer and a terminal's print agent could be set up only by calling the edge by hand.
+  - **Devices → This device** says which till this device is, or that it is not one of the store's
+    tills yet, and lists the store's terminals, marking the one another device is. **Bind** makes
+    this device the chosen one and says what came of it: bound; another device is already that
+    till, so release it there first; or this device is already another till, so release that
+    first. **Release** asks first, then stops this device being its till, and the card reads the
+    list again after either. A store that publishes no terminal is told they are created in the
+    console under **Devices → Terminals**. The card is drawn for a person who may manage devices,
+    and not for one the edge refuses the list to.
+  - `GET /api/print/agent` (new) lists the published terminals in the node's order, each with
+    `agent_device_id`, `name` and `held`: `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`. It never
+    names another device, a person or when an agent last asked for work. It sits behind the claim's
+    two gates: a paired device, and a signed-in person whose own role grants `admin.device.manage`,
+    whether or not the store enforces each person's own set. The `403` from all three binding
+    routes now carries `pos-error-reason: PERMISSION_DENIED`.
+  - `POS_DEMO_PROFILE=tills` publishes two terminals in `examples/minimal-edge`, which the browser
+    gate binds.
+
+  **Upgrade note:** `GET /api/print/agent` is new and additive (`docs/snapshots/routes.txt`,
+  `ROUTE_PERMISSIONS`). No event, migration, permission, setting or protocol change. An edge older
+  than this release has no such read, and none is asked for one: the till that reads it is the
+  bundle its own edge serves, and POS Station loads the till from the edge's address
+  ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md)).
+
+- **A till can have its own receipt printer and receipt languages**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 4). Every till's receipts printed at the store's one receipt printer, in the store's
+  receipt languages, so a bar till's bill came out at the counter.
+  - A terminal on the `devices` node can name `receipt_printer_id`, the printer its receipts,
+    receipt copies and pre-bills go to, and `receipt_language` and `receipt_second_language`, the
+    languages they print in. Each is the store's while absent. The second language takes the store
+    setting's own choices, `RECEIPT_SECOND_LANGUAGE_NONE` among them, so a till can print in one
+    language where the store prints in two.
+  - `POST /admin/devices/proposals/{id}/receipt` (new, and documented in
+    `docs/openapi-admin.json`) sets the three, each `null` for the store's, with an `If-Match` and
+    an audit entry. It refuses `400` naming the field: `id` for a device that is not a terminal,
+    `receipt_printer_id` for a device that is not an approved printer of the terminal's store
+    serving no station, and either language for a token outside its choices.
+  - The devices publish carries them as set. A till whose receipt printer is no longer among the
+    store's published printers that serve no station, such as one archived, is published without
+    it and prints at the store's receipt printer: the publish is not refused, and the store keeps
+    printing.
+  - The edge prints a receipt, its copy and a pre-bill asked for at a till at the printer its
+    terminal names, in its languages. A paired device is that till once a manager binds it to the
+    terminal with the print-agent binding, `POST /api/print/agent`
+    ([ADR-0112](docs/adr/0112-print-agents.md)); no agent has to be installed for this. A device
+    bound to no terminal, a terminal that names nothing, and a printer the node does not list as
+    one serving no station print at the store's receipt printer, as before. A till's printer that
+    does not answer is reported as `PRINTER_UNAVAILABLE`, and nothing prints at the counter
+    instead. Kitchen tickets, the shift report and the cash drawer are unchanged: a cash payment
+    at the bar till opens the store's drawer.
+  - The console's **Terminals** card shows each till's **Receipt printer**, **Receipt language**
+    and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
+    offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and
+    one line says why, and a store that has not reported its release is shown them with a note.
+
+  **Upgrade note:** `PublishedDevice` gains `receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`pos-proto`, additive), left off the node while unset. Nothing changes
+  until a terminal sets a printer or a language and the store's devices are published: until then
+  the edge reads no binding to print a guest's paper, and prints it byte for byte as before. An edge
+  older than 0.14.1 ignores the fields, because `PublishedDevice` has never refused one it does not
+  know. The cash drawer stays the store's until the multi-drawer shift work. Migration
+  `0082_terminal_receipts.sql` adds `device_proposals.receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`text`, nullable). It is additive and rollback-safe. No event,
+  permission or protocol change.
+
+- **The console sets how large a store draws what its printers cannot print**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0102](docs/adr/0102-printing-any-script.md)). The size lived in each box's
+  `config.toml` as `font_size_dots`, where the console could not reach it.
+  - A new setting on the `printing` node, `printing.font_size_dots`, from 16 to 48 printer dots per
+    em, default 24, set at the tenant, a brand, a store group or one store. Only a line the printer
+    cannot print in its own characters, such as a Vietnamese dish name, is drawn at it; a line the
+    printer's own character set covers prints in the printer's font. Double-size text is drawn at
+    twice it.
+  - The edge reads the size at each print, so a change applies from the next print, without a
+    restart and without loading the fonts again: `pos-render` gains `TextRenderer::render_at`, which
+    draws a line at a given size. The edge logs the size in force and where it comes from, the
+    store's configuration, `config.toml` or the default, at start-up and at the first print after
+    it changes.
+  - `font_size_dots` is **deprecated**: it applies only while the store's configuration sets none,
+    with a warning while it is the size in use (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the size: a store that sets none prints
+    byte for byte as before, at its box's own size or 24, and a box's own size keeps applying until
+    a setting is written, which then wins. An edge older than this release does not read the
+    `printing` node and keeps its file's size. The settings snapshot and `docs/configuration.md` gain
+    the setting; no route, event, migration, permission or protocol change.
+
+- **The console sets how often a store archives its database**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The interval lived in
+  each box's `config.toml` as `backup_interval_hours`, where the console could not reach it.
+  - A new setting on a new `backup` node, `backup.interval_hours`, from 1 to 168 hours, default 24,
+    set at the tenant, a brand, a store group or one store. It is the most trading a store can lose
+    if its disk dies. The register gains a unit, `SETTING_UNIT_HOURS`, which the console names in
+    English and Vietnamese.
+  - No published value switches archiving off: the bounds start at one hour, and the cloud refuses
+    `0` with `OUT_OF_RANGE`.
+  - The archive loop reads the interval as it schedules each archive, so a change applies from the
+    next archive without a restart. The first archive is still five minutes after the box starts.
+    The edge logs the interval in force and where it comes from, the store's configuration,
+    `config.toml` or the default, when the loop starts and whenever it changes.
+  - `backup_interval_hours` is **deprecated** as a number: it applies only while the store's
+    configuration sets none, with a warning while it is the interval in use.
+    `backup_interval_hours = 0` is not deprecated: it is still the one way to switch archiving off,
+    and no published value overrides it (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the interval: the default is today's day,
+    and a box's own number keeps applying until a setting is written, which then wins. A box whose
+    file sets `backup_interval_hours = 0` keeps archiving off whatever is published. An edge older
+    than this release ignores the `backup` node and keeps its file's interval. `pos-proto` gains the
+    `backup` module and the unit, additively; the settings snapshot and `docs/configuration.md` gain
+    the setting. No route, event, migration, permission or protocol change.
+
+- **A tenant sets the fewest digits a staff PIN may have**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A PIN could always be four digits, and nothing let a tenant ask for more.
+  - A new setting, `session.pin_min_length`, from 4 to 8, default 4. It is written in Shared
+    settings for the whole tenant and nowhere narrower, because a person may work at every store;
+    the cloud refuses it at a brand, a store group or one store with `SCOPE_NOT_ALLOWED`. It is a
+    policy choice rather than a defence, which stays the PIN's Argon2id cost and the lockout.
+  - `PUT /admin/employees/{employee_id}/pin` holds a PIN set or reset to it. A PIN shorter than the
+    minimum, or longer than eight digits, is refused `400` with `pin: OUT_OF_RANGE` and a message
+    naming the range, such as "the PIN must be 6 to 8 digits". If the tenant's settings cannot be
+    read, the PIN is refused `503` rather than held to four.
+  - The People screen's PIN dialog names the tenant's range and checks it before sending. If it
+    cannot read the minimum it asks for 4 to 8, and the cloud still refuses a shorter PIN.
+  - Shared settings names no release for it and notes no store as too old, because the cloud applies
+    it whatever release a store runs. The register says so with `0.0.0` as the release it is
+    honoured from.
+  - **Upgrade note:** nothing changes until a tenant sets it: the default is today's four. Raising
+    the minimum does not touch a PIN already set, which keeps working; to move everyone to the new
+    length, reset their PINs. The value rides each store's `session` node, from which the edge reads
+    nothing, so there is no edge or till change. The settings snapshot and `docs/configuration.md`
+    gain the setting; no route, event, migration, permission or protocol change.
+
+- **The counter asks a walk-in guest whether they eat in or take away**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A store that sets `counter.walk_in_channel` to `WALK_IN_CHANNEL_ASK` opened every
+  walk-in for takeaway, because the till asked nothing.
+  - Under ask, **New order** offers two large answers, **Eat in** and **Take away**. The order opens
+    on the channel tapped, with the day's next queue number as before; the counter shows that
+    channel's book, and the order's header says which answer the guest gave.
+  - `GET /api/orders/live` names each order's `sales_channel`, so a till that reloads on a walk-in
+    shows its book and its answer again.
+  - **Upgrade note:** only a store set to ask sees anything new. A till older than this release
+    opens a walk-in at one tap, which the edge opens for takeaway, and a till reading an older edge
+    never asks. The new response field is additive; no route, event, migration, permission or
+    protocol change.
+
+- **A store chooses the channel its walk-ins take**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md)). The counter
+  opened every walk-in for takeaway, so a café whose guests eat at its counter charged them
+  takeaway's prices and tax.
+  - A new setting on a new `counter` node, `walk_in_channel`: `WALK_IN_CHANNEL_TAKEAWAY`, the
+    default, `WALK_IN_CHANNEL_DINE_IN` or `WALK_IN_CHANNEL_ASK`, set at the tenant, a brand, a store
+    group or one store. No new store is given a value, and a value the edge cannot read is takeaway.
+  - `POST /api/orders` without a channel opens the walk-in on the store's channel, and on takeaway
+    under `WALK_IN_CHANNEL_ASK`, where the till names the guest's choice. A channel the till names
+    still wins. A store that publishes the channels it accepts must accept the one a walk-in takes,
+    or the order is refused as before.
+  - The edge sends the setting with the price book as `walk_in_channel`, and the counter shows the
+    book of the channel its walk-ins open on. It reads the dining room's book for the counter only
+    where the store's walk-ins are eaten in.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's takeaway, a till
+    reading an older edge shows the takeaway book, and an older till ignores the field. The setting
+    lives on a node of its own, not on `channels`, so an edge older than this release ignores it and
+    opens every walk-in for takeaway, and the channels a store accepts are unchanged. The settings
+    snapshot and `docs/configuration.md` gain the setting; no route, event, migration, permission or
+    protocol change.
+
+- **An even split offers as many guests as the store sets**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered an even split between two and six guests at every store.
+  - A new setting on the `tender_keys` node, `split_ways_max`: a count from 2 to 12, default 6, set
+    at the tenant, a brand, a store group or one store. A value out of range or unreadable reads as
+    6.
+  - The edge sends it with the price book as `split_ways_max`, and the pay screen offers every
+    count from two up to it. Up to six the row is the five columns it was; past six it is one row
+    that scrolls sideways, as the kitchen board's station tabs do, so the tenders below it stay on
+    a phone's screen.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's row, a till
+    reading an older edge offers two to six, an older till ignores the field, and an edge older
+    than this release ignores the `tender_keys` node. No route, event, migration, permission or
+    protocol change.
+
+- **A store sets its own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered 5, 10 and 15 percent at every store.
+  - Three new settings on a new `tender_keys` node, `first_tip_percent`, `second_tip_percent` and
+    `third_tip_percent`: each a whole percentage of the bill from 0 to 100, defaulting to 5, 10 and
+    15, set at the tenant, a brand, a store group or one store. `0` hides that key. The register
+    gains the unit `SETTING_UNIT_PERCENT`, which the console names "10%".
+  - The edge reads them from the `tender_keys` node, a value out of range or unreadable as its
+    default, and sends the till the keys to offer as `tip_percents` beside `tips_enabled`: each that
+    is not `0` and does not repeat an earlier key's percentage, in order. The pay screen offers
+    **No tip** and those keys, rounded to the cash increment as before, in any order the store sets
+    them, and shows no tip row when no key is left.
+  - **Upgrade note:** nothing changes until a store sets a key: the defaults are today's keys, a
+    till reading an older edge offers them too, and an older till ignores the field. The keys live
+    on a node of their own, not on `tender`, so an edge older than this release ignores them and
+    keeps today's keys, and the `tender` node and the tender a store accepts are unchanged. The
+    settings snapshot and `docs/configuration.md` gain the three settings; no route, event,
+    migration, permission or protocol change.
+
+- **A store chooses how its tax rounds**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 2). Every tax amount
+  and every fee rounded half-up.
+  - `locale.tax_rounding` is a new setting: `TAX_ROUNDING_HALF_UP`, the default, or
+    `TAX_ROUNDING_DOWN`, which drops the fraction of a minor unit, as many Japanese businesses do
+    with consumption tax. It is set at the tenant, a brand, a store group or one store. No country
+    and no new store is given a value.
+  - It rounds the tax of each tax class, whether prices include their tax or not, the tax of a
+    charge taxed at a class no line is in, and each fee's amount. A tax line's named parts share
+    its tax as it rounded. It does not round the total to the country's coins, which stays
+    half-up, or a line's price, a campaign or a recipe's consumption.
+  - The edge reads it from the store's `locale` node and computes every bill with it: a table's or
+    a bill's check, a pre-bill, each part of a split, a discount's answer, the settle, and the
+    lines a receipt copy computes again.
+  - The fee preview (`POST /admin/fees/preview`) rounds a store's sample bill the same way, so the
+    console shows the fee and tax the store's till will charge. The console's Settings screen
+    offers the setting, in English and Vietnamese.
+  - The setting is written on each store's Tenant layer and the locale publish keeps writing the
+    country's fields on its Store layer, so the store receives both. A `locale` node that carries
+    only the setting is not a published locale: a menu is still refused to a store whose locale
+    was never published.
+  - **Upgrade note:** a new setting on the `locale` node, with a new wire enum `TaxRounding`
+    (`pos-proto`, additive), in `docs/snapshots/settings.txt` and `docs/configuration.md`. Nothing
+    changes until a store sets it: absent, `TAX_ROUNDING_UNSPECIFIED` and a token this release does
+    not know all read as half-up, and an edge older than 0.14.1 is not offered the setting and
+    ignores it. A bill is computed with the mode in force when it is computed, so change the mode
+    outside trading hours. A bill does not keep the mode it opened with, the way it keeps its fee
+    rules; that would need an event field and an ADR of its own. In `pos-core`,
+    `BillInput::rounding_mode` is now `tax_rounding` and no longer rounds the cash rounding, which
+    is always half-up (`billing::CASH_ROUNDING`). Every caller passed half-up, so no figure
+    changes. No event, migration, permission or protocol change.
+
+- **A kitchen station prints its tickets in its own language**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). Every kitchen ticket printed in the store's display language, whoever read it.
+  - A station on the `stations` node gains `ticket_language`, with the receipt language's four
+    choices: `RECEIPT_LANGUAGE_DISPLAY`, `_COUNTRY`, `_VI` or `_EN`. The console's Stations screen
+    sets it on each station as **Ticket language**, in the receipt language setting's words, and
+    lists it. The station routes refuse a language this release does not know, or `_UNSPECIFIED`,
+    `400 INVALID_ENUM_VALUE`, naming `ticket_language`, and keep their `If-Match` and audit entry.
+  - A ticket prints its labels, and each item's and modifier's name where the menu translates it,
+    in the language of the station whose printer prints it: the station it was fired to, or the
+    backup station whose printer it goes to when its own station has none, because the backup's
+    cooks read it. The edge resolves the language as it resolves a receipt's. The kitchen display, a pre-bill and a receipt
+    are unchanged.
+  - **Upgrade note:** `KitchenStation` gains `ticket_language` (`pos-proto`, additive), left off the
+    node while unset, and `ReceiptLanguage` now chooses a station's ticket language too; its tokens
+    are unchanged. A station that sets none prints the ticket it printed before, byte for byte.
+    Nothing changes until a station sets one and its floor is published, and an edge that predates
+    the field ignores it and prints in the display language. Migration
+    `0081_station_ticket_language.sql` adds `kitchen_stations.ticket_language` (`text`, nullable).
+    It is additive and rollback-safe. No event, permission or protocol change.
+
+- **Each kitchen station says when its tickets are late**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). Every kitchen display marked a ticket late after ten minutes, whatever its station
+  cooked.
+  - A station on the `stations` node gains `late_after_seconds`, from 60 to 3600. The console's
+    Stations screen sets it on each station as **Late after (minutes)**, a whole number from 1 to
+    60, and lists it; an empty field leaves the station on ten minutes. The station routes refuse a
+    threshold outside the bounds `400`, naming `late_after_seconds`, and keep their `If-Match` and
+    audit entry.
+  - The edge sends each station's threshold with the station list the till reads
+    (`GET /api/floor`): a station that sets none, or one outside the bounds, reads as 600 seconds.
+    The kitchen display marks a ticket late after its own station's threshold, on that station's
+    board and on the board for every station. A ticket whose station the store did not publish is
+    late after ten minutes.
+  - **Upgrade note:** `KitchenStation` gains `late_after_seconds` (`pos-proto`, additive), left off
+    the node while unset. Nothing changes until a station sets one and its floor is published, and
+    an edge that predates the field ignores it and marks every ticket late after ten minutes.
+    Migration `0080_station_late_after.sql` adds `kitchen_stations.late_after_seconds` (`integer`,
+    nullable). It is additive and rollback-safe. No event, permission or protocol change.
+
+- **Who sees the day's takings is a permission, `reports.takings.view`**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+  - The till's Today screen gains a **Takings today** tile: what the bills settled in the current
+    business day came to, at what their guests paid, and how many there were. It is the store's
+    figure only, with no person, till or shift, because takings per person would be monitoring
+    staff.
+  - The tile reads `GET /api/reports/takings` (new). It answers `403 PERMISSION_DENIED` unless the
+    signed-in person's own role grants `reports.takings.view`, whether or not the store enforces
+    each person's own permissions: takings are confidential, and no till showed them before. The
+    route is the first read in `ROUTE_PERMISSIONS`.
+  - `reports.takings.view` is in a new group, `REPORTS`. It is medium risk, asks no PIN, and goes by
+    default to the owner, manager and supervisor roles, so a new tenant's starting roles get it
+    there. Owners can widen it to any role in the console's People screen, which names it in
+    English and Vietnamese.
+  - **Upgrade note:** a new permission id (`docs/snapshots/permissions.txt`, `docs/permissions.md`)
+    and a new edge route (`docs/snapshots/routes.txt`). Migration
+    `0079_approvers_who_close_a_shift_see_takings.sql` grants it once, directly, to every role that
+    exists and grants both `cash.shift.close` and at least one PIN-flagged permission directly: an
+    approver who closes shifts. Applied to a new tenant's starting roles, that rule picks exactly
+    the supervisor, manager and owner, so existing and new tenants agree. A role that holds its
+    PIN-flagged permissions only with approval, as 0074 left a cashier's, does not get it, nor does
+    any other role: cashiers see takings only where an owner grants it. A later boot does not give
+    it back to a role an owner takes it from. Publish each store's People once after the migration,
+    as after 0076, so its till receives the permission: until then nobody at the store sees the
+    tile. Nothing else changes. No event or protocol change.
+
+- **A store sets its opening float and whether the count is blind**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The Shift screen opened on an empty float field, and every count was blind.
+  - `shift.opening_float_minor` is a new setting: the float the Shift screen fills in when a shift
+    opens, in the store currency's minor unit, from `0` to `1000000000`, at the tenant, a brand, a
+    store group or one store. The cashier can change it before opening, and the shift opens with
+    the float they send. `0`, the default, fills in nothing. A float that is not a whole number of
+    the currency's main unit fills in nothing either, because the till's keypad types whole units.
+  - `shift.blind_close` is a new setting, on by default. Off, the edge also sends
+    `expected_amount` before the close: on opening, on a paid in or out, on
+    `GET /api/shifts/current` and on the count. The Shift screen then shows what the drawer should
+    hold beside the count field, and reads it again each time the screen opens. The variance still
+    appears only at the close.
+  - `GET /api/session` carries `opening_float_minor`. The register gains a unit,
+    `SETTING_UNIT_MINOR_UNITS`, which the console names as minor units.
+  - The console's Settings screen offers both, in English and Vietnamese, to the stores whose edge
+    honours them.
+  - **Upgrade note:** two additive fields on the `shift` node and a new unit, added to
+    `docs/snapshots/settings.txt` and `docs/configuration.md`. Nothing changes until a store sets
+    one: an empty float field and a blind count are the defaults, and an edge older than 0.14.1 is
+    not offered them and ignores them. No event, migration, permission or protocol change. A store
+    that turns the blind close off gives up the blind count as a fraud control
+    (`docs/pos-spec.md` §11 item 1).
+
+- **The console says what paper each printer takes, and whether it cuts it**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The edge took every printer to be 80 mm paper, 42 characters a line, with a cutter.
+  A 58 mm printer was sent rasters drawn for 80 mm paper, which shear on its head, and bilingual
+  receipts laid out for 42 characters.
+  - The console's Devices page has **Paper** on each approved printer: **80 mm**, **80 mm, 48
+    characters a line** or **58 mm**, and **Cuts paper**, on by default. It saves under
+    `POST /admin/devices/proposals/{id}/paper` (new, and documented in `docs/openapi-admin.json`),
+    with an `If-Match` and an audit entry. A paper the cloud does not know is refused `400`, naming
+    `paper_width`. Like the drawer mark, it reaches a store when its devices are published.
+  - A receipt, its copy and a pre-bill decide from the printer's paper, 42, 48 or 32 characters a
+    line, whether a bilingual label and its translation share a line. Every line drawn as a bitmap,
+    on any document, is 576 dots wide on 80 mm paper and 384 on 58 mm. A printer with no cutter is
+    sent no cut, whether the edge or a print agent writes to it.
+  - There is no code page to choose. The ESC/POS adapter sends text only in ASCII and draws every
+    other line, so a code page setting would change nothing.
+
+  **Upgrade note:** `PublishedDevice` gains `paper_width` (`PAPER_WIDTH_MILLIMETRES_80`,
+  `_MILLIMETRES_80_COLUMNS_48` or `_MILLIMETRES_58`) and `cuts_paper` (`pos-proto`, additive). Both
+  are left off the node while unset, and absent means 80 mm paper, 42 characters, 576 dots and a
+  cut. Nothing prints differently until an operator sets a printer and publishes, and an edge that
+  predates the fields ignores them and prints as before. Migration `0078_device_paper.sql` adds
+  `device_proposals.paper_width` (`text`) and `cuts_paper` (`boolean`), both nullable. It is
+  additive and rollback-safe. No event, permission or protocol change.
+
+- **A receipt can print in two languages**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2).
+  - `printing.receipt_second_language` is a new setting: `RECEIPT_SECOND_LANGUAGE_NONE`, the
+    default, or `_VI` or `_EN`, at the tenant, a brand, a store group or one store. A new store is
+    given none, because a bilingual receipt is each store's choice (the owner, 2026-10-01).
+  - With one set, the receipt, its copy and the pre-bill print each label in the receipt's language
+    and then the second, as `Tạm tính / Subtotal`, on one line where the two fit the printer's width
+    and with the second under the first, indented two spaces, where they do not. A heading centres
+    the second under the first. An item, a modifier and a fee print their name in the second
+    language on the next line where the menu or the fee's rule translates it and the name differs
+    from the one above.
+  - A second language that the labels already print in, or one a store PC with no fonts cannot
+    draw, prints the receipt in one language, as before. Kitchen tickets and the shift report are
+    unchanged.
+  - The console's Settings screen offers it, in English and Vietnamese, to the stores whose edge
+    honours it.
+  - **Upgrade note:** an additive field on the `printing` node, added to
+    `docs/snapshots/settings.txt` and `docs/configuration.md`. No receipt changes until a store
+    sets it, and an edge older than 0.14.1 is not offered it and ignores it. The edge decides
+    whether a label and its translation share a line from the 42 characters it already takes a
+    receipt printer to be. No event, migration, permission or protocol change.
+
+- **A guest's QR order can join the table's order: the `qr.table_order` setting**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  item 2, confirmed by the owner on 2026-10-01). A guest's QR order was always an order of its own
+  on the table, beside the waiter's, with its own bill.
+  - **`TABLE_ORDER_JOIN`** puts a guest's lines on the table's open order, so the table has one
+    order, one bill and one send to the kitchen, and a joined line is fired, voided, billed and split
+    like a waiter's. It joins as it arrives where nobody has to confirm a guest's order, and when
+    staff confirm it where they do; until then it waits as its own order, and a refused one never
+    joined. **`TABLE_ORDER_SEPARATE`** keeps the guest's order its own, as before.
+  - **A table whose order cannot take a line** keeps the guest's order separate, as before: its
+    bill is open, split or paid. A table nobody seated gets the guest's order as its order, and the
+    next guest's joins it.
+  - **A joined line keeps the guest's price**, from the `QR` book, and the bill taxes it and charges
+    fees at the table's order's channel, the dining room's for a seated table, rather than at the
+    `QR` channel's rates. Where a store's `QR` rates or fees differ from the dining room's, a joined
+    guest pays the dining room's.
+  - **In the log** the guest's order is still opened on the `QR` channel with its lines, and the
+    edge now writes `sales.table.merged` (target: the table's order; merged: the guest's), in the
+    same transaction as the lines or as the staff confirmation. Each line keeps the order it was
+    ordered on, and a submission keeps its own order id, so a retry is answered as before
+    (`created: false`, the same `order_id`). The folded order ends at the merge and never waits
+    for staff, even if the store turns the hold on later. No screen shows a line's channel, so a
+    joined line looks like the waiter's.
+  - **Upgrade note:** a new setting, `qr.table_order` on the `qr` node (`docs/configuration.md`,
+    `docs/snapshots/settings.txt`). Its default is `TABLE_ORDER_SEPARATE`, so an upgrade changes
+    nothing until someone sets it. A store created from now on is given `TABLE_ORDER_JOIN` by the
+    new-store values. It is honoured from release 0.14.1: the console hides it for a store on an
+    earlier release, and counts such stores where it is set more widely, and an earlier edge ignores
+    the field. The `qr` node is typed in `pos-proto` for this field alone
+    (`pos_proto::qr::PublishedQr`), and the guardrails are read as before. `sales.table.merged` was
+    already in the event catalogue (`docs/snapshots/events.txt`), and nothing wrote it: its payload
+    is unchanged, and `PROTOCOL_VERSION` does not change. A consumer that groups
+    `sales.order_line.added` by order should apply it; a bill names the lines it covers, so a bill
+    read from the log needs nothing from it. A till page loaded before its edge updated shows a
+    joined guest's lines apart until it next reloads the open orders. A guest's order that has
+    ended, by a release with nothing sold or by joining, now never waits for staff. No route,
+    permission or migration changes.
+
+- **POS Station asks whether its token is still accepted on a route of its own**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8, step 1).
+  The Station checked its pairing with `GET /api/pair/devices`, which hands every paired device the
+  id of every other, so that list could not be gated without breaking every Station in the field.
+  - `GET /api/pair/this_device` answers for the calling token alone: `accepted`, the caller's own
+    `device_id` and its `pair_time`, and nothing about any other device. It sits behind the
+    paired-device gate alone, so it answers with nobody signed in, and it signs nobody in and resets
+    nobody's idle window. An unknown or retired token is refused `401`.
+  - POS Station asks it first. An edge older than this release has no such route: it answers `404`,
+    or `200` with the till's `index.html` when the till is built in, so the Station counts a `200`
+    only when it carries the route's JSON. Otherwise it asks `GET /api/pair/devices` as before, so a
+    new Station keeps working with an older edge.
+  - **Upgrade note:** one route is added (`docs/snapshots/routes.txt`). No event, migration,
+    permission or protocol change. `GET /api/pair/devices` is unchanged and still needs only a
+    paired device, because every POS Station older than this release still reads it as its probe.
+    Step 2, gating the list behind `admin.device.manage`, waits until no Station older than this
+    release remains in the fleet. Deciding when that is belongs to the owner and the fleet, not to
+    this release.
+
+- **Before a store enforces each person's own permissions, the console says what each role lacks**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
+  - `GET /admin/stores/{store_id}/permissions/readiness` lists each active role an active person
+    holds at the store, through an assignment of any scope that reaches it. For each it gives the
+    role's id and name, how many people hold it, each once, and `missing`: every permission a store
+    decides that the role grants neither directly nor with approval, with its id, group and risk.
+    Low risk comes first, then medium, then high, in catalogue order within a level. The cloud
+    administration permissions are left out, because no till asks for them. The answer also counts
+    `people_without_role`, the people at the store who hold no active role, and says what the store
+    runs for `permissions.enforced`, with `enforced_scope` and `enforced_scope_id` naming the level
+    that sets it.
+  - It needs `console.people.read`. It names roles and counts people, and names no person. It
+    compares roles with the permission catalogue and nothing else: what anybody did at the till is
+    not read.
+  - **Settings** shows it for one store under **Each person's own permissions**, whichever way the
+    switch is set, as **Before you turn this on**. Each role shows its name, how many people hold
+    it, and what it does not grant, everyday permissions first and each in words, with **Edit**,
+    which opens the role's editor on **People**. The panel says plainly when no role misses an
+    everyday permission, and counts the people who hold no role. Ops and Viewer are told that an
+    owner or an admin can see it. People opens a role's editor from a link that names it
+    (`?role=`).
+  - **Upgrade note:** no migration, event, permission or protocol change. The new route is in
+    `docs/openapi-admin.json`.
+
+- **An assignment reaches one store, a store group or every store**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3). A
+  person can be given a role at every store of a store group
+  ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)), whichever stores it holds at
+  the time, or at every store of the tenant, one opened later included, as well as at one store. A
+  store's `permissions` node lists everyone whose assignments reach it, once each, with the union of
+  their roles and the highest of their ceilings.
+  - **`POST /admin/assignments` names exactly one place**: `store_id`, `store_group_id`, or
+    `scope_kind` `ASSIGNMENT_SCOPE_TENANT`. Anything else is refused `400`, naming each field at
+    fault. A group the tenant does not have, another tenant's included, is `404`, and one it has
+    archived `409`. A person holds at most one assignment per store, one per group and one
+    tenant-wide.
+  - **A wider assignment publishes at once.** Creating or removing an assignment to a group or to
+    every store publishes `permissions` to every open store it reaches before it answers; the create
+    answers `201` with `stores` beside the `id`. Archiving a person or a role now also reaches the
+    stores their group and tenant-wide assignments reach. `PUT /admin/store-groups/{group_id}/members`
+    publishes to each open store that joins or leaves a group an assignment names, and answers with
+    `stores`. A new assignment to one store still reaches it when someone publishes.
+  - **`GET /admin/assignments?store_id=`** lists every assignment that reaches the store, and the
+    route also lists by `store_group_id`, or every tenant-wide assignment with
+    `scope_kind=ASSIGNMENT_SCOPE_TENANT`. Each row carries `scope_kind` (`ASSIGNMENT_SCOPE_STORE`,
+    `ASSIGNMENT_SCOPE_STORE_GROUP` or `ASSIGNMENT_SCOPE_TENANT`) beside the `store_id` or
+    `store_group_id` it names, and the `assignment.create` and `assignment.remove` audit entries
+    record the same.
+  - **The People screen asks Where**: this store, one store group, or every store. Its list shows
+    where each assignment reaches, and removing a wider one says it leaves every store it reached.
+    It says when a store a wider assignment reached could not be published, and offers to publish
+    to it again; **Store groups** says the same after a membership change.
+  - **Upgrade note:** migration `0077` adds the table `employee_scope_assignments`, with row-level
+    security like `employee_store_assignments`, which it leaves untouched: every existing assignment
+    is a one-store assignment and reads as before, and rolling back loses only the wider ones. The API
+    change is additive: a one-store row keeps its `store_id` and gains `scope_kind`, and a row of a
+    wider scope has no `store_id`. A listing by store now includes the group and tenant-wide
+    assignments that reach it, so a console tab from before this release lists a wider assignment at
+    each store like a one-store one, and removing it there removes it from every store. No event,
+    permission or protocol change.
+
+- **Reports show each fee under its code** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decision 4).
+  - The revenue rollup folds each settled bill's `fee_lines` into the day's `by_fee`: per fee
+    code, the name the latest bill recorded, the bills that charged it, what it charged and the
+    tax on it. A line that charged nothing counts no bill. `service_charge` is unchanged, and is
+    still the sum of every fee. A bill settled by an edge from before fee lines adds to
+    `service_charge` and to no code, and no bucket stands in for the difference.
+  - `GET /admin/stores/{store_id}/revenue/fees/export` downloads `revenue-fees.csv`, one row per
+    trading day per fee code: `business_date,currency_code,fee_code,fee_name,bills,amount,tax`.
+    It takes the revenue export's window and permission, `console.reports.revenue`, and is
+    audited as `reports.export_revenue_fees` with its row count. `revenue.csv` is unchanged,
+    header included.
+  - The console's Reports screen has a **Fees** card under Revenue, for owners and admins: each
+    fee summed over the date range, with **Export CSV**.
+  - What a waive forgave is not reported: `billing.fee.waived` carries no amount.
+  - **Upgrade note:** a store's stored rollup gains `by_fee` from its cursor forward, so a day
+    folded before the upgrade shows no fees, and the day of the upgrade only those folded after
+    it. To backfill, reset the store's rollup (ADR-0036's reset-cursor-and-replay: **Rebuild from
+    the log** on the Reconcile screen, or `POST /admin/stores/{store_id}/rollups/reset`), and the
+    next projector pass re-folds the whole log. Every `DailyRevenue` the cloud serves, the X/Z
+    report's included, gains `by_fee`, additively. The new route is in `docs/openapi-admin.json`.
+    No event, migration, permission, default or protocol change.
+
+- **The till waives a fee on one bill** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decision 5).
+  - `POST /api/bills/{id}/fees/{fee_id}/waive` takes the reason, and an approver's code and PIN
+    where the person needs one, and answers with the bill as it now stands, in the shape of its
+    check. It writes `billing.fee.waived`, and `security.permission.overridden` when somebody
+    approved, in one transaction. A fee whose rule is not waivable answers `409
+    FEE_NOT_WAIVABLE`, one the bill does not charge or has waived already `409 FEE_NOT_ON_BILL`,
+    and a bill that is not open `409 TRANSITION_REFUSED`, each before anybody is asked to
+    approve.
+  - The bill charges the fee and its tax nothing from then on. Every part of a split of it keeps
+    the waive, a merge keeps every waive of the bills it puts together, and a restart folds them
+    back from the log.
+  - The check reads and the discount's answer mark each fee line `waivable`. On the pay screen,
+    and on the order screen's check while one bill is open on the table, a waivable fee carries
+    **Waive**: the store's reasons for a waive, with the manager's code and PIN where the person
+    needs an approver, which `billing.fee.waive` asks for wherever the store does not enforce
+    each person's own set. The till names `FEE_NOT_WAIVABLE` and `FEE_NOT_ON_BILL` in words.
+  - **Upgrade note:** a new edge route, in `docs/snapshots/routes.txt` and `ROUTE_PERMISSIONS`
+    under `billing.fee.waive`, and an additive `waivable` on every fee line of the check reads and
+    the discount's answer. A store's fees are waived only where a rule says `waivable`, and an
+    approver must hold `billing.fee.waive`, which a store's roles carry from the next publish of
+    its `permissions` node after migration `0076`. The event, the permission and the migration
+    are the entry below's; no protocol version change.
+
+- **Waiving a fee is an act, with an event, a permission and a reason of its own**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 5). A fee is never waived by editing
+  its rule: a rule published `waivable` is removed from one open bill, and every other bill is
+  charged it as before.
+  - `billing.fee.waived` records the waive: the `bill_id`, the `fee_id` and the `reason_code_id`,
+    ids only.
+  - `billing.fee.waive` is the new permission: high risk, PIN-flagged, and by default the
+    manager's and the owner's, as `billing.discount.override_ceiling` is. A new tenant's starting
+    roles get it on those terms: directly for the owner and the manager, with approval for the
+    rest.
+  - Reasons gain `REASON_ACTION_WAIVE_FEE`. The framework's *Staff error* and *Putting it right
+    for a guest* are valid for it, and the console's Reason codes screen offers it.
+  - In the core, `assemble` leaves a waived fee out (`BillInput::waived_fee_ids`): it charges and
+    taxes nothing, and every other figure is what it would be without the rule. A waive follows
+    the fee's `fee_id`, so `merge_fee_rules` keeps every fee waived on any bill it merges, and a
+    part of a split keeps its source's. `waivable_fee` refuses a fee the bill does not charge
+    (`FeeNotOnBill`) or whose rule is not waivable (`FeeNotWaivable`), and `decide_bill` takes
+    `BillCommand::WaiveFee`: an open bill only, under `billing.fee.waive` and its PIN. Each
+    `FeeLine` says whether its rule is `waivable`.
+  - No till waives a fee yet; the edge's route and the till's control come next.
+  - **Upgrade note:** migration `0076_roles_can_waive_a_fee.sql` grants `billing.fee.waive` once,
+    behind a `data_migrations` marker as `0073` and `0074` do: directly to every role that grants
+    `billing.discount.override_ceiling` directly, and with approval to every other role, archived
+    ones included. Nothing else in either list changes. A store sees the permission on the next
+    publish of its `permissions` node; until then nobody there holds it, so nobody can approve a
+    waive. The event, the permission and the reason action are additive:
+    `docs/snapshots/events.txt`, `docs/snapshots/permissions.txt` and `docs/permissions.md` grow,
+    and an older edge reads a reason tagged only for a waive as valid for nothing. A console tab
+    holding a role open across the upgrade gets a version conflict on its next save and reloads.
+    No route or protocol version change.
+
+- **A receipt shows each fee under its own name**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4).
+  - The receipt, its copy and the pre-bill print each fee the bill was charged on its own line,
+    under its name, where they printed the fees' sum on one service-charge line. The name is in
+    the receipt's language: the translation the store's current rule for that `fee_id` carries,
+    and the name the bill froze where the rule has none or the store no longer runs it. A fee that
+    charged nothing prints no line.
+  - A copy prints the fees and the tax per class that `billing.bill.settled` recorded, whatever the
+    rates and the fees in force say now
+    ([ADR-0164](docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    A bill settled before the settle recorded them is copied as before.
+  - The till's check and pay screens list each fee under the subtotal, and the total is still the
+    edge's figure. The check reads name each fee in the store's display language where its rule
+    translates it, and `POST /api/bills/{id}/discount` answers with `fee_lines` too, so the pay
+    screen keeps them after a discount. The till shows `LINES_DO_NOT_MATCH_BASES` as an internal
+    error.
+  - **Upgrade note:** a store with no `fees` node prints every receipt as before. A store that
+    charges fees prints a line per fee where it printed one service-charge line, and a copy of a
+    bill settled on this release prints the tax per class the settle recorded even after a rate
+    changes, where it printed the tax as one total. `fee_lines` on the discount response is
+    additive, and on the check reads `display_name` is now the display-language name. No event,
+    route, migration, permission or protocol version change.
+
+- **The console has a Fees screen** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)), under
+  Menu & pricing, for owners and admins.
+  - It lists the rules written for every store, one brand or one store. At a brand or a store it
+    also lists the rules that reach it from a wider scope, and **Override here** writes the fee for
+    that scope under the same `fee_id`, so its stores run it in place of the wider rule.
+  - **New fee** and **Edit** open one form with every field: the code, the name and the name in
+    each language, how it charges (a percentage, an amount per bill or an amount per unit), the
+    channels, the items and categories it counts or leaves out, a percentage's base (after or
+    before discounts and comps, net of tax or including it), its tax (taxed the way its lines are,
+    not taxed, or at one tax class), whether staff can waive it, and whether it is in force. A new
+    fee starts from the owner's defaults: taxed the way its lines are, after discounts, net of tax,
+    and not waivable. A rate is typed as a percentage and sent as an exact ratio, never a float.
+  - Before saving, the form tries the fee on a sample bill at a store it reaches, from that store's
+    menu (`POST /admin/fees/preview`): each line, each fee with its tax, the tax per class and the
+    total due. Nothing is saved until **Save and publish**.
+  - A save or a delete publishes to every store the rule reaches, and the screen lists each store
+    by name as published, unchanged, refused (with the rule it cannot apply, and why) or failed,
+    with **Publish again** for the ones that did not take it. For one store it shows what the store
+    runs, where each rule comes from, and anything that stops it applying one. **Publish fees
+    again** republishes the stores a scope reaches.
+  - The console replay walks the flow in a browser: a new fee, its sample bill, and its publish.
+  - **Upgrade note:** Channels & payments moves from the nav's Menu & pricing group to Operations,
+    so that no group holds more than six screens. The screen reads rules with
+    `console.reports.revenue`, so it is not offered to Ops, which can write a rule but not read one.
+    No route, migration, permission, event or protocol change.
+
+- **A fee rule can be tried on a sample bill before it is saved**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md), its accepted consequences: "the console
+  previews a sample bill before publishing").
+  - `POST /admin/fees/preview` takes a store, the rules as they would be written, each at its
+    scope and with no `fee_id` for a fee not created yet, and up to 50 sample lines from the
+    store's menu. It answers with the bill the store would assemble with those rules in place:
+    each line priced from its menu, each fee with its tax and the part of it taxed at each class,
+    the tax per class, the cash rounding and the total due.
+  - Nothing is written or published. The lines are priced by `pos_core::menu::reprice_line` and
+    the totals come from `pos_core::billing::assemble`, given the store's published tax table,
+    tax posture and cash rounding, so the preview is the store's own arithmetic.
+  - A rule is refused as a write would refuse it. A store with no locale, tax table or menu
+    published, and a line its menu does not sell on the channel, answer `422`.
+  - **Upgrade note:** a new route behind `console.reports.revenue`, the fee reads' permission. No
+    migration, permission, event or protocol change.
+
+- **The console can write fees, and the cloud sends each store its own**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1).
+  - `/admin/fees` lists a tenant's rules (`GET`), writes a new fee with a minted `fee_id` (`POST`)
+    or a fee at one scope (`PUT`), and removes one (`DELETE`). A rule is written at the tenant, a
+    brand or one store, and for each fee a store runs the most specific rule that reaches it: its
+    own, else its brand's, else its tenant's.
+  - Every store a write reaches is republished in the same request, with its resolved list written
+    whole as the `fees` node on its Store layer. Each store answers `FEE_PUBLISH_APPLIED`,
+    `_UNCHANGED`, `_REFUSED` or `_FAILED`.
+  - `GET /admin/fees/effective` shows what one store runs: the scope each fee's rule comes from,
+    the rule as written, the rule as the store is sent it, and anything that stops the store
+    applying it. `POST /admin/fees/publish` republishes one store or every store, after a store
+    moves to another brand or a category a rule names gains items.
+  - An include or exclude list may name item categories. The cloud compiles each one into the
+    active items it holds when it publishes the store.
+  - A write is refused (`400`) when the rule fails the node's own checks, with
+    `INVALID_ENUM_VALUE`, `OUT_OF_RANGE` or `REQUIRED` on the field, or names an item, an item
+    category or a tax class the catalog does not have (`UNKNOWN_REFERENCE`). It is refused (`422`)
+    when a store it would take effect at could not apply it: an amount in another currency
+    (`CURRENCY_MISMATCH`), or a tax class with no rate there (`TAX_RATE_NOT_CONFIGURED`), either
+    of which would fail every bill the fee applies to. It is also refused when a store already runs
+    another fee under its code (`ALREADY_EXISTS`), or when its item list names nothing on the menu
+    of any store it takes effect at (`NOT_ON_MENU`). A store that can no longer apply a rule it was
+    sent is not published to, and keeps the fees it has.
+  - Reads need `console.reports.revenue`, because a rule's rate and amount are prices, and writes
+    need `console.config.publish`. A store's configuration read now leaves the `fees` node out for
+    a role without `console.reports.revenue`, as it does `menu` and `campaigns`. The audit trail
+    records `fee.create`, `fee.update`, `fee.delete` and `fee.publish` with ids and store counts
+    only.
+  - **Upgrade note:** no migration, permission or protocol version change; the routes use the
+    `fee_rules` table of migration `0075`. No store is sent a `fees` node until a rule is written
+    for it. A store on a release from before the edge charged fees ignores the node and charges no
+    fee. Ops holds `console.config.publish` but not `console.reports.revenue`, so Ops can write a
+    rule but not read one back.
+
+- **Merging a split's parts back charges a fee per bill as the whole bill did**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 6). A merge kept the holder's share
+  of a cover charge alone, so a bill split in two and merged back charged a third of it, or two
+  thirds, rather than all of it.
+  - A merged bill keeps the rules of the bill the cashier holds, plus any fee per bill another
+    merged bill carries and the holder lacks. Each fee per bill is the sum of the merged bills'
+    shares of it, capped at its whole: the amount on the bill they were first split from.
+    Percentages and fees per unit are the holder's.
+  - So merging every part of a split back restores the fee, merging some charges the sum of their
+    shares, two bills never split from one charge it once, and a fee the holder dropped, its share
+    being nothing, comes back with the parts that carry it. Where bills that were never one froze
+    different amounts, the larger is the cap.
+  - The edge folds it from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
+    so a restart charges what the till showed. `pos_core::billing::merge_fee_rules` does the
+    arithmetic, and a property test holds it.
+  - **Upgrade note:** no event, route, migration, permission or protocol change. A store charges
+    fees once a rule is written for it (#592), and only a merge of split bills that carry a fee per
+    bill charges differently.
+
+- **The cloud keeps each tenant's fee rules**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1). A fee rule is written for the
+  tenant, a brand or one store. It is kept in a new table, `fee_rules`, one row per rule and scope,
+  keyed by the rule's `fee_id` and holding the rule in the shape a store is sent it.
+  - `pos_cloud::fees` holds the seam, `FeeRuleStore`, with a bounded in-memory store and the
+    PostgreSQL adapter in `store-postgres`. A contract suite holds the in-memory store to the
+    seam's rules, and the adapter's integration tests hold it to the same ones on a real database.
+  - A row is pricing configuration and carries no personal data. Who last wrote a rule is recorded
+    as a console admin's id.
+  - **Upgrade note:** migration `0075` adds `fee_rules`, isolated by tenant with row-level security
+    like the other configuration tables. It is additive, with no backfill. The console's fee routes
+    (above) read and write it. No route, event, permission or protocol version change.
+
+- **A store chooses the language its receipts print in, and whether a settle prints one**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The new `printing` node carries both, as two settings in the register.
+  - `printing.receipt_language` decides what a receipt, its copy and a pre-bill print their labels
+    and item names in. `RECEIPT_LANGUAGE_DISPLAY`, the default, is the store's display language, as
+    before. `RECEIPT_LANGUAGE_COUNTRY`, which a new store is given, is the language of the store's
+    country (Vietnamese in Vietnam), and the display language where the edge has no labels in it.
+    `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN` name one. In a language other than the display
+    language, each item and modifier prints the menu's translation for it, or the name it was rung
+    up with where the menu has none. A box with no fonts still prints English labels. The shift
+    report and kitchen tickets keep the display language.
+  - The store's `locale` node gains `country_language`, the country pack's language, which the cloud
+    writes at a locale publish as it writes the number format.
+  - `printing.receipt_printed_on_settle`, `true` by default: off, a settle prints no receipt, and the
+    till's print button prints one, marked as a copy.
+  - **Upgrade note:** additive, and nothing changes until a value is set, because each default is
+    what the edge did before. The console's new-store values gain `RECEIPT_LANGUAGE_COUNTRY`. A
+    store receives `country_language` when its locale node is next published, and until then a
+    `RECEIPT_LANGUAGE_COUNTRY` receipt prints in the display language. `docs/snapshots/settings.txt`
+    and `docs/configuration.md` list the two settings, and `pos-proto` gains the `printing` module,
+    additively. No route, event, migration, permission or protocol version change.
+
+- **A settled bill records each fee and its tax per class**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4, roadmap-v3 B4.1).
+  `billing.bill.settled` carries `tax_lines`, one per tax class with its base, rate and tax, and
+  `fee_lines` when a fee was charged, each with its code, the name the bill froze, its amount and
+  its tax. `service_charge` stays the sum of every fee, so a reader of that one figure stays right.
+  - **Upgrade note:** every settled event this release writes carries `tax_lines`, because every
+    bill has a tax class, so its bytes differ from an older edge's for the same sale. The fields
+    are additive: an older reader ignores them, and `PROTOCOL_VERSION` and `schema_version` are
+    unchanged. An event without them reads as no fee lines, and as tax lines *not recorded*. No
+    migration or permission changes.
+
+- **A new tenant starts with six roles**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). A tenant
+  created with `POST /admin/tenants` gets one editable role for each of `pos-core`'s built-in roles:
+  owner, manager, supervisor, cashier, server and cook. Each grants what the permission catalogue's
+  `default_roles` say. A permission the role is a default for is granted directly, a PIN-flagged one
+  it is not a default for is granted with approval, and nothing else is granted. None has a discount
+  ceiling.
+  - **Names come from the console's language packs**, the keys `people.startingRole.*`. The route
+    takes an optional `language`, which the console sends as the language it is shown in; one the
+    packs do not carry, or none, names the roles in English. Nothing about the tenant records it.
+  - **Audited as one `role.seed` entry** with the role ids and the counts, never a name, beside
+    `tenant.create`.
+  - **Idempotent.** Each starting role's id is derived from the tenant's, so seeding a tenant again
+    writes nothing and never overwrites a role its owner has renamed or changed. A seeding failure
+    is logged and the tenant still answers `201`, with whichever roles were written.
+  - **Upgrade note:** no migration, event or permission change, and no existing tenant is touched.
+    A tenant created after this release starts with six role templates rather than none, and
+    `POST /admin/tenants` records two audit entries where it recorded one.
+
+- **The edge charges a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decisions 2, 3 and 6), as the cloud publishes them (above).
+  - The edge installs the `fees` node. An absent node, or an empty list, is no fee; a node that
+    does not parse leaves the rules the store had, as every node does.
+  - Every bill open, at a table or at the counter, freezes the rules in force on its order's
+    channel into `billing.bill.opened`'s `fee_rules`, and the bill is computed from those until it
+    settles. A restart folds them back from the log. Until a bill opens, the check is quoted with
+    the rules a bill would freeze then. A bill opened again after a void freezes what is in force
+    then.
+  - A split part keeps its source's rules. A percentage or a fee per unit is charged on each
+    part's own lines. A fee per bill is allocated across the parts in proportion to the nets of
+    the lines it counts on each (`pos_core::billing::split_fee_rules`), so the parts charge
+    together what the whole bill would have, and a part with no share does not keep it. A merge
+    keeps the rules of the bill the cashier holds, and charges a fee per bill once (below).
+  - The check reads, `GET /api/tables/{id}/check`, `GET /api/orders/{id}/check` and
+    `GET /api/bills/{id}/check`, gain `fee_lines`: each fee's `fee_id`, `code`, `display_name`,
+    `amount` and `tax`. `service_charge` carries the sum of every fee, which the receipt and the
+    pre-bill itemise (above).
+  - `FrozenFee` and `BillFeeLine` carry the rule's own `display_name`, so a renamed fee prints as
+    it was charged, as an item's name does (ADR-0129). `pos_core::billing::FeeLine` gains `code`
+    and `display_name`.
+  - A bill whose lines do not come to its class bases is a broken invariant, since the edge reads
+    both from one snapshot. It now answers `500` with `LINES_DO_NOT_MATCH_BASES`, not a refusal.
+  - **Upgrade note:** a store charges no fee until a rule is written for it (above). Until then
+    every bill owes what it did, a settled bill records its tax per class (above), and the check
+    reads carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain
+    a required `display_name`; no event from an earlier release carries either. No migration,
+    permission or protocol version change.
+
+- **A store can be set to decide with each person's own permissions**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) Rollout,
+  [ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+  The edge has read the `enforced` switch on the `permissions` node since #572, and nothing wrote
+  it.
+  - `permissions.enforced` is a security setting in Shared settings, a switch at any scope:
+    `false` by default, and `true` for a store the console creates. The console's help text warns
+    that turning it on refuses whatever a person's roles do not grant.
+  - The cloud writes it on each store's Tenant layer, and the merge puts it beside the staff the
+    people compiler writes on the Store layer.
+  - A `permissions` node with no `staff` key, which is what a store with no people node receives,
+    now sets the switch and keeps the roster the edge holds. A `staff` list that is present, even
+    empty, still replaces it. An edge from before this release empties its roster for such a
+    node, so a settings publish logs how many stores it left with the switch and no people node,
+    as a count.
+  - **Upgrade note:** every store that exists stays off, because the default is `false`, until
+    someone turns the setting on. A store the console creates after this release enforces each
+    person's own permissions from its first day, so set up its roles, with the permissions each
+    person needs, before it opens. A store whose people the console has not published receives the
+    switch alone. An edge from this release keeps its roster then, and an older one empties it
+    until the people are published. No route, event, migration, permission or protocol version
+    changes.
+
+- **A till left untouched locks, and opens again with its person's PIN**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, `docs/pos-spec.md` §16). A till stayed signed in as its person until the edge's
+  sign-in idle timeout, thirty minutes by default, so anyone passing could use it meanwhile.
+  - A new security setting on the `session` node, `idle_lock_seconds` (0 to 3600, default 0, never).
+    The console gives a new store 120, two minutes, as the owner confirmed on 2026-10-01.
+  - After that long with no touch, key, click or scroll, the till signs its person out on the
+    store server and covers the screen. Their PIN opens it again, on the screen they left, so a
+    split's taken shares are still on the pay screen. A till that has reloaded since they signed in
+    asks for their staff code as well, which it keeps in memory only. **Sign in as someone else**
+    goes to the sign-in screen.
+  - The kitchen board, the pass and the screens before sign-in never lock.
+  - `GET /api/session` gains `idle_lock_seconds`, whoever is signed in. The till rereads it when a
+    new configuration is applied.
+  - **Upgrade note:** additive. The default, `0`, is today's behaviour, so no existing store's tills
+    lock until the setting is written. A store the console creates from now on locks after two
+    minutes. An edge that predates the field omits it from the session read, and the till then
+    never locks. No event, migration, permission or protocol version changes.
+
 - **The till hides what the signed-in person cannot do, where the store enforces each person's own
   permissions** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
   decision 6). Nothing turns enforcement on yet.
@@ -401,12 +1473,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `billing.bill.opened` gains `fee_rules`: the rules in force for the bill when it opens
     (active, clear of every fault, and applying on its channel), frozen, so a publish during the
     meal does not change what the pre-bill showed. A frozen rule (`pos_proto::fees::FrozenFee`)
-    carries every field the bill is computed from and its `code`, and not its name: the till
-    prints a fee's name from the `fees` node by its id. `PublishedFees::in_force` freezes the
-    rules for a channel.
-  - `billing.bill.settled` gains `fee_lines` (`fee_id`, `code`, `amount`, `tax`), one per fee
-    charged, and `tax_lines` (`tax_class_id`, `taxable_base`, `rate_basis_points`, `tax`), one per
-    tax class, summing to `tax_total`. No event carries a fee's name or a translation.
+    carries every field the bill is computed from, its `code` and its own `display_name`, and no
+    translation. `PublishedFees::in_force` freezes the rules for a channel.
+  - `billing.bill.settled` gains `fee_lines` (`fee_id`, `code`, `display_name`, `amount`, `tax`),
+    one per fee charged, and `tax_lines` (`tax_class_id`, `taxable_base`, `rate_basis_points`,
+    `tax`), one per tax class, summing to `tax_total`. No event carries a translation.
   - Each class's tax still rounds once, on its whole base (ADR-0028). It is then shared among the
     parts of that base in proportion, so the parts sum to it exactly: each fee's part, the service
     charge when it is taxed there, and the lines after their reductions. Each share is rounded
@@ -484,7 +1555,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `docs/snapshots/settings.txt` lists a whole number's `min=`, `max=` and `unit=`. These may change
     as a default may, because the cloud checks every value when it is written. A switch lists
     `value=false` and `value=true`.
-  - The `session` settings are the first whole numbers. No switch exists yet.
+  - The `session` settings are the first whole numbers, and `permissions.enforced` is the first
+    switch.
   - **Upgrade note:** additive. `values` is absent from the catalogue for a setting that is not a
     choice, and `default` and `preset` are typed JSON rather than always a string. The console this
     cloud serves reads both, and the one existing setting's entry is unchanged. No route, event,

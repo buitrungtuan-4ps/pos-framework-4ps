@@ -1,0 +1,23 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0081 — the language a kitchen station's tickets print in
+-- ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+-- decision 2).
+--
+-- Every kitchen ticket printed in the store's display language, whoever read it. An operator now
+-- says, per station, which language its cooks read:
+--
+--   * `ticket_language` — the wire token, one of the receipt language's: `RECEIPT_LANGUAGE_DISPLAY`,
+--                         `_COUNTRY`, `_VI` or `_EN`. No check constraint, as for
+--                         `device_proposals.paper_width` (0078): `pos-cloud` validates the token
+--                         before it writes, and widening a constraint for a language added later
+--                         would need a destructive statement.
+--
+-- Nullable, and the null is the whole compatibility story. Null is "nobody has said", which is
+-- published as nothing at all, and the edge reads nothing as the display language every ticket
+-- printed in until now. A fleet takes this release, every row reads null, and every store's
+-- `stations` node and every ticket stay as they were.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE kitchen_stations ADD COLUMN IF NOT EXISTS ticket_language text;

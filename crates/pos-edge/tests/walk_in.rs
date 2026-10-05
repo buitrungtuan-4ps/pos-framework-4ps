@@ -243,6 +243,41 @@ fn a_walk_in_survives_a_restart() {
     });
 }
 
+/// The live read names the channel each walk-in opened on, before a restart and after it, so a till
+/// that reloads on a walk-in shows the book of its channel and whether the guest eats in.
+#[test]
+fn the_live_read_names_the_channel_each_walk_in_opened_on() {
+    run_ready(async {
+        let channels = |edge: &Edge<FakeStore>| {
+            edge.live_orders()
+                .into_iter()
+                .map(|order| (order.order_id, order.sales_channel))
+                .collect::<Vec<_>>()
+        };
+        let store = FakeStore::default();
+        let opened = {
+            let edge = edge_over(store.clone(), session());
+            let mut opened = Vec::new();
+            for channel in [SalesChannel::DineIn, SalesChannel::Takeaway] {
+                let order = edge
+                    .open_counter_order(actor(), channel)
+                    .await
+                    .expect("opens");
+                edge.add_line_to_order(actor(), order.order_id, one_of(item()))
+                    .await
+                    .expect("adds");
+                opened.push((order.order_id, Some(channel)));
+            }
+            assert_eq!(channels(&edge), opened);
+            opened
+        };
+
+        let edge = edge_over(store, session());
+        edge.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(channels(&edge), opened, "the same channels after a restart");
+    });
+}
+
 /// A store that prices takeaway on its own charges a walk-in the takeaway price: 45,000 at 8% owes
 /// 48,600. It used to be charged 50,000, the dining room's price, taxed at the takeaway rate.
 #[test]

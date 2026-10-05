@@ -58,6 +58,12 @@ billing.discount.override_ceiling	default_role=OWNER
 billing.discount.override_ceiling	group=BILLING
 billing.discount.override_ceiling	pin_required=true
 billing.discount.override_ceiling	risk=HIGH
+billing.fee.waive
+billing.fee.waive	default_role=MANAGER
+billing.fee.waive	default_role=OWNER
+billing.fee.waive	group=BILLING
+billing.fee.waive	pin_required=true
+billing.fee.waive	risk=HIGH
 billing.payment.take
 billing.payment.take	default_role=CASHIER
 billing.payment.take	default_role=MANAGER
@@ -156,6 +162,13 @@ menu.item.edit	default_role=OWNER
 menu.item.edit	group=MENU_AND_INVENTORY
 menu.item.edit	pin_required=false
 menu.item.edit	risk=MEDIUM
+reports.takings.view
+reports.takings.view	default_role=MANAGER
+reports.takings.view	default_role=OWNER
+reports.takings.view	default_role=SUPERVISOR
+reports.takings.view	group=REPORTS
+reports.takings.view	pin_required=false
+reports.takings.view	risk=MEDIUM
 sales.item.mark_unavailable
 sales.item.mark_unavailable	default_role=CASHIER
 sales.item.mark_unavailable	default_role=COOK

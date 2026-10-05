@@ -7,6 +7,7 @@ use std::num::NonZeroU32;
 
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
 use tokio_postgres::NoTls;
+use tokio_postgres::error::SqlState;
 
 use pos_ports::event_store::{
     AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
@@ -277,6 +278,51 @@ const MIGRATION_0072: &str = include_str!("../migrations/0072_setting_values.sql
 /// `data_migrations` so a later boot does not hand back one an owner removed
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 const MIGRATION_0073: &str = include_str!("../migrations/0073_roles_keep_every_till_action.sql");
+
+/// A role grants each permission directly or with approval, and every role that exists is given,
+/// once, each PIN-flagged permission it does not grant directly, with approval
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4).
+const MIGRATION_0074: &str = include_str!("../migrations/0074_role_permissions_with_approval.sql");
+
+/// The fee rules a tenant writes, at tenant, brand or store scope, merged by fee id down the tree
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+const MIGRATION_0075: &str = include_str!("../migrations/0075_fee_rules.sql");
+
+/// Every role that exists is given, once, `billing.fee.waive` on the terms it grants
+/// `billing.discount.override_ceiling`: directly where it grants that directly, and with approval
+/// otherwise ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+const MIGRATION_0076: &str = include_str!("../migrations/0076_roles_can_waive_a_fee.sql");
+
+/// An assignment reaches a store group or every store of the tenant, beside the one-store rows
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
+const MIGRATION_0077: &str = include_str!("../migrations/0077_employee_scope_assignments.sql");
+
+/// What paper a printer takes and whether it cuts it, which the console sets and the edge lays a
+/// receipt out for ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0078: &str = include_str!("../migrations/0078_device_paper.sql");
+
+/// Every role that exists, closes a shift directly and grants a PIN-flagged permission directly is
+/// given, once, `reports.takings.view`, and no other role is: the approvers who close shifts, as a new
+/// tenant's are ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0079: &str =
+    include_str!("../migrations/0079_approvers_who_close_a_shift_see_takings.sql");
+
+/// How long a kitchen station's tickets wait before its display marks them late, which the console
+/// sets per station ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0080: &str = include_str!("../migrations/0080_station_late_after.sql");
+
+/// The language a kitchen station's tickets print in, which the console sets per station
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0081: &str = include_str!("../migrations/0081_station_ticket_language.sql");
+
+/// A till's own receipt printer and receipt languages, which the console sets per terminal
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
+const MIGRATION_0082: &str = include_str!("../migrations/0082_terminal_receipts.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -629,6 +675,42 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0073)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0074)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0075)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0076)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0077)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0078)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0079)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0080)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0081)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0082)
+            .await
             .map_err(unavailable)
     }
 
@@ -886,6 +968,24 @@ impl PostgresStore {
     #[must_use]
     pub fn settings(&self) -> crate::settings::PostgresSettings {
         crate::settings::PostgresSettings::new(self.pool.clone())
+    }
+
+    /// The record of the one-time data changes the cloud has made through its own code, rather
+    /// than in a migration's SQL (`data_migrations`, migration 0073).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `DataMigrations` seam over it.
+    #[must_use]
+    pub fn data_migrations(&self) -> crate::data_migrations::PostgresDataMigrations {
+        crate::data_migrations::PostgresDataMigrations::new(self.pool.clone())
+    }
+
+    /// A tenant's fee rules over this pool
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `FeeRuleStore` seam over it.
+    #[must_use]
+    pub fn fee_rules(&self) -> crate::fee_rules::PostgresFeeRules {
+        crate::fee_rules::PostgresFeeRules::new(self.pool.clone())
     }
 
     /// The reason-code authoring store over this pool
@@ -1242,6 +1342,23 @@ pub enum RowUpdate {
 /// Maps a database error to the port's unavailable status.
 pub(crate) fn unavailable(error: tokio_postgres::Error) -> PortError {
     PortError::unavailable(PortName::EventStore, "the cloud database failed").with_source(error)
+}
+
+/// Maps a failed insert whose one refusal is a unique index: a unique violation (SQLSTATE `23505`)
+/// is the row being there already, [`PortError::already_exists`] with `message`, and every other
+/// failure is the database's, as [`unavailable`] maps it.
+///
+/// A conflict is not an outage. Reported as `unavailable`, it told the console the service was down
+/// and invited a retry that can never succeed.
+pub(crate) fn already_exists_or_unavailable(
+    error: tokio_postgres::Error,
+    message: &'static str,
+) -> PortError {
+    if error.code() == Some(&SqlState::UNIQUE_VIOLATION) {
+        PortError::already_exists(PortName::EventStore, message).with_source(error)
+    } else {
+        unavailable(error)
+    }
 }
 
 /// Maps a pool checkout failure (no connection available) to the port's unavailable status.

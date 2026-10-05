@@ -7,7 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
-import { loadPermissions } from "./permissions";
+import { loadSession } from "./session";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -21,6 +21,7 @@ import type {
   OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
+  MenuResponse,
   ModifierGroup,
   PaymentRequest,
   DrawerOutcome,
@@ -82,7 +83,15 @@ export interface OrderLine {
 export interface Station {
   id: string;
   name: string;
+  // How long a ticket at this station waits, in seconds, before the board marks it late.
+  lateAfterSeconds: number;
 }
+
+// How long a ticket waits before the board marks it late when nothing says otherwise: a ticket whose
+// station the store did not publish, or an edge too old to send each station's own threshold. Ten
+// minutes, what every board used before a station could say (ADR-0160 decision 2).
+export const DEFAULT_LATE_AFTER_SECONDS = 600;
+
 
 export interface TableCard {
   id: string;
@@ -171,12 +180,14 @@ interface StoreShape {
   // Empty until it lands and on every store that has published none, which is every store today —
   // and the till then asks nothing, exactly as it did before the field existed.
   modifierGroups: ModifierGroup[];
-  // The walk-in channel's own price book and groups, from `GET /api/menu?channel=` (ADR-0066). A
-  // walk-in is priced by the edge at its order's channel, and a store may price takeaway apart from
-  // the dining room, so the counter shows this book rather than `menu`. Where the store prices only
-  // the dining room the edge serves that book here too, and the two are the same.
-  walkInMenu: MenuItemResponse[];
-  walkInModifierGroups: ModifierGroup[];
+  // The counter's price books and their groups, from `GET /api/menu?channel=` (ADR-0066), keyed by
+  // the sales channel each is read for. A walk-in is priced by the edge at its order's channel, and a
+  // store may price takeaway apart from the dining room, so the counter shows the book of the
+  // channel its walk-ins open on rather than `menu`: takeaway's, always read, and the dining room's,
+  // read where the store's walk-ins are eaten in. Where the store prices only the dining room the
+  // edge serves that book for every channel, and they are the same.
+  walkInMenu: Record<string, MenuItemResponse[]>;
+  walkInModifierGroups: Record<string, ModifierGroup[]>;
   // What kind of shop this is, from the same read. `docs/ui-ux.md` §3: the store profile decides the
   // starting screen and the flow — *"same components, different assembly, not three applications"*.
   //
@@ -201,6 +212,21 @@ interface StoreShape {
   // server who has not said whose dish it is has not said.
   seatForTable: Record<string, number>;
   acceptedTender: string[] | null;
+  // The store's tip keys, whole percentages in its order, from the same read (ADR-0160 decision 2).
+  // `null` until the read lands, and from an edge older than the setting: the till then offers the
+  // three keys it always did. An empty array is a real answer: the store offers no tip key, and the
+  // pay screen shows no tip row.
+  tipPercents: number[] | null;
+  // The most guests the pay screen's even split offers, from the same read (ADR-0160 decision 2).
+  // `null` until the read lands, and from an edge older than the setting: two to six, as always.
+  splitWaysMax: number | null;
+  // The channel the counter opens a walk-in on, from the same read (ADR-0160 decision 2):
+  // `WALK_IN_CHANNEL_TAKEAWAY`, `_DINE_IN` or `_ASK`. `null` until the read lands, and from an edge
+  // older than the setting, which opens every walk-in for takeaway.
+  walkInChannel: string | null;
+  // The sales channel of each walk-in whose channel the till knows: the one this till opened it on,
+  // or the one the edge's live read names. A walk-in it has no channel for is on the store's.
+  walkInChannels: Record<string, string>;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
@@ -294,12 +320,16 @@ const [state, setState] = createStore<StoreShape>({
   coursesEnabled: false,
   courses: [],
   modifierGroups: [],
-  walkInMenu: [],
-  walkInModifierGroups: [],
+  walkInMenu: {},
+  walkInModifierGroups: {},
   tablesEnabled: true,
   kdsEnabled: true,
   seatForTable: {},
   acceptedTender: null,
+  tipPercents: null,
+  splitWaysMax: null,
+  walkInChannel: null,
+  walkInChannels: {},
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
@@ -409,12 +439,22 @@ export async function loadFloor(): Promise<void> {
       draft.stations = (response.stations.stations ?? []).map((station) => ({
         id: station.station_id,
         name: station.name,
+        lateAfterSeconds: station.late_after_seconds ?? DEFAULT_LATE_AFTER_SECONDS,
       }));
     }),
   );
 }
 
 // ---- reading ----------------------------------------------------------------
+
+// The threshold the board marks a ticket at `stationId` late after: its station's, as the edge sent
+// it, or the default for a station the store did not publish.
+export function lateAfterSeconds(stationId: string | undefined): number {
+  return (
+    state.stations.find((station) => station.id === stationId)?.lateAfterSeconds ??
+    DEFAULT_LATE_AFTER_SECONDS
+  );
+}
 
 export function tableState(tableId: string): string {
   return state.tableState[tableId] ?? "TABLE_STATE_FREE";
@@ -623,6 +663,37 @@ export function fold(event: ServerEvent): void {
           produce((draft) =>
             moveOrder(draft, order, from, to, "TABLE_STATE_NEEDS_CLEANING", "TABLE_STATE_OCCUPIED"),
           ),
+        );
+      }
+      break;
+    }
+    // A guest's QR order that joined the table's order (ADR-0160 item 2), as it arrived or when
+    // staff confirmed it: its lines are the table's order's from now on, the table holds that
+    // order, and the guest's own order is off every board — the same fold the edge makes.
+    case "sales.table.merged": {
+      const target = str(payload, "target_order_id");
+      const merged = str(payload, "merged_order_id");
+      if (target !== null && merged !== null && target !== merged) {
+        setState(
+          produce((draft) => {
+            let moved = false;
+            for (const line of Object.values(draft.lines)) {
+              if (line.orderId === merged) {
+                line.orderId = target;
+                moved = true;
+              }
+            }
+            if (moved) {
+              draft.liveOrders[target] = true;
+            }
+            draft.liveOrders[merged] = false;
+            const table = draft.orderTable[merged];
+            if (table !== undefined && draft.tableOrder[table] === merged) {
+              draft.tableOrder[table] = target;
+              draft.orderTable[target] = table;
+            }
+            delete draft.orderTable[merged];
+          }),
         );
       }
       break;
@@ -913,7 +984,9 @@ export function modifierNames(line: OrderLine): string[] {
   const named = (id: string) =>
     (
       state.menu.find((item) => item.menu_item_id === id) ??
-      state.walkInMenu.find((item) => item.menu_item_id === id)
+      Object.values(state.walkInMenu)
+        .flat()
+        .find((item) => item.menu_item_id === id)
     )?.display_name;
   return line.modifierMenuItemIds.map((id) => named(id) ?? id);
 }
@@ -1100,10 +1173,12 @@ function setSoldOut(menuItemId: string, soldOut: boolean): void {
   if (index >= 0) {
     setState("menu", index, { sold_out: soldOut, available: !soldOut });
   }
-  // A mark is the store's, whatever channel the dish sells on: the counter's book follows it.
-  const walkIn = state.walkInMenu.findIndex((item) => item.menu_item_id === menuItemId);
-  if (walkIn >= 0) {
-    setState("walkInMenu", walkIn, { sold_out: soldOut, available: !soldOut });
+  // A mark is the store's, whatever channel the dish sells on: the counter's books follow it.
+  for (const [channel, book] of Object.entries(state.walkInMenu)) {
+    const walkIn = book.findIndex((item) => item.menu_item_id === menuItemId);
+    if (walkIn >= 0) {
+      setState("walkInMenu", channel, walkIn, { sold_out: soldOut, available: !soldOut });
+    }
   }
 }
 
@@ -1286,18 +1361,22 @@ export function holdWalkIn(orderId: string): void {
 
 /**
  * Opens a tableless order at the counter and returns its id (ADR-0146). The edge records it, gives
- * it the day's next queue number, and prices every line added to it at the order's own channel.
+ * it the day's next queue number, and prices every line added to it at the order's own channel:
+ * `channel` where the cashier asked the guest, and the store's walk-in channel otherwise.
  */
-export async function startWalkIn(): Promise<string> {
-  const opened = await api.openOrder();
+export async function startWalkIn(channel?: string): Promise<string> {
+  const opened = await api.openOrder(channel);
   holdWalkIn(opened.order_id);
+  if (channel !== undefined) {
+    setState("walkInChannels", opened.order_id, channel);
+  }
   return opened.order_id;
 }
 
 // A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
-// edge's figure; the counter shows the walk-in channel's own book (`walkInMenu`), the one the edge
-// prices a walk-in from, so the two agree.
+// edge's figure; the counter shows the book of the channel its walk-ins open on (`walkInMenu`), the
+// one the edge prices a walk-in from, so the two agree.
 async function addItemToWalkIn(
   orderId: string,
   key: string,
@@ -1410,6 +1489,48 @@ export function tipsEnabled(): boolean {
   return state.tipsEnabled;
 }
 
+// The tip keys the pay screen offered before a store could set its own: five, ten and fifteen
+// percent of the bill.
+const DEFAULT_TIP_PERCENTS: readonly number[] = [5, 10, 15];
+
+// The tip keys the pay screen offers, as whole percentages of the bill in the store's order: what
+// the edge sent, or the three it always offered where it sent nothing.
+export function tipPercents(): readonly number[] {
+  return state.tipPercents ?? DEFAULT_TIP_PERCENTS;
+}
+
+// The keys an edge sent, or `null` where it sent none the till can use: at most three, the most the
+// row has room for, each a whole percentage from 1 to 100. Anything else and the till offers its
+// own three.
+function readTipPercents(sent: unknown): number[] | null {
+  if (!Array.isArray(sent) || sent.length > DEFAULT_TIP_PERCENTS.length) {
+    return null;
+  }
+  const keys = sent.filter(
+    (percent): percent is number => Number.isInteger(percent) && percent > 0 && percent <= 100,
+  );
+  return keys.length === sent.length ? keys : null;
+}
+
+// The most guests the even split offered before a store could set its own, and the most a store
+// may set.
+const DEFAULT_SPLIT_WAYS_MAX = 6;
+const SPLIT_WAYS_LIMIT = 12;
+
+// The guest counts the pay screen's even split offers: every number from two up to the store's
+// most, or up to six where the edge sent none.
+export function splitWays(): readonly number[] {
+  const most = state.splitWaysMax ?? DEFAULT_SPLIT_WAYS_MAX;
+  return Array.from({ length: most - 1 }, (_, index) => index + 2);
+}
+
+// The most an edge sent, or `null` where it sent none the till can use: a whole number from 2 to 12.
+function readSplitWaysMax(sent: unknown): number | null {
+  return Number.isInteger(sent) && (sent as number) >= 2 && (sent as number) <= SPLIT_WAYS_LIMIT
+    ? (sent as number)
+    : null;
+}
+
 // Whether the store accepts `method` (a `PAYMENT_METHOD_*` wire name).
 //
 // An unloaded or unrestricted store accepts everything, which is why both are `true` rather than
@@ -1420,17 +1541,68 @@ export function tenderAccepted(method: string): boolean {
   return accepted === null || accepted.includes(method);
 }
 
+// The channels the counter reads a book for (ADR-0146): takeaway, the channel every walk-in took
+// before a store could choose, and the dining room, for a store whose walk-ins are eaten in.
+const TAKEAWAY = "SALES_CHANNEL_TAKEAWAY";
+const DINE_IN = "SALES_CHANNEL_DINE_IN";
+
+// What a store may set its walk-ins to (ADR-0160 decision 2).
+const WALK_IN_CHANNELS: readonly string[] = [
+  "WALK_IN_CHANNEL_TAKEAWAY",
+  "WALK_IN_CHANNEL_DINE_IN",
+  "WALK_IN_CHANNEL_ASK",
+];
+
+// The channel the counter opens a walk-in on, as the edge sent it with the price book (ADR-0160
+// decision 2), and takeaway where it sent none: an edge older than the setting opens every walk-in
+// for takeaway.
+export function walkInChannel(): string {
+  return state.walkInChannel ?? "WALK_IN_CHANNEL_TAKEAWAY";
+}
+
+// The sales channel a walk-in opens on when the till names none: the dining room where the store
+// eats its walk-ins in, and takeaway otherwise. Under `WALK_IN_CHANNEL_ASK` the till names the
+// guest's answer, and only an older till names none; the edge then opens takeaway.
+export function walkInSalesChannel(): string {
+  return walkInChannel() === "WALK_IN_CHANNEL_DINE_IN" ? DINE_IN : TAKEAWAY;
+}
+
+// Whether the counter asks each walk-in guest whether they eat in or take away.
+export function walkInAsks(): boolean {
+  return walkInChannel() === "WALK_IN_CHANNEL_ASK";
+}
+
+// The sales channel a walk-in is on, whose book the order screen shows: the one it was opened on
+// where the till knows it, and the store's walk-in channel otherwise.
+export function walkInOrderChannel(orderId: string): string {
+  return state.walkInChannels[orderId] ?? walkInSalesChannel();
+}
+
+// Whether a walk-in is eaten in, which the order screen says where the store asks: as the till
+// opened it or the edge's live read names it, and `undefined` while the till does not know.
+export function walkInEatenIn(orderId: string): boolean | undefined {
+  const channel = state.walkInChannels[orderId];
+  return channel === undefined ? undefined : channel === DINE_IN;
+}
+
+// The channel an edge sent, or `null` where it sent none the till knows.
+function readWalkInChannel(sent: unknown): string | null {
+  return typeof sent === "string" && WALK_IN_CHANNELS.includes(sent) ? sent : null;
+}
+
+// Holds the book an edge served for `channel`, merged by id as the store's own book is.
+function setWalkInBook(channel: string, book: MenuResponse): void {
+  setState("walkInMenu", channel, reconcile(book.items, { key: "menu_item_id" }));
+  setState("walkInModifierGroups", channel, book.modifier_groups);
+}
+
 // Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
 // failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
 // empty menu is a real answer — the store has published none — and the screen says so.
-// The channel a walk-in is opened on: the edge's default for `POST /api/orders` (ADR-0146), which
-// this till's counter never overrides.
-const WALK_IN_CHANNEL = "SALES_CHANNEL_TAKEAWAY";
-
 export async function loadMenu(): Promise<void> {
   // Two reads, each applied on its own: a walk-in book that fails to arrive must not keep the store's
   // own book from loading, and the reverse.
-  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(WALK_IN_CHANNEL)]);
+  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(TAKEAWAY)]);
   if (own.status === "fulfilled") {
     const response = own.value;
     // Merged by id rather than replaced, so an item that did not change keeps its place and its
@@ -1444,12 +1616,22 @@ export async function loadMenu(): Promise<void> {
     setState("tablesEnabled", response.tables_enabled);
     setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
+    setState("tipPercents", readTipPercents(response.tip_percents));
+    setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
+    setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
     setState("coursesEnabled", response.courses_enabled);
     setState("courses", response.courses);
   }
   if (walkIn.status === "fulfilled") {
-    setState("walkInMenu", reconcile(walkIn.value.items, { key: "menu_item_id" }));
-    setState("walkInModifierGroups", walkIn.value.modifier_groups);
+    setWalkInBook(TAKEAWAY, walkIn.value);
+  }
+  // The dining room's book as well where the store's walk-ins are eaten in, or may be, read once
+  // the store's own book has said so: a store that sets nothing reads what it always read.
+  if (walkInChannel() !== "WALK_IN_CHANNEL_TAKEAWAY") {
+    await api.menu(DINE_IN).then(
+      (book) => setWalkInBook(DINE_IN, book),
+      () => undefined,
+    );
   }
   // A read that failed keeps whatever it last loaded; the next boot or reload tries again.
 }
@@ -1592,6 +1774,15 @@ export async function loadLiveOrders(): Promise<void> {
       // The answer is the whole live set, so it replaces the one held rather than merging into it:
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
+      // The channel of each walk-in the edge names one for, replacing the set held for the same
+      // reason: a walk-in that is no longer live needs no book.
+      draft.walkInChannels = Object.fromEntries(
+        orders.flatMap((order) =>
+          order.table_id === undefined && order.sales_channel !== undefined
+            ? [[order.order_id, order.sales_channel] as const]
+            : [],
+        ),
+      );
       // The same for the kitchen's own set, when the edge answered: a paid order it no longer
       // lists has been bumped, or its day has ended.
       if (kitchen !== null) {
@@ -1661,11 +1852,11 @@ export async function loadStore(): Promise<void> {
 }
 
 // What the till draws from the store's configuration: the floor, both price books, the console's
-// button plan, the money settings, the reason codes and what the signed-in person may do, which the
-// published `permissions` node decides (ADR-0158 decision 6). The edge says `config_applied` on the
-// live link when a new version is live (ADR-0160 item 7), and an open till reloads these then,
-// without a new sign-in; the boot gate and sign-in read them through loadStore. Forgiving like each
-// loader it calls.
+// button plan, the money settings, the reason codes, the idle lock and what the signed-in person
+// may do, which the published `permissions` node decides (ADR-0158 decision 6). The edge says
+// `config_applied` on the live link when a new version is live (ADR-0160 item 7), and an open till
+// reloads these then, without a new sign-in; the boot gate and sign-in read them through loadStore.
+// Forgiving like each loader it calls.
 export async function loadConfiguration(): Promise<void> {
   await Promise.all([
     loadFloor(),
@@ -1673,7 +1864,8 @@ export async function loadConfiguration(): Promise<void> {
     loadLayout(),
     loadLocale(),
     loadReasonCodes(),
-    loadPermissions(),
+    // One read of `GET /api/session` for the idle lock and the person's permissions both.
+    loadSession(),
   ]);
 }
 
@@ -1696,6 +1888,8 @@ export async function loadShift(): Promise<void> {
       : {
           shiftId: response.shift_id,
           state: response.state,
+          // Only where the store's count is not blind (ADR-0160): a blind store is sent none.
+          expected: response.expected_amount,
           counted: response.counted_amount,
           paidIn: response.paid_in_amount,
           paidOut: response.paid_out_amount,
@@ -1853,6 +2047,17 @@ export async function applyDiscount(
     reason_code_id: reasonCodeId,
     ...approval,
   });
+}
+
+// Waives one of a bill's fees, citing a reason (ADR-0159 decision 5). The answer is the bill as it
+// now stands, which the screen shows in place of what it held.
+export async function waiveFee(
+  billId: string,
+  feeId: string,
+  reasonCodeId: string,
+  approval?: ApproverRequest,
+): Promise<CheckResponse> {
+  return api.waiveFee(billId, feeId, { reason_code_id: reasonCodeId, ...approval });
 }
 
 export async function voidBill(
@@ -2021,6 +2226,7 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
   const response = await api.countShift(shiftId, { counted_minor: countedMinor });
   setState("shift", "state", response.state);
   setState("shift", "counted", response.counted_amount);
+  setState("shift", "expected", response.expected_amount);
 }
 
 export async function closeShift(shiftId: string): Promise<ShiftInfo> {
@@ -2052,6 +2258,8 @@ export async function recordCashMovement(
     direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
   setState("shift", "paidIn", response.paid_in_amount);
   setState("shift", "paidOut", response.paid_out_amount);
+  // A movement moves what the drawer should hold, which a store whose count is not blind is shown.
+  setState("shift", "expected", response.expected_amount);
   return response.drawer_open;
 }
 

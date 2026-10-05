@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use pos_core::capability::Capability;
+use pos_core::error::DomainError;
 use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
@@ -150,6 +152,18 @@ where
                 PortName::OrderIn,
                 "this store does not accept orders on that sales channel",
             ));
+        }
+        // QR ordering is one switch, the `qr_ordering_enabled` capability (ADR-0160 decision 5): a
+        // QR order is refused where the store's configuration switches it off, whether the guest
+        // page relayed it or a keyed caller sent it. A configuration that does not carry the switch
+        // decides by the channel list above alone, as this did before the switch, so an edge that
+        // updates before its cloud refuses nothing it took (`EdgeSession::qr_ordering_switched_off`).
+        if channel == SalesChannel::Qr && session.qr_ordering_switched_off() {
+            return Err(port_error_from_app(AppError::Domain(
+                DomainError::CapabilityDisabled {
+                    capability: Capability::QrOrdering.meta().key,
+                },
+            )));
         }
         let mut priced_lines: Vec<(PricedLine, Option<NoteText>)> =
             Vec::with_capacity(order.lines.len());

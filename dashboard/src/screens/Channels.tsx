@@ -5,6 +5,13 @@
 // store chosen in the top bar. The edge applies channels/tender as gates and qr as its staff-confirm
 // source; the live marketplace loop for vendor policy is a flagged follow-up.
 //
+// QR ordering is one switch (ADR-0160 decision 5), the capability flag `qr_ordering_enabled`, and it
+// sits here, above the guardrails it governs. The cloud's guest intake and the edge read it, and the
+// cloud makes `qr.enabled` and the QR sales channel follow it on every publish of the switch, the
+// `qr` node or the channel list. So this screen never offers `qr.enabled`, and the channels card's QR
+// box shows the switch rather than being one: a channel list published here gets its QR channel
+// from the switch.
+//
 // The fifth card is `origins` (ADR-0111): which other origins that store's edge answers. It sits here
 // rather than on Store settings because it is the same publish-a-node-to-one-store shape as the four
 // above, and because it is a *channel* question in every sense that matters — a native shell or a
@@ -16,8 +23,10 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
+  QR_ORDERING_SWITCH,
   SALES_CHANNELS,
   VENDOR_AVAILABILITIES,
+  type Json,
   type QrGuardrails,
   type SalesChannel,
   type VendorAvailability,
@@ -36,6 +45,7 @@ import {
   CheckboxField,
   PageHeader,
   SelectField,
+  SwitchField,
   TextField,
 } from "../components/ui";
 import { PublishBar } from "../components/kit";
@@ -84,9 +94,19 @@ const AVAILABILITY_LABEL: Record<VendorAvailability, MessageKey> = {
  */
 const MAX_ORIGINS = 8;
 
+/**
+ * Whether a store's effective document has QR ordering on: its switch, or off when the document
+ * does not set it, which is the switch's declared default (`GET /admin/capabilities`).
+ */
+function qrSwitchOf(document: Json | null): boolean {
+  if (document !== null && typeof document === "object" && !Array.isArray(document)) {
+    return (document as Record<string, Json>)[QR_ORDERING_SWITCH] === true;
+  }
+  return false;
+}
+
 /** The QR guardrail defaults, matching the server's `QrConfig::default` (ADR-0057). */
 const QR_DEFAULTS: QrGuardrails = {
-  enabled: true,
   staff_confirmation_required: true,
   per_table_limit: 10,
   rate_window_secs: 60,
@@ -100,6 +120,9 @@ export function Channels() {
   const [channels, setChannels] = createSignal<SalesChannel[]>([]);
   const [tender, setTender] = createSignal<string[]>([]);
   const [qr, setQr] = createSignal<QrGuardrails>({ ...QR_DEFAULTS });
+  // The switch as the operator has set it here, and as the store last had it published.
+  const [qrOn, setQrOn] = createSignal(false);
+  const [qrPublished, setQrPublished] = createSignal(false);
   const [qrHoursOn, setQrHoursOn] = createSignal(false);
   const [qrOpen, setQrOpen] = createSignal("0");
   const [qrClose, setQrClose] = createSignal("0");
@@ -107,7 +130,8 @@ export function Channels() {
   const [vendors, setVendors] = createSignal<VendorPolicy[]>([]);
   const [origins, setOrigins] = createSignal<string[]>([]);
 
-  // The five store-scoped nodes this screen authors, read together.
+  // The five store-scoped nodes this screen authors, read together, and the effective document for
+  // QR ordering's switch, a top-level flag rather than a node.
   //
   // Without a store there is nothing to read: the nodes are per-shop, so the read answers `null`
   // for each rather than refusing, and the forms below fall back to their defaults. That is a fact
@@ -117,14 +141,15 @@ export function Channels() {
       if (!store) {
         return null;
       }
-      const [channels, tender, qr, vendors, origins] = await Promise.all([
+      const [channels, tender, qr, vendors, origins, effective] = await Promise.all([
         api.readChannels(tenant, store),
         api.readTender(tenant, store),
         api.readQrGuardrails(tenant, store),
         api.readVendorPolicies(tenant, store),
         api.readOrigins(tenant, store),
+        api.effectiveConfig(tenant, store),
       ]);
-      return { channels, tender, qr, vendors, origins };
+      return { channels, tender, qr, vendors, origins, effective };
     },
     { scope: "tenant" },
   );
@@ -148,12 +173,17 @@ export function Channels() {
       setChannels([...SALES_CHANNELS]);
       setTender([...PAYMENT_METHODS]);
       setQr({ ...QR_DEFAULTS });
+      setQrOn(false);
+      setQrPublished(false);
       setVendors([]);
       setOrigins([]);
       return;
     }
     setChannels(read.channels ? [...read.channels.enabled] : [...SALES_CHANNELS]);
     setTender(read.tender ? [...read.tender.accepted] : [...PAYMENT_METHODS]);
+    const switchedOn = qrSwitchOf(read.effective);
+    setQrOn(switchedOn);
+    setQrPublished(switchedOn);
     const guardrails = read.qr ?? { ...QR_DEFAULTS };
     setQr(guardrails);
     setQrHoursOn(Boolean(guardrails.business_hours));
@@ -232,7 +262,6 @@ export function Channels() {
       hours = { open_hour: open, close_hour: close, tz_offset_minutes: offset };
     }
     return {
-      enabled: qr().enabled,
       staff_confirmation_required: qr().staff_confirmation_required,
       per_table_limit: limit,
       rate_window_secs: window,
@@ -249,6 +278,27 @@ export function Channels() {
     try {
       await api.publishQrGuardrails(tenantId(), storeId(), guardrails);
       toast.ok(t("channels.qrPublished", { store: storeName() }));
+      await published.refresh();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The switch is published as the capability flag it is. The cloud writes `qr.enabled` and the QR
+  // channel with it, so the channels card's QR box follows once this lands.
+  const publishQrSwitch = async () => {
+    const on = qrOn();
+    setBusy(true);
+    try {
+      await api.publishCapabilities(tenantId(), storeId(), { [QR_ORDERING_SWITCH]: on });
+      setQrPublished(on);
+      toast.ok(
+        t(on ? "channels.qrSwitchPublishedOn" : "channels.qrSwitchPublishedOff", {
+          store: storeName(),
+        }),
+      );
       await published.refresh();
     } catch (caught) {
       fail(caught);
@@ -348,14 +398,27 @@ export function Channels() {
                 <div class="flex flex-wrap gap-3">
                   <For each={SALES_CHANNELS}>
                     {(channel) => (
-                      <CheckboxField
-                        label={t(CHANNEL_LABEL[channel])}
-                        checked={channels().includes(channel)}
-                        onChange={() => toggleChannel(channel)}
-                      />
+                      <Show
+                        when={channel !== "SALES_CHANNEL_QR"}
+                        fallback={
+                          <CheckboxField
+                            label={t(CHANNEL_LABEL[channel])}
+                            checked={qrPublished()}
+                            disabled
+                            onChange={() => undefined}
+                          />
+                        }
+                      >
+                        <CheckboxField
+                          label={t(CHANNEL_LABEL[channel])}
+                          checked={channels().includes(channel)}
+                          onChange={() => toggleChannel(channel)}
+                        />
+                      </Show>
                     )}
                   </For>
                 </div>
+                <p class="text-xs text-ink-muted">{t("channels.qrChannelFollows")}</p>
                 <PublishBar
                   label={t("channels.publishTo", { store: storeName() })}
                   publishedAtMs={published.publishedAtMs("channels")}
@@ -398,16 +461,39 @@ export function Channels() {
             ))}
           </Card>
 
+          {/* QR ordering's one switch */}
+          <Card title={t("channels.qrSwitchTitle")}>
+            <p class="mb-3 text-sm text-ink-muted">{t("channels.qrSwitchHint")}</p>
+            {storeGate(() => (
+              <div class="flex flex-col gap-4">
+                <SwitchField
+                  label={t("channels.qrSwitch")}
+                  checked={qrOn()}
+                  onChange={setQrOn}
+                  onLabel={t("channels.qrSwitchOn")}
+                  offLabel={t("channels.qrSwitchOff")}
+                  disabled={busy()}
+                />
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs(QR_ORDERING_SWITCH)}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishQrSwitch")}
+                  busy={busy()}
+                  preview={previewNode("capabilities", tenantId(), storeId(), {
+                    flags: { [QR_ORDERING_SWITCH]: qrOn() },
+                  })}
+                  onPublish={() => void publishQrSwitch()}
+                />
+              </div>
+            ))}
+          </Card>
+
           {/* QR guardrails */}
           <Card title={t("channels.qrTitle")}>
             <p class="mb-3 text-sm text-ink-muted">{t("channels.qrHint")}</p>
             {storeGate(() => (
               <div class="flex flex-col gap-3">
-                <CheckboxField
-                  label={t("channels.qrEnabled")}
-                  checked={qr().enabled}
-                  onChange={(on) => setQr({ ...qr(), enabled: on })}
-                />
                 <CheckboxField
                   label={t("channels.qrStaffConfirm")}
                   checked={qr().staff_confirmation_required}

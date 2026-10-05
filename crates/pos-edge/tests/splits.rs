@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use pos_core::decision::Actor;
 use pos_core::error::{DomainError, PartitionFault};
-use pos_edge::{Edge, EdgeSession, InMemoryReceipts, LineDraft, StoreIdentity};
+use pos_edge::{Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StoreIdentity};
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_ports::event_store::{EventQuery, EventStore};
@@ -119,6 +119,36 @@ async fn a_bill_of(edge: &Edge<FakeStore>, count: usize) -> (BillId, Vec<OrderLi
         .open_bill(server(), table())
         .await
         .expect("opens the bill");
+    (bill.bill_id, lines)
+}
+
+/// Starts an order at the counter, sells it `count` things, and opens its bill.
+async fn a_counter_bill_of(edge: &Edge<FakeStore>, count: usize) -> (BillId, Vec<OrderLineId>) {
+    let order = edge
+        .open_counter_order(server(), SalesChannel::DineIn)
+        .await
+        .expect("the counter opens an order")
+        .order_id;
+    let mut lines = Vec::new();
+    for _ in 0..count {
+        let dish = OrderLineChoice {
+            menu_item_id: item(),
+            quantity: Quantity::ONE,
+            modifier_menu_item_ids: Vec::new(),
+            seat: None,
+            course_id: None,
+            note_present: false,
+        };
+        let view = edge
+            .add_line_to_order(server(), order, dish)
+            .await
+            .expect("adds");
+        lines.push(view.order_line_id);
+    }
+    let bill = edge
+        .open_bill_for_order(server(), order)
+        .await
+        .expect("opens its bill");
     (bill.bill_id, lines)
 }
 
@@ -342,6 +372,67 @@ fn a_bill_cannot_be_merged_into_itself() {
             edge.bill_totals(bill).expect("totals").total_due,
             vnd(110_000),
             "and the bill still owes what it did"
+        );
+    });
+}
+
+/// **Two counter orders' bills do not merge.** They share a table, none, so the table check let
+/// them through, and the survivor charged only its own order: a settle reads a bill's lines from its
+/// own order, so the other order's food was charged nothing, and its bill, merged, could never be
+/// paid. Refused before anything is written, so each still owes what it did.
+#[test]
+fn bills_on_two_counter_orders_are_not_merged() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        let (first, _) = a_counter_bill_of(&edge, 1).await;
+        let (second, _) = a_counter_bill_of(&edge, 2).await;
+
+        let refused = edge.merge_bills(server(), first, vec![second]).await;
+        assert!(
+            matches!(refused, Err(pos_edge::AppError::BillsOnDifferentOrders)),
+            "got {refused:?}"
+        );
+        for (bill, owed) in [(first, 55_000), (second, 110_000)] {
+            let check = edge.bill_check(bill).expect("reads");
+            assert_eq!(check.state, pos_proto::BillState::Open);
+            assert_eq!(check.totals.total_due, vnd(owed));
+        }
+        assert!(
+            !logged(&store)
+                .await
+                .contains(&"billing.bill.merged".to_owned()),
+            "and nothing was written"
+        );
+
+        // A table's bill and a counter's are on two tables too, and keep that answer.
+        let (at_the_table, _) = a_bill_of(&edge, 1).await;
+        let refused = edge.merge_bills(server(), at_the_table, vec![first]).await;
+        assert!(
+            matches!(refused, Err(pos_edge::AppError::BillsOnDifferentTables)),
+            "got {refused:?}"
+        );
+    });
+}
+
+/// A counter bill split in two merges back, as a table's does: its parts are one order's.
+#[test]
+fn a_split_counter_bill_merges_back() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let (bill, lines) = a_counter_bill_of(&edge, 2).await;
+        let parts = edge
+            .split_bill(server(), bill, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+        let survivor = edge
+            .merge_bills(server(), parts[0], vec![parts[1]])
+            .await
+            .expect("one order's parts merge back");
+        assert_eq!(
+            edge.bill_totals(survivor).expect("totals").total_due,
+            vnd(110_000),
+            "and the survivor owes the whole order"
         );
     });
 }

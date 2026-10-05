@@ -93,24 +93,29 @@ use pos_proto::channels::{
     PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
 };
 use pos_proto::determinism::ClockSource;
-use pos_proto::devices::{DeviceConnection, PublishedDevice, PublishedDevices};
+use pos_proto::devices::{DeviceConnection, PaperWidth, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::fees::{
+    FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees,
+};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
-    SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
+    DisplaySubcategoryId, EventId, FeeId, IngredientId, MenuItemId, ReasonCodeId, StationId,
+    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
 };
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
 use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
-use pos_proto::money::CurrencyCode;
+use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
+use pos_proto::session::PublishedSession;
 use pos_proto::settings::{SettingScope, ValueRefusal};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
@@ -175,6 +180,10 @@ use crate::devices::{
     DeviceWriteOutcome, PersistedDeviceProposal,
 };
 use crate::export;
+use crate::fees::{
+    CategoryItems, FeePlacement, FeeRule, FeeRuleSlot, FeeRuleStore, FeeRuleStoreError, FeeScope,
+    StoreFacts, StoreFault,
+};
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
@@ -206,10 +215,11 @@ use crate::ota::{
 };
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
-    Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeListFilter,
-    EmployeeSort, EmployeeStore, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
-    PermissionInfo, RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate,
-    is_known_permission, permission_catalogue,
+    Assignment, AssignmentId, AssignmentScope, AssignmentScopeKind, AssignmentStore,
+    AssignmentStoreError, Employee, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate,
+    RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate, is_known_permission,
+    is_pin_flagged_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
@@ -232,7 +242,8 @@ use crate::releases::{
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
-use crate::settings::SettingsStore;
+use crate::settings::{SettingsStore, SettingsStoreError};
+use crate::starting_roles::StartingRoles;
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
     StoreGroupStore, StoreGroupStoreError,
@@ -352,6 +363,9 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
     /// no-op, so a route can always record unconditionally; the binary wires the real store in.
     audit: Arc<dyn AuditRecorder>,
+    /// When QR ordering got one switch ([`crate::qr_ordering::OneSwitch::since`]): a rollback to a
+    /// version published before then is settled. `None` restores every version as it is.
+    qr_switch_since: Option<pos_proto::Timestamp>,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -391,6 +405,7 @@ where
             orders_rate_limiter: self.orders_rate_limiter.clone(),
             trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
+            qr_switch_since: self.qr_switch_since,
         }
     }
 }
@@ -435,6 +450,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             ),
             trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
             audit: Arc::new(NoopAuditRecorder),
+            qr_switch_since: None,
         }
     }
 
@@ -573,6 +589,16 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub fn with_internal_shared_secret(mut self, secret: Option<InternalSecret>) -> Self {
         self.internal_shared_secret = secret;
+        self
+    }
+
+    /// Sets when QR ordering got one switch, which the binary reads from its one-time setting
+    /// ([`crate::qr_ordering::run_once`]): a rollback to a version published before then gives it
+    /// the switch it ran ([`crate::qr_ordering::settle`]). Left unset, a rollback restores every
+    /// version as it is.
+    #[must_use]
+    pub const fn with_qr_switch_since(mut self, since: pos_proto::Timestamp) -> Self {
+        self.qr_switch_since = Some(since);
         self
     }
 }
@@ -738,6 +764,10 @@ where
         .route(
             "/admin/stores/{store_id}/revenue/export",
             get(admin_export_revenue::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/revenue/fees/export",
+            get(admin_export_revenue_fees::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/webhooks",
@@ -3124,6 +3154,14 @@ where
             "/admin/devices/proposals/{id}/drawer",
             post(set_drawer_attached::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/paper",
+            post(admin_set_printer_paper::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/receipt",
+            post(admin_set_terminal_receipt::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -3665,32 +3703,19 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state
+    let written = state
         .devices
         .set_agent(tenant_id, id, agent, expected.as_str())
-        .await
-    {
-        Ok(DeviceWriteOutcome::Updated) => {
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "device_proposal.set_agent",
-                "device_proposal",
-                &id.to_string(),
-                None,
-                Some(serde_json::json!({
-                    "agent_device_id": agent.map(|agent| agent.to_string()),
-                })),
-            )
-            .await;
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(DeviceWriteOutcome::VersionMismatch) => version_mismatch(),
-        Ok(DeviceWriteOutcome::NotFound) => not_found("device"),
-        Err(error) => device_error_response(&error),
-    }
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_agent",
+        serde_json::json!({ "agent_device_id": agent.map(|agent| agent.to_string()) }),
+        written,
+    )
+    .await
 }
 
 /// An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.
@@ -3742,22 +3767,370 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state
+    let written = state
         .devices
         .set_drawer(tenant_id, id, request.drawer_attached, expected.as_str())
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_drawer",
+        serde_json::json!({ "drawer_attached": request.drawer_attached }),
+        written,
+    )
+    .await
+}
+
+/// An operator says what paper an approved printer takes and whether it cuts it.
+#[derive(Debug, Clone, Deserialize)]
+struct SetPaperRequest {
+    /// The tenant the device belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The paper the printer takes, as its `PAPER_WIDTH_…` token.
+    paper_width: String,
+    /// Whether the printer cuts its paper: `false` for one with no cutter.
+    cuts_paper: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/paper",
+    params(
+        ("id" = String, Path, description = "The approved printer's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the printer was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
+                       characters a line and a 576-dot raster), \
+                       `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and \
+                       `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, \
+                       `false` for a printer with no cutter. A printer nobody has set prints as \
+                       80 mm paper with a cutter",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`"),
+        (status = 400, description = "`paper_width` is not one of the three, an id is not a \
+                                      ULID, or If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The device changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says what paper an approved printer takes and whether it cuts it
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+///
+/// The drawer mark's guards, for the drawer mark's reasons: `ManageDevices`, an `If-Match`, and an
+/// audit entry. The width decides how a receipt is laid out and how wide a raster is drawn, and the
+/// cutter whether a printer is sent a cut, so who set them is worth a row. They reach a store on the
+/// next devices publish, as every other fact about a device does. `PAPER_WIDTH_UNSPECIFIED` is
+/// refused with every token this release does not know: it is what an older reader takes a newer
+/// paper to be, never a choice.
+async fn admin_set_printer_paper<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetPaperRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let paper_width = match PaperWidth::from_wire(&request.paper_width) {
+        Some(known) if known != PaperWidth::Unspecified => known,
+        _ => return enum_refusal("paper_width", accepted_tokens::<PaperWidth>()),
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let written = state
+        .devices
+        .set_paper(
+            tenant_id,
+            id,
+            paper_width,
+            request.cuts_paper,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_paper",
+        serde_json::json!({
+            "paper_width": paper_width.as_wire(),
+            "cuts_paper": request.cuts_paper,
+        }),
+        written,
+    )
+    .await
+}
+
+/// An operator says where an approved terminal's receipts go and the languages they print in.
+///
+/// The three fields are the till's whole receipt state, as a station's update is its whole state: an
+/// absent or `null` field is the store's again.
+#[derive(Debug, Clone, Deserialize)]
+struct SetReceiptRequest {
+    /// The tenant the terminal belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The printer this till's receipts, receipt copies and pre-bills go to (a ULID), or `null` for
+    /// the store's receipt printer.
+    #[serde(default)]
+    receipt_printer_id: Option<String>,
+    /// The language they print in, as a `RECEIPT_LANGUAGE_…` token, or `null` for the store's.
+    #[serde(default)]
+    receipt_language: Option<String>,
+    /// The second language they print in, as a `RECEIPT_SECOND_LANGUAGE_…` token, or `null` for the
+    /// store's.
+    #[serde(default)]
+    receipt_second_language: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/receipt",
+    params(
+        ("id" = String, Path, description = "The terminal's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the terminal was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's \
+                       store that serves no station; `receipt_language`, one of \
+                       `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, \
+                       `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and \
+                       `receipt_second_language`, one of `RECEIPT_SECOND_LANGUAGE_NONE`, \
+                       `RECEIPT_SECOND_LANGUAGE_VI` and `RECEIPT_SECOND_LANGUAGE_EN`. Each is \
+                       `null` or absent for the store's: its receipt printer, \
+                       `printing.receipt_language` and `printing.receipt_second_language`. The \
+                       three are the till's whole receipt state, so a field left out is the \
+                       store's again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`; an edge older than 0.14.1 \
+                                      ignores it. A device paired at the store prints by it once \
+                                      it is bound to the terminal, `POST /api/print/agent`"),
+        (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), \
+                                      `receipt_printer_id` is not an approved device of its store \
+                                      (`UNKNOWN_REFERENCE`) or not a printer serving no station \
+                                      (`WRONG_KIND`), a language is not one of its choices, an id \
+                                      is not a ULID, or If-Match is absent, malformed, or a \
+                                      wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The terminal changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says which printer a till's receipts, receipt copies and pre-bills go to, and the
+/// languages they print in
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
+///
+/// The paper's guards, for the paper's reasons: `ManageDevices`, an `If-Match`, and an audit entry.
+/// Unlike an agent pick, the printer is checked here, against the tenant's approved devices: it must
+/// be a printer of the terminal's own store that serves no station, because a kitchen's printer is
+/// for its tickets and another store's is in another building. What the check cannot see is a
+/// printer that leaves the approved set later: the publish then leaves that till printing at the
+/// store's receipt printer.
+async fn admin_set_terminal_receipt<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetReceiptRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let printer = match request.receipt_printer_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("receipt_printer_id", raw)]) {
+            Ok([printer]) => Some(DeviceProposalId::new(printer)),
+            Err(refusal) => return refusal,
+        },
+    };
+    let language = match optional_choice::<ReceiptLanguage>(
+        "receipt_language",
+        request.receipt_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let second_language = match optional_choice::<ReceiptSecondLanguage>(
+        "receipt_second_language",
+        request.receipt_second_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let approved = match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Approved)
         .await
     {
+        Ok(approved) => approved,
+        Err(error) => return device_error_response(&error),
+    };
+    if let Some(refusal) = till_receipt_refusal(&approved, id, printer) {
+        return refusal;
+    }
+    let written = state
+        .devices
+        .set_receipt(
+            tenant_id,
+            id,
+            printer,
+            language,
+            second_language,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_receipt",
+        serde_json::json!({
+            "receipt_printer_id": printer.map(|printer| printer.to_string()),
+            "receipt_language": language.map(ReceiptLanguage::as_wire),
+            "receipt_second_language": second_language.map(ReceiptSecondLanguage::as_wire),
+        }),
+        written,
+    )
+    .await
+}
+
+/// Why `id` may not have its receipts printed at `printer`, among the tenant's `approved` devices, or
+/// `None` when it may.
+///
+/// A `404` for a device the tenant has not approved, as a conditional write answers, and a `400`
+/// naming the field otherwise: `id` when the device is not a terminal, because only a till prints a
+/// guest's paper for itself, and `receipt_printer_id` when the printer is not an approved device of
+/// the terminal's store, or is one that is not a printer serving no station.
+fn till_receipt_refusal(
+    approved: &[DeviceProposalSummary],
+    id: DeviceProposalId,
+    printer: Option<DeviceProposalId>,
+) -> Option<Response> {
+    let id = id.to_string();
+    let Some(terminal) = approved.iter().find(|row| row.id == id) else {
+        return Some(not_found("device"));
+    };
+    if terminal.kind != DeviceKind::Terminal.as_wire() {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "only a terminal has a receipt printer and receipt languages of its own",
+            &[("id", "WRONG_KIND")],
+        ));
+    }
+    let printer = printer?.to_string();
+    match approved
+        .iter()
+        .find(|row| row.id == printer && row.store_id == terminal.store_id)
+    {
+        None => Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "receipt_printer_id must name an approved printer in the terminal's store",
+            &[("receipt_printer_id", "UNKNOWN_REFERENCE")],
+        )),
+        Some(row) if row.kind != DeviceKind::Printer.as_wire() || row.station_id.is_some() => {
+            Some(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "receipt_printer_id must name a printer that serves no station: a station's \
+                 printer prints that kitchen's tickets",
+                &[("receipt_printer_id", "WRONG_KIND")],
+            ))
+        }
+        Some(_) => None,
+    }
+}
+
+/// The answer to a conditional write on an approved device: an agent pick, a drawer mark, a
+/// printer's paper or a till's receipts.
+///
+/// A write that changed the row is audited as `action`, with what the device now says as the
+/// entry's `after`: each of them decides what a store does with real paper or real cash. A stale
+/// version is a `412` and a device that is not there a `404`, as for every conditional write.
+async fn device_write_response<D, A, K, C>(
+    state: &DeviceState<D, A, K, C>,
+    context: &AdminContext,
+    (tenant_id, id): (TenantId, DeviceProposalId),
+    action: &str,
+    after: serde_json::Value,
+    written: Result<DeviceWriteOutcome, crate::devices::DeviceProposalError>,
+) -> Response
+where
+    C: ClockSource,
+{
+    match written {
         Ok(DeviceWriteOutcome::Updated) => {
             audit_action(
                 &state.audit,
                 &state.clock,
-                &context,
+                context,
                 Some(tenant_id),
-                "device_proposal.set_drawer",
+                action,
                 "device_proposal",
                 &id.to_string(),
                 None,
-                Some(serde_json::json!({ "drawer_attached": request.drawer_attached })),
+                Some(after),
             )
             .await;
             StatusCode::NO_CONTENT.into_response()
@@ -3788,6 +4161,9 @@ struct RegistryState<Rg, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// Gives a tenant created here its six starting roles
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+    starting_roles: Arc<dyn StartingRoles>,
 }
 
 /// Builds the org-registry sub-router ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
@@ -3795,12 +4171,15 @@ struct RegistryState<Rg, A, C> {
 /// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
-/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]).
+/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]). A tenant created
+/// here is given its six starting roles through `starting_roles`
+/// ([`crate::starting_roles`]).
 pub fn registry_router<Rg, A, C>(
     registry: Rg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    starting_roles: Arc<dyn StartingRoles>,
 ) -> Router
 where
     Rg: RegistryStore + Clone + Send + Sync + 'static,
@@ -3845,6 +4224,7 @@ where
             admin,
             clock,
             audit,
+            starting_roles,
         })
 }
 
@@ -3874,9 +4254,84 @@ struct StoreGroupState<Grp, Reg, Cfg, A, C> {
     config_trees: Cfg,
     /// The node kinds a batch may publish, built once in `main.rs` — see [`batch_nodes`].
     nodes: Arc<Vec<Arc<dyn BatchNode>>>,
+    /// Who works through each group, told when a store joins or leaves one (ADR-0158).
+    staff: Arc<dyn GroupStaff>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+}
+
+/// What a change to a group's membership asks of the people side
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decisions 3 and 7): an assignment that names the group reaches each store it holds, so a store
+/// that joins or leaves the group gains or loses those people, and is told at once.
+///
+/// A trait object for the reason [`GroupMembership`] is one, from the other side: the store-group
+/// handlers would otherwise all carry the people store's type for the one route that reads it.
+trait GroupStaff: Send + Sync {
+    /// Whether any assignment names the group.
+    fn names_group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<bool, AssignmentStoreError>>;
+
+    /// Publishes `permissions` to each store, in turn, with the group as the cause the trail
+    /// records, and reports how each went.
+    fn publish_to<'a>(
+        &'a self,
+        context: &'a AdminContext,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        stores: &'a BTreeSet<StoreId>,
+    ) -> BoxFuture<'a, Vec<PermissionsPublishResult>>;
+}
+
+/// [`GroupStaff`] over the people store, with what a `permissions` publish writes through.
+struct PeopleOfGroups<P, Cfg, C> {
+    people: P,
+    config_trees: Cfg,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+impl<P, Cfg, C> GroupStaff for PeopleOfGroups<P, Cfg, C>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync,
+    Cfg: ConfigTreeStore + Send + Sync,
+    C: ClockSource + Send + Sync,
+{
+    fn names_group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<bool, AssignmentStoreError>> {
+        Box::pin(async move {
+            AssignmentStore::list_for_group(&self.people, tenant_id, group_id)
+                .await
+                .map(|named| !named.is_empty())
+        })
+    }
+
+    fn publish_to<'a>(
+        &'a self,
+        context: &'a AdminContext,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        stores: &'a BTreeSet<StoreId>,
+    ) -> BoxFuture<'a, Vec<PermissionsPublishResult>> {
+        Box::pin(async move {
+            let cause = group_id.to_string();
+            PermissionsPublisher {
+                people: &self.people,
+                config_trees: &self.config_trees,
+                clock: &self.clock,
+                audit: &self.audit,
+            }
+            .publish_all(context, tenant_id, stores, ("store_group_id", &cause))
+            .await
+        })
+    }
 }
 
 /// A store group on the wire, with its membership.
@@ -3929,11 +4384,16 @@ struct SetStoreGroupMembersRequest {
 ///
 /// Ids are server-minted: a batch names its group forever in `config_batches`, so a client that
 /// could choose one could collide with a cohort's history.
-pub fn store_group_router<Grp, Reg, Cfg, A, C>(
+///
+/// `people` is the roster a membership change reaches: a store that joins or leaves a group some
+/// assignment names is published its `permissions` node at once
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+pub fn store_group_router<Grp, Reg, Cfg, P, A, C>(
     groups: Grp,
     registry: Reg,
     config_trees: Cfg,
     nodes: Vec<Arc<dyn BatchNode>>,
+    people: P,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -3942,9 +4402,16 @@ where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
+    let staff = Arc::new(PeopleOfGroups {
+        people,
+        config_trees: config_trees.clone(),
+        clock: clock.clone(),
+        audit: Arc::clone(&audit),
+    });
     Router::new()
         .route(
             "/admin/store-groups",
@@ -3976,6 +4443,7 @@ where
             registry,
             config_trees,
             nodes: Arc::new(nodes),
+            staff,
             admin,
             clock,
             audit,
@@ -4234,14 +4702,16 @@ where
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
     ),
     responses(
-        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag"),
+        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
+                                      when an assignment names the group, how the `permissions` publish went at each open store \
+                                      that joined or left it (ADR-0158), and empty otherwise"),
         (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
         (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
         (status = 422, description = "More than 200 stores, or an id that names no store of this tenant", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The store-group store or the registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store, the registry or the people store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "store groups",
 )]
@@ -4251,6 +4721,13 @@ where
 /// no store of this tenant is a `422` rather than a stored row, because the failure it otherwise
 /// produces is invisible: the cohort looks right on screen, and every batch quietly reports one more
 /// `skipped` store than the operator expects, forever.
+///
+/// A group an assignment names changes who works at each store that joins or leaves it, so each
+/// such store that is open is published its `permissions` node once the membership is saved
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and the answer's `stores` says how each went. The membership before the write, and
+/// whether an assignment names the group, are read first, so a failed read refuses a write that has
+/// not happened.
 async fn admin_set_store_group_members<Grp, Reg, Cfg, A, C>(
     State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
@@ -4299,19 +4776,23 @@ where
         }
     }
     let known = match state.registry.list_stores(tenant_id).await {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|row| row.record.store_id)
-            .collect::<Vec<_>>(),
+        Ok(rows) => rows,
         Err(error) => return registry_error_response(&error),
     };
-    if let Some(stranger) = members.iter().find(|id| !known.contains(id)) {
+    if let Some(stranger) = members
+        .iter()
+        .find(|id| !known.iter().any(|row| row.record.store_id == **id))
+    {
         return unprocessable_violations(&[format!(
             "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
         )]);
     }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
+        Ok(moved) => moved,
         Err(refusal) => return refusal,
     };
     match state
@@ -4333,10 +4814,18 @@ where
                 serde_json::to_value(&membership).ok(),
             )
             .await;
+            let stores = state
+                .staff
+                .publish_to(&context, tenant_id, group_id, &moved)
+                .await;
             (
                 StatusCode::OK,
                 [(ETAG, version.as_str().to_owned())],
-                Json(serde_json::json!({ "store_ids": membership, "etag": version.as_str() })),
+                Json(serde_json::json!({
+                    "store_ids": membership,
+                    "etag": version.as_str(),
+                    "stores": stores,
+                })),
             )
                 .into_response()
         }
@@ -4344,6 +4833,40 @@ where
         Ok(UpdateOutcome::NotFound) => not_found("store group"),
         Err(error) => store_group_error_response(&error),
     }
+}
+
+/// The open stores whose staff a membership write changes — each that joins or leaves a group some
+/// assignment names (ADR-0158 decision 3) — read before the write. None when no assignment names
+/// the group.
+async fn staff_moved_by<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    stores: &[Versioned<StoreRecord>],
+    members: &[StoreId],
+) -> Result<BTreeSet<StoreId>, Response>
+where
+    Grp: StoreGroupStore,
+{
+    let before = state
+        .groups
+        .list_members(tenant_id, group_id)
+        .await
+        .map_err(|error| store_group_error_response(&error))?;
+    let named = state
+        .staff
+        .names_group(tenant_id, group_id)
+        .await
+        .map_err(|error| people_error_response(&error))?;
+    if !named {
+        return Ok(BTreeSet::new());
+    }
+    Ok(stores
+        .iter()
+        .filter(|row| row.record.status == EntityStatus::Active)
+        .map(|row| row.record.store_id)
+        .filter(|id| before.contains(id) != members.contains(id))
+        .collect())
 }
 
 // --- Batch publish to a store group (ADR-0122 §3–§7) -------------------------------------------
@@ -4622,7 +5145,8 @@ impl BatchNode for OriginsBatchNode {
     }
 }
 
-/// The `qr` node: whether QR ordering is on at each member, and the guardrails (ADR-0116).
+/// The `qr` node: the guardrails at each member (ADR-0116), and QR ordering's switch when the
+/// arguments name `enabled`.
 struct QrBatchNode;
 
 impl BatchNode for QrBatchNode {
@@ -5166,7 +5690,7 @@ where
     }
 
     for key in prerequisites {
-        match read_store_node(config_trees, tenant_id, store_id, key).await {
+        match read_store_node_as_run(config_trees, tenant_id, store_id, key).await {
             Ok(serde_json::Value::Null) => {
                 return MemberOutcome::skipped(format!(
                     "this store has no `{key}` node yet; publish one to it before this"
@@ -5673,21 +6197,171 @@ where
 /// audit recorder every write emits to. Like [`RegistryState`], it carries its own state and is merged
 /// into the main router.
 ///
-/// The registry and the config trees are here for
-/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7:
-/// an assignment is refused for a store the tenant does not have or has archived, and a removal or
-/// an archive publishes the `permissions` node to every store it affects in the same request.
+/// The registry, the store groups and the config trees are here for
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3
+/// and 7: an assignment is refused for a store or group the tenant does not have or has archived,
+/// and a removal, an archive or a new assignment to a group or every store publishes the
+/// `permissions` node to every store it affects in the same request.
 #[derive(Clone)]
 struct PeopleState<P, R, Cfg, A, C> {
     people: P,
     registry: R,
+    /// The tenant's store groups, through which a group assignment reaches its stores (ADR-0122).
+    groups: Arc<dyn GroupMembership>,
+    /// The fewest digits the tenant lets a PIN have, which the PIN route applies (ADR-0160).
+    pin_minimum: Arc<dyn PinMinimum>,
     config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
 }
 
+/// What the people routes read of a tenant's store groups
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)): whether a group
+/// exists, its status and the stores it holds.
+///
+/// A trait object rather than a sixth type parameter on [`PeopleState`], for the reason
+/// [`BatchNode`] gives: every people handler would carry the store-group store's type for the few
+/// that read it.
+trait GroupMembership: Send + Sync {
+    /// The group's status and members, or `None` when the tenant has no such group — one of
+    /// another tenant included.
+    fn group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<Option<GroupMembers>, StoreGroupStoreError>>;
+}
+
+/// One group as [`GroupMembership`] reads it.
+struct GroupMembers {
+    status: EntityStatus,
+    store_ids: Vec<StoreId>,
+}
+
+impl<G> GroupMembership for G
+where
+    G: StoreGroupStore + Send + Sync,
+{
+    fn group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<Option<GroupMembers>, StoreGroupStoreError>> {
+        Box::pin(async move {
+            let Some(group) = self
+                .list_groups(tenant_id)
+                .await?
+                .into_iter()
+                .find(|group| group.record.group_id == group_id)
+            else {
+                return Ok(None);
+            };
+            let store_ids = self.list_members(tenant_id, group_id).await?;
+            Ok(Some(GroupMembers {
+                status: group.record.status,
+                store_ids,
+            }))
+        })
+    }
+}
+
+/// What the PIN route reads of a tenant's settings: the fewest digits a PIN may have,
+/// `session.pin_min_length`
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2). A trait object rather than another type parameter on [`PeopleState`], for the reason
+/// [`GroupMembership`] gives: one handler reads it.
+trait PinMinimum: Send + Sync {
+    /// The fewest digits a PIN set now may have at `tenant_id`: the value the tenant wrote for every
+    /// store, read through [`PublishedSession::pin_min_length`] so its bounds and its default, four,
+    /// are the register's.
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>>;
+}
+
+/// The register key the PIN route reads.
+const PIN_MIN_LENGTH_KEY: &str = "session.pin_min_length";
+
+impl<S> PinMinimum for S
+where
+    S: SettingsStore + Send + Sync,
+{
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>> {
+        Box::pin(async move {
+            let tenant = tenant_id.as_ulid().to_string();
+            let written = self.list(tenant_id).await?.into_iter().find(|value| {
+                value.setting_key == PIN_MIN_LENGTH_KEY
+                    && value.scope.known() == SettingScope::Tenant
+                    && value.scope_id == tenant
+            });
+            let session = PublishedSession {
+                pin_min_length: written.and_then(|value| value.value.as_i64()),
+                ..PublishedSession::default()
+            };
+            Ok(session.pin_min_length())
+        })
+    }
+}
+
 impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
+    /// The stores a set of assignment scopes reaches now, each once and in order: the store a
+    /// one-store scope names, the open stores a group holds, and every open store of the tenant
+    /// (ADR-0158 decision 3).
+    ///
+    /// A one-store scope reaches its store whatever the store's status, as it always has. A wider
+    /// one reaches only the open stores, the ones a group batch publishes to as well: an archived
+    /// store is not published to merely because it is in a group or is the tenant's. An archived
+    /// group still reaches the stores it holds — archiving a delivery cohort does not take anybody's
+    /// access away — and a group that is gone reaches none.
+    async fn stores_reached(
+        &self,
+        tenant_id: TenantId,
+        scopes: impl IntoIterator<Item = AssignmentScope>,
+    ) -> Result<BTreeSet<StoreId>, Response>
+    where
+        R: RegistryStore,
+    {
+        let mut reached = BTreeSet::new();
+        let mut groups = BTreeSet::new();
+        let mut tenant_wide = false;
+        for scope in scopes {
+            match scope {
+                AssignmentScope::Store(store_id) => {
+                    reached.insert(store_id);
+                }
+                AssignmentScope::StoreGroup(group_id) => {
+                    groups.insert(group_id);
+                }
+                AssignmentScope::Tenant => tenant_wide = true,
+            }
+        }
+        if groups.is_empty() && !tenant_wide {
+            return Ok(reached);
+        }
+        let open: BTreeSet<StoreId> = match self.registry.list_stores(tenant_id).await {
+            Ok(stores) => stores
+                .into_iter()
+                .filter(|store| store.record.status == EntityStatus::Active)
+                .map(|store| store.record.store_id)
+                .collect(),
+            Err(error) => return Err(registry_error_response(&error)),
+        };
+        if tenant_wide {
+            reached.extend(open);
+            return Ok(reached);
+        }
+        for group_id in groups {
+            match self.groups.group(tenant_id, group_id).await {
+                Ok(Some(group)) => {
+                    let members = group.store_ids.into_iter();
+                    reached.extend(members.filter(|member| open.contains(member)));
+                }
+                Ok(None) => {}
+                Err(error) => return Err(store_group_error_response(&error)),
+            }
+        }
+        Ok(reached)
+    }
+
     /// The publish `POST /admin/people/publish` makes, over these routes' own collaborators.
     fn publisher(&self) -> PermissionsPublisher<'_, P, Cfg, C> {
         PermissionsPublisher {
@@ -5765,19 +6439,33 @@ struct EmployeeListQuery {
     order: Option<String>,
 }
 
-/// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
-/// store) or `employee_id` (every store a person works at).
+/// The tenant plus which assignments to list: exactly one of `store_id` (everyone who works at a
+/// store, whatever reaches it), `employee_id` (everything a person holds), `store_group_id` (what
+/// names a group) or `scope_kind=ASSIGNMENT_SCOPE_TENANT` (what reaches every store).
 #[derive(Debug, Clone, Deserialize)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the field names are the query-string wire contract"
-)]
 struct AssignmentListQuery {
     tenant_id: String,
     #[serde(default)]
     store_id: Option<String>,
     #[serde(default)]
     employee_id: Option<String>,
+    #[serde(default)]
+    store_group_id: Option<String>,
+    #[serde(default)]
+    scope_kind: Option<String>,
+}
+
+/// Which listing an [`AssignmentListQuery`] asks for, by the one selector it carries.
+#[derive(Debug, Clone, Copy)]
+enum AssignmentListing {
+    /// Everyone who works at a store.
+    Store,
+    /// Everything a person holds.
+    Employee,
+    /// What names a group.
+    Group,
+    /// What reaches every store.
+    TenantWide,
 }
 
 /// Create an employee — identity only; the PIN is set separately.
@@ -5830,7 +6518,19 @@ struct UpdateCourseRequest {
 struct CreateRoleRequest {
     tenant_id: String,
     name: String,
+    /// What the role grants directly, stored as sent.
     permissions: Vec<String>,
+    /// What the role grants only with approval (ADR-0158 decision 4), checked by
+    /// [`granted_with_approval`]. Absent is none: every permission in `permissions` is granted
+    /// directly, as before the list existed.
+    ///
+    /// The catalogue's PIN flag, the default a new role starts from, is the console's to apply: its
+    /// role editor starts a newly ticked PIN-flagged permission with approval and always sends both
+    /// lists. Applied here, it would give a role created by a script or an old console tab holders
+    /// who can no longer approve, since only a direct holder approves, and a `permissions` that
+    /// reads back without the ids it was sent.
+    #[serde(default)]
+    permissions_with_approval: Vec<String>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
     /// discount then needs a manager, exactly as it does today.
@@ -5838,12 +6538,18 @@ struct CreateRoleRequest {
     discount_ceiling_minor: Option<i64>,
 }
 
-/// Update a role template's name, permission set, and status.
+/// Update a role template's name, permission sets, ceiling and status.
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateRoleRequest {
     tenant_id: String,
     name: String,
+    /// What the role grants directly.
     permissions: Vec<String>,
+    /// What the role grants only with approval (ADR-0158 decision 4). Absent, the role keeps what
+    /// it grants with approval, less anything `permissions` now grants directly
+    /// ([`granted_with_approval`]).
+    #[serde(default)]
+    permissions_with_approval: Option<Vec<String>>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
     /// discount then needs a manager, exactly as it does today.
@@ -5852,23 +6558,35 @@ struct UpdateRoleRequest {
     status: String,
 }
 
-/// Assign an employee to a store with a role.
+/// Assign an employee with a role, at one store, a store group or every store of the tenant
+/// (ADR-0158 decision 3) — see [`requested_scope`] for how the three fields name one.
 #[derive(Debug, Clone, Deserialize)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the field names are the JSON wire contract"
-)]
 struct CreateAssignmentRequest {
     tenant_id: String,
     employee_id: String,
-    store_id: String,
+    /// The store, for an assignment to one store.
+    #[serde(default)]
+    store_id: Option<String>,
+    /// The group, for an assignment to every store it holds.
+    #[serde(default)]
+    store_group_id: Option<String>,
+    /// An [`AssignmentScopeKind`] token. Absent, or `ASSIGNMENT_SCOPE_UNSPECIFIED`, the scope is
+    /// the one the id sent names.
+    #[serde(default)]
+    scope_kind: Option<String>,
     role_template_id: String,
 }
 
-/// A PIN must be 4–8 digits. Its defence is the Argon2id cost plus the edge's attempt rate-limit, not
-/// length (ADR-0030/0070); this only rejects the obviously-wrong (non-digits, too short/long).
-fn pin_is_well_formed(pin: &str) -> bool {
-    (4..=8).contains(&pin.len()) && pin.bytes().all(|byte| byte.is_ascii_digit())
+/// The most digits a PIN may have.
+const PIN_MAX_DIGITS: u32 = 8;
+
+/// A PIN must be digits, from `fewest` to [`PIN_MAX_DIGITS`] of them: four to eight until the tenant
+/// sets a minimum of its own (`session.pin_min_length`, ADR-0160). Its defence is the Argon2id cost
+/// plus the edge's attempt lockout, not its length (ADR-0030/0070); the minimum is the tenant's
+/// policy, and this otherwise only rejects the obviously wrong.
+fn pin_is_well_formed(pin: &str, fewest: u32) -> bool {
+    u32::try_from(pin.len()).is_ok_and(|digits| (fewest..=PIN_MAX_DIGITS).contains(&digits))
+        && pin.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Hashes a PIN with Argon2id under a fresh 16-byte CSPRNG salt — the same primitive and shape as
@@ -5914,13 +6632,19 @@ fn people_entropy_unavailable() -> Response {
 ///
 /// What the console authors is what the store enforces
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7). An assignment is refused for an employee, store or role the tenant does not have
-/// (`404`) or has archived (`409`). Removing an assignment, archiving a person and archiving a role
-/// publish the `permissions` node to every store the change reaches before they answer, and answer
-/// with each store's outcome; every other write publishes as before, when someone presses publish.
-pub fn people_router<P, R, Cfg, A, C>(
+/// decisions 3 and 7). An assignment reaches one store, a store group or every store of the tenant,
+/// and is refused for an employee, store, group or role the tenant does not have (`404`) or has
+/// archived (`409`). Removing an assignment, archiving a person, archiving a role and creating an
+/// assignment to a group or every store publish the `permissions` node to every store the change
+/// reaches before they answer, and answer with each store's outcome; every other write publishes as
+/// before, when someone presses publish.
+///
+/// Setting a PIN reads the tenant's `settings` for the fewest digits a PIN may have (ADR-0160).
+pub fn people_router<P, R, G, St, Cfg, A, C>(
     people: P,
     registry: R,
+    groups: G,
+    settings: St,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -5929,6 +6653,8 @@ pub fn people_router<P, R, Cfg, A, C>(
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
+    G: StoreGroupStore + Send + Sync + 'static,
+    St: SettingsStore + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -5972,6 +6698,8 @@ where
         .with_state(PeopleState {
             people,
             registry,
+            groups: Arc::new(groups),
+            pin_minimum: Arc::new(settings),
             config_trees,
             admin,
             clock,
@@ -6261,7 +6989,7 @@ async fn admin_update_employee<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6302,16 +7030,24 @@ where
     };
     // When this update archives the person, the stores to tell are read before the write, so a
     // failed read refuses a write that has not happened rather than leaving one done with nobody
-    // told. `None` when it archives nobody.
-    let reached =
-        if existing.record.status != EntityStatus::Archived && status == EntityStatus::Archived {
+    // told: every store any of their assignments reaches, through a group or the tenant as well.
+    // `None` when it archives nobody.
+    let reached = if existing.record.status != EntityStatus::Archived
+        && status == EntityStatus::Archived
+    {
+        let assignments =
             match AssignmentStore::list_for_employee(&state.people, tenant_id, employee_id).await {
-                Ok(assignments) => Some(stores_of(&assignments)),
+                Ok(assignments) => assignments,
                 Err(error) => return people_error_response(&error),
-            }
-        } else {
-            None
-        };
+            };
+        let scopes = assignments.iter().map(|assignment| assignment.scope);
+        match state.stores_reached(tenant_id, scopes).await {
+            Ok(stores) => Some(stores),
+            Err(refusal) => return refusal,
+        }
+    } else {
+        None
+    };
     let update = EmployeeUpdate {
         employee_id,
         tenant_id,
@@ -6360,6 +7096,11 @@ where
 /// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
 /// returned, stored raw, or **audited** — the entry records only that a PIN was set, by whom
 /// (ADR-0070).
+///
+/// A PIN has at least the digits the tenant's `session.pin_min_length` asks for, four where it asks
+/// for none, and at most eight (ADR-0160). This is the one place the minimum is applied: the edge
+/// holds only a PIN's hash. Raising the minimum leaves a PIN already set as it is. If the tenant's
+/// settings cannot be read, the PIN is refused rather than held to four.
 async fn admin_set_employee_pin<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6391,10 +7132,14 @@ where
         Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
         Err(refusal) => return refusal,
     };
-    if !pin_is_well_formed(&request.pin) {
+    let fewest = match state.pin_minimum.fewest_digits(tenant_id).await {
+        Ok(fewest) => fewest,
+        Err(error) => return people_error_response(&error),
+    };
+    if !pin_is_well_formed(&request.pin, fewest) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
-            "the PIN must be 4 to 8 digits",
+            format!("the PIN must be {fewest} to {PIN_MAX_DIGITS} digits"),
             &[("pin", "OUT_OF_RANGE")],
         );
     }
@@ -6501,8 +7246,59 @@ fn first_unknown_permission(permissions: &[String]) -> Option<&str> {
         .find(|id| !is_known_permission(id))
 }
 
-/// A super-admin creates a role template. The permission set is validated against the catalogue.
-/// Audited `role.create` with id/name/permissions (a role name is not PII).
+/// What a role write stores as granted with approval, or why it is refused
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 4). `permissions` is what the role grants directly, stored as sent; it has already
+/// passed [`first_unknown_permission`].
+///
+/// `listed` is the request's own list. Each id in it must be in the catalogue and PIN-flagged, and
+/// none may also be granted directly: a permission is held one way. A create always has one, an
+/// absent list reading as none. An update may leave it out, as one written before the list existed
+/// does, and the role then keeps what it grants with approval today (`stored`), less anything
+/// `permissions` now grants directly.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn granted_with_approval(
+    permissions: &[String],
+    listed: Option<&[String]>,
+    stored: &[String],
+) -> Result<Vec<String>, Response> {
+    let Some(listed) = listed else {
+        let kept = stored.iter().filter(|id| !permissions.contains(id));
+        return Ok(kept.cloned().collect());
+    };
+    if let Some(unknown) = first_unknown_permission(listed) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("unknown permission id: {unknown}"),
+            &[("permissions_with_approval", "INVALID_ENUM_VALUE")],
+        ));
+    }
+    if let Some(unflagged) = listed.iter().find(|id| !is_pin_flagged_permission(id)) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("only a PIN-flagged permission is granted with approval: {unflagged}"),
+            &[("permissions_with_approval", "INVALID_VALUE")],
+        ));
+    }
+    if let Some(both) = listed.iter().find(|id| permissions.contains(id)) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("a permission is granted directly or with approval, not both: {both}"),
+            &[
+                ("permissions", "MUTUALLY_EXCLUSIVE"),
+                ("permissions_with_approval", "MUTUALLY_EXCLUSIVE"),
+            ],
+        ));
+    }
+    Ok(listed.to_vec())
+}
+
+/// A super-admin creates a role template. Both permission sets are validated against the catalogue
+/// ([`granted_with_approval`]). Audited `role.create` with id, name, both sets and the ceiling (a
+/// role name is not PII).
 async fn admin_create_role<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6554,6 +7350,14 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
+    let permissions_with_approval = match granted_with_approval(
+        &request.permissions,
+        Some(&request.permissions_with_approval),
+        &[],
+    ) {
+        Ok(listed) => listed,
+        Err(refusal) => return refusal,
+    };
     let Some(role_template_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoleTemplateId::new)
     else {
@@ -6564,15 +7368,17 @@ where
         tenant_id,
         name: request.name.clone(),
         permissions: request.permissions.clone(),
+        permissions_with_approval,
         discount_ceiling_minor: request.discount_ceiling_minor,
     };
     match state.people.create(&new_role).await {
         Ok(version) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
-                "name": request.name,
-                "permissions": request.permissions,
-                "discount_ceiling_minor": request.discount_ceiling_minor,
+                "name": new_role.name,
+                "permissions": new_role.permissions,
+                "permissions_with_approval": new_role.permissions_with_approval,
+                "discount_ceiling_minor": new_role.discount_ceiling_minor,
             });
             audit_action(
                 &state.audit,
@@ -6599,7 +7405,8 @@ where
     }
 }
 
-/// A super-admin updates a role template's name, permissions, and status. Audited `role.update`.
+/// A super-admin updates a role template's name, permission sets, ceiling and status. Audited
+/// `role.update` with what was written, both sets included ([`granted_with_approval`]).
 ///
 /// An archived role grants nothing, so archiving one publishes the `permissions` node at once to
 /// every store where someone holds it
@@ -6615,7 +7422,7 @@ async fn admin_update_role<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6666,18 +7473,10 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
-    let reached =
-        match stores_archiving_reaches(&state.people, tenant_id, role_template_id, status).await {
-            Ok(reached) => reached,
-            Err(refusal) => return refusal,
-        };
-    let update = RoleTemplateUpdate {
-        role_template_id,
-        tenant_id,
-        name: request.name.clone(),
-        permissions: request.permissions.clone(),
-        discount_ceiling_minor: request.discount_ceiling_minor,
-        status,
+    let planned = planned_role_update(&state, tenant_id, role_template_id, &request, status).await;
+    let (update, reached) = match planned {
+        Ok(planned) => planned,
+        Err(refusal) => return refusal,
     };
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
@@ -6687,9 +7486,10 @@ where
         Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
-                "name": request.name,
-                "permissions": request.permissions,
-                "discount_ceiling_minor": request.discount_ceiling_minor,
+                "name": update.name,
+                "permissions": update.permissions,
+                "permissions_with_approval": update.permissions_with_approval,
+                "discount_ceiling_minor": update.discount_ceiling_minor,
                 "status": status.as_str(),
             });
             audit_action(
@@ -6715,9 +7515,12 @@ where
     }
 }
 
-/// A super-admin lists assignments — everyone at a store (`?store_id=`) or every store a person works
-/// at (`?employee_id=`), exactly one. Behind [`ConsolePermission::ReadPeople`], the roster's gate:
-/// each row names the person it grants ([`Assignment`]).
+/// A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store
+/// (`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a
+/// person holds (`?employee_id=`), those naming a store group (`?store_group_id=`), or those that
+/// reach every store (`?scope_kind=ASSIGNMENT_SCOPE_TENANT`). Each row says its scope. Behind
+/// [`ConsolePermission::ReadPeople`], the roster's gate: each row names the person it grants
+/// ([`Assignment`]).
 async fn admin_list_assignments<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6744,30 +7547,69 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let result = match (query.store_id.as_deref(), query.employee_id.as_deref()) {
-        (Some(store), None) => {
-            let store_id = match parse_ulid_fields([("store_id", store)]) {
-                Ok([store_id]) => StoreId::new(store_id),
-                Err(refusal) => return refusal,
-            };
-            state.people.list_for_store(tenant_id, store_id).await
-        }
-        (None, Some(employee)) => {
-            let employee_id = match parse_ulid_fields([("employee_id", employee)]) {
-                Ok([employee_id]) => EmployeeId::new(employee_id),
-                Err(refusal) => return refusal,
-            };
-            state.people.list_for_employee(tenant_id, employee_id).await
-        }
-        _ => {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "name exactly one of store_id or employee_id",
-                &[
-                    ("store_id", "MUTUALLY_EXCLUSIVE"),
-                    ("employee_id", "MUTUALLY_EXCLUSIVE"),
-                ],
-            );
+    let selectors = [
+        (
+            "store_id",
+            AssignmentListing::Store,
+            query.store_id.as_deref(),
+        ),
+        (
+            "employee_id",
+            AssignmentListing::Employee,
+            query.employee_id.as_deref(),
+        ),
+        (
+            "store_group_id",
+            AssignmentListing::Group,
+            query.store_group_id.as_deref(),
+        ),
+        (
+            "scope_kind",
+            AssignmentListing::TenantWide,
+            query.scope_kind.as_deref(),
+        ),
+    ];
+    let mut named = selectors
+        .iter()
+        .filter_map(|(field, listing, value)| value.map(|value| (*field, *listing, value)));
+    let (Some((field, listing, value)), None) = (named.next(), named.next()) else {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name exactly one of store_id, employee_id, store_group_id or scope_kind",
+            &selectors.map(|(field, _, _)| (field, "MUTUALLY_EXCLUSIVE")),
+        );
+    };
+    let result = match listing {
+        AssignmentListing::Store => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                state
+                    .people
+                    .list_for_store(tenant_id, StoreId::new(id))
+                    .await
+            }
+            Err(refusal) => return refusal,
+        },
+        AssignmentListing::Employee => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                let employee_id = EmployeeId::new(id);
+                state.people.list_for_employee(tenant_id, employee_id).await
+            }
+            Err(refusal) => return refusal,
+        },
+        AssignmentListing::Group => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                let store_group_id = StoreGroupId::new(id);
+                state.people.list_for_group(tenant_id, store_group_id).await
+            }
+            Err(refusal) => return refusal,
+        },
+        // Only the tenant's rows are listed by their kind: a store's and a group's are listed by
+        // the id they name.
+        AssignmentListing::TenantWide => {
+            if AssignmentScopeKind::from_wire(value) != Some(AssignmentScopeKind::Tenant) {
+                return enum_refusal(field, [AssignmentScopeKind::Tenant.as_wire()]);
+            }
+            state.people.list_tenant_wide(tenant_id).await
         }
     };
     match result {
@@ -6776,16 +7618,23 @@ where
     }
 }
 
-/// A super-admin assigns an employee to a store with a role. Audited `assignment.create` with the
-/// three ids.
+/// A super-admin assigns an employee with a role, at one store, a store group or every store of the
+/// tenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the
+/// scope ([`assignment_audit`]).
 ///
 /// Each id is checked before anything is written, because the schema declares no foreign keys
-/// under row-level security and leaves the check to this route (ADR-0070). An employee, store or
-/// role the tenant does not have is `404`, and one it has archived is `409`
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7): a grant to a retired person or store would publish nobody, and one with a retired
-/// role would grant nothing, while the console showed it as a grant. Each refusal names the field
-/// that carried the id. A new assignment publishes as before, when someone presses publish.
+/// under row-level security and leaves the check to this route (ADR-0070). An employee, store,
+/// group or role the tenant does not have is `404` — another tenant's group included — and one it
+/// has archived is `409` (decision 7): a grant to a retired person, store or group would publish
+/// nobody, and one with a retired role would grant nothing, while the console showed it as a grant.
+/// Each refusal names the field that carried the id. A person who already holds an assignment
+/// there is `409` too ([`already_assigned`]), and nothing is written, audited or published.
+///
+/// An assignment to one store publishes as before, when someone presses publish, and answers `201`
+/// with its id. One to a group or to every store publishes the `permissions` node at once to every
+/// store it reaches — the open stores the group holds, or every open store of the tenant, read
+/// before the write — and answers `201` with its id and each store's outcome (`stores`).
 async fn admin_create_assignment<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6794,7 +7643,7 @@ async fn admin_create_assignment<P, R, Cfg, A, C>(
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
-    Cfg: Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6809,32 +7658,29 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, employee_id, store_id, role_template_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("employee_id", &request.employee_id),
-        ("store_id", &request.store_id),
-        ("role_template_id", &request.role_template_id),
-    ]) {
-        Ok([tenant_id, employee_id, store_id, role_template_id]) => (
-            TenantId::new(tenant_id),
-            EmployeeId::new(employee_id),
-            StoreId::new(store_id),
-            RoleTemplateId::new(role_template_id),
-        ),
+    let target = match requested_scope(&request) {
+        Ok(target) => target,
         Err(refusal) => return refusal,
     };
-    let checked = refuse_unassignable(
-        &state.people,
-        &state.registry,
-        tenant_id,
-        employee_id,
-        store_id,
-        role_template_id,
-    )
-    .await;
+    let (tenant_id, employee_id, scope, role_template_id) = match assignment_ids(&request, target) {
+        Ok(ids) => ids,
+        Err(refusal) => return refusal,
+    };
+    let checked =
+        refuse_unassignable(&state, tenant_id, employee_id, scope, role_template_id).await;
     if let Err(refusal) = checked {
         return refusal;
     }
+    // A wider assignment changes who works at every store it reaches, and each is told at once.
+    // They are read before the write, for the reason `admin_update_employee` gives.
+    let reached = if let AssignmentScope::Store(_) = scope {
+        None
+    } else {
+        match state.stores_reached(tenant_id, [scope]).await {
+            Ok(stores) => Some(stores),
+            Err(refusal) => return refusal,
+        }
+    };
     let Some(assignment_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AssignmentId::new)
     else {
@@ -6844,17 +7690,11 @@ where
         assignment_id,
         tenant_id,
         employee_id,
-        store_id,
+        scope,
         role_template_id,
     };
     match state.people.assign(&new_assignment).await {
         Ok(()) => {
-            let after = serde_json::json!({
-                "id": assignment_id.to_string(),
-                "employee_id": employee_id.to_string(),
-                "store_id": store_id.to_string(),
-                "role_template_id": role_template_id.to_string(),
-            });
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -6864,25 +7704,240 @@ where
                 "assignment",
                 &assignment_id.to_string(),
                 None,
-                Some(after),
+                Some(assignment_audit(
+                    assignment_id,
+                    employee_id,
+                    scope,
+                    role_template_id,
+                )),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": assignment_id.to_string() })),
-            )
-                .into_response()
+            let created = match reached {
+                None => serde_json::json!({ "id": assignment_id.to_string() }),
+                Some(reached) => {
+                    let stores = state
+                        .publisher()
+                        .publish_all(
+                            &context,
+                            tenant_id,
+                            &reached,
+                            ("assignment_id", &assignment_id.to_string()),
+                        )
+                        .await;
+                    serde_json::json!({ "id": assignment_id.to_string(), "stores": stores })
+                }
+            };
+            (StatusCode::CREATED, Json(created)).into_response()
         }
+        Err(AssignmentStoreError::AlreadyAssigned(_)) => already_assigned(scope),
         Err(error) => people_error_response(&error),
     }
 }
 
-/// A super-admin removes an assignment — offboarding a person from a store. Audited `assignment.remove`
-/// when a row was actually removed, with the ids it bound; a no-op removal records nothing.
+/// The `409` an assignment earns where the person already holds one: a person holds one per store,
+/// one per group and one tenant-wide (ADR-0158 decision 3). It names the field that names the place,
+/// `store_id`, `store_group_id` or `scope_kind` for every store.
 ///
-/// The removal publishes the store's `permissions` node at once, so the person cannot sign in there
-/// a moment longer ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7), and answers `200` with the store's outcome.
+/// A conflict rather than an outage: before the store said which, this was the people service's
+/// `503`, which sent the operator to retry what can never succeed. What resolves it is the
+/// assignment that is there, changed or removed.
+fn already_assigned(scope: AssignmentScope) -> Response {
+    let field = match scope {
+        AssignmentScope::Store(_) => "store_id",
+        AssignmentScope::StoreGroup(_) => "store_group_id",
+        AssignmentScope::Tenant => "scope_kind",
+    };
+    api_error_with_details(
+        ErrorStatus::AlreadyExists,
+        "the employee is already assigned there: change or remove that assignment instead",
+        &[(field, "ALREADY_EXISTS")],
+    )
+}
+
+/// The scope a new assignment's fields name, with the id that names it as sent, before it is
+/// parsed.
+#[derive(Debug, Clone, Copy)]
+enum ScopeTarget<'a> {
+    /// One store, by `store_id`.
+    Store(&'a str),
+    /// A store group, by `store_group_id`.
+    StoreGroup(&'a str),
+    /// Every store of the tenant, by no id.
+    Tenant,
+}
+
+/// A new assignment's ids, parsed in one go so a refusal names each that is not a ULID: the tenant,
+/// the person, the scope with the id `target` sent, and the role.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn assignment_ids(
+    request: &CreateAssignmentRequest,
+    target: ScopeTarget<'_>,
+) -> Result<(TenantId, EmployeeId, AssignmentScope, RoleTemplateId), Response> {
+    let tenant = ("tenant_id", request.tenant_id.as_str());
+    let employee = ("employee_id", request.employee_id.as_str());
+    let role = ("role_template_id", request.role_template_id.as_str());
+    let named = match target {
+        ScopeTarget::Store(id) => ("store_id", id),
+        ScopeTarget::StoreGroup(id) => ("store_group_id", id),
+        ScopeTarget::Tenant => {
+            return parse_ulid_fields([tenant, employee, role]).map(|[tenant, employee, role]| {
+                (
+                    TenantId::new(tenant),
+                    EmployeeId::new(employee),
+                    AssignmentScope::Tenant,
+                    RoleTemplateId::new(role),
+                )
+            });
+        }
+    };
+    parse_ulid_fields([tenant, employee, named, role]).map(|[tenant, employee, id, role]| {
+        let scope = if let ScopeTarget::StoreGroup(_) = target {
+            AssignmentScope::StoreGroup(StoreGroupId::new(id))
+        } else {
+            AssignmentScope::Store(StoreId::new(id))
+        };
+        (
+            TenantId::new(tenant),
+            EmployeeId::new(employee),
+            scope,
+            RoleTemplateId::new(role),
+        )
+    })
+}
+
+/// Which scope a new assignment names, as the request carries it (ADR-0158 decision 3).
+///
+/// `scope_kind` says which. Absent, or `ASSIGNMENT_SCOPE_UNSPECIFIED`, the id sent says it:
+/// `store_id` alone is one store, as every assignment was, and `store_group_id` alone is a group.
+/// Each scope takes its own id and no other — one store its `store_id`, a group its
+/// `store_group_id`, every store neither — and anything else is a `400` naming each field at fault:
+/// `REQUIRED` for the id the scope needs, `MUTUALLY_EXCLUSIVE` for one it does not take.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn requested_scope(request: &CreateAssignmentRequest) -> Result<ScopeTarget<'_>, Response> {
+    let kind = match request.scope_kind.as_deref() {
+        None => AssignmentScopeKind::Unspecified,
+        Some(token) => match AssignmentScopeKind::from_wire(token) {
+            Some(kind) => kind,
+            None => {
+                return Err(enum_refusal(
+                    "scope_kind",
+                    accepted_tokens::<AssignmentScopeKind>(),
+                ));
+            }
+        },
+    };
+    let store = request.store_id.as_deref();
+    let group = request.store_group_id.as_deref();
+    match (kind, store, group) {
+        (AssignmentScopeKind::Store | AssignmentScopeKind::Unspecified, Some(store), None) => {
+            Ok(ScopeTarget::Store(store))
+        }
+        (AssignmentScopeKind::StoreGroup | AssignmentScopeKind::Unspecified, None, Some(group)) => {
+            Ok(ScopeTarget::StoreGroup(group))
+        }
+        (AssignmentScopeKind::Tenant, None, None) => Ok(ScopeTarget::Tenant),
+        // With no kind to say which, both ids are the mistake together, and neither alone.
+        (AssignmentScopeKind::Unspecified, Some(_), Some(_)) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name one of store_id or store_group_id, not both",
+            &[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "MUTUALLY_EXCLUSIVE"),
+            ],
+        )),
+        (AssignmentScopeKind::Unspecified, None, None) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "store_id is required: name one store, a store_group_id, or scope_kind \
+             ASSIGNMENT_SCOPE_TENANT for every store",
+            &[("store_id", "REQUIRED")],
+        )),
+        (kind, store, group) => Err(scope_refusal(kind, store.is_some(), group.is_some())),
+    }
+}
+
+/// The `400` an assignment earns when `scope_kind` names a scope its ids do not fit, naming each id
+/// at fault: the one the scope needs and did not get, and the one it does not take.
+fn scope_refusal(kind: AssignmentScopeKind, sent_store: bool, sent_group: bool) -> Response {
+    let (takes_store, takes_group, message) = match kind {
+        AssignmentScopeKind::StoreGroup => (
+            false,
+            true,
+            "an assignment to a store group names its store_group_id, and no store_id",
+        ),
+        AssignmentScopeKind::Tenant => (
+            false,
+            false,
+            "an assignment to every store names neither a store_id nor a store_group_id",
+        ),
+        AssignmentScopeKind::Store | AssignmentScopeKind::Unspecified => (
+            true,
+            false,
+            "an assignment to one store names its store_id, and no store_group_id",
+        ),
+    };
+    let mut details = Vec::with_capacity(2);
+    for (field, sent, takes) in [
+        ("store_id", sent_store, takes_store),
+        ("store_group_id", sent_group, takes_group),
+    ] {
+        if sent != takes {
+            details.push((
+                field,
+                if sent {
+                    "MUTUALLY_EXCLUSIVE"
+                } else {
+                    "REQUIRED"
+                },
+            ));
+        }
+    }
+    api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
+}
+
+/// What the trail records of an assignment: its ids and its scope, the `store_id` or
+/// `store_group_id` it names beside its `scope_kind` — never the name or code a read resolves
+/// beside them (ADR-0070).
+fn assignment_audit(
+    assignment_id: AssignmentId,
+    employee_id: EmployeeId,
+    scope: AssignmentScope,
+    role_template_id: RoleTemplateId,
+) -> serde_json::Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("id".to_owned(), assignment_id.to_string().into());
+    entry.insert("employee_id".to_owned(), employee_id.to_string().into());
+    entry.insert("scope_kind".to_owned(), scope.kind().as_wire().into());
+    if let Some(store_id) = scope.store_id() {
+        entry.insert("store_id".to_owned(), store_id.to_string().into());
+    }
+    if let Some(store_group_id) = scope.store_group_id() {
+        entry.insert(
+            "store_group_id".to_owned(),
+            store_group_id.to_string().into(),
+        );
+    }
+    entry.insert(
+        "role_template_id".to_owned(),
+        role_template_id.to_string().into(),
+    );
+    serde_json::Value::Object(entry)
+}
+
+/// A super-admin removes an assignment — offboarding a person from where it reached. Audited
+/// `assignment.remove` when a row was actually removed, with the ids and the scope it bound; a no-op
+/// removal records nothing.
+///
+/// The removal publishes the `permissions` node at once to every store the assignment reached — its
+/// store, the open stores its group holds, or every open store of the tenant — so the person cannot
+/// sign in there a moment longer
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and answers `200` with each store's outcome.
 async fn admin_remove_assignment<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6891,7 +7946,7 @@ async fn admin_remove_assignment<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6916,22 +7971,26 @@ where
         }
         Err(refusal) => return refusal,
     };
-    // Read before the removal: the row names the store that must be told, and it is gone after.
+    // Read before the removal: the row names the stores that must be told, and it is gone after.
     let assignment = match AssignmentStore::get(&state.people, tenant_id, assignment_id).await {
         Ok(Some(assignment)) => assignment,
         Ok(None) => return not_found("assignment"),
         Err(error) => return people_error_response(&error),
     };
+    let reached = match state.stores_reached(tenant_id, [assignment.scope]).await {
+        Ok(stores) => stores,
+        Err(refusal) => return refusal,
+    };
     match state.people.remove(tenant_id, assignment_id).await {
         Ok(true) => {
             // The ids the grant bound, so the trail says who was offboarded from where and under
             // which role — never the name or code the read resolved beside them (ADR-0070).
-            let before = serde_json::json!({
-                "id": assignment_id.to_string(),
-                "employee_id": assignment.employee_id.to_string(),
-                "store_id": assignment.store_id.to_string(),
-                "role_template_id": assignment.role_template_id.to_string(),
-            });
+            let before = assignment_audit(
+                assignment_id,
+                assignment.employee_id,
+                assignment.scope,
+                assignment.role_template_id,
+            );
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -6949,7 +8008,7 @@ where
                 .publish_each(
                     &context,
                     tenant_id,
-                    &BTreeSet::from([assignment.store_id]),
+                    &reached,
                     ("assignment_id", &assignment_id.to_string()),
                 )
                 .await
@@ -6959,57 +8018,74 @@ where
     }
 }
 
-/// The stores a set of assignments reaches, each once and in order.
-fn stores_of(assignments: &[Assignment]) -> BTreeSet<StoreId> {
-    assignments
-        .iter()
-        .map(|assignment| assignment.store_id)
-        .collect()
-}
-
-/// Every store where someone holds the role, when an update to `status` archives it — read before
-/// the write, for the reason [`admin_update_employee`] gives — or `None` when the update does not
-/// archive it, whether it leaves the role active or finds it archived already.
-async fn stores_archiving_reaches<P>(
-    people: &P,
+/// The update `PATCH /admin/roles/{role_id}` writes, and the stores it publishes to at once, from
+/// the request and the role as stored, read once before the write and `404` if there is none.
+///
+/// The stored role answers two things. A request that leaves `permissions_with_approval` out keeps
+/// what the role grants with approval ([`granted_with_approval`]). And an update that archives the
+/// role reaches every store an assignment granting it reaches, through a group or the tenant as
+/// well — read before the write, for the reason [`admin_update_employee`] gives — while one that
+/// leaves it active, or finds it archived already, reaches none (`None`).
+async fn planned_role_update<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
     tenant_id: TenantId,
     role_template_id: RoleTemplateId,
+    request: &UpdateRoleRequest,
     status: EntityStatus,
-) -> Result<Option<BTreeSet<StoreId>>, Response>
+) -> Result<(RoleTemplateUpdate, Option<BTreeSet<StoreId>>), Response>
 where
     P: RoleTemplateStore + AssignmentStore,
+    R: RegistryStore,
 {
-    if status != EntityStatus::Archived {
-        return Ok(None);
-    }
-    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
-        Ok(Some(existing)) if existing.record.status == EntityStatus::Archived => return Ok(None),
-        Ok(Some(_)) => {}
+    let stored = match RoleTemplateStore::get(&state.people, tenant_id, role_template_id).await {
+        Ok(Some(stored)) => stored.record,
         Ok(None) => return Err(not_found("role")),
         Err(error) => return Err(people_error_response(&error)),
-    }
-    AssignmentStore::list_for_role(people, tenant_id, role_template_id)
-        .await
-        .map(|assignments| Some(stores_of(&assignments)))
-        .map_err(|error| people_error_response(&error))
+    };
+    let permissions_with_approval = granted_with_approval(
+        &request.permissions,
+        request.permissions_with_approval.as_deref(),
+        &stored.permissions_with_approval,
+    )?;
+    let reached = if status == EntityStatus::Archived && stored.status != EntityStatus::Archived {
+        let assignments =
+            AssignmentStore::list_for_role(&state.people, tenant_id, role_template_id)
+                .await
+                .map_err(|error| people_error_response(&error))?;
+        let scopes = assignments.iter().map(|assignment| assignment.scope);
+        Some(state.stores_reached(tenant_id, scopes).await?)
+    } else {
+        None
+    };
+    let update = RoleTemplateUpdate {
+        role_template_id,
+        tenant_id,
+        name: request.name.clone(),
+        permissions: request.permissions.clone(),
+        permissions_with_approval,
+        discount_ceiling_minor: request.discount_ceiling_minor,
+        status,
+    };
+    Ok((update, reached))
 }
 
-/// Refuses an assignment to an employee, store or role the tenant does not have (`404`) or has
-/// archived (`409`), each named by the request field that carried its id — the route's half of the
-/// referential check the schema leaves to it (ADR-0070, ADR-0158 decision 7).
-async fn refuse_unassignable<P, R>(
-    people: &P,
-    registry: &R,
+/// Refuses an assignment to an employee, store, group or role the tenant does not have (`404`) or
+/// has archived (`409`), each named by the request field that carried its id — the route's half of
+/// the referential check the schema leaves to it (ADR-0070, ADR-0158 decision 7). A group is looked
+/// up among the tenant's own, so another tenant's is `404` like one that never existed; an
+/// assignment to every store names nothing beyond the person and the role.
+async fn refuse_unassignable<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
     tenant_id: TenantId,
     employee_id: EmployeeId,
-    store_id: StoreId,
+    scope: AssignmentScope,
     role_template_id: RoleTemplateId,
 ) -> Result<(), Response>
 where
     P: EmployeeStore + RoleTemplateStore,
     R: RegistryStore,
 {
-    match EmployeeStore::get(people, tenant_id, employee_id).await {
+    match EmployeeStore::get(&state.people, tenant_id, employee_id).await {
         Ok(Some(employee)) if employee.record.status == EntityStatus::Archived => {
             return Err(unassignable_archived(
                 "employee_id",
@@ -7020,23 +8096,39 @@ where
         Ok(None) => return Err(unassignable_unknown("employee_id", "employee")),
         Err(error) => return Err(people_error_response(&error)),
     }
-    match registry.list_stores(tenant_id).await {
-        Ok(stores) => match stores
-            .into_iter()
-            .find(|store| store.record.store_id == store_id)
-        {
-            Some(store) if store.record.status == EntityStatus::Archived => {
-                return Err(unassignable_archived(
-                    "store_id",
-                    "the store is archived; restore it before assigning anyone to it",
-                ));
-            }
-            Some(_) => {}
-            None => return Err(unassignable_unknown("store_id", "store")),
+    match scope {
+        AssignmentScope::Store(store_id) => match state.registry.list_stores(tenant_id).await {
+            Ok(stores) => match stores
+                .into_iter()
+                .find(|store| store.record.store_id == store_id)
+            {
+                Some(store) if store.record.status == EntityStatus::Archived => {
+                    return Err(unassignable_archived(
+                        "store_id",
+                        "the store is archived; restore it before assigning anyone to it",
+                    ));
+                }
+                Some(_) => {}
+                None => return Err(unassignable_unknown("store_id", "store")),
+            },
+            Err(error) => return Err(registry_error_response(&error)),
         },
-        Err(error) => return Err(registry_error_response(&error)),
+        AssignmentScope::StoreGroup(group_id) => {
+            match state.groups.group(tenant_id, group_id).await {
+                Ok(Some(group)) if group.status == EntityStatus::Archived => {
+                    return Err(unassignable_archived(
+                        "store_group_id",
+                        "the store group is archived; restore it before assigning anyone to it",
+                    ));
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(unassignable_unknown("store_group_id", "store group")),
+                Err(error) => return Err(store_group_error_response(&error)),
+            }
+        }
+        AssignmentScope::Tenant => {}
     }
-    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+    match RoleTemplateStore::get(&state.people, tenant_id, role_template_id).await {
         Ok(Some(role)) if role.record.status == EntityStatus::Archived => {
             Err(unassignable_archived(
                 "role_template_id",
@@ -7081,6 +8173,27 @@ struct CapabilityFlagView {
     key: &'static str,
     default_on: bool,
     description: &'static str,
+    /// Whether the console offers the flag as a switch: `false` for one no release reads yet
+    /// ([`offered`]).
+    offered: bool,
+}
+
+/// Whether the console offers `capability` as a switch
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 5: every switch the console offers changes behaviour at the edge).
+///
+/// `false` for the four nothing reads yet: no domain rule, edge route or till screen acts on
+/// `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` or `queue_number_enabled`. No tab, no
+/// pay-first flow and no barcode entry exists, and every tableless order is given a queue number
+/// whatever the switch says. Only the console stops offering them. A store's stored value is kept,
+/// published and parsed as before, the presets still name them, and the §10 rules still apply to
+/// them. A flag is offered again in the change that gives it a reader.
+const fn offered(capability: pos_core::capability::Capability) -> bool {
+    use pos_core::capability::Capability;
+    !matches!(
+        capability,
+        Capability::Tabs | Capability::PayFirst | Capability::Barcode | Capability::QueueNumber
+    )
 }
 
 /// One capability preset (§10) — a named starting profile the console offers as a button, given as the
@@ -7142,7 +8255,8 @@ where
         .with_state(CapabilitiesState { admin, clock })
 }
 
-/// Serves the §10 capability catalogue for the console's form editor.
+/// Serves the §10 capability catalogue for the console's form editor. Each flag says whether the
+/// console offers it as a switch ([`offered`]).
 async fn admin_list_capabilities<A, C>(
     State(state): State<CapabilitiesState<A, C>>,
     headers: HeaderMap,
@@ -7172,6 +8286,7 @@ where
                 key: meta.key,
                 default_on: meta.default_on,
                 description: meta.description,
+                offered: offered(capability),
             }
         })
         .collect();
@@ -8354,7 +9469,13 @@ where
         .into_response()
 }
 
-/// Composes the `revoked_devices` node from the one the tree currently holds plus `listed`.
+/// Composes the `revoked_devices` node from the one the store runs plus `listed`.
+///
+/// The list is read from the tree's layers composed ([`ConfigTreeState::effective`]) and written,
+/// with `listed` added, onto the Store layer as before. Read from the Store layer alone it was wrong
+/// after a rollback, which restores a version onto the Tenant layer and empties the Store layer: the
+/// append wrote a list of `listed` alone, and since a list replaces when layers merge, the store
+/// stopped refusing every device it had retired.
 ///
 /// Called on every attempt of the conditional-write retry, so the merge always sees the tree as just
 /// read. Three properties, all load-bearing:
@@ -8380,8 +9501,9 @@ fn append_revoked_device(
     listed: &str,
 ) -> Result<Vec<(String, serde_json::Value)>, Response> {
     let mut ids: Vec<String> = before
-        .map(|state| state.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("revoked_devices"))
+        .map(ConfigTreeState::effective)
+        .as_ref()
+        .and_then(|document| document.get("revoked_devices"))
         .and_then(|node| node.get("device_ids"))
         .and_then(serde_json::Value::as_array)
         .map(|entries| {
@@ -8800,6 +9922,11 @@ struct PackedFacts {
     /// of the place, not of the money. Vietnam writes `1.234.567,50` whether the amount is in đồng
     /// or in dollars.
     number_formats: std::collections::BTreeMap<CountryCode, NumberFormat>,
+    /// The language each country's pack starts a store in, as a BCP 47 tag, which a receipt set to
+    /// `RECEIPT_LANGUAGE_COUNTRY` prints in
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// Keyed on the country: it is the language of the place, whatever the store trades in.
+    languages: std::collections::BTreeMap<CountryCode, String>,
 }
 
 /// Builds those from the compiled country modules.
@@ -8821,6 +9948,10 @@ fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
         facts
             .number_formats
             .insert(module.country_code(), pack.number_format.clone());
+        facts.languages.insert(
+            module.country_code(),
+            pack.default_language.as_str().to_owned(),
+        );
     }
     facts
 }
@@ -9085,6 +10216,17 @@ fn checked_locale_node(
     {
         map.insert("number_format".to_owned(), format);
     }
+    // The language of the store's country (ADR-0160), which a receipt set to
+    // `RECEIPT_LANGUAGE_COUNTRY` prints in. The cloud's to say for the reason the rest of these are:
+    // the edge a store runs carries no country pack of its own.
+    if let Some(language) = facts.languages.get(&country)
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "country_language".to_owned(),
+            serde_json::Value::String(language.clone()),
+        );
+    }
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
     if let Some(language) = request
@@ -9267,8 +10409,22 @@ fn accepted_tokens<E: WireEnum>() -> impl Iterator<Item = &'static str> {
         .map(WireEnum::as_wire)
 }
 
-/// Reads a store's current Store-layer node value by key, or `null` when it has none.
-async fn read_store_node<Cfg>(
+/// A store's `node_key` node as the store runs it, without the node's settings fields, or `null`
+/// when it runs none.
+///
+/// Read from the tree's four layers composed ([`ConfigTree::effective`]), not from the Store layer
+/// alone. A rollback writes the restored version onto the Tenant layer and empties the others
+/// ([`ConfigTree::restore_with`]), so a Store-layer read answered `null` for every node the store
+/// still ran: the console's forms went blank, and its checks refused a store that held the node. A
+/// node a tenant or brand layer sets is read with the store's own, because the store runs it.
+///
+/// The fields the settings register puts on the node (`pos_proto::settings::register`) are left
+/// out. They are written on the Tenant layer by the settings compile, and they are the settings
+/// store's to decide (ADR-0160 decision 3): a form that read one and saved the node back would pin
+/// it on the Store layer, where it would shadow every later settings change for the store. A node
+/// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
+/// holding only `tax_rounding` is not the locale a menu waits for.
+async fn read_store_node_as_run<Cfg>(
     config_trees: &Cfg,
     tenant_id: TenantId,
     store_id: StoreId,
@@ -9282,14 +10438,37 @@ where
         .await
         .map(strip_tree_version)
     {
-        Ok(Some(state)) => Ok(state
-            .layers
-            .get(2)
-            .and_then(|layer| layer.get(node_key))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)),
+        Ok(Some(state)) => {
+            let composed = ConfigTree::from_state(store_id, CapabilityValidator, state).effective();
+            Ok(node_as_run(node_key, composed.get(node_key)))
+        }
         Ok(None) => Ok(serde_json::Value::Null),
         Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+/// The answer [`read_store_node_as_run`] gives for `node`, the store's `node_key` as its layers
+/// compose it: the node without its settings fields, and `null` for a node the store does not run
+/// or one that holds nothing but settings. A node that is not an object is answered as it is.
+fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::Value {
+    match node {
+        None => serde_json::Value::Null,
+        Some(value) if only_settings(node_key, value) => serde_json::Value::Null,
+        Some(serde_json::Value::Object(fields)) => {
+            let register = pos_proto::settings::register();
+            serde_json::Value::Object(
+                fields
+                    .iter()
+                    .filter(|(field, _)| {
+                        !register.iter().any(|setting| {
+                            setting.node == node_key && setting.field == field.as_str()
+                        })
+                    })
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect(),
+            )
+        }
+        Some(other) => other.clone(),
     }
 }
 
@@ -9423,7 +10602,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "channels").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "channels").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -9502,7 +10681,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "tender").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "tender").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -9581,7 +10760,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "origins").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "origins").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -9715,14 +10894,21 @@ fn vendor_policies_node(
 /// stripped off — which is precisely what makes this node batchable under ADR-0122 §4.
 #[derive(Debug, Clone, Deserialize)]
 struct QrGuardrailFields {
-    enabled: bool,
+    /// QR ordering's switch, for a caller that still sends it here. Optional: the switch is
+    /// `qr_ordering_enabled` (ADR-0160 decision 5), and `qr.enabled` follows it. A value sent here is
+    /// written as the switch, so an older console's checkbox and a cohort copy of a store's `qr`
+    /// node keep doing what they did; absent, the store's switch is kept.
+    #[serde(default)]
+    enabled: Option<bool>,
     staff_confirmation_required: bool,
     per_table_limit: u32,
     rate_window_secs: u64,
     business_hours: Option<QrBusinessHoursRequest>,
 }
 
-/// Compiles the `qr` node: whether QR ordering is on, and the guardrails around it (ADR-0116).
+/// Compiles the `qr` node: the guardrails around QR ordering (ADR-0116), and `enabled` when the
+/// caller sent one. The publish then sets `enabled` to the store's switch
+/// ([`crate::qr_ordering::align`]), so the node always carries it.
 #[expect(
     clippy::result_large_err,
     reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
@@ -9730,11 +10916,13 @@ struct QrGuardrailFields {
 )]
 fn qr_guardrail_node(fields: &QrGuardrailFields) -> Result<serde_json::Value, Response> {
     let mut node = serde_json::json!({
-        "enabled": fields.enabled,
         "staff_confirmation_required": fields.staff_confirmation_required,
         "per_table_limit": fields.per_table_limit,
         "rate_window_secs": fields.rate_window_secs,
     });
+    if let (Some(enabled), serde_json::Value::Object(map)) = (fields.enabled, &mut node) {
+        map.insert("enabled".to_owned(), serde_json::Value::Bool(enabled));
+    }
     if let Some(hours) = fields.business_hours.as_ref() {
         let mut out_of_range: Vec<(&str, &str)> = Vec::with_capacity(2);
         if hours.open_hour > 23 {
@@ -9789,7 +10977,10 @@ struct QrBusinessHoursRequest {
 struct PublishQrRequest {
     tenant_id: String,
     store_id: String,
-    enabled: bool,
+    /// QR ordering's switch, as [`QrGuardrailFields::enabled`] takes it: optional, and written as
+    /// the switch when sent.
+    #[serde(default)]
+    enabled: Option<bool>,
     staff_confirmation_required: bool,
     per_table_limit: u32,
     rate_window_secs: u64,
@@ -9825,7 +11016,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "qr").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -9882,10 +11073,9 @@ where
     .await
 }
 
-/// The range a store's `event_log_days` may take (ADR-0145). The edge holds the same bounds as
-/// `pos_edge::EVENT_LOG_DAYS` and ignores a value outside them; the two crates share no dependency,
-/// so each side's test pins the numbers and a change to one fails until the other agrees.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u32> = 30..=3650;
+/// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
+/// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
@@ -9924,7 +11114,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "retention").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "retention").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -9961,7 +11151,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    if !EVENT_LOG_DAYS.contains(&request.event_log_days) {
+    if !u16::try_from(request.event_log_days).is_ok_and(|days| EVENT_LOG_DAYS.contains(&days)) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
             "event_log_days must be between 30 and 3650",
@@ -10017,7 +11207,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "vendors").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10157,9 +11347,18 @@ struct CreateStationRequest {
     backup_station_id: Option<String>,
     #[serde(default)]
     is_default: bool,
+    /// When the station's tickets are late, in seconds; absent or `null` for the default. Read as
+    /// any integer so that one out of bounds is refused naming the field, as one too large is.
+    #[serde(default)]
+    late_after_seconds: Option<i64>,
+    /// The language its kitchen tickets print in, as a `RECEIPT_LANGUAGE_…` token; absent or `null`
+    /// for the store's display language.
+    #[serde(default)]
+    ticket_language: Option<String>,
 }
 
-/// Update a station's name, backup, default flag, and status.
+/// Update a station's name, backup, default flag, late threshold, ticket language, and status. Every
+/// field is the station's whole new state, so an absent threshold or language is the default again.
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateStationRequest {
     tenant_id: String,
@@ -10168,7 +11367,76 @@ struct UpdateStationRequest {
     backup_station_id: Option<String>,
     #[serde(default)]
     is_default: bool,
+    #[serde(default)]
+    late_after_seconds: Option<i64>,
+    #[serde(default)]
+    ticket_language: Option<String>,
     status: String,
+}
+
+/// A station's late threshold as a request names it: `None` for the default, or a number of seconds
+/// within [`LATE_AFTER_SECONDS`](pos_proto::floor::LATE_AFTER_SECONDS).
+///
+/// # Errors
+///
+/// A `400` naming `late_after_seconds` for a threshold outside the bounds, which the edge would read
+/// as ten minutes rather than as what the operator typed.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn station_late_after(seconds: Option<i64>) -> Result<Option<u32>, Response> {
+    let Some(seconds) = seconds else {
+        return Ok(None);
+    };
+    u32::try_from(seconds)
+        .ok()
+        .filter(|seconds| pos_proto::floor::LATE_AFTER_SECONDS.contains(seconds))
+        .map(Some)
+        .ok_or_else(|| {
+            api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "late_after_seconds must be from 60 to 3600",
+                &[("late_after_seconds", "OUT_OF_RANGE")],
+            )
+        })
+}
+
+/// A station's ticket language as a request names it: `None` for the store's display language, or
+/// one of the [`ReceiptLanguage`] tokens a receipt's language takes.
+///
+/// # Errors
+///
+/// A `400 INVALID_ENUM_VALUE` naming `ticket_language` for a token this release does not know, and
+/// for `RECEIPT_LANGUAGE_UNSPECIFIED`, which is what an older reader takes a newer language to be
+/// and never a choice.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn station_ticket_language(token: Option<&str>) -> Result<Option<ReceiptLanguage>, Response> {
+    optional_choice("ticket_language", token)
+}
+
+/// A choice a request names by its wire token: `None` where it names none, which leaves the choice
+/// to whatever stands for it, or a token of `E` this release knows.
+///
+/// # Errors
+///
+/// A `400 INVALID_ENUM_VALUE` naming `field` for a token this release does not know, and for `E`'s
+/// `UNSPECIFIED`, which is what an older reader takes a newer token to be and never a choice.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn optional_choice<E: WireEnum>(field: &str, token: Option<&str>) -> Result<Option<E>, Response> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    match E::from_wire(token) {
+        Some(known) if known != E::UNSPECIFIED => Ok(Some(known)),
+        _ => Err(enum_refusal(field, accepted_tokens::<E>())),
+    }
 }
 
 /// Create an item→station routing rule.
@@ -10886,6 +12154,14 @@ where
     else {
         return ulid_refusal(&["backup_station_id"]);
     };
+    let late_after_seconds = match station_late_after(request.late_after_seconds) {
+        Ok(seconds) => seconds,
+        Err(refusal) => return refusal,
+    };
+    let ticket_language = match station_ticket_language(request.ticket_language.as_deref()) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
     let Some(station_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StationId::new)
     else {
@@ -10898,6 +12174,8 @@ where
         name: request.name.clone(),
         backup_station_id,
         is_default: request.is_default,
+        late_after_seconds,
+        ticket_language,
     };
     match StationStore::create(&state.floor, &new_station).await {
         Ok(version) => {
@@ -10905,6 +12183,8 @@ where
                 "id": station_id.to_string(),
                 "name": request.name,
                 "is_default": request.is_default,
+                "late_after_seconds": late_after_seconds,
+                "ticket_language": ticket_language.map(ReceiptLanguage::as_wire),
                 "status": EntityStatus::Active.as_str(),
             });
             audit_action(
@@ -10977,12 +12257,22 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    let late_after_seconds = match station_late_after(request.late_after_seconds) {
+        Ok(seconds) => seconds,
+        Err(refusal) => return refusal,
+    };
+    let ticket_language = match station_ticket_language(request.ticket_language.as_deref()) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
     let update = StationUpdate {
         station_id,
         tenant_id,
         name: request.name.clone(),
         backup_station_id,
         is_default: request.is_default,
+        late_after_seconds,
+        ticket_language,
         status,
     };
     let expected = match if_match(&headers) {
@@ -10995,6 +12285,8 @@ where
                 "id": station_id.to_string(),
                 "name": request.name,
                 "is_default": request.is_default,
+                "late_after_seconds": late_after_seconds,
+                "ticket_language": ticket_language.map(ReceiptLanguage::as_wire),
                 "status": status.as_str(),
             });
             audit_action(
@@ -11411,7 +12703,7 @@ where
 /// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
 /// is not a guess here, it is the accurate answer.
 fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
-    PublishedDevices::new(
+    PublishedDevices::new(with_listed_receipt_printers(
         approved
             .iter()
             .filter_map(|row| {
@@ -11454,10 +12746,70 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                     // only, its own transport only), so a mark on a network printer is published
                     // and inert rather than silently dropped here.
                     drawer_attached: row.drawer_attached,
+                    // Verbatim, and absent where nobody has said: the edge reads absent as the 80 mm
+                    // printer with a cutter every store assumed before the console could say
+                    // (ADR-0160), so a store nobody has set publishes the node it did before.
+                    paper_width: row
+                        .paper_width
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
+                    cuts_paper: row.cuts_paper,
+                    // Verbatim, as the paper is, and absent where nobody has said: the edge reads
+                    // absent as the store's receipt printer and languages (ADR-0160 decision 4). A
+                    // printer id that will not parse drops the printer, as an agent's does, and one
+                    // that names no printer of this node is dropped below.
+                    receipt_printer_id: row
+                        .receipt_printer_id
+                        .as_deref()
+                        .and_then(|raw| raw.parse::<Ulid>().ok())
+                        .map(DeviceId::new),
+                    receipt_language: row
+                        .receipt_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
+                    receipt_second_language: row
+                        .receipt_second_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
                 })
             })
             .collect(),
-    )
+    ))
+}
+
+/// `devices` with each till's `receipt_printer_id` that names no printer of `devices` serving no
+/// station left out (ADR-0160 decision 4).
+///
+/// The rule for a till whose receipt printer goes: the till is published without the field, and
+/// prints at the store's receipt printer, rather than the publish being refused, because the store
+/// must keep printing. A printer goes when it is no longer approved, which archiving one would be,
+/// or when its row cannot be published, as one approved with no connection cannot. The till's
+/// languages stay, and the console still shows the printer it names, so an operator can choose
+/// another.
+fn with_listed_receipt_printers(mut devices: Vec<PublishedDevice>) -> Vec<PublishedDevice> {
+    let receipt_printers: BTreeSet<DeviceId> = devices
+        .iter()
+        .filter(|device| {
+            device.kind.known() == pos_proto::devices::DeviceKind::Printer
+                && device.station_id.is_none()
+        })
+        .map(|device| device.device_id)
+        .collect();
+    for device in &mut devices {
+        if let Some(printer) = device
+            .receipt_printer_id
+            .filter(|printer| !receipt_printers.contains(printer))
+        {
+            tracing::warn!(
+                till = %device.device_id,
+                %printer,
+                "a till names a receipt printer the store's devices do not list; it is published \
+                 printing at the store's receipt printer"
+            );
+            device.receipt_printer_id = None;
+        }
+    }
+    devices
 }
 
 /// The first device in `node` that names an agent the node cannot resolve to a `TERMINAL`.
@@ -12560,11 +13912,13 @@ where
 /// The country a store's published `locale` node names, or `None` when it has never published one
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
-/// Reads the Store layer, which is where `admin_publish_locale` writes. A value that is not two
-/// ASCII letters answers `None` rather than an error: a node written by a fork, or by a build older
-/// than the required-`country_code` change, is a store this console still has to be able to draw.
+/// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
+/// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant
+/// layer. A value that is not two ASCII letters answers `None` rather than an error: a node written
+/// by a fork, or by a build older than the required-`country_code` change, is a store this console
+/// still has to be able to draw.
 fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
-    tree.layer(ConfigLevel::Store)
+    tree.effective()
         .get("locale")?
         .get("country_code")?
         .as_str()
@@ -13023,6 +14377,11 @@ struct MediaListQuery {
 #[derive(Debug, Clone, Deserialize)]
 struct CreateTenantRequest {
     name: String,
+    /// The language the tenant's starting roles are named in, a language tag such as `vi`. The
+    /// console sends the one it is shown in. Absent, or one the console's language packs do not
+    /// carry, names them in English. Nothing about the tenant records it.
+    #[serde(default)]
+    language: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -13127,6 +14486,13 @@ where
 }
 
 /// A super-admin creates a tenant; the id is minted here and returned once in the created record.
+///
+/// The tenant then gets its six starting roles, one for each of `pos-core`'s built-in roles,
+/// granting what the catalogue's defaults say ([`crate::starting_roles`],
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). They are
+/// audited as one `role.seed` entry carrying their ids and counts. The tenant exists whatever the
+/// seeding does, so a seeding failure is logged rather than refused: the tenant then starts with
+/// fewer roles, and its owner creates the rest in People.
 async fn admin_create_tenant<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
     headers: HeaderMap,
@@ -13173,9 +14539,51 @@ where
                 after,
             )
             .await;
+            seed_tenant_roles(&state, &context, tenant_id, request.language.as_deref()).await;
             versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
+    }
+}
+
+/// Gives a tenant just created its starting roles, and audits what was written as `role.seed`: the
+/// ids and the counts, nothing else. A failure is logged with the tenant's id; the tenant stands.
+async fn seed_tenant_roles<Rg, A, C>(
+    state: &RegistryState<Rg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    language: Option<&str>,
+) where
+    C: ClockSource,
+{
+    match state.starting_roles.seed(tenant_id, language).await {
+        Ok(seeded) if seeded.created.is_empty() => {}
+        Ok(seeded) => {
+            let after = serde_json::json!({
+                "role_template_ids": seeded
+                    .created
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                "created": seeded.created.len(),
+                "kept": seeded.kept.len(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                context,
+                Some(tenant_id),
+                "role.seed",
+                "tenant",
+                &tenant_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::error!(%error, %tenant_id, "a new tenant's starting roles could not be written");
+        }
     }
 }
 
@@ -18078,13 +19486,19 @@ where
         }
     };
     let mut results = Vec::with_capacity(stores.len());
+    // Stores left with the permissions switch and no people node beside it, counted and never
+    // named ([`crate::settings::switch_without_people`]).
+    let mut switch_only = 0_usize;
     for store_id in stores {
         let resolved = layout
             .placement(*store_id)
             .map(|placement| crate::settings::resolve_for_store(&values, &placement))
             .unwrap_or_default();
-        let outcome = publish_settings_to_store(state, tenant_id, *store_id, &resolved).await;
-        results.push(match outcome {
+        let published = publish_settings_to_store(state, tenant_id, *store_id, &resolved).await;
+        if published.switch_without_people {
+            switch_only = switch_only.saturating_add(1);
+        }
+        results.push(match published.version {
             Ok(Some(version)) => SettingPublishResult {
                 store_id: store_id.to_string(),
                 outcome: "SETTING_PUBLISH_APPLIED",
@@ -18102,7 +19516,24 @@ where
             },
         });
     }
+    if switch_only > 0 {
+        tracing::warn!(
+            stores = switch_only,
+            "the permissions switch reached stores with no people node beside it: an edge from \
+             0.14.1 on keeps its roster there, and an older one empties it until the store's \
+             people are published (ADR-0158, ADR-0160)"
+        );
+    }
     results
+}
+
+/// What one store's settings publish did.
+struct StorePublish {
+    /// The new version, `None` when the layer already held the store's settings, or `Err` when the
+    /// store could not be read or refused the write.
+    version: Result<Option<ConfigVersionId>, ()>,
+    /// Whether the store is left with the permissions switch and no people node beside it.
+    switch_without_people: bool,
 }
 
 /// Writes one store's resolved settings onto its Tenant layer: the new version, or `None` when the
@@ -18117,7 +19548,7 @@ async fn publish_settings_to_store<St, Rg, Grp, Cfg, A, C>(
     tenant_id: TenantId,
     store_id: StoreId,
     resolved: &[crate::settings::ResolvedSetting],
-) -> Result<Option<ConfigVersionId>, ()>
+) -> StorePublish
 where
     Cfg: ConfigTreeStore,
     C: ClockSource,
@@ -18129,17 +19560,32 @@ where
     };
     let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
         tracing::error!(%store_id, "a store's configuration could not be read for a settings publish");
-        return Err(());
+        return StorePublish {
+            version: Err(()),
+            switch_without_people: false,
+        };
     };
     let layer = tenant_layer(loaded.state.as_ref());
     let nodes = crate::settings::tenant_layer_nodes(&layer, resolved);
+    let switch_without_people = crate::settings::switch_without_people(
+        &nodes,
+        loaded
+            .state
+            .as_ref()
+            .map_or(&serde_json::Value::Null, |tree| {
+                tree.layer(ConfigLevel::Store)
+            }),
+    );
     if nodes
         .iter()
         .all(|(node, value)| layer.get(node) == Some(value))
     {
-        return Ok(None);
+        return StorePublish {
+            version: Ok(None),
+            switch_without_people,
+        };
     }
-    match publish_config_nodes_with(
+    let version = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
@@ -18159,6 +19605,10 @@ where
             tracing::warn!(%store_id, "a store's configuration refused a settings publish");
             Err(())
         }
+    };
+    StorePublish {
+        version,
+        switch_without_people,
     }
 }
 
@@ -18221,9 +19671,1983 @@ fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Respon
 }
 
 /// The `503` for a settings store that did not answer.
-fn settings_store_error_response(error: &crate::settings::SettingsStoreError) -> Response {
+fn settings_store_error_response(error: &SettingsStoreError) -> Response {
     tracing::error!(%error, "the settings store failed");
     service_unavailable("settings")
+}
+
+// --- Fees (`/admin/fees`, ADR-0159 decision 1) ---------------------------------------------------
+
+/// The collaborators the fee routes need: the rules; the registry that says which stores a rule
+/// reaches; the catalog a rule's items, categories and tax class are checked and compiled
+/// against; the config trees each store's `fees` node is written onto; and the admin, clock and
+/// audit every route carries.
+#[derive(Clone)]
+struct FeesState<F, Rg, Cat, Cfg, A, C> {
+    fees: F,
+    registry: Rg,
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the fee sub-router ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+/// decision 1).
+///
+/// A rule is written once, at the tenant, a brand or one store, and every store it reaches is
+/// republished in the same request: each store's rules are resolved, per fee the most specific
+/// scope's ([`crate::fees::resolve_for_store`]), compiled ([`crate::fees::compile`]) and written
+/// whole as the `fees` node on its Store layer, as the `integrations` node is.
+///
+/// `POST /admin/fees/preview` assembles a sample bill at one store with rules in place before they
+/// are written, and writes nothing.
+///
+/// A rule's rate and amount are prices (T2), so the reads, the preview among them, are behind
+/// [`ConsolePermission::ReadRevenue`], as a menu's placements are (production-readiness S5). A
+/// write publishes, so it is behind [`ConsolePermission::PublishConfig`], like every node publish.
+pub fn fees_router<F, Rg, Cat, Cfg, A, C>(
+    fees: F,
+    registry: Rg,
+    catalog: Cat,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/fees",
+            get(admin_list_fees::<F, Rg, Cat, Cfg, A, C>)
+                .post(admin_create_fee::<F, Rg, Cat, Cfg, A, C>)
+                .put(admin_put_fee::<F, Rg, Cat, Cfg, A, C>)
+                .delete(admin_delete_fee::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .route(
+            "/admin/fees/effective",
+            get(admin_effective_fees::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .route(
+            "/admin/fees/publish",
+            post(admin_publish_fees::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .route(
+            "/admin/fees/preview",
+            post(admin_preview_fees::<F, Rg, Cat, Cfg, A, C>),
+        )
+        .with_state(FeesState {
+            fees,
+            registry,
+            catalog,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The tenant a fee read is for.
+#[derive(Debug, Clone, Deserialize)]
+struct FeesTenantQuery {
+    tenant_id: String,
+}
+
+/// One rule as the console lists it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeeRuleView {
+    /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
+    scope: &'static str,
+    /// The tenant, brand or store it was written for.
+    scope_id: String,
+    /// The rule as written: the wire rule's fields, and the categories it names.
+    rule: serde_json::Value,
+    update_time: pos_proto::Timestamp,
+    /// The console admin who last wrote it, by id.
+    updated_by: String,
+}
+
+impl FeeRuleView {
+    fn of(rule: &FeeRule) -> Option<Self> {
+        Some(Self {
+            scope: rule.scope.as_wire(),
+            scope_id: rule.scope_id.clone(),
+            rule: crate::fees::authored_json(rule).ok()?,
+            update_time: rule.update_time,
+            updated_by: rule.updated_by.clone(),
+        })
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/fees",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose rules to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every rule the tenant has written, at every scope: the scope \
+                                      and the id it was written for, the rule with the item \
+                                      categories it names, and who last wrote it when"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `GET /admin/fees` — the rules a tenant has written, at every scope.
+async fn admin_list_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<FeesTenantQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: Clone + Send + Sync + 'static,
+    Cat: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    match state.fees.list(tenant_id).await {
+        Ok(rules) => {
+            let views: Vec<FeeRuleView> = rules.iter().filter_map(FeeRuleView::of).collect();
+            (StatusCode::OK, Json(serde_json::json!({ "rules": views }))).into_response()
+        }
+        Err(error) => fee_store_error_response(&error),
+    }
+}
+
+/// A `POST` or `PUT /admin/fees` body: one rule, at one scope.
+#[derive(Debug, Clone, Deserialize)]
+struct FeeRuleRequest {
+    tenant_id: String,
+    /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
+    scope: String,
+    /// The tenant, brand or store the rule is for.
+    scope_id: String,
+    rule: FeeRuleBody,
+}
+
+/// A rule as the console sends it: the wire rule's own fields, with each id as text so a malformed
+/// one is refused by name, and the item categories an include or exclude list names besides its
+/// items. A field left out takes the default the owner confirmed: after discounts, net of tax,
+/// taxed the way its lines are, not waivable, on every channel and every item, and active.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the wire rule's four independent flags, each named on the wire and each with its own \
+              default; deserialised by name and never built from positional booleans"
+)]
+#[derive(Debug, Clone, Deserialize)]
+struct FeeRuleBody {
+    /// The fee: absent on a `POST`, which mints its id, and the fee written on a `PUT`.
+    #[serde(default)]
+    fee_id: Option<String>,
+    code: String,
+    display_name: String,
+    #[serde(default)]
+    display_name_translations: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    kind: Open<FeeKind>,
+    #[serde(default)]
+    rate: Option<Ratio>,
+    #[serde(default)]
+    amount: Option<Money>,
+    #[serde(default)]
+    channels: Vec<Open<SalesChannel>>,
+    #[serde(default)]
+    item_scope: Open<FeeItems>,
+    #[serde(default)]
+    menu_item_ids: Vec<String>,
+    #[serde(default)]
+    item_category_ids: Vec<String>,
+    #[serde(default = "authored_fee_base_is_discounted")]
+    base_discounted: bool,
+    #[serde(default)]
+    base_tax_inclusive: bool,
+    #[serde(default)]
+    tax: Open<FeeTax>,
+    #[serde(default)]
+    tax_class_id: Option<String>,
+    #[serde(default)]
+    waivable: bool,
+    #[serde(default = "authored_fee_is_active")]
+    active: bool,
+}
+
+/// The default for [`FeeRuleBody::base_discounted`]: a percentage is taken after discounts and
+/// comps, as the owner confirmed.
+const fn authored_fee_base_is_discounted() -> bool {
+    true
+}
+
+/// The default for [`FeeRuleBody::active`]: a rule written is a rule that applies.
+const fn authored_fee_is_active() -> bool {
+    true
+}
+
+/// A rule as a request writes it, checked field by field: every refusal the rule alone decides,
+/// before anything is read. `fee_id` is the caller's on a `PUT` and minted on a `POST`.
+///
+/// A field the rule's kind, item scope or tax treatment ignores is dropped rather than kept, so the
+/// stored rule is the rule that takes effect: an amount on a percentage, a rate or a base on an
+/// amount, an item list on a fee for every line, a tax class on a fee not taxed at one. A token the
+/// wire tolerates is refused here, because authoring one is a mistake: an unknown channel matches
+/// nothing, and an unknown tax treatment would be read as the default.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn build_fee_rule(
+    body: &FeeRuleBody,
+    fee_id: FeeId,
+) -> Result<(PublishedFee, Vec<ItemCategoryId>), Response> {
+    check_fee_text_and_tokens(body)?;
+    let code = body.code.trim();
+    let display_name = body.display_name.trim();
+    let menu_item_ids = parse_id_list(&body.menu_item_ids, "rule.menu_item_ids", MenuItemId::new)?;
+    let item_category_ids = parse_id_list(
+        &body.item_category_ids,
+        "rule.item_category_ids",
+        ItemCategoryId::new,
+    )?;
+    let tax_class_id = match body.tax_class_id.as_deref() {
+        None => None,
+        Some(text) => match parse_ulid_fields([("rule.tax_class_id", text)]) {
+            Ok([id]) => Some(TaxClassId::new(id)),
+            Err(refusal) => return Err(refusal),
+        },
+    };
+
+    let percent = !body.kind.is_unrecognised() && body.kind.known() == FeeKind::Percent;
+    let item_scope = if body.item_scope.is_unspecified() && !body.item_scope.is_unrecognised() {
+        Open::from_known(FeeItems::All)
+    } else {
+        body.item_scope.clone()
+    };
+    let listed = !item_scope.is_unrecognised()
+        && matches!(item_scope.known(), FeeItems::Include | FeeItems::Exclude);
+    let tax = if body.tax.is_unspecified() {
+        Open::from_known(FeeTax::FollowLines)
+    } else {
+        body.tax.clone()
+    };
+    let mut channels = body.channels.clone();
+    channels.sort_by(|left, right| left.as_wire().cmp(right.as_wire()));
+    channels.dedup();
+    let rule = PublishedFee {
+        fee_id,
+        code: FeeCode::new(code),
+        display_name: DisplayName::new(display_name),
+        display_name_translations: clean_name_translations(body.display_name_translations.clone())
+            .into_iter()
+            .map(|(locale, name)| (locale, DisplayName::new(name)))
+            .collect(),
+        kind: body.kind.clone(),
+        rate: if percent { body.rate } else { None },
+        amount: if percent { None } else { body.amount },
+        channels,
+        item_scope,
+        menu_item_ids: if listed { menu_item_ids } else { Vec::new() },
+        base_discounted: !percent || body.base_discounted,
+        base_tax_inclusive: percent && body.base_tax_inclusive,
+        tax_class_id: if tax.known() == FeeTax::TaxClass {
+            tax_class_id
+        } else {
+            None
+        },
+        tax,
+        waivable: body.waivable,
+        active: body.active,
+    };
+    let item_category_ids = if listed {
+        item_category_ids
+    } else {
+        Vec::new()
+    };
+    // An include or exclude list may be categories alone, which compile into items when the rule
+    // is published, so the wire rule's own list may be empty here.
+    let refusals: Vec<FeeViolation> = rule
+        .violations()
+        .into_iter()
+        .filter(|violation| {
+            *violation != FeeViolation::EmptyItemList || item_category_ids.is_empty()
+        })
+        .collect();
+    if refusals.is_empty() {
+        Ok((rule, item_category_ids))
+    } else {
+        Err(fee_violations_refusal(&refusals))
+    }
+}
+
+/// Refuses a rule whose code or name is blank, or which names a channel or a tax treatment this
+/// cloud does not know.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn check_fee_text_and_tokens(body: &FeeRuleBody) -> Result<(), Response> {
+    if body.code.trim().is_empty() {
+        return Err(FieldRefusal::new("code is required", "rule.code", "REQUIRED").into_response());
+    }
+    if body.display_name.trim().is_empty() {
+        return Err(
+            FieldRefusal::new("display_name is required", "rule.display_name", "REQUIRED")
+                .into_response(),
+        );
+    }
+    if body.channels.iter().any(Open::is_unspecified) {
+        return Err(FieldRefusal::new(
+            "a fee names an unknown sales channel",
+            "rule.channels",
+            "INVALID_ENUM_VALUE",
+        )
+        .into_response());
+    }
+    if body.tax.is_unrecognised() {
+        return Err(enum_refusal(
+            "rule.tax",
+            FeeTax::ALL
+                .iter()
+                .filter(|tax| **tax != FeeTax::Unspecified)
+                .map(|tax| tax.as_wire()),
+        ));
+    }
+    Ok(())
+}
+
+/// The `400` for a rule whose shape pos-proto's checks refuse: every fault, each naming its field.
+fn fee_violations_refusal(violations: &[FeeViolation]) -> Response {
+    let message: Vec<String> = violations.iter().map(ToString::to_string).collect();
+    let details: Vec<(&str, &str)> = violations
+        .iter()
+        .map(|violation| fee_violation_detail(*violation))
+        .collect();
+    api_error_with_details(ErrorStatus::InvalidArgument, message.join("; "), &details)
+}
+
+/// The field a fault in a rule's shape is about, and the reason a refusal gives for it.
+const fn fee_violation_detail(violation: FeeViolation) -> (&'static str, &'static str) {
+    match violation {
+        FeeViolation::UnknownKind => ("rule.kind", "INVALID_ENUM_VALUE"),
+        FeeViolation::MissingRate => ("rule.rate", "REQUIRED"),
+        FeeViolation::RateOutOfRange => ("rule.rate", "OUT_OF_RANGE"),
+        FeeViolation::MissingAmount => ("rule.amount", "REQUIRED"),
+        FeeViolation::NegativeAmount => ("rule.amount", "OUT_OF_RANGE"),
+        FeeViolation::MissingTaxClass => ("rule.tax_class_id", "REQUIRED"),
+        FeeViolation::EmptyItemList => ("rule.menu_item_ids", "REQUIRED"),
+        FeeViolation::UnknownItemScope => ("rule.item_scope", "INVALID_ENUM_VALUE"),
+    }
+}
+
+/// Parses a list of ids sent as text, refusing the list by name if one is not a ULID. Each id is
+/// kept once, in id order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_id_list<T: Ord>(
+    texts: &[String],
+    field: &str,
+    wrap: impl Fn(Ulid) -> T,
+) -> Result<Vec<T>, Response> {
+    let mut ids = BTreeSet::new();
+    for text in texts {
+        match text.trim().parse::<Ulid>() {
+            Ok(id) => {
+                ids.insert(wrap(id));
+            }
+            Err(_ignored) => return Err(ulid_refusal(&[field])),
+        }
+    }
+    Ok(ids.into_iter().collect())
+}
+
+/// Reads a scope token, refusing anything but the three a rule is written at.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_fee_scope(token: &str) -> Result<FeeScope, Response> {
+    match FeeScope::from_wire(token.trim()) {
+        Some(FeeScope::Unspecified) | None => Err(enum_refusal(
+            "scope",
+            FeeScope::WRITABLE.iter().map(|scope| scope.as_wire()),
+        )),
+        Some(scope) => Ok(scope),
+    }
+}
+
+/// Where a tenant's stores sit for their fees — each store and its brand — read once per request,
+/// so one write resolves every store it reaches against the same picture.
+struct FeeLayout {
+    tenant_id: TenantId,
+    stores: Vec<StoreRecord>,
+    brand_ids: Vec<BrandId>,
+}
+
+impl FeeLayout {
+    /// Reads the tenant's stores and brands.
+    async fn load<Rg: RegistryStore>(registry: &Rg, tenant_id: TenantId) -> Result<Self, Response> {
+        let stores = records(
+            registry
+                .list_stores(tenant_id)
+                .await
+                .map_err(|error| registry_error_response(&error))?,
+        );
+        let brand_ids = registry
+            .list_brands(tenant_id)
+            .await
+            .map_err(|error| registry_error_response(&error))?
+            .into_iter()
+            .map(|brand| brand.record.brand_id)
+            .collect();
+        Ok(Self {
+            tenant_id,
+            stores,
+            brand_ids,
+        })
+    }
+
+    /// Where one store sits, or `None` if the tenant has no such store.
+    fn placement(&self, store_id: StoreId) -> Option<FeePlacement> {
+        let store = self
+            .stores
+            .iter()
+            .find(|store| store.store_id == store_id)?;
+        Some(FeePlacement {
+            tenant_id: self.tenant_id.to_string(),
+            brand_id: store.brand_id.map(|brand| brand.to_string()),
+            store_id: store_id.to_string(),
+        })
+    }
+
+    /// The canonical id a rule at `scope` is written for, refusing one the tenant does not have.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn scope_target(&self, scope: FeeScope, scope_id: &str) -> Result<String, Response> {
+        let id = match parse_ulid_fields([("scope_id", scope_id)]) {
+            Ok([id]) => id,
+            Err(refusal) => return Err(refusal),
+        };
+        match scope {
+            FeeScope::Tenant if id == self.tenant_id.as_ulid() => Ok(id.to_string()),
+            FeeScope::Tenant => Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tenant-scope rule is written for the tenant itself",
+                &[("scope_id", "MUST_BE_THE_TENANT")],
+            )),
+            FeeScope::Brand if self.brand_ids.contains(&BrandId::new(id)) => Ok(id.to_string()),
+            FeeScope::Brand => Err(not_found("brand")),
+            FeeScope::Store if self.placement(StoreId::new(id)).is_some() => Ok(id.to_string()),
+            FeeScope::Store => Err(not_found("store")),
+            FeeScope::Unspecified => Err(enum_refusal(
+                "scope",
+                FeeScope::WRITABLE.iter().map(|scope| scope.as_wire()),
+            )),
+        }
+    }
+
+    /// The stores a rule at `scope` reaches, in the registry's order.
+    fn reached_by(&self, scope: FeeScope, scope_id: &str) -> Vec<StoreId> {
+        let tenant_id = self.tenant_id.to_string();
+        self.stores
+            .iter()
+            .filter(|store| match scope {
+                FeeScope::Tenant => scope_id == tenant_id,
+                FeeScope::Brand => store
+                    .brand_id
+                    .is_some_and(|brand| brand.to_string() == scope_id),
+                FeeScope::Store => store.store_id.to_string() == scope_id,
+                FeeScope::Unspecified => false,
+            })
+            .map(|store| store.store_id)
+            .collect()
+    }
+}
+
+/// What a fee rule is checked and compiled against in the tenant's catalog.
+struct FeeCatalog {
+    item_ids: BTreeSet<MenuItemId>,
+    category_ids: BTreeSet<ItemCategoryId>,
+    tax_class_ids: BTreeSet<TaxClassId>,
+    categories: CategoryItems,
+}
+
+impl FeeCatalog {
+    /// Reads the tenant's items, item categories and tax classes.
+    async fn load<Cat: CatalogStore>(catalog: &Cat, tenant_id: TenantId) -> Result<Self, Response> {
+        let items = records(
+            catalog
+                .list_items(tenant_id)
+                .await
+                .map_err(|error| catalog_error_response(&error))?,
+        );
+        let category_ids = catalog
+            .list_item_categories(tenant_id)
+            .await
+            .map_err(|error| catalog_error_response(&error))?
+            .into_iter()
+            .map(|category| category.record.item_category_id)
+            .collect();
+        let tax_class_ids = catalog
+            .list_tax_classes(tenant_id)
+            .await
+            .map_err(|error| catalog_error_response(&error))?
+            .into_iter()
+            .map(|tax_class| tax_class.record.tax_class_id)
+            .collect();
+        Ok(Self {
+            item_ids: items.iter().map(|item| item.menu_item_id).collect(),
+            category_ids,
+            tax_class_ids,
+            categories: CategoryItems::from_catalog(&items),
+        })
+    }
+
+    /// Refuses a rule that names an item, an item category or a tax class the catalog does not
+    /// have: a list naming an item nobody can sell is a typing mistake, and a tax class no store
+    /// can have a rate for fails every bill the fee applies to.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn check_references(
+        &self,
+        rule: &PublishedFee,
+        item_category_ids: &[ItemCategoryId],
+    ) -> Result<(), Response> {
+        let refusal = |message: &'static str, field: &'static str| {
+            Err(FieldRefusal::new(message, field, "UNKNOWN_REFERENCE").into_response())
+        };
+        if rule
+            .menu_item_ids
+            .iter()
+            .any(|id| !self.item_ids.contains(id))
+        {
+            return refusal(
+                "the fee names an item the catalog does not have",
+                "rule.menu_item_ids",
+            );
+        }
+        if item_category_ids
+            .iter()
+            .any(|id| !self.category_ids.contains(id))
+        {
+            return refusal(
+                "the fee names an item category the catalog does not have",
+                "rule.item_category_ids",
+            );
+        }
+        if rule
+            .tax_class_id
+            .is_some_and(|id| !self.tax_class_ids.contains(&id))
+        {
+            return refusal(
+                "the fee names a tax class the catalog does not have",
+                "rule.tax_class_id",
+            );
+        }
+        Ok(())
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/fees",
+    request_body(
+        description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
+                       for, and the rule without a fee_id: code, display_name and its \
+                       translations, kind (FEE_KIND_PERCENT with a rate, or FEE_KIND_AMOUNT_PER_BILL \
+                       or _PER_UNIT with an amount), channels, item_scope with menu_item_ids and \
+                       item_category_ids, base_discounted, base_tax_inclusive, tax (with a \
+                       tax_class_id for FEE_TAX_TAX_CLASS), waivable and active",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created with a minted fee_id, and every store it reaches \
+                                      republished. The body names the fee_id and lists each store \
+                                      with FEE_PUBLISH_APPLIED and the new config version, \
+                                      FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it \
+                                      cannot apply, or FEE_PUBLISH_FAILED"),
+        (status = 400, description = "An id is not a ULID, the scope is not a scope, a field the \
+                                      rule needs is absent or out of range, a token is not one \
+                                      the field takes, a fee_id was sent, the rule names an item, \
+                                      category or tax class the catalog does not have, or a \
+                                      tenant-scope rule names another tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such brand or store", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "A store the rule takes effect at could not apply it: an \
+                                      amount in another currency than the store's, or a tax class \
+                                      it has no rate for; or the store already runs another fee \
+                                      with this code; or an item list names nothing on the menu of \
+                                      any store it takes effect at", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `POST /admin/fees` — writes a new fee, minting its id, and republishes every store it reaches.
+async fn admin_create_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<FeeRuleRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    if request.rule.fee_id.is_some() {
+        return FieldRefusal::new(
+            "a new fee's id is minted here; write an existing fee with PUT",
+            "rule.fee_id",
+            "INVALID_VALUE",
+        )
+        .into_response();
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let Some(fee_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(FeeId::new)
+    else {
+        tracing::error!("could not read OS entropy to mint a fee id");
+        return service_unavailable("fees");
+    };
+    write_fee_rule(&state, &context, tenant_id, fee_id, &request, true).await
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/fees",
+    request_body(
+        description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
+                       where it is, the rule replaces it; written at a narrower scope, it \
+                       overrides the broader one for the stores that scope reaches",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Written, and every store it reaches republished, with the \
+                                      same per-store outcomes as a POST"),
+        (status = 400, description = "As a POST, or the fee_id is absent", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such brand or store", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "As a POST", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `PUT /admin/fees` — writes a fee at one scope and republishes every store it reaches.
+async fn admin_put_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<FeeRuleRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let Some(fee_text) = request.rule.fee_id.as_deref() else {
+        return FieldRefusal::new(
+            "rule.fee_id is required: a PUT writes the fee it names",
+            "rule.fee_id",
+            "REQUIRED",
+        )
+        .into_response();
+    };
+    let (tenant_id, fee_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("rule.fee_id", fee_text)]) {
+            Ok([tenant_id, fee_id]) => (TenantId::new(tenant_id), FeeId::new(fee_id)),
+            Err(refusal) => return refusal,
+        };
+    write_fee_rule(&state, &context, tenant_id, fee_id, &request, false).await
+}
+
+/// The write `POST` and `PUT` share: checks the rule, checks it against every store it would take
+/// effect at, keeps it, republishes every store it reaches, and records it.
+async fn write_fee_rule<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    fee_id: FeeId,
+    request: &FeeRuleRequest,
+    minted: bool,
+) -> Response
+where
+    F: FeeRuleStore,
+    Rg: RegistryStore,
+    Cat: CatalogStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let scope = match parse_fee_scope(&request.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    let (rule, item_category_ids) = match build_fee_rule(&request.rule, fee_id) {
+        Ok(built) => built,
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let scope_id = match layout.scope_target(scope, &request.scope_id) {
+        Ok(scope_id) => scope_id,
+        Err(refusal) => return refusal,
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    if let Err(refusal) = catalog.check_references(&rule, &item_category_ids) {
+        return refusal;
+    }
+    let written = FeeRule {
+        scope,
+        scope_id,
+        rule,
+        item_category_ids,
+        update_time: state.clock.now(),
+        updated_by: context.admin.id.clone(),
+    };
+    let before = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    let replaced = before.iter().any(|held| held.slot() == written.slot());
+    let mut after: Vec<FeeRule> = before
+        .iter()
+        .filter(|held| held.slot() != written.slot())
+        .cloned()
+        .collect();
+    after.push(written.clone());
+    let reached = layout.reached_by(scope, &written.scope_id);
+    let write = FeeWrite {
+        before: &before,
+        after: &after,
+        written: Some(&written),
+    };
+    if let Err(refusal) =
+        check_fee_write(state, &layout, &reached, &write, &catalog.categories).await
+    {
+        return refusal;
+    }
+    if let Err(error) = state.fees.put(tenant_id, &written).await {
+        return fee_store_error_response(&error);
+    }
+    let results = publish_fees_to(state, &layout, &reached, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        if replaced && !minted {
+            "fee.update"
+        } else {
+            "fee.create"
+        },
+        "fee_rule",
+        &fee_audit_id(fee_id, scope, &written.scope_id),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        if minted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(serde_json::json!({ "fee_id": fee_id.to_string(), "stores": results })),
+    )
+        .into_response()
+}
+
+/// What a write changes: the tenant's rules before and after it, and the rule it writes, which a
+/// delete has none of.
+struct FeeWrite<'a> {
+    before: &'a [FeeRule],
+    after: &'a [FeeRule],
+    written: Option<&'a FeeRule>,
+}
+
+/// Checks what a write would change at each store it reaches, before the write is kept.
+///
+/// At each store, the rules in force before and after the write are resolved, and every rule in
+/// force after it that was not before — the rule written, or for a delete the broader rule it
+/// uncovers — must be one the store can apply ([`crate::fees::faults_at`]) and must not share its
+/// code with another fee the store runs. A written include or exclude list must also name an item
+/// on the menu of at least one store it takes effect at, where any of them has a menu: ADR-0159's
+/// check of an `items` list that names nothing on the store's menu.
+///
+/// A rule already in force that a later change to the store left unable to apply is not this
+/// write's to refuse: the publish leaves that store as it is, and says why.
+async fn check_fee_write<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    layout: &FeeLayout,
+    stores: &[StoreId],
+    write: &FeeWrite<'_>,
+    categories: &CategoryItems,
+) -> Result<(), Response>
+where
+    Cfg: ConfigTreeStore,
+{
+    let mut problems = FeeWriteProblems::default();
+    for store_id in stores {
+        let Some(placement) = layout.placement(*store_id) else {
+            continue;
+        };
+        let was = crate::fees::resolve_for_store(write.before, &placement);
+        let now = crate::fees::resolve_for_store(write.after, &placement);
+        let changed: Vec<&FeeRule> = now
+            .iter()
+            .copied()
+            .filter(|rule| !was.contains(rule))
+            .collect();
+        if changed.is_empty() {
+            continue;
+        }
+        let facts = fee_store_facts(&state.config_trees, layout.tenant_id, *store_id).await?;
+        for rule in changed {
+            let published = crate::fees::compile(rule, categories);
+            problems.note(
+                *store_id,
+                &published,
+                &now,
+                &facts,
+                write.written == Some(rule),
+            );
+        }
+    }
+    problems.into_result(write.written.is_none())
+}
+
+/// What [`check_fee_write`] found, gathered across the stores a write reaches.
+#[derive(Default)]
+struct FeeWriteProblems {
+    /// Each store-and-rule fault, as a sentence naming them by id.
+    faults: Vec<String>,
+    /// The `details` the refusal carries, each once.
+    details: BTreeSet<(&'static str, &'static str)>,
+    /// Whether a store the written list takes effect at has a menu, and whether one lists an item.
+    menus: Option<bool>,
+}
+
+impl FeeWriteProblems {
+    /// The most store-and-rule sentences a refusal spells out; the rest are counted.
+    const SENTENCES: usize = 5;
+
+    /// Notes what is wrong with `published`, in force at `store_id` among `now`.
+    fn note(
+        &mut self,
+        store_id: StoreId,
+        published: &PublishedFee,
+        now: &[&FeeRule],
+        facts: &StoreFacts,
+        written: bool,
+    ) {
+        for fault in crate::fees::faults_at(published, facts) {
+            self.details.insert((fault.field(), fault.as_wire()));
+            self.faults.push(format!(
+                "fee {} cannot apply at store {store_id}: {}",
+                published.fee_id,
+                match fault {
+                    StoreFault::CurrencyMismatch => "its amount is in another currency",
+                    StoreFault::TaxClassNotRated => "its tax class has no rate there",
+                }
+            ));
+        }
+        if published.active
+            && let Some(other) = crate::fees::shares_code_with(published, now)
+        {
+            self.details.insert(("rule.code", "ALREADY_EXISTS"));
+            self.faults.push(format!(
+                "fee {} at store {store_id} has the code of fee {}, which the store also runs; \
+                 override that fee instead",
+                published.fee_id, other.rule.fee_id
+            ));
+        }
+        let listed = matches!(
+            published.item_scope(),
+            Some(FeeItems::Include | FeeItems::Exclude)
+        );
+        if written
+            && listed
+            && published.active
+            && let Some(lists) = facts.menu_lists_any(&published.menu_item_ids, &published.channels)
+        {
+            self.menus = Some(self.menus.unwrap_or(false) || lists);
+        }
+    }
+
+    /// The `422` for what was found, or nothing. A delete's refusal names `fee_id`, since the rule
+    /// it is about is not in the request.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn into_result(mut self, deleting: bool) -> Result<(), Response> {
+        if self.menus == Some(false) {
+            self.details.insert(("rule.menu_item_ids", "NOT_ON_MENU"));
+            self.faults.push(
+                "the item list names nothing on the menu of any store the fee takes effect at"
+                    .to_owned(),
+            );
+        }
+        if self.faults.is_empty() {
+            return Ok(());
+        }
+        let more = self.faults.len().saturating_sub(Self::SENTENCES);
+        let mut message: Vec<String> = self.faults.into_iter().take(Self::SENTENCES).collect();
+        if more > 0 {
+            message.push(format!("and {more} more"));
+        }
+        let details: Vec<(&str, &str)> = self
+            .details
+            .iter()
+            .map(|(field, reason)| (if deleting { "fee_id" } else { *field }, *reason))
+            .collect();
+        Err(api_error_with_details(
+            ErrorStatus::Unprocessable,
+            message.join("; "),
+            &details,
+        ))
+    }
+}
+
+/// What a store's configuration holds that a fee must agree with; nothing for a store with no
+/// configuration yet.
+async fn fee_store_facts<Cfg: ConfigTreeStore>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<StoreFacts, Response> {
+    let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
+    Ok(loaded.state.map_or_else(StoreFacts::default, |tree| {
+        StoreFacts::from_document(
+            &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
+        )
+    }))
+}
+
+/// The rule a `DELETE /admin/fees` removes.
+#[derive(Debug, Clone, Deserialize)]
+struct DeleteFeeQuery {
+    tenant_id: String,
+    scope: String,
+    scope_id: String,
+    fee_id: String,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/admin/fees",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("scope" = String, Query, description = "FEE_SCOPE_TENANT, _BRAND or _STORE"),
+        ("scope_id" = String, Query, description = "The tenant, brand or store the rule was written for"),
+        ("fee_id" = String, Query, description = "The fee"),
+    ),
+    responses(
+        (status = 200, description = "Removed, and every store it reached republished, with the \
+                                      same per-store outcomes as a write. A store that ran it runs \
+                                      the fee's broader rule if there is one, and otherwise no \
+                                      longer charges it"),
+        (status = 400, description = "An id is not a ULID or the scope is not a scope", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No rule is written there", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "A store would then run the fee's broader rule, and could not \
+                                      apply it, or runs another fee with its code", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `DELETE /admin/fees` — removes a rule at one scope and republishes every store it reached.
+async fn admin_delete_fee<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<DeleteFeeQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, scope_id, fee_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("scope_id", &query.scope_id),
+        ("fee_id", &query.fee_id),
+    ]) {
+        Ok([tenant_id, scope_id, fee_id]) => (
+            TenantId::new(tenant_id),
+            scope_id.to_string(),
+            FeeId::new(fee_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    let scope = match parse_fee_scope(&query.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    let slot = FeeRuleSlot {
+        scope,
+        scope_id: &scope_id,
+        fee_id,
+    };
+    let before = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    if !before.iter().any(|held| held.slot() == slot) {
+        return not_found("fee rule");
+    }
+    let after: Vec<FeeRule> = before
+        .iter()
+        .filter(|held| held.slot() != slot)
+        .cloned()
+        .collect();
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let reached = layout.reached_by(scope, &scope_id);
+    let write = FeeWrite {
+        before: &before,
+        after: &after,
+        written: None,
+    };
+    if let Err(refusal) =
+        check_fee_write(&state, &layout, &reached, &write, &catalog.categories).await
+    {
+        return refusal;
+    }
+    if let Err(error) = state.fees.delete(tenant_id, slot).await {
+        return fee_store_error_response(&error);
+    }
+    let results = publish_fees_to(&state, &layout, &reached, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "fee.delete",
+        "fee_rule",
+        &fee_audit_id(fee_id, scope, &scope_id),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stores": results })),
+    )
+        .into_response()
+}
+
+/// The store whose fees to read.
+#[derive(Debug, Clone, Deserialize)]
+struct EffectiveFeesQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// One fee as one store runs it, and where its rule comes from.
+#[derive(Debug, Clone, serde::Serialize)]
+struct EffectiveFee {
+    fee_id: String,
+    /// The scope of the rule in force, and what it was written for.
+    scope: &'static str,
+    scope_id: String,
+    /// The rule as written: the wire rule's fields, and the categories it names.
+    rule: serde_json::Value,
+    /// The rule as the store is sent it, its categories compiled into items.
+    published: PublishedFee,
+    /// Why the store cannot apply it, if it cannot.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    faults: Vec<&'static str>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/fees/effective",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every fee the store runs, in the order it is sent them: the \
+                                      scope and id its rule was written at, the rule as written, \
+                                      the rule as the store is sent it with its categories \
+                                      compiled into items, and any reason the store cannot apply \
+                                      it. publishable is false when one cannot be applied, in \
+                                      which case a publish leaves the store as it is"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `GET /admin/fees/effective` — the fees one store runs, and why.
+async fn admin_effective_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<EffectiveFeesQuery>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let Some(placement) = layout.placement(store_id) else {
+        return not_found("store");
+    };
+    let rules = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let facts = match fee_store_facts(&state.config_trees, tenant_id, store_id).await {
+        Ok(facts) => facts,
+        Err(refusal) => return refusal,
+    };
+    let fees: Vec<EffectiveFee> = crate::fees::resolve_for_store(&rules, &placement)
+        .into_iter()
+        .filter_map(|rule| {
+            let published = crate::fees::compile(rule, &catalog.categories);
+            Some(EffectiveFee {
+                fee_id: published.fee_id.to_string(),
+                scope: rule.scope.as_wire(),
+                scope_id: rule.scope_id.clone(),
+                rule: crate::fees::authored_json(rule).ok()?,
+                faults: crate::fees::faults_at(&published, &facts)
+                    .into_iter()
+                    .map(StoreFault::as_wire)
+                    .collect(),
+                published,
+            })
+        })
+        .collect();
+    let publishable = fees.iter().all(|fee| fee.faults.is_empty());
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "store_id": store_id.to_string(),
+            "fees": fees,
+            "publishable": publishable,
+        })),
+    )
+        .into_response()
+}
+
+/// The most rules one preview takes: the rule being edited and the handful beside it, bounded so one
+/// request cannot ask the cloud to resolve an unbounded list.
+const MOST_PREVIEW_RULES: usize = 20;
+
+/// The most units one sample line takes.
+const MOST_SAMPLE_UNITS: i64 = 999;
+
+/// A `POST /admin/fees/preview` body: a store, the rules as they would be written, and the lines of
+/// a sample bill.
+#[derive(Debug, Clone, Deserialize)]
+struct PreviewFeesRequest {
+    tenant_id: String,
+    store_id: String,
+    /// The channel the sample bill's order comes in on, which picks the menu's prices, the tax
+    /// rate and the fees that apply. Dine-in when absent.
+    #[serde(default)]
+    sales_channel: Option<Open<SalesChannel>>,
+    /// Rules as a `PUT` would send them, each at its scope, in place of what is written there. A rule
+    /// with no `fee_id` is a fee not created yet.
+    #[serde(default)]
+    rules: Vec<PreviewFeeRule>,
+    /// The sample bill's lines.
+    lines: Vec<SampleLineRequest>,
+}
+
+/// One rule a preview writes in place, as a `PUT` body carries it.
+#[derive(Debug, Clone, Deserialize)]
+struct PreviewFeeRule {
+    scope: String,
+    scope_id: String,
+    rule: FeeRuleBody,
+}
+
+/// One sample line: an item on the store's menu, and how many.
+#[derive(Debug, Clone, Deserialize)]
+struct SampleLineRequest {
+    menu_item_id: String,
+    quantity: i64,
+}
+
+/// A sample bill as the console draws it: each line, each fee with its tax, the tax per class, and
+/// what the guest would pay.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SampleBillView {
+    store_id: String,
+    sales_channel: &'static str,
+    lines: Vec<SampleLineView>,
+    subtotal: Money,
+    fee_lines: Vec<SampleFeeLineView>,
+    /// Every fee together, as the bill's one service-charge figure carries it.
+    service_charge: Money,
+    tax_lines: Vec<SampleTaxLineView>,
+    tax_total: Money,
+    rounding_adjustment: Money,
+    total_due: Money,
+}
+
+/// A sample line, priced from the store's menu.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SampleLineView {
+    menu_item_id: String,
+    display_name: DisplayName,
+    quantity: i64,
+    unit_price: Money,
+    line_total: Money,
+    tax_class_id: String,
+}
+
+/// A fee the sample bill charges, with its tax.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SampleFeeLineView {
+    fee_id: String,
+    code: String,
+    display_name: DisplayName,
+    amount: Money,
+    tax: Money,
+    /// The parts of the fee taxed at each class, with each part's tax.
+    class_shares: Vec<SampleFeeShareView>,
+}
+
+/// The part of a fee taxed at one class.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SampleFeeShareView {
+    tax_class_id: String,
+    amount: Money,
+    tax: Money,
+}
+
+/// The tax at one class, on the base the fees joined.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SampleTaxLineView {
+    tax_class_id: String,
+    taxable_base: Money,
+    rate_basis_points: u32,
+    tax: Money,
+}
+
+impl SampleBillView {
+    fn of(
+        store_id: StoreId,
+        channel: SalesChannel,
+        units: &[i64],
+        bill: crate::fees::SampleBill,
+    ) -> Self {
+        let totals = bill.totals;
+        Self {
+            store_id: store_id.to_string(),
+            sales_channel: channel.as_wire(),
+            lines: bill
+                .lines
+                .into_iter()
+                .zip(units)
+                .map(|(line, quantity)| SampleLineView {
+                    menu_item_id: line.menu_item_id.to_string(),
+                    display_name: line.display_name,
+                    quantity: *quantity,
+                    unit_price: line.unit_price,
+                    line_total: line.line_total,
+                    tax_class_id: line.tax_class_id.to_string(),
+                })
+                .collect(),
+            subtotal: totals.subtotal,
+            fee_lines: totals
+                .fee_lines
+                .into_iter()
+                .map(|fee| SampleFeeLineView {
+                    fee_id: fee.fee_id.to_string(),
+                    code: fee.code.as_str().to_owned(),
+                    display_name: fee.display_name,
+                    amount: fee.amount,
+                    tax: fee.tax,
+                    class_shares: fee
+                        .class_shares
+                        .into_iter()
+                        .map(|share| SampleFeeShareView {
+                            tax_class_id: share.tax_class_id.to_string(),
+                            amount: share.amount,
+                            tax: share.tax,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            service_charge: totals.service_charge,
+            tax_lines: totals
+                .tax_lines
+                .into_iter()
+                .map(|line| SampleTaxLineView {
+                    tax_class_id: line.tax_class_id.to_string(),
+                    taxable_base: line.taxable_base,
+                    rate_basis_points: line.rate_basis_points,
+                    tax: line.tax,
+                })
+                .collect(),
+            tax_total: totals.tax_total,
+            rounding_adjustment: totals.rounding_adjustment,
+            total_due: totals.total_due,
+        }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/fees/preview",
+    request_body(
+        description = "The tenant, a store, the sales channel (dine-in when absent), the rules as \
+                       they would be written — each with its scope and scope_id and the rule as a \
+                       PUT sends it, its fee_id absent for a fee not created yet — and the sample \
+                       bill's lines, each a menu_item_id from the store's menu and a quantity of \
+                       1 to 999. From 1 to 50 lines, and at most 20 rules",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "The sample bill as the store would assemble it with those \
+                                      rules in place: each line priced from its menu, each fee \
+                                      charged with its tax and the parts of it taxed at each \
+                                      class, the tax per class, the cash rounding and the total \
+                                      due. Nothing is written or published"),
+        (status = 400, description = "An id is not a ULID, the channel or a scope is not one, a \
+                                      rule is refused as a write would refuse it, or there are no \
+                                      lines, too many lines or rules, or a quantity out of range", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store, brand or store a rule is for", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store could not assemble the bill: it has no locale, \
+                                      tax table or menu published (NOT_PUBLISHED), a line is not \
+                                      on its menu for the channel (NOT_ON_MENU), not available \
+                                      (NOT_AVAILABLE) or has no tax rate (TAX_RATE_NOT_CONFIGURED), \
+                                      or a rule it would run cannot apply there", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry, the catalog or the config \
+                                      tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `POST /admin/fees/preview` — a sample bill at one store with rules in place, before they are
+/// written ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md): "the console previews a
+/// sample bill before publishing").
+///
+/// A read: it writes nothing and publishes nothing, so it stands behind the fee reads' permission.
+/// It resolves the store's rules with the ones sent in place, compiles them as a publish would, and
+/// assembles the bill with [`crate::fees::sample_bill`], which prices each line and adds it up with
+/// `pos_core`'s own functions, from the store's own published menu, tax table and rounding.
+async fn admin_preview_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PreviewFeesRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let channel = match &request.sales_channel {
+        None => SalesChannel::DineIn,
+        Some(channel) if channel.is_unspecified() => {
+            return enum_refusal(
+                "sales_channel",
+                SalesChannel::ALL
+                    .iter()
+                    .filter(|channel| **channel != SalesChannel::Unspecified)
+                    .map(|channel| channel.as_wire()),
+            );
+        }
+        Some(channel) => channel.known(),
+    };
+    if request.rules.len() > MOST_PREVIEW_RULES {
+        return FieldRefusal::new("a preview takes at most 20 rules", "rules", "OUT_OF_RANGE")
+            .into_response();
+    }
+    let lines = match parse_sample_lines(&request.lines) {
+        Ok(lines) => lines,
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let Some(placement) = layout.placement(store_id) else {
+        return not_found("store");
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let mut rules = match state.fees.list(tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => return fee_store_error_response(&error),
+    };
+    for preview in &request.rules {
+        let rule = match previewed_rule(&state, &context, &layout, &catalog, preview) {
+            Ok(rule) => rule,
+            Err(refusal) => return refusal,
+        };
+        rules.retain(|held| held.slot() != rule.slot());
+        rules.push(rule);
+    }
+    let facts = match fee_store_facts(&state.config_trees, tenant_id, store_id).await {
+        Ok(facts) => facts,
+        Err(refusal) => return refusal,
+    };
+    let sent = crate::fees::for_store(&rules, &placement, &catalog.categories, &facts);
+    if !sent.faults.is_empty() {
+        let message: Vec<String> = sent
+            .faults
+            .iter()
+            .map(|(fee_id, fault)| {
+                format!(
+                    "fee {fee_id} cannot apply at the store: {}",
+                    fault.as_wire()
+                )
+            })
+            .collect();
+        let details: BTreeSet<(&str, &str)> = sent
+            .faults
+            .iter()
+            .map(|(_, fault)| ("rules", fault.as_wire()))
+            .collect();
+        let details: Vec<(&str, &str)> = details.into_iter().collect();
+        return api_error_with_details(ErrorStatus::Unprocessable, message.join("; "), &details);
+    }
+    match crate::fees::sample_bill(&facts, channel, &lines, &sent.node) {
+        Ok(bill) => {
+            let units: Vec<i64> = request.lines.iter().map(|line| line.quantity).collect();
+            (
+                StatusCode::OK,
+                Json(SampleBillView::of(store_id, channel, &units, bill)),
+            )
+                .into_response()
+        }
+        Err(error) => sample_bill_refusal(&error),
+    }
+}
+
+/// One rule a preview writes in place, checked as a write checks it. A rule with no `fee_id` is
+/// given one for the preview alone.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn previewed_rule<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    context: &AdminContext,
+    layout: &FeeLayout,
+    catalog: &FeeCatalog,
+    preview: &PreviewFeeRule,
+) -> Result<FeeRule, Response>
+where
+    C: ClockSource,
+{
+    let scope = parse_fee_scope(&preview.scope)?;
+    let fee_id = if let Some(text) = preview.rule.fee_id.as_deref() {
+        let [id] = parse_ulid_fields([("rule.fee_id", text)])?;
+        FeeId::new(id)
+    } else {
+        let Some(id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()) else {
+            tracing::error!("could not read OS entropy to mint a fee id for a preview");
+            return Err(service_unavailable("fees"));
+        };
+        FeeId::new(id)
+    };
+    let (rule, item_category_ids) = build_fee_rule(&preview.rule, fee_id)?;
+    let scope_id = layout.scope_target(scope, &preview.scope_id)?;
+    catalog.check_references(&rule, &item_category_ids)?;
+    Ok(FeeRule {
+        scope,
+        scope_id,
+        rule,
+        item_category_ids,
+        update_time: state.clock.now(),
+        updated_by: context.admin.id.clone(),
+    })
+}
+
+/// Reads a sample bill's lines: from 1 to [`crate::fees::MOST_SAMPLE_LINES`], each an item id and
+/// from 1 to [`MOST_SAMPLE_UNITS`] units.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_sample_lines(
+    lines: &[SampleLineRequest],
+) -> Result<Vec<crate::fees::SampleLine>, Response> {
+    let out_of_range =
+        |message: &'static str| FieldRefusal::new(message, "lines", "OUT_OF_RANGE").into_response();
+    if lines.is_empty() || lines.len() > crate::fees::MOST_SAMPLE_LINES {
+        return Err(out_of_range("a sample bill has from 1 to 50 lines"));
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let Ok(id) = line.menu_item_id.trim().parse::<Ulid>() else {
+                return Err(ulid_refusal(&["lines"]));
+            };
+            if !(1..=MOST_SAMPLE_UNITS).contains(&line.quantity) {
+                return Err(out_of_range("a sample line has from 1 to 999 units"));
+            }
+            let quantity = pos_proto::quantity::Quantity::from_whole(line.quantity)
+                .map_err(|_overflow| out_of_range("a sample line has from 1 to 999 units"))?;
+            Ok(crate::fees::SampleLine {
+                menu_item_id: MenuItemId::new(id),
+                quantity,
+            })
+        })
+        .collect()
+}
+
+/// The `422` for a sample bill the store could not assemble, naming what it lacks or the line it
+/// cannot price.
+fn sample_bill_refusal(error: &crate::fees::SampleBillError) -> Response {
+    use crate::fees::SampleBillError;
+    use pos_core::menu::RepriceError;
+
+    let (field, reason) = match error {
+        SampleBillError::NotPublished(_) => ("store_id", "NOT_PUBLISHED"),
+        SampleBillError::Line(RepriceError::UnknownItem(_)) => ("lines", "NOT_ON_MENU"),
+        SampleBillError::Line(RepriceError::Unavailable(_)) => ("lines", "NOT_AVAILABLE"),
+        SampleBillError::Line(RepriceError::MissingRate { .. }) => {
+            ("lines", "TAX_RATE_NOT_CONFIGURED")
+        }
+        SampleBillError::Line(_) | SampleBillError::Assemble(_) => ("lines", "INVALID_VALUE"),
+    };
+    api_error_with_details(
+        ErrorStatus::Unprocessable,
+        error.to_string(),
+        &[(field, reason)],
+    )
+}
+
+/// A `POST /admin/fees/publish` body: the tenant, and one store or, without one, every store.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishFeesRequest {
+    tenant_id: String,
+    #[serde(default)]
+    store_id: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/fees/publish",
+    request_body(
+        description = "The tenant, and optionally one store. Without a store, every store of the \
+                       tenant is republished",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Each store's rules resolved, compiled and republished, with \
+                                      the same per-store outcomes as a write"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fee rule store, the registry or the catalog is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fees",
+)]
+/// `POST /admin/fees/publish` — republishes the fees of one store, or of every store of the tenant.
+///
+/// A write republishes every store it reaches by itself. What it cannot see is a change elsewhere
+/// that changes what a store is sent: a store given another brand, or an item added to or taken
+/// out of a category a rule names, which is compiled into items only when the fees are published,
+/// as a menu is compiled only when it is published.
+async fn admin_publish_fees<F, Rg, Cat, Cfg, A, C>(
+    State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishFeesRequest>,
+) -> Response
+where
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let stores: Vec<StoreId> = match request.store_id.as_deref().map(str::trim) {
+        None | Some("") => layout.stores.iter().map(|store| store.store_id).collect(),
+        Some(text) => {
+            let store_id = match parse_ulid_fields([("store_id", text)]) {
+                Ok([store_id]) => StoreId::new(store_id),
+                Err(refusal) => return refusal,
+            };
+            if layout.placement(store_id).is_none() {
+                return not_found("store");
+            }
+            vec![store_id]
+        }
+    };
+    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
+        Ok(catalog) => catalog,
+        Err(refusal) => return refusal,
+    };
+    let results = publish_fees_to(&state, &layout, &stores, &catalog.categories).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "fee.publish",
+        "tenant",
+        &tenant_id.to_string(),
+        None,
+        Some(fee_publish_counts(&results)),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stores": results })),
+    )
+        .into_response()
+}
+
+/// How one store's fee publish went.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeePublishResult {
+    store_id: String,
+    /// `FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or
+    /// `FEE_PUBLISH_FAILED`.
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
+    /// For a refused store: each rule it cannot apply, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    faults: Vec<FeeFaultView>,
+}
+
+impl FeePublishResult {
+    /// An outcome with nothing more to say.
+    fn of(store_id: StoreId, outcome: &'static str) -> Self {
+        Self {
+            store_id: store_id.to_string(),
+            outcome,
+            config_version_id: None,
+            faults: Vec::new(),
+        }
+    }
+}
+
+/// One rule a store cannot apply, as a refused publish reports it: by id, never by name.
+#[derive(Debug, Clone, serde::Serialize)]
+struct FeeFaultView {
+    fee_id: String,
+    /// `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`.
+    reason: &'static str,
+}
+
+/// Republishes each store's resolved rules as the `fees` node on its Store layer.
+///
+/// One store failing does not stop the others, and a failed one is retried with
+/// `POST /admin/fees/publish`. A store whose layer already holds what it resolves to is not given
+/// a new version, so a write that changes nothing for a store does not make its tills reload. A
+/// store that cannot apply one of its rules is not published to at all and keeps the rules it has:
+/// sending the others alone would stop charging a fee nobody removed, and sending them all would
+/// fail every bill the faulted rule applies to.
+///
+/// The rules are read once, before the stores are written, as a settings publish reads its values.
+async fn publish_fees_to<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    layout: &FeeLayout,
+    stores: &[StoreId],
+    categories: &CategoryItems,
+) -> Vec<FeePublishResult>
+where
+    F: FeeRuleStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let rules = match state.fees.list(layout.tenant_id).await {
+        Ok(rules) => rules,
+        Err(error) => {
+            tracing::error!(%error, "the fee rules could not be read for a fee publish");
+            return stores
+                .iter()
+                .map(|store_id| FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"))
+                .collect();
+        }
+    };
+    let mut results = Vec::with_capacity(stores.len());
+    for store_id in stores {
+        results.push(match layout.placement(*store_id) {
+            Some(placement) => {
+                publish_fees_to_store(
+                    state,
+                    layout.tenant_id,
+                    *store_id,
+                    &rules,
+                    &placement,
+                    categories,
+                )
+                .await
+            }
+            None => FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"),
+        });
+    }
+    results
+}
+
+/// Writes one store's resolved rules onto its Store layer, unless it already holds them or cannot
+/// apply one of them.
+async fn publish_fees_to_store<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    rules: &[FeeRule],
+    placement: &FeePlacement,
+    categories: &CategoryItems,
+) -> FeePublishResult
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
+        tracing::error!(%store_id, "a store's configuration could not be read for a fee publish");
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
+    };
+    let held = loaded.state.as_ref().and_then(|tree| {
+        tree.layer(ConfigLevel::Store)
+            .get(PublishedFees::NODE)
+            .cloned()
+    });
+    let facts = loaded.state.map_or_else(StoreFacts::default, |tree| {
+        StoreFacts::from_document(
+            &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
+        )
+    });
+    let sent = crate::fees::for_store(rules, placement, categories, &facts);
+    if !sent.faults.is_empty() {
+        tracing::warn!(
+            %store_id,
+            rules = sent.faults.len(),
+            "a store cannot apply some of its fee rules, so it keeps the ones it has"
+        );
+        return FeePublishResult {
+            faults: sent
+                .faults
+                .iter()
+                .map(|(fee_id, fault)| FeeFaultView {
+                    fee_id: fee_id.to_string(),
+                    reason: fault.as_wire(),
+                })
+                .collect(),
+            ..FeePublishResult::of(store_id, "FEE_PUBLISH_REFUSED")
+        };
+    }
+    let Ok(node) = serde_json::to_value(&sent.node) else {
+        tracing::error!("could not serialise a store's fees node");
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
+    };
+    // No node and no rule is the same answer at the edge, so it is not a change.
+    if held.map_or(sent.node.fees.is_empty(), |held| held == node) {
+        return FeePublishResult::of(store_id, "FEE_PUBLISH_UNCHANGED");
+    }
+    match publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        vec![(PublishedFees::NODE.to_owned(), node)],
+    )
+    .await
+    {
+        Ok(version) => FeePublishResult {
+            config_version_id: Some(version.to_string()),
+            ..FeePublishResult::of(store_id, "FEE_PUBLISH_APPLIED")
+        },
+        Err(_refused) => {
+            tracing::warn!(%store_id, "a store's configuration refused a fee publish");
+            FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
+        }
+    }
+}
+
+/// What the trail keeps of a fee write or publish: how many stores it reached and how each went.
+/// Counts only — never a rule's code, name, rate or amount, which the rule store keeps.
+fn fee_publish_counts(results: &[FeePublishResult]) -> serde_json::Value {
+    let count = |outcome: &str| {
+        results
+            .iter()
+            .filter(|result| result.outcome == outcome)
+            .count()
+    };
+    serde_json::json!({
+        "stores": results.len(),
+        "applied": count("FEE_PUBLISH_APPLIED"),
+        "unchanged": count("FEE_PUBLISH_UNCHANGED"),
+        "refused": count("FEE_PUBLISH_REFUSED"),
+        "failed": count("FEE_PUBLISH_FAILED"),
+    })
+}
+
+/// What the audit trail names a rule by: its fee, its scope and the id it was written for.
+fn fee_audit_id(fee_id: FeeId, scope: FeeScope, scope_id: &str) -> String {
+    format!("{fee_id} {scope} {scope_id}")
+}
+
+/// The `503` for a fee rule store that did not answer.
+fn fee_store_error_response(error: &FeeRuleStoreError) -> Response {
+    tracing::error!(%error, "the fee rule store failed");
+    service_unavailable("fees")
 }
 
 // --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
@@ -18433,7 +21857,11 @@ where
 ///
 /// `compose` may refuse: returning `Err` abandons the publish with that response, which is how a
 /// route reports a refusal it can only decide once it has seen the current node.
-async fn publish_config_nodes_with<Cfg, C, F>(
+///
+/// A write to the Store layer that sets QR ordering's switch, the `qr` node or the `channels` list
+/// also carries what the other two need to follow the switch ([`crate::qr_ordering::align`],
+/// ADR-0160 decision 5), composed here on the tree as just read, so a retry composes again.
+pub(crate) async fn publish_config_nodes_with<Cfg, C, F>(
     config_trees: &Cfg,
     clock: &C,
     tenant_id: TenantId,
@@ -18450,6 +21878,11 @@ where
     for _ in 0..CONDITIONAL_WRITE_ATTEMPTS {
         let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
         let nodes = compose(loaded.state.as_ref())?;
+        let nodes = if level == ConfigLevel::Store {
+            crate::qr_ordering::align(loaded.state.as_ref(), nodes)
+        } else {
+            nodes
+        };
         let layer = layer_with_nodes(loaded.state.as_ref(), level, &nodes);
         let mut tree = match loaded.state {
             Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
@@ -18509,6 +21942,9 @@ where
 ///
 /// The refusal names the node and what it is waiting for, because "the configuration is invalid" is
 /// the message that sent the operator to the logs.
+///
+/// A node that carries nothing but settings is not held ([`only_settings`]): the settings compile
+/// writes `locale.tax_rounding` on the Tenant layer of a store whose locale was never published.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
@@ -18518,9 +21954,10 @@ fn check_prerequisites(
     publishing: &[String],
 ) -> Result<(), Response> {
     let held = |key: &str| {
-        effective_before
-            .as_object()
-            .is_some_and(|map| map.get(key).is_some_and(|value| !value.is_null()))
+        effective_before.as_object().is_some_and(|map| {
+            map.get(key)
+                .is_some_and(|value| !value.is_null() && !only_settings(key, value))
+        })
     };
     for node in publishing {
         for need in prerequisites_for(node) {
@@ -18537,6 +21974,23 @@ fn check_prerequisites(
         }
     }
     Ok(())
+}
+
+/// Whether `value`, the store's `node`, carries only fields the settings register writes there
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+///
+/// Such a node is the settings and nothing else: a `locale` holding `tax_rounding` alone has no
+/// currency, timezone or cutoff, so it is not the locale a menu waits for.
+fn only_settings(node: &str, value: &serde_json::Value) -> bool {
+    let register = pos_proto::settings::register();
+    value.as_object().is_some_and(|fields| {
+        !fields.is_empty()
+            && fields.keys().all(|field| {
+                register
+                    .iter()
+                    .any(|setting| setting.node == node && setting.field == field)
+            })
+    })
 }
 
 /// Sets `nodes` on the layer at `level`, preserving every other key.
@@ -19016,11 +22470,16 @@ fn preview_config_node(
 /// quietly under-report a plan that writes two. Setting them all on the Store layer before composing
 /// also gives the honest answer for a plan whose nodes interact — the validator sees the candidate
 /// the publish would actually write, not one node of it.
+///
+/// That includes what QR ordering's switch makes follow it: a candidate that sets the switch, the
+/// `qr` node or the `channels` list is previewed with the nodes [`crate::qr_ordering::align`] adds,
+/// exactly as [`publish_config_nodes_with`] would write them.
 fn preview_config_nodes(
     state_before: Option<&ConfigTreeState>,
     nodes: &[(String, serde_json::Value)],
 ) -> Result<ConfigPreview, Vec<String>> {
     use serde_json::Value;
+    let nodes = crate::qr_ordering::align(state_before, nodes.to_vec());
     let empty = || Value::Object(serde_json::Map::new());
     // The four authored layers as stored (all empty when the store has no tree yet).
     let layers: [Value; 4] = state_before.map_or_else(
@@ -19042,7 +22501,7 @@ fn preview_config_nodes(
     }
     if let Value::Object(map) = &mut store_layer {
         for (node_key, node_value) in nodes {
-            map.insert(node_key.clone(), node_value.clone());
+            map.insert(node_key, node_value);
         }
     }
 
@@ -19563,10 +23022,14 @@ where
     .await
 }
 
-/// Flips the kill switch on a store's published rollout: loads its authored `fleet_update`, sets
-/// `halted`, and re-publishes — preserving the rest of the rollout, so an operator halts a bad rollout
-/// (or resumes a paused one) without re-typing the target, ring, and key. `400` if the store has no
-/// rollout to halt.
+/// Flips the kill switch on a store's published rollout: loads the `fleet_update` the store runs, sets
+/// `halted`, and re-publishes it on the Store layer — preserving the rest of the rollout, so an
+/// operator halts a bad rollout (or resumes a paused one) without re-typing the target, ring, and
+/// key. `400` if the store has no rollout to halt.
+///
+/// The rollout is read from the tree's layers composed ([`ConfigTreeState::effective`]): a rollback
+/// restores a version onto the Tenant layer and empties the Store layer, and a halt that read the
+/// Store layer alone refused a store running the restored rollout.
 async fn admin_halt_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -19603,9 +23066,8 @@ where
     let state_before = &loaded.state;
     let Some(mut node) = state_before
         .as_ref()
-        .map(|s| s.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("fleet_update"))
-        .cloned()
+        .map(ConfigTreeState::effective)
+        .and_then(|document| document.get("fleet_update").cloned())
     else {
         return api_error(
             ErrorStatus::InvalidArgument,
@@ -19707,8 +23169,9 @@ where
         .into_response()
 }
 
-/// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
-/// is published. Behind [`ConsolePermission::Read`].
+/// Reads a store's currently-published rollout — the `fleet_update` node the store runs, its layers
+/// composed so a rollout a rollback restored reads as it runs — or `null` if none is published.
+/// Behind [`ConsolePermission::Read`].
 async fn admin_get_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -19746,9 +23209,8 @@ where
         Ok(state_before) => {
             let rollout = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Store))
-                .and_then(|layer| layer.get("fleet_update"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("fleet_update").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(rollout)).into_response()
         }
@@ -19818,8 +23280,9 @@ where
     .await
 }
 
-/// Reads a store's published placement — the authored `device_ota` node — or `null` if the store has
-/// never been placed. Behind [`ConsolePermission::Read`].
+/// Reads a store's published placement — the `device_ota` node the store runs, its layers composed
+/// so a placement a rollback restored reads as it runs — or `null` if the store has never been
+/// placed. Behind [`ConsolePermission::Read`].
 async fn admin_get_placement<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -19857,9 +23320,8 @@ where
         Ok(state_before) => {
             let placement = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Device))
-                .and_then(|layer| layer.get("device_ota"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("device_ota").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(placement)).into_response()
         }
@@ -24903,7 +28365,7 @@ where
     ///
     /// The trail records the config version and how many staff the node carries — never a name or
     /// a PIN (ADR-0070) — and, for a publish a write caused, the id that write was about, under its
-    /// own key: `assignment_id`, `employee_id` or `role_template_id`.
+    /// own key: `assignment_id`, `employee_id`, `role_template_id` or `store_group_id`.
     async fn publish(
         &self,
         context: &AdminContext,
@@ -24949,11 +28411,6 @@ where
     /// Publishes to every store a write reached, in turn, and answers with how each went: the `200`
     /// a write that publishes at once returns, `{"stores": [...]}`, the shape a settings write
     /// answers with.
-    ///
-    /// One store failing does not stop the others: each answers for itself, and a failed one is
-    /// published again with `POST /admin/people/publish`. The write that caused this has already
-    /// been saved by then, so a failure here is reported rather than refused — taking the write
-    /// back would be a second change nobody asked for.
     async fn publish_each(
         &self,
         context: &AdminContext,
@@ -24961,6 +28418,28 @@ where
         stores: &BTreeSet<StoreId>,
         cause: (&'static str, &str),
     ) -> Response {
+        let results = self.publish_all(context, tenant_id, stores, cause).await;
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "stores": results })),
+        )
+            .into_response()
+    }
+
+    /// Publishes to every store a write reached, in turn, and reports how each went, for a write
+    /// whose answer carries the report beside its own fields.
+    ///
+    /// One store failing does not stop the others: each answers for itself, and a failed one is
+    /// published again with `POST /admin/people/publish`. The write that caused this has already
+    /// been saved by then, so a failure here is reported rather than refused — taking the write
+    /// back would be a second change nobody asked for.
+    async fn publish_all(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        stores: &BTreeSet<StoreId>,
+        cause: (&'static str, &str),
+    ) -> Vec<PermissionsPublishResult> {
         let mut results = Vec::with_capacity(stores.len());
         for store_id in stores {
             let published = self
@@ -24982,11 +28461,7 @@ where
                 }
             });
         }
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "stores": results })),
-        )
-            .into_response()
+        results
     }
 }
 
@@ -24998,6 +28473,218 @@ struct PermissionsPublishResult {
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     config_version_id: Option<String>,
+}
+
+// --- Permissions readiness (`/admin/stores/{store_id}/permissions/readiness`, ADR-0158) ---------
+
+/// The collaborators the readiness read needs: the people store, for the roles, the people and the
+/// assignments that reach a store; the settings, the registry and the store groups that resolve the
+/// store's `permissions.enforced`; and the admin and clock the session guard uses. It writes
+/// nothing, so it carries no audit recorder.
+#[derive(Clone)]
+struct ReadinessState<P, St, Rg, Grp, A, C> {
+    people: P,
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    admin: A,
+    clock: C,
+}
+
+/// Builds the permissions-readiness sub-router
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
+///
+/// One read: what each role held at a store does not grant ([`crate::people_readiness`]), beside
+/// whether the store enforces each person's own permissions and which level says so. Behind
+/// [`ConsolePermission::ReadPeople`], because it reads the store's roles and assignments. The answer
+/// names roles and counts people, and names no person.
+pub fn permissions_readiness_router<P, St, Rg, Grp, A, C>(
+    people: P,
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    admin: A,
+    clock: C,
+) -> Router
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/stores/{store_id}/permissions/readiness",
+            get(admin_permissions_readiness::<P, St, Rg, Grp, A, C>),
+        )
+        .with_state(ReadinessState {
+            people,
+            settings,
+            registry,
+            groups,
+            admin,
+            clock,
+        })
+}
+
+/// The tenant a readiness read is scoped to.
+#[derive(Debug, Clone, Deserialize)]
+struct ReadinessQuery {
+    tenant_id: String,
+}
+
+/// What `GET /admin/stores/{store_id}/permissions/readiness` answers.
+#[derive(Debug, Clone, Serialize)]
+struct PermissionsReadiness {
+    store_id: String,
+    /// What the store runs for `permissions.enforced`.
+    enforced: bool,
+    /// The scope of the value the store runs, a `SETTING_SCOPE_*` token, absent when it runs the
+    /// default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enforced_scope: Option<&'static str>,
+    /// The tenant, brand, store group or store that value was written for, beside `enforced_scope`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enforced_scope_id: Option<String>,
+    roles: Vec<crate::people_readiness::RoleReadiness>,
+    people_without_role: usize,
+}
+
+/// What a store runs for `permissions.enforced`, and the scope and id of the value it runs, or
+/// `None` for the register's default: the same resolve `GET /admin/settings/effective` answers.
+fn enforced_at(
+    values: &[crate::settings::SettingValue],
+    placement: &crate::settings::StorePlacement,
+) -> (bool, Option<(SettingScope, String)>) {
+    crate::settings::resolve_for_store(values, placement)
+        .into_iter()
+        .find(|resolved| {
+            resolved.node == pos_proto::people::PublishedPermissions::NODE
+                && resolved.field == "enforced"
+        })
+        .map_or(
+            (
+                pos_proto::people::PublishedPermissions::default().enforced,
+                None,
+            ),
+            |resolved| {
+                (
+                    resolved.value.as_bool().unwrap_or_default(),
+                    Some((resolved.scope, resolved.scope_id)),
+                )
+            },
+        )
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/permissions/readiness",
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "`store_id`; `enforced`, what the store runs for \
+                                      `permissions.enforced`, with `enforced_scope` and \
+                                      `enforced_scope_id` naming the value's level, both absent \
+                                      for the default; `roles`, one per active role an active \
+                                      person holds at the store through any assignment that reaches \
+                                      it, by name, each with `role_template_id`, `name`, `people` \
+                                      (how many hold it, each once) and `missing` — every \
+                                      permission a store decides that the role grants neither \
+                                      directly nor with approval, as `id`, `group` and `risk`, low \
+                                      risk first and catalogue order within a level; and \
+                                      `people_without_role`, how many people at the store hold no \
+                                      active role there. No person is named"),
+        (status = 400, description = "store_id or tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The people store, the settings store, the registry or the \
+                                      store groups is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "people",
+)]
+/// `GET /admin/stores/{store_id}/permissions/readiness` — what each role held at a store does not
+/// grant, read before the store enforces each person's own permissions.
+///
+/// The roles are those the store's `permissions` node is compiled from: every assignment that
+/// reaches the store, whatever its scope, held by an active person, with an active role. Each is
+/// compared with the permission catalogue and nothing else; what anybody did at the till is not
+/// read (ADR-0070).
+async fn admin_permissions_readiness<P, St, Rg, Grp, A, C>(
+    State(state): State<ReadinessState<P, St, Rg, Grp, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ReadinessQuery>,
+) -> Response
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ReadPeople,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let Some(placement) = layout.placement(store_id) else {
+        return not_found("store");
+    };
+    let values = match state.settings.list(tenant_id).await {
+        Ok(values) => values,
+        Err(error) => return settings_store_error_response(&error),
+    };
+    let (enforced, source) = enforced_at(&values, &placement);
+    let assignments =
+        match AssignmentStore::list_for_store(&state.people, tenant_id, store_id).await {
+            Ok(assignments) => assignments,
+            Err(error) => return people_error_response(&error),
+        };
+    let employees: Vec<Employee> = match EmployeeStore::list(&state.people, tenant_id).await {
+        Ok(employees) => employees.into_iter().map(|row| row.record).collect(),
+        Err(error) => return people_error_response(&error),
+    };
+    let roles: Vec<RoleTemplate> = match RoleTemplateStore::list(&state.people, tenant_id).await {
+        Ok(roles) => roles.into_iter().map(|row| row.record).collect(),
+        Err(error) => return people_error_response(&error),
+    };
+    let readiness = crate::people_readiness::store_readiness(&employees, &roles, &assignments);
+    let (enforced_scope, enforced_scope_id) = match source {
+        Some((scope, scope_id)) => (Some(scope.as_wire()), Some(scope_id)),
+        None => (None, None),
+    };
+    (
+        StatusCode::OK,
+        Json(PermissionsReadiness {
+            store_id: store_id.to_string(),
+            enforced,
+            enforced_scope,
+            enforced_scope_id,
+            roles: readiness.roles,
+            people_without_role: readiness.people_without_role,
+        }),
+    )
+        .into_response()
 }
 
 // --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
@@ -29158,7 +32845,8 @@ fn staff_redacted_for(document: &serde_json::Value, role: AdminRole) -> serde_js
 /// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
 ///
 /// A node earns a place here by carrying a **price a competitor would want** — `Money` in the wire
-/// type the publish path writes — not merely by being commercially interesting. Today that is two:
+/// type the publish path writes — not merely by being commercially interesting. Today that is
+/// three:
 ///
 /// - **`menu`** — the compiled per-channel price book. This is the node S8 was raised for: closing
 ///   `GET /admin/catalog/menus/{id}/placements` under **S5** left the same price book readable one
@@ -29167,12 +32855,15 @@ fn staff_redacted_for(document: &serde_json::Value, role: AdminRole) -> serde_js
 ///   ([ADR-0077](../../../docs/adr/0077-campaigns.md)). Found while fixing S8, and included because a
 ///   redaction that closes one price surface and leaves its sibling open is not a fix; a promotion's
 ///   economics are the same **T2** class as a menu price.
+/// - **`fees`** — each fee's rate or amount, and which items and channels it covers
+///   ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), the same class again; the fee
+///   routes read them only with `ReadRevenue` for the same reason.
 ///
 /// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`
 /// (published rates, which a receipt shows the guest anyway) and `permissions` (whose credential is
 /// removed unconditionally by [`without_staff_credentials`], and whose names and codes go by role in
 /// [`without_staff_identities`]).
-const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns"];
+const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns", "fees"];
 
 /// Removes the priced nodes from a console read for a caller without `ReadRevenue`
 /// (production-readiness **S8**).
@@ -29322,7 +33013,14 @@ where
         tracing::error!("could not read OS entropy to mint a config version id");
         return service_unavailable("configuration");
     };
-    let Some(new_id) = tree.restore(version_id, new_version_id) else {
+    // A version from before QR ordering had one switch comes back with the switch it ran, and
+    // `qr.enabled` and the channel list agreeing with it (ADR-0160 decision 5).
+    let from_before_the_switch = crate::qr_ordering::predates(version_id, app.qr_switch_since);
+    let Some(new_id) = tree.restore_with(version_id, new_version_id, |document| {
+        if from_before_the_switch {
+            crate::qr_ordering::settle(document);
+        }
+    }) else {
         return not_found("config version");
     };
     match app
@@ -29686,6 +33384,105 @@ where
     )
     .await;
     csv_download_response("revenue.csv", body)
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/fees/export",
+    params(
+        ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
+                                      is `business_date,currency_code,fee_code,fee_name,bills,\
+                                      amount,tax`, then one row per trading day per fee code the \
+                                      day's settled bills charged, oldest day first and then by \
+                                      code: the fee's name, the bills that charged it, what it \
+                                      charged and the tax on it, in the store's currency's minor \
+                                      units. A day that charged no fee has no row, and neither \
+                                      has a bill settled by an edge from before fee lines, whose \
+                                      charge is only in `revenue.csv`'s `service_charge`. Only \
+                                      the header for a window with no fees, and for a store \
+                                      whose rollup has not been projected yet"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "reports",
+)]
+/// A store's fees by code as a CSV download, one row per trading day per code
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+///
+/// Windowed as the revenue read is, and long-format: a file of its own rather than columns added to
+/// `revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,
+/// so it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,
+/// and the audit trail records how many rows were exported, never what they held.
+async fn admin_export_revenue_fees<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        &headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(error) => return window_refusal(error),
+    };
+    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(days) => days,
+        Err(error) => return rollup_error_response(&error),
+    };
+    let Ok(body) = export::revenue_fees_csv(&days) else {
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
+    };
+    let rows: usize = days.iter().map(|day| day.by_fee.len()).sum();
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        "reports.export_revenue_fees",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": "revenue_fees", "rows": rows })),
+    )
+    .await;
+    csv_download_response("revenue-fees.csv", body)
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log
@@ -31187,7 +34984,8 @@ where
     publishable_membership(groups, tenant_id, group_id).await
 }
 
-/// Reads each target store's published `locale.timezone`, for the wall-clock conversion.
+/// Reads each target store's `locale.timezone` as the store runs it ([`read_store_node_as_run`]),
+/// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
 /// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
@@ -31202,7 +35000,7 @@ where
 {
     let mut targets = Vec::with_capacity(stores.len());
     for store_id in stores {
-        let locale = read_store_node(config_trees, tenant_id, *store_id, "locale").await?;
+        let locale = read_store_node_as_run(config_trees, tenant_id, *store_id, "locale").await?;
         targets.push(TargetStore {
             store_id: *store_id,
             timezone: locale
@@ -31379,7 +35177,9 @@ where
                 continue;
             }
             for store_id in &stores {
-                match read_store_node(&state.config_trees, tenant_id, *store_id, needed).await {
+                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
+                    .await
+                {
                     Ok(serde_json::Value::Null) => {
                         return api_error(
                             ErrorStatus::Unprocessable,
@@ -31891,6 +35691,114 @@ mod client_ip_tests {
 }
 
 #[cfg(test)]
+mod devices_compile_tests {
+    //! What a till's receipts compile to ([`super::compile_devices`], ADR-0160 decision 4), and the
+    //! rule for a till whose receipt printer leaves the store's approved devices: it is published
+    //! without the field, and prints at the store's receipt printer.
+    use super::{DeviceProposalSummary, compile_devices};
+    use pos_proto::devices::PublishedDevice;
+    use pos_proto::ids::DeviceId;
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
+    use pos_proto::ulid::Ulid;
+
+    /// An approved row of the one store, as the device store lists it.
+    fn row(
+        id: u128,
+        kind: &str,
+        connection: Option<&str>,
+        station: Option<u128>,
+    ) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            id: Ulid::from_u128(id).to_string(),
+            store_id: Ulid::from_u128(0x5).to_string(),
+            kind: kind.to_owned(),
+            name: format!("Device {id}"),
+            address: String::new(),
+            connection: connection.map(str::to_owned),
+            station_id: station.map(|station| Ulid::from_u128(station).to_string()),
+            agent_device_id: None,
+            drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: None,
+            receipt_second_language: None,
+            status: "approved".to_owned(),
+            version: "1".to_owned(),
+        }
+    }
+
+    /// The bar till, naming `printer` and printing in English then Vietnamese.
+    fn bar_till(printer: u128) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            receipt_printer_id: Some(Ulid::from_u128(printer).to_string()),
+            receipt_language: Some("RECEIPT_LANGUAGE_EN".to_owned()),
+            receipt_second_language: Some("RECEIPT_SECOND_LANGUAGE_VI".to_owned()),
+            ..row(7, "terminal", None, None)
+        }
+    }
+
+    /// The compiled entry for `id`.
+    fn compiled(rows: &[DeviceProposalSummary], id: u128) -> PublishedDevice {
+        compile_devices(rows)
+            .devices()
+            .iter()
+            .find(|device| device.device_id == DeviceId::new(Ulid::from_u128(id)))
+            .cloned()
+            .expect("the device is published")
+    }
+
+    #[test]
+    fn a_till_carries_its_receipt_printer_and_languages_and_one_nobody_set_carries_none() {
+        let rows = [
+            row(1, "printer", Some("network"), None),
+            row(2, "printer", Some("network"), None),
+            bar_till(2),
+            row(8, "terminal", None, None),
+        ];
+        let bar = compiled(&rows, 7);
+        assert_eq!(
+            bar.receipt_printer_id,
+            Some(DeviceId::new(Ulid::from_u128(2)))
+        );
+        assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+        assert_eq!(
+            bar.receipt_second_language(),
+            Some(ReceiptSecondLanguage::Vietnamese)
+        );
+        let door = serde_json::to_value(compiled(&rows, 8)).expect("json");
+        for field in [
+            "receipt_printer_id",
+            "receipt_language",
+            "receipt_second_language",
+        ] {
+            assert!(door.get(field).is_none(), "{field} is not written: {door}");
+        }
+    }
+
+    #[test]
+    fn a_till_whose_receipt_printer_goes_is_published_without_it_and_keeps_its_languages() {
+        // Archived: the printer is no longer among the approved rows. A station's printer, and a
+        // printer approved before a connection was recorded, which the publish holds back, are not
+        // a counter's receipt printer either. Each till prints at the store's instead.
+        for rows in [
+            vec![row(1, "printer", Some("network"), None), bar_till(2)],
+            vec![row(2, "printer", Some("network"), Some(0x5A)), bar_till(2)],
+            vec![row(2, "printer", None, None), bar_till(2)],
+            vec![row(2, "kds", Some("network"), None), bar_till(2)],
+        ] {
+            let bar = compiled(&rows, 7);
+            assert_eq!(bar.receipt_printer_id, None, "{rows:?}");
+            assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+            assert_eq!(
+                bar.receipt_second_language(),
+                Some(ReceiptSecondLanguage::Vietnamese)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod locale_node_tests {
     //! What a store's `locale` node actually carries
     //! ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
@@ -31900,6 +35808,7 @@ mod locale_node_tests {
     //! write, none of which can tell you whether the node an edge receives is complete.
     use super::{PublishLocaleRequest, checked_locale_node, packed_facts};
     use crate::countries;
+    use pos_proto::locale::{PublishedLocale, PublishedNumberFormat};
     use serde_json::Value;
 
     /// A publish as the console sends one, for a store trading in `currency`.
@@ -31978,68 +35887,91 @@ mod locale_node_tests {
         );
     }
 
-    /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
-    ///
-    /// Written out rather than derived, because the two sides sit in different crates with nothing
-    /// linking them: `crates/pos-edge/src/config_client.rs` declares what an edge parses, this
-    /// function declares what a cloud sends, and the silence between them is where
-    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
-    /// on them.
-    ///
-    /// Both directions are checked, because the gap has appeared both ways round: a key the edge
-    /// reads and the cloud never sends is a feature that does nothing, and a key the cloud sends and
-    /// the edge never reads is a payload nobody consumes. Neither shows up as a failure anywhere
-    /// else.
-    ///
-    /// **What it does not do**, because the list is written here rather than read from the edge: it
-    /// cannot tell whether `PublishedLocale` really parses these. Adding a name to the list is what
-    /// makes this pass, so the list is a checklist with teeth on the *node*, not a cross-crate
-    /// check. No crate depends on both, and adding a dependency to make a test possible is the
-    /// wrong trade.
-    ///
-    /// Its sibling closes the other half: `every_field_a_locale_node_carries_reaches_the_session`
-    /// in `crates/pos-edge/src/config_client.rs` asserts each of these keys actually moves a session
-    /// field. Between them, each side is checked against real behaviour rather than against nothing.
-    /// What neither catches is a field added to both lists and to neither implementation, which is
-    /// what the per-field tests above are for.
     #[test]
-    fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
-        // `crates/pos-edge/src/config_client.rs`, `struct PublishedLocale`.
-        const READ_BY_THE_EDGE: &[&str] = &[
-            "currency_code",
-            "currency_exponent",
-            "timezone",
-            "cutoff_hour",
-            "prices_include_tax",
-            "cash_rounding_increment",
-            "cash_denominations",
-            "default_retention_days",
-            "number_format",
-        ];
-        // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
-        // against a store's region (ADR-0114); `display_language` is applied when the menu book is
-        // compiled rather than onto the session.
-        const THE_CLOUD_S_OWN: &[&str] = &["country_code", "display_language"];
-
+    fn the_node_tells_the_store_the_language_of_its_country() {
+        // ADR-0160: a new store's receipts print in its country's language, which the edge has no
+        // pack to look up.
         let node =
             checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
                 .expect("a valid publish");
-        let object = node.as_object().expect("the node is an object");
+        assert_eq!(
+            node.get("country_language").and_then(Value::as_str),
+            Some("vi"),
+            "{node}"
+        );
+    }
 
-        let missing: Vec<&&str> = READ_BY_THE_EDGE
-            .iter()
-            .filter(|key| !object.contains_key(**key))
+    /// The node carries every field the edge reads, and nothing else but the two the cloud keeps for
+    /// itself.
+    ///
+    /// The fields are the type's, `pos_proto::locale::PublishedLocale`, the one the edge applies the
+    /// node through, rather than a list written out here: the node parses as it, sends each field it
+    /// reads and reads back as stated, and sends no other key but the cloud's own. A field added to
+    /// the type does not compile below until it is stated.
+    ///
+    /// Both directions are checked, because the gap has appeared both ways round: a key the edge
+    /// reads and the cloud never sends is a feature that does nothing, which is where
+    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
+    /// on them, and a key the cloud sends and the edge never reads is a payload nobody consumes.
+    /// Neither shows up as a failure anywhere else.
+    ///
+    /// Its sibling closes the other half: `every_field_a_locale_node_carries_reaches_the_session`
+    /// in `crates/pos-edge/src/config_client.rs` asserts each of these fields actually moves a
+    /// session field.
+    #[test]
+    fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
+        // Not read through `PublishedLocale`. `country_code` is the fleet console's own comparison
+        // against a store's region (ADR-0114). `display_language` is the store's choice rather than
+        // its country's, and the edge reads it apart from the type, field by field, to name the
+        // menu's items in it and keep it on the session (ADR-0074).
+        const THE_CLOUD_S_OWN: &[&str] = &["country_code", "display_language"];
+
+        let mut published = request("VN", "VND");
+        published.display_language = Some("vi".to_owned());
+        let node = checked_locale_node(&published, &packed_facts(&countries::registry()))
+            .expect("a valid publish");
+        let sent = node.as_object().expect("the node is an object");
+
+        // The node as the edge reads it, through its text as `session_from_config` parses it, and
+        // written back: an optional field the node sends as `null` reads as absent.
+        let read: PublishedLocale =
+            serde_json::from_str(&node.to_string()).expect("the edge applies the node it is sent");
+        let read = serde_json::to_value(read).expect("serialise");
+        let read = read.as_object().expect("an object");
+
+        // Every key the type reads, from the type: a value stating each field, written.
+        let every_field = serde_json::to_value(PublishedLocale {
+            currency_code: String::new(),
+            currency_exponent: Some(0),
+            timezone: String::new(),
+            cutoff_hour: 0,
+            prices_include_tax: true,
+            cash_rounding_increment: Some(0),
+            cash_denominations: vec![0],
+            default_retention_days: Some(0),
+            number_format: Some(PublishedNumberFormat {
+                decimal_separator: String::new(),
+                group_separator: String::new(),
+                digits_per_group: 0,
+            }),
+            country_language: Some(String::new()),
+        })
+        .expect("serialise");
+        let every_field = every_field.as_object().expect("an object");
+
+        let missing: Vec<&String> = every_field
+            .keys()
+            .filter(|key| !sent.contains_key(*key) || !read.contains_key(*key))
             .collect();
         assert!(
             missing.is_empty(),
             "the edge parses these and the node does not send them, so they do nothing: {missing:?}"
         );
 
-        let unclaimed: Vec<&String> = object
+        let unclaimed: Vec<&String> = sent
             .keys()
             .filter(|key| {
-                !READ_BY_THE_EDGE.contains(&key.as_str())
-                    && !THE_CLOUD_S_OWN.contains(&key.as_str())
+                !every_field.contains_key(*key) && !THE_CLOUD_S_OWN.contains(&key.as_str())
             })
             .collect();
         assert!(
@@ -32062,6 +35994,173 @@ mod locale_node_tests {
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
         );
+    }
+}
+
+#[cfg(test)]
+mod revoked_devices_tests {
+    //! The deny-list a revocation writes ([`super::append_revoked_device`]): the list the store runs,
+    //! read from the tree's layers composed, with the new id appended.
+    use super::append_revoked_device;
+    use crate::config_tree::ConfigTreeState;
+    use pos_core::device_revocation::MAX_REVOKED_DEVICES;
+    use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    /// A tree whose Tenant layer holds `tenant` and whose Store layer holds `store`.
+    fn tree(tenant: Value, store: Value) -> ConfigTreeState {
+        ConfigTreeState {
+            layers: [tenant, json!({}), store, json!({})],
+            history: Vec::new(),
+            k: 8,
+        }
+    }
+
+    fn id(n: u128) -> String {
+        Ulid::from_u128(n).to_string()
+    }
+
+    fn deny_list(ids: &[String]) -> Value {
+        json!({ "revoked_devices": { "device_ids": ids } })
+    }
+
+    /// The ids the append writes onto the Store layer.
+    fn written(before: &ConfigTreeState, listed: &str) -> Vec<String> {
+        let (key, node) = append_revoked_device(Some(before), listed)
+            .expect("appended")
+            .into_iter()
+            .next()
+            .expect("one node");
+        assert_eq!(key, "revoked_devices");
+        serde_json::from_value(node["device_ids"].clone()).expect("a list of ids")
+    }
+
+    #[test]
+    fn a_restored_list_is_kept_and_the_new_id_appended_to_it() {
+        // A rollback leaves the restored list on the Tenant layer and the Store layer empty.
+        let restored = tree(deny_list(&[id(1), id(2)]), json!({}));
+        assert_eq!(written(&restored, &id(3)), vec![id(1), id(2), id(3)]);
+        assert_eq!(
+            written(&restored, &id(1)),
+            vec![id(1), id(2)],
+            "an id already listed adds nothing"
+        );
+    }
+
+    #[test]
+    fn the_list_appended_to_is_the_one_the_store_runs() {
+        // A list on the Store layer replaces one below it when the layers merge, so it is the list
+        // the store runs, and the one a revocation adds to.
+        let both = tree(deny_list(&[id(1)]), deny_list(&[id(2)]));
+        assert_eq!(written(&both, &id(3)), vec![id(2), id(3)]);
+    }
+
+    #[test]
+    fn the_cap_counts_the_list_the_store_runs() {
+        let full: Vec<String> = (1_u128..).take(MAX_REVOKED_DEVICES).map(id).collect();
+        let restored = tree(deny_list(&full), json!({}));
+        let refused =
+            append_revoked_device(Some(&restored), &id(0xFFFF)).expect_err("past the cap");
+        assert_eq!(refused.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            written(&restored, &id(1)).len(),
+            MAX_REVOKED_DEVICES,
+            "an id already listed re-publishes the full list"
+        );
+    }
+}
+
+#[cfg(test)]
+mod node_as_run_tests {
+    //! What a store's node reads as once its layers are composed ([`super::node_as_run`]).
+    use super::node_as_run;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_node_reads_without_its_settings_and_one_of_settings_alone_reads_as_none() {
+        let locale = json!({
+            "currency_code": "VND",
+            "timezone": "Asia/Ho_Chi_Minh",
+            "tax_rounding": "TAX_ROUNDING_DOWN",
+        });
+        assert_eq!(
+            node_as_run("locale", Some(&locale)),
+            json!({ "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" })
+        );
+        for (node, settings) in [
+            ("locale", json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })),
+            ("qr", json!({ "table_order": "TABLE_ORDER_JOIN" })),
+        ] {
+            assert_eq!(node_as_run(node, Some(&settings)), Value::Null, "{node}");
+        }
+        assert_eq!(node_as_run("locale", None), Value::Null);
+    }
+
+    #[test]
+    fn a_node_with_no_settings_fields_reads_as_it_is_composed() {
+        // `table_order` is a setting of the `qr` node, not of `channels`.
+        let channels = json!({ "enabled": ["SALES_CHANNEL_DINE_IN"], "table_order": 1 });
+        assert_eq!(node_as_run("channels", Some(&channels)), channels);
+        // An empty node is a node, as the publish check counts it, and a node that is not an
+        // object, `null` included, is answered as it is.
+        for node in [json!({}), Value::Null, json!([1, 2]), json!("text")] {
+            assert_eq!(node_as_run("qr", Some(&node)), node, "{node}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod qr_node_tests {
+    //! The `qr` node the console's QR form publishes reads back through the type the edge and the
+    //! guest intake read it with (`pos_proto::qr::PublishedQr`), every field as it was written.
+    use super::{QrBusinessHoursRequest, QrGuardrailFields, qr_guardrail_node};
+    use pos_proto::qr::{PublishedQr, QrBusinessHours, TableOrder};
+
+    #[test]
+    fn the_node_the_qr_form_writes_reads_back_through_its_type() {
+        for (enabled, hours) in [
+            (
+                Some(false),
+                Some(QrBusinessHoursRequest {
+                    open_hour: 22,
+                    close_hour: 2,
+                    tz_offset_minutes: 420,
+                }),
+            ),
+            (None, None),
+        ] {
+            let fields = QrGuardrailFields {
+                enabled,
+                staff_confirmation_required: false,
+                per_table_limit: 5,
+                rate_window_secs: 300,
+                business_hours: hours.clone(),
+            };
+            let node = qr_guardrail_node(&fields).expect("a valid publish");
+            let read: PublishedQr =
+                serde_json::from_str(&node.to_string()).expect("the node parses");
+            assert_eq!(read.table_order(), TableOrder::Separate);
+            assert_eq!(read.enabled, enabled);
+            assert_eq!(read.staff_confirmation_required, Some(false));
+            assert_eq!(read.per_table_limit, Some(5));
+            assert_eq!(read.rate_window_secs, Some(300));
+            assert_eq!(
+                read.business_hours,
+                hours.map(|hours| QrBusinessHours {
+                    open_hour: hours.open_hour,
+                    close_hour: hours.close_hour,
+                    tz_offset_minutes: Some(hours.tz_offset_minutes),
+                })
+            );
+            assert_eq!(PublishedQr::guardrails(&node), Some(read.clone()));
+
+            // Nothing the form writes is lost or renamed on the way through the type.
+            let mut written_back = serde_json::to_value(&read).expect("serialise");
+            if let serde_json::Value::Object(fields) = &mut written_back {
+                fields.remove("table_order");
+            }
+            assert_eq!(written_back, node);
+        }
     }
 }
 
@@ -32144,6 +36243,63 @@ mod preview_diff_tests {
         let before = json!({"locale": {"currency": "VND"}, "tax": Value::Null});
         super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect_err("a null tax node is no tax node");
+    }
+
+    #[test]
+    fn a_locale_that_carries_only_its_settings_is_not_the_locale_a_menu_needs() {
+        // ADR-0160: a tenant's tax rounding reaches the Tenant layer of every store it covers,
+        // including one whose locale was never published. That store still has no locale.
+        let setting = json!({"tax_rounding": "TAX_ROUNDING_DOWN"});
+        let before = json!({"locale": setting, "tax": {"rates": []}});
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect_err("a setting alone is no locale");
+        let before = json!({
+            "locale": {"currency": "VND", "tax_rounding": "TAX_ROUNDING_DOWN"},
+            "tax": {"rates": []},
+        });
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect("a published locale with the setting beside it");
+    }
+
+    #[test]
+    fn a_backup_node_of_settings_alone_is_a_settings_only_node() {
+        // ADR-0160 decision 6: the settings compile writes `backup.interval_hours` on the Tenant
+        // layer of every store it reaches, and the node holds nothing else, so the publish check
+        // treats it as it treats a `locale` holding only its tax rounding.
+        assert!(super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6})
+        ));
+        assert!(!super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6, "destination": "elsewhere"})
+        ));
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"backup")),
+            "and no node waits on it"
+        );
+    }
+
+    #[test]
+    fn nothing_waits_on_the_tender_keys_node() {
+        // ADR-0160: the node holds settings and nothing else, which the rule above counts as no node.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"tender_keys"))
+        );
+    }
+
+    #[test]
+    fn nothing_waits_on_the_counter_node() {
+        // ADR-0160: the walk-in channel's node holds settings and nothing else, as `tender_keys` does.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"counter"))
+        );
     }
 
     #[test]
@@ -33030,6 +37186,7 @@ mod console_config_redaction_tests {
         json!({
             "menu": { "channels": { "dine_in": { "items": [{ "price_amount_minor": 95_000 }] } } },
             "campaigns": { "rules": [{ "amount": { "currency": "VND", "minor": 20_000 } }] },
+            "fees": { "fees": [{ "code": "SERVICE", "rate": { "numerator": 5, "denominator": 100 } }] },
             "layout": { "buttons": ["margherita"] },
             "capabilities": { "tips_enabled": true },
             "permissions": {
@@ -33335,8 +37492,8 @@ mod settings_catalogue_tests {
     //!
     //! The console draws its form from these fields and nothing else, so each kind is pinned: a
     //! choice carries its values; a whole number its bounds and unit and no values; a switch
-    //! neither. The register has no whole number or switch yet, so two are built here, as the
-    //! register's own tests build them.
+    //! neither. A whole number and a switch are built here, as the register's own tests build
+    //! them, so these tests do not move when a register entry does.
 
     use pos_proto::settings::{Setting, SettingScope, SettingShape, SettingUnit, register};
     use serde_json::json;

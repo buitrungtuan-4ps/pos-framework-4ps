@@ -15,19 +15,20 @@ import {
   settle,
   startWalkIn,
   tenderAccepted,
+  tipPercents,
   tipsEnabled,
+  walkInAsks,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 
-// The table pay screen's tip shares and its guard on the cash snap, repeated rather than shared: this
-// is their second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx` carries the
-// reasoning for both.
-const TIP_PERCENTS = [5, 10, 15] as const;
-
+// The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
+// shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
+// carries the reasoning. Asked of the store's own keys, in its order, so it compares each key with
+// every other rather than with the one before it.
 function distinctAndSpendable(keys: readonly number[]): boolean {
-  return keys.every((amount, index) => amount > (index === 0 ? 0 : (keys[index - 1] ?? 0)));
+  return keys.every((amount, index) => amount > 0 && keys.indexOf(amount) === index);
 }
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
@@ -84,14 +85,19 @@ export function Takeaway() {
   // A walk-in guest (ADR-0146, finding F12): the counter opens its own order and goes straight to
   // it. Before this, a store without tables could charge an order someone else started and could
   // not start one.
-  const newOrder = async () => {
+  const openWalkIn = async (channel?: string) => {
     setError(null);
     try {
-      navigate(`/order/${await startWalkIn()}`);
+      navigate(`/order/${await startWalkIn(channel)}`);
     } catch (caught) {
       explain(caught);
     }
   };
+  // A store that asks each walk-in guest whether they eat in or take away (ADR-0160 decision 2):
+  // New order offers the two answers, and the order opens on the channel tapped. Every other store
+  // opens the order at the first tap, as before.
+  const [asking, setAsking] = createSignal(false);
+  const newOrder = () => (walkInAsks() ? setAsking(!asking()) : void openWalkIn());
 
   onMount(() => void refresh());
 
@@ -117,12 +123,15 @@ export function Takeaway() {
   // Opens the pad. A figure already typed survives a quick key closing the pad and this opening it
   // again, so a cashier who changes their mind twice does not type it twice.
   const typeTender = () => setTyping(true);
-  // Whole minor units, snapped to the store's cash increment where that still leaves three amounts a
-  // cashier can tell apart — the table pay screen's keys. This line was `(total * percent) / 100`,
-  // the float division `Pay.tsx` had already been fixed for: on an odd total the 5% key was a
-  // fraction of a đồng, and the edge refused the settle with the guest's money on the counter.
+  // The store's own tip keys, in its order (ADR-0160 decision 2), with the table pay screen's
+  // arithmetic, kept in step with `Pay.tsx`'s `tipKeys` by hand: whole minor units, snapped to the
+  // store's cash increment where that still leaves amounts a cashier can tell apart. This line was
+  // `(total * percent) / 100`, the float division `Pay.tsx` had already been fixed for: on an odd
+  // total the 5% key was a fraction of a đồng, and the edge refused the settle with the guest's money
+  // on the counter. It then offered 5, 10 and 15 percent at every store after the table pay screen
+  // took the store's own keys.
   const tipKeys = () => {
-    const exact = TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+    const exact = tipPercents().map((percent) => percentOf(total(), percent));
     const increment = cashRoundingIncrement();
     if (increment === null) {
       return exact;
@@ -240,11 +249,32 @@ export function Takeaway() {
             <button
               type="button"
               class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
+              aria-expanded={walkInAsks() ? asking() : undefined}
               data-step="newOrder"
-              onClick={() => void newOrder()}
+              onClick={() => newOrder()}
             >
               {t("counter.new_order")}
             </button>
+            <Show when={walkInAsks() && asking()}>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                  data-step="eatIn"
+                  onClick={() => void openWalkIn("SALES_CHANNEL_DINE_IN")}
+                >
+                  {t("counter.eat_in")}
+                </button>
+                <button
+                  type="button"
+                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                  data-step="takeAway"
+                  onClick={() => void openWalkIn("SALES_CHANNEL_TAKEAWAY")}
+                >
+                  {t("counter.take_away")}
+                </button>
+              </div>
+            </Show>
             </Show>
 
             <Show when={error()}>
@@ -337,7 +367,9 @@ export function Takeaway() {
 
                   {/* The tip and the tenders are taking payment (ADR-0158). */}
                   <Show when={can("billing.payment.take")}>
-                  <Show when={tipsEnabled()}>
+                  {/* No tip key left to offer, and the row is not drawn, as on the table pay screen:
+                      with no amount to type, a lone "No tip" would offer nothing. */}
+                  <Show when={tipsEnabled() && tipPercents().length > 0}>
                     <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
                     <div class="grid grid-cols-4 gap-2">
                       <button

@@ -14,9 +14,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pos_core::permission::PermissionSet;
+use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::pairing::Minter;
-use pos_edge::printing::{Printers, TransportFactory};
+use pos_edge::printing::{AgentLane, Printers, TransportFactory};
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
     StaffRoster, StoreIdentity, SystemClock,
@@ -27,6 +27,7 @@ use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
 use pos_proto::Open;
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+use pos_proto::fees::PublishedFees;
 use pos_proto::ids::DeviceId;
 use pos_proto::ids::{EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
@@ -83,6 +84,16 @@ async fn app_with_shift(
     permissions: PermissionSet,
     shift: PublishedShift,
 ) -> (Router, String) {
+    app_with_config(printing, permissions, shift, PublishedFees::default()).await
+}
+
+/// [`app_with_shift`], at a store whose published `fees` node is `fees` as well (ADR-0159).
+async fn app_with_config(
+    printing: Option<(Arc<Printers>, PublishedDevices)>,
+    permissions: PermissionSet,
+    shift: PublishedShift,
+    fees: PublishedFees,
+) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
@@ -106,6 +117,7 @@ async fn app_with_shift(
             EdgeSession {
                 devices,
                 shift,
+                fees,
                 ..EdgeSession::bootstrap().with_staff(roster)
             },
             Arc::new(InMemoryReceipts::new()),
@@ -317,6 +329,107 @@ async fn a_table_sells_end_to_end_over_http() {
     assert_eq!(cleaned["state"], "TABLE_STATE_FREE");
 }
 
+/// The check reads name each fee a bill charges (ADR-0159 decision 4): before the bill opens, as the
+/// rules in force would charge it, and once it is open, as the bill froze them. The settle takes the
+/// figure the check quoted.
+#[tokio::test]
+async fn a_check_shows_each_fee_and_the_settle_takes_its_total() {
+    let service: PublishedFees = serde_json::from_str(
+        &json!({ "fees": [{
+            "fee_id": "01JQ0000000000000000000003",
+            "code": "SERVICE",
+            "display_name": "Service charge",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+        }] })
+        .to_string(),
+    )
+    .expect("a fees node");
+    let (app, token) = app_with_config(
+        None,
+        PermissionSet::default(),
+        PublishedShift::default(),
+        service,
+    )
+    .await;
+    let table = TableId::new(Ulid::from_u128(701));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 5% of 150,000, and the 10% tax on 157,500, of which 750 is the fee's. A rule that says
+    // nothing about waiving is not waivable (ADR-0159 decision 5).
+    let fee_line = json!([{
+        "fee_id": "01JQ0000000000000000000003",
+        "code": "SERVICE",
+        "display_name": "Service charge",
+        "amount": vnd(7_500),
+        "tax": vnd(750),
+        "waivable": false,
+    }]);
+    let (status, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/tables/{table}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(check["fee_lines"], fee_line, "{check}");
+    assert_eq!(check["total_due"], json!(vnd(173_250)));
+
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    for uri in [
+        format!("/api/bills/{bill_id}/check"),
+        format!("/api/tables/{table}/check"),
+    ] {
+        let (status, check) = send(app.clone(), &token, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(check["fee_lines"], fee_line, "{uri}: {check}");
+        assert_eq!(check["total_due"], json!(vnd(173_250)), "{uri}");
+    }
+
+    let (status, settled) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(173_250),
+                "applied_to_bill": vnd(173_250),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["state"], "BILL_STATE_SETTLED");
+}
+
 /// A transport that records what a printer would have received.
 #[derive(Debug, Default)]
 struct Recorder {
@@ -367,6 +480,11 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
         // No agent: the edge opens the address itself, which is what this test drives.
         agent_device_id: None,
         drawer_attached: false,
+        paper_width: Open::default(),
+        cuts_paper: None,
+        receipt_printer_id: None,
+        receipt_language: Open::default(),
+        receipt_second_language: Open::default(),
     };
     let (app, token) = app_with(Some((
         printers,
@@ -771,6 +889,91 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     assert_eq!(closed["print_shift_report"], true);
 }
 
+/// A store that turns the blind close off (ADR-0160 decision 2) is told what the drawer should
+/// hold on every answer before the close, so the count can be made against it. The variance is still
+/// the close's alone.
+#[tokio::test]
+async fn a_store_whose_count_is_not_blind_sees_the_expectation_before_the_close() {
+    let open_count = PublishedShift {
+        blind_close: Some(false),
+        ..PublishedShift::default()
+    };
+    let (app, token) = app_with_shift(None, PermissionSet::default(), open_count).await;
+
+    let (status, opened) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened["expected_amount"], json!(vnd(500_000)));
+    let shift_id = opened["shift_id"].as_str().expect("a shift id").to_owned();
+
+    // A reason the store lists for a paid out: the framework's default list has "Making change".
+    let (_, listed) = send(app.clone(), &token, "GET", "/api/reason-codes", None).await;
+    let reason = listed["reasons"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|reason| {
+            reason["applies_to"]
+                .as_array()
+                .is_some_and(|acts| acts.iter().any(|act| act == "REASON_ACTION_CASH_PAID_OUT"))
+        })
+        .expect("a reason for a paid out")["reason_code_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let (status, paid_out) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/paid-out"),
+        Some(json!({ "amount_minor": 20_000, "reason_code_id": reason })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paid_out}");
+    assert_eq!(
+        paid_out["expected_amount"],
+        json!(vnd(480_000)),
+        "a movement moves what is shown"
+    );
+
+    let (_, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(current["expected_amount"], json!(vnd(480_000)));
+    assert!(current.get("variance").is_none(), "{current}");
+
+    let (status, counted) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/count"),
+        Some(json!({ "counted_minor": 470_000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(counted["expected_amount"], json!(vnd(480_000)));
+    assert!(
+        counted.get("variance").is_none(),
+        "the variance is the close's alone"
+    );
+
+    let (status, closed) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(closed["expected_amount"], json!(vnd(480_000)));
+    assert_eq!(closed["variance"], json!(vnd(-10_000)));
+}
+
 #[tokio::test]
 async fn the_open_shift_is_readable_by_a_device_that_reloads() {
     let (app, token) = app().await;
@@ -1019,6 +1222,46 @@ async fn a_receipt_is_copied_over_http_from_today_s_bills() {
     assert_eq!(listed[0]["copies"], 2);
 }
 
+/// The day's takings (ADR-0160 decision 2): what the bills settled today came to, and how many, to
+/// a person whose own role grants `reports.takings.view`. Nobody else reads them, even at a store
+/// that does not enforce each person's own permissions, which every store here is: takings are
+/// confidential, and there was no takings read for the store-wide set to keep working.
+#[tokio::test]
+async fn the_days_takings_are_read_by_whoever_holds_the_permission_and_nobody_else() {
+    let (app, token) = app_with_permissions(None, PermissionSet::EMPTY).await;
+    let (status, reason) = send_for_reason(app, &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reason.as_deref(), Some("PERMISSION_DENIED"));
+
+    let (app, token) =
+        app_with_permissions(None, PermissionSet::EMPTY.with(Permission::ViewTakings)).await;
+    let (status, nothing) = send(app.clone(), &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::OK, "{nothing}");
+    assert_eq!(nothing["takings_amount"], json!(vnd(0)));
+    assert_eq!(nothing["bill_count"], 0);
+
+    for (seed, method) in [(781, "PAYMENT_METHOD_CASH"), (782, "PAYMENT_METHOD_CARD")] {
+        settle_a_table_with(&app, &token, TableId::new(Ulid::from_u128(seed)), method).await;
+    }
+    let (status, takings) = send(app, &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::OK, "{takings}");
+    assert_eq!(
+        takings["takings_amount"],
+        json!(vnd(330_000)),
+        "both bills, whatever they were paid with"
+    );
+    assert_eq!(takings["bill_count"], 2);
+    // The store's figure and nothing finer: no person, no till, no shift.
+    let mut fields: Vec<&str> = takings
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["bill_count", "business_date", "takings_amount"]);
+}
+
 #[tokio::test]
 async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
     let (app, token) = app().await;
@@ -1045,6 +1288,7 @@ async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
 async fn a_store_that_refuses_selling_without_a_shift_says_so_until_one_opens() {
     let refusing = PublishedShift {
         no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+        ..PublishedShift::default()
     };
     let (app, token) = app_with_shift(None, PermissionSet::default(), refusing).await;
     let seat = format!("/api/tables/{}/seat", TableId::new(Ulid::from_u128(780)));
@@ -1145,6 +1389,11 @@ fn counter_printer() -> PublishedDevice {
         station_id: None,
         agent_device_id: None,
         drawer_attached: false,
+        paper_width: Open::default(),
+        cuts_paper: None,
+        receipt_printer_id: None,
+        receipt_language: Open::default(),
+        receipt_second_language: Open::default(),
     }
 }
 
@@ -1154,7 +1403,7 @@ async fn a_manager_prints_a_test_page_on_a_published_printer() {
     let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
     let (app, token) = app_with_permissions(
         Some((printers, PublishedDevices::new(vec![counter_printer()]))),
-        PermissionSet::default().with(pos_core::permission::Permission::ManageDevices),
+        PermissionSet::default().with(Permission::ManageDevices),
     )
     .await;
 
@@ -1408,4 +1657,416 @@ async fn a_store_with_no_published_connection_lists_none() {
     let (status, listed) = send(app, &token, "GET", "/api/integrations", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed, json!([]));
+}
+
+/// A fee is waived over HTTP (ADR-0159 decision 5): the check marks which fee may be waived, the
+/// waive answers with the bill as it now stands, and each refusal answers under a token of its own.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bill through every refusal the route makes and the waive that succeeds"
+)]
+async fn a_fee_is_waived_over_http_and_each_refusal_says_why() {
+    let fees: PublishedFees = serde_json::from_str(
+        &json!({ "fees": [
+            {
+                "fee_id": "01JQ0000000000000000000003",
+                "code": "SERVICE",
+                "display_name": "Service charge",
+                "kind": "FEE_KIND_PERCENT",
+                "rate": { "numerator": 5, "denominator": 100 },
+                "waivable": true,
+            },
+            {
+                "fee_id": "01JQ0000000000000000000004",
+                "code": "COVER",
+                "display_name": "Cover charge",
+                "kind": "FEE_KIND_AMOUNT_PER_BILL",
+                "amount": vnd(10_000),
+            },
+        ] })
+        .to_string(),
+    )
+    .expect("a fees node");
+    // The person signed in may waive a fee, so their own code and PIN approve it: a store that does
+    // not enforce each person's own set still asks for a holder's PIN, and takes theirs.
+    let (app, token) = app_with_config(
+        None,
+        PermissionSet::EMPTY.with(Permission::WaiveFee),
+        PublishedShift::default(),
+        fees,
+    )
+    .await;
+    let table = TableId::new(Ulid::from_u128(702));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    // 5% of 150,000 and a 10,000 cover, and 10% on 167,500. Only the service charge is waivable.
+    let (status, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/bills/{bill_id}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(check["fee_lines"][0]["code"], "SERVICE", "{check}");
+    assert_eq!(check["fee_lines"][0]["waivable"], true, "{check}");
+    assert_eq!(check["fee_lines"][1]["waivable"], false, "{check}");
+    assert_eq!(check["total_due"], json!(vnd(184_250)));
+
+    let reason = pos_proto::reason_codes::PublishedReasonCodes::framework_default()
+        .for_action(pos_proto::reason_codes::ReasonAction::WaiveFee)
+        .next()
+        .expect("a framework reason for a waive")
+        .id
+        .to_string();
+    let waive = |fee: &str| format!("/api/bills/{bill_id}/fees/{fee}/waive");
+    let approved = json!({
+        "reason_code_id": reason,
+        "approver_code": STAFF_CODE,
+        "approver_pin": STAFF_PIN,
+    });
+
+    for (uri, body, status, token_expected) in [
+        (
+            waive("01JQ0000000000000000000003"),
+            json!({ "reason_code_id": reason }),
+            StatusCode::FORBIDDEN,
+            "APPROVAL_REQUIRED",
+        ),
+        (
+            waive("01JQ0000000000000000000004"),
+            approved.clone(),
+            StatusCode::CONFLICT,
+            "FEE_NOT_WAIVABLE",
+        ),
+        (
+            waive("01JQ0000000000000000000009"),
+            approved.clone(),
+            StatusCode::CONFLICT,
+            "FEE_NOT_ON_BILL",
+        ),
+    ] {
+        let (answered, refusal) =
+            send_for_reason(app.clone(), &token, "POST", &uri, Some(body)).await;
+        assert_eq!(answered, status, "{uri}");
+        assert_eq!(refusal.as_deref(), Some(token_expected), "{uri}");
+    }
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &waive("not-a-fee"),
+        Some(approved.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The cover alone, and 10% on 160,000.
+    let (status, waived) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &waive("01JQ0000000000000000000003"),
+        Some(approved),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{waived}");
+    assert_eq!(
+        waived["fee_lines"],
+        json!([{
+            "fee_id": "01JQ0000000000000000000004",
+            "code": "COVER",
+            "display_name": "Cover charge",
+            "amount": vnd(10_000),
+            "tax": vnd(1_000),
+            "waivable": false,
+        }])
+    );
+    assert_eq!(waived["total_due"], json!(vnd(176_000)));
+    let (_, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/bills/{bill_id}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        check["total_due"],
+        json!(vnd(176_000)),
+        "the bill reads as the waive answered"
+    );
+}
+
+// --- A till's own receipt printer (ADR-0160 decision 4) -----------------------------------------
+
+/// What each printer was sent, by its address, so a test can say at which counter paper came out.
+#[derive(Debug, Default)]
+struct Counters {
+    sent: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+impl Counters {
+    /// The addresses written to, in order.
+    fn at(&self) -> Vec<String> {
+        let sent = self.sent.lock().expect("the counters");
+        sent.iter().map(|(address, _)| address.clone()).collect()
+    }
+}
+
+#[derive(Debug)]
+struct CountersAt(Arc<Counters>);
+
+#[derive(Debug)]
+struct CounterTransport(Arc<Counters>, String);
+
+impl Transport for CounterTransport {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        self.0
+            .sent
+            .lock()
+            .map_err(|_| Unreachable)?
+            .push((self.1.clone(), bytes.to_vec()));
+        Ok(())
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        Ok(TransportStatus::default())
+    }
+}
+
+impl TransportFactory for CountersAt {
+    fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
+        Ok(Box::new(CounterTransport(
+            Arc::clone(&self.0),
+            device.address.clone(),
+        )))
+    }
+}
+
+/// The store's receipt printer, on USB at the counter with the cash drawer on it (ADR-0165).
+const COUNTER_PRINTER: &str = "/dev/usb/lp0";
+/// The bar's printer, which serves no station.
+const BAR_PRINTER: &str = "192.0.2.30:9100";
+/// The bar till: a `TERMINAL` entry whose receipts print at the bar.
+const BAR_TILL: u128 = 0x7111;
+
+/// The store the till tests sell in, and two paired devices signed in on it by a manager: the first
+/// to become the bar till, the second a till bound to no terminal. The printers' binding record is
+/// the one `POST /api/print/agent` binds through, as `serve` composes it.
+async fn tills_app(counters: &Arc<Counters>) -> (Router, String, String) {
+    let bar_printer = PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9130)),
+        address: BAR_PRINTER.to_owned(),
+        name: DisplayName::new("Bar"),
+        ..counter_printer()
+    };
+    let devices = PublishedDevices::new(vec![
+        PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            address: COUNTER_PRINTER.to_owned(),
+            drawer_attached: true,
+            ..counter_printer()
+        },
+        PublishedDevice {
+            device_id: DeviceId::new(Ulid::from_u128(BAR_TILL)),
+            kind: DeviceKind::Terminal.into(),
+            connection: Open::default(),
+            address: String::new(),
+            name: DisplayName::new("Bar till"),
+            receipt_printer_id: Some(bar_printer.device_id),
+            ..counter_printer()
+        },
+        bar_printer,
+    ]);
+    let mut roster = StaffRoster::new();
+    roster.insert(
+        STAFF_CODE,
+        StaffAuth {
+            employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+            permissions: PermissionSet::default().with(Permission::ManageDevices),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: Some(hash_of(STAFF_PIN)),
+        },
+    );
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7))),
+            EdgeSession {
+                devices,
+                ..EdgeSession::bootstrap().with_staff(roster)
+            },
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed"),
+    );
+    let agents = Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new());
+    let queue = Arc::new(pos_edge::print_queue::InMemoryPrintQueue::new());
+    let wake = pos_edge::print_wake::SharedPrintWake::new();
+    let printers = Arc::new(
+        Printers::over(Arc::new(CountersAt(Arc::clone(counters)))).with_agents(Arc::new(
+            AgentLane::new(Arc::clone(&agents), Arc::clone(&queue), wake.clone()),
+        )),
+    );
+    let pairing = Arc::new(Pairing::new());
+    let now = SystemClock.now();
+    let mut tokens = Vec::new();
+    for _ in 0..2 {
+        let (code, _) = pairing
+            .mint(now, Minter::Boot)
+            .expect("mint a pairing code");
+        let paired = pairing.redeem(&code, now).await.expect("redeem");
+        let token = paired.token().expect("a fresh code pairs a device");
+        tokens.push(token.as_str().to_owned());
+    }
+    let service = pos_edge::http::domain_router(
+        edge,
+        InMemoryQueueNumbers::new(),
+        agents,
+        queue,
+        wake,
+        pairing,
+        Arc::new(Sessions::new()),
+        &Arc::new(pos_edge::origins::Origins::new()),
+    )
+    .layer(axum::Extension(printers));
+    for token in &tokens {
+        let (status, _) = send(
+            service.clone(),
+            token,
+            "POST",
+            "/api/session/sign-in",
+            Some(json!({ "code": STAFF_CODE, "pin": STAFF_PIN })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "the manager signs in on both tills");
+    }
+    let counter = tokens.pop().expect("the second till");
+    let bar = tokens.pop().expect("the first till");
+    (service, bar, counter)
+}
+
+/// Binds the device holding `token` to the bar till, as a manager does at it (ADR-0112).
+async fn bind_to_the_bar_till(app: &Router, token: &str) {
+    let (status, bound) = send(
+        app.clone(),
+        token,
+        "POST",
+        "/api/print/agent",
+        Some(json!({ "agent_device_id": DeviceId::new(Ulid::from_u128(BAR_TILL)) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bound}");
+    assert_eq!(bound["outcome"], "BOUND");
+}
+
+#[tokio::test]
+async fn the_bar_till_prints_its_pre_bill_receipt_and_copy_at_the_bar_and_opens_the_stores_drawer()
+{
+    let counters = Arc::new(Counters::default());
+    let (app, bar, _counter) = tills_app(&counters).await;
+    bind_to_the_bar_till(&app, &bar).await;
+
+    let table = TableId::new(Ulid::from_u128(730));
+    for (uri, body) in [
+        (format!("/api/tables/{table}/seat"), None),
+        (format!("/api/tables/{table}/lines"), Some(a_line_body())),
+    ] {
+        let (status, answer) = send(app.clone(), &bar, "POST", &uri, body).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {answer}");
+    }
+    let check = format!("/api/tables/{table}/check/print");
+    let (_, pre_bill) = send(app.clone(), &bar, "POST", &check, None).await;
+    assert_eq!(pre_bill["prints"], json!(["PRINTED"]));
+
+    let (_, bill) = send(
+        app.clone(),
+        &bar,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let cash = json!({
+        "payments": [{
+            "method": "PAYMENT_METHOD_CASH",
+            "tendered": vnd(165_000),
+            "applied_to_bill": vnd(165_000),
+        }],
+    });
+    let settle = format!("/api/bills/{bill_id}/settle");
+    let (status, settled) = send(app.clone(), &bar, "POST", &settle, Some(cash)).await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(
+        settled["drawer_open"], "OPENED",
+        "the store's drawer, at the counter"
+    );
+    assert_eq!(settled["receipt_print"], "PRINTED");
+    let reprint = format!("/api/bills/{bill_id}/receipt/reprint");
+    let (_, copy) = send(app.clone(), &bar, "POST", &reprint, None).await;
+    assert_eq!(copy["receipt_print"], "PRINTED", "{copy}");
+
+    assert_eq!(
+        counters.at(),
+        [BAR_PRINTER, COUNTER_PRINTER, BAR_PRINTER, BAR_PRINTER],
+        "the pre-bill at the bar, the drawer's kick at the counter, the receipt and its copy at \
+         the bar"
+    );
+    let sent = counters.sent.lock().expect("the counters");
+    assert_eq!(
+        sent.get(1).map(|(_, bytes)| bytes.as_slice()),
+        Some(printer_escpos::escpos::DRAWER_KICK.as_slice()),
+        "the counter was sent the kick and nothing else"
+    );
+}
+
+#[tokio::test]
+async fn a_till_bound_to_no_terminal_prints_at_the_stores_receipt_printer() {
+    let counters = Arc::new(Counters::default());
+    let (app, bar, counter) = tills_app(&counters).await;
+    bind_to_the_bar_till(&app, &bar).await;
+
+    let settled = settle_a_table_with(
+        &app,
+        &counter,
+        TableId::new(Ulid::from_u128(731)),
+        "PAYMENT_METHOD_CARD",
+    )
+    .await;
+    assert_eq!(settled["receipt_print"], "PRINTED");
+    assert_eq!(
+        counters.at(),
+        [COUNTER_PRINTER],
+        "another till's receipt prints where every receipt did"
+    );
 }

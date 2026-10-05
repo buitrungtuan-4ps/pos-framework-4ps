@@ -23,13 +23,14 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, OrderId, OrderLineId, ReasonCodeId, TableId};
+use pos_proto::ids::{BillId, FeeId, OrderId, OrderLineId, ReasonCodeId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
-use pos_proto::ids::EventId;
+use pos_proto::ids::{DeviceId, EventId};
 
 use crate::app::{Approval, BillView, BuyerDetails, Edge};
+use crate::http::check::{CheckFeeLine, CheckResponse, check_fee_lines};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
 
@@ -269,7 +270,14 @@ where
         response.drawer_open = Some(opened.as_wire().to_owned());
     }
     if view.print_receipt {
-        let printed = print_receipt_for(printers.as_deref(), &edge, &view, buyer.as_ref()).await;
+        let printed = print_receipt_for(
+            printers.as_deref(),
+            &edge,
+            actor.device_id,
+            &view,
+            buyer.as_ref(),
+        )
+        .await;
         response.receipt_print = Some(printed.as_wire().to_owned());
     }
     Json(response).into_response()
@@ -316,8 +324,11 @@ where
     };
     let printed = match printers.as_deref() {
         Some(printers) => {
+            // At the printer of the till the copy was asked for at (ADR-0160 decision 4).
+            let session = edge.session();
+            let till = printers.till_for(&session, actor.device_id).await;
             printers
-                .print_receipt_copy(&edge.session(), edge.store_id(), &copy, buyer.as_ref())
+                .print_receipt_copy(&session, &till, edge.store_id(), &copy, buyer.as_ref())
                 .await
         }
         None => PrintOutcome::NoPrinter,
@@ -342,13 +353,14 @@ fn tax_code_is_well_formed(tax_code: &str) -> bool {
         .all(|module| module.is_valid_tax_code(tax_code))
 }
 
-/// Runs the receipt effect and says what came of it.
+/// Runs the receipt effect at the printer of the till `device` is, and says what came of it.
 ///
 /// A composition with no dispatcher layered in — the fakes-backed example, a route test that does not
 /// care — reports `NO_PRINTER`, which is the truth for it: there is nothing to print on.
 async fn print_receipt_for<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
+    device: DeviceId,
     view: &BillView,
     buyer: Option<&BuyerDetails>,
 ) -> PrintOutcome
@@ -360,9 +372,14 @@ where
     else {
         return PrintOutcome::NoPrinter;
     };
+    // The till's own receipt printer and languages, where its terminal names them (ADR-0160
+    // decision 4). The drawer above is the store's whichever till this is.
+    let session = edge.session();
+    let till = printers.till_for(&session, device).await;
     printers
         .print_receipt(
-            &edge.session(),
+            &session,
+            &till,
             edge.store_id(),
             // The bill's own id as the idempotency key: a settle retried after an ambiguous failure
             // reuses it and the adapter prints once, which is the same promise the receipt number
@@ -400,6 +417,64 @@ impl VoidBillRequest {
         let code = self.approver_code.clone()?;
         let pin = self.approver_pin.clone()?;
         Some(Approval { code, pin })
+    }
+}
+
+/// A fee waive as a till asks for it: the reason from the store's managed list, plus the badge
+/// and PIN of somebody who holds `billing.fee.waive` where the person acting needs one
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+#[derive(Debug, Deserialize)]
+pub(crate) struct WaiveFeeRequest {
+    reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+impl WaiveFeeRequest {
+    fn approval(&self) -> Option<Approval> {
+        let code = self.approver_code.clone()?;
+        let pin = self.approver_pin.clone()?;
+        Some(Approval { code, pin })
+    }
+}
+
+/// `POST /api/bills/{id}/fees/{fee_id}/waive` — waive one of an open bill's fees, citing a reason
+/// (ADR-0159 decision 5).
+///
+/// Answers with the bill as it now stands, in the shape of its check, so the till redraws it from
+/// the edge's arithmetic and never subtracts the fee itself: the fee's tax goes with it. A fee
+/// that is not waivable answers `409 FEE_NOT_WAIVABLE`, one the bill does not charge
+/// `409 FEE_NOT_ON_BILL`, and a bill that is not open `409 TRANSITION_REFUSED`.
+pub(crate) async fn waive_fee<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path((id, fee_id)): Path<(String, String)>,
+    Json(request): Json<WaiveFeeRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    let Some(fee_id) = parse_ulid(&fee_id).map(FeeId::new) else {
+        return bad_request("a fee id is a ULID");
+    };
+    let approval = request.approval();
+    match edge
+        .waive_fee(
+            actor,
+            bill_id,
+            fee_id,
+            request.reason_code_id,
+            approval.as_ref(),
+        )
+        .await
+    {
+        Ok(totals) => Json(CheckResponse::of(&totals, &edge.session())).into_response(),
+        Err(error) => error_response(&error),
     }
 }
 
@@ -446,6 +521,9 @@ pub(crate) struct DiscountResponse {
     comp_total: Money,
     tax_total: Money,
     total_due: Money,
+    /// Each fee on the bill once the discount is on it, as the check reads list them: a
+    /// percentage taken after discounts moves with the discount (ADR-0159).
+    fee_lines: Vec<CheckFeeLine>,
 }
 
 /// `POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).
@@ -478,14 +556,18 @@ where
         )
         .await
     {
-        Ok(totals) => Json(DiscountResponse {
-            subtotal: totals.subtotal,
-            discount_total: totals.discount_total,
-            comp_total: totals.comp_total,
-            tax_total: totals.tax_total,
-            total_due: totals.total_due,
-        })
-        .into_response(),
+        Ok(totals) => {
+            let session = edge.session();
+            Json(DiscountResponse {
+                subtotal: totals.subtotal,
+                discount_total: totals.discount_total,
+                comp_total: totals.comp_total,
+                tax_total: totals.tax_total,
+                total_due: totals.total_due,
+                fee_lines: check_fee_lines(&totals, &session),
+            })
+            .into_response()
+        }
         Err(error) => error_response(&error),
     }
 }
@@ -547,7 +629,9 @@ pub(crate) struct MergeResponse {
 /// The path names the **target**: it is the bill the cashier is standing in front of, and it keeps
 /// its identity. Every absorbed bill must be open and on the same table, which is a floor
 /// restriction rather than a model one — settling moves a table, and a bill over two tables makes
-/// "which table moved?" a question with two answers.
+/// "which table moved?" a question with two answers — and of the same order, which two counter
+/// bills, sharing no table, need too: a settle charges a bill's lines from its own order, so
+/// another order's would be charged nothing. Each is refused `409` before anything is written.
 pub(crate) async fn merge<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,

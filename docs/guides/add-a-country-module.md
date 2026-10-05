@@ -46,6 +46,9 @@ half-finished country fails CI rather than looking finished.
   market: `prices_include_tax` (Japan and India quote inclusive, Vietnam exclusive),
   `cash_rounding_increment` (India ₹1, Vietnam 1,000 ₫, Japan none), and `cash_denominations` (the
   notes a guest hands over, in minor units — empty means "the exact amount only").
+  `default_language` is also what a new store's receipts print in
+  ([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md)), where
+  [`paper_labels.rs`](../../crates/pos-edge/src/paper_labels.rs) has a table for it.
 - **`Fiscalization`** — if the country has electronic tax invoices, implement the port
   (allocate-range / issue / look-up / reconcile). Its contract suite in `pos-contract-tests` is the
   spec. Invoices key on the **calendar** date, never the business date.

@@ -745,6 +745,20 @@ impl Pairing {
             .map(|issued| issued.device_id)
     }
 
+    /// When `device_id` paired, or `None` if it is not paired: never was, or has been retired.
+    ///
+    /// One device's own row, for `GET /api/pair/this_device`. A device asking about itself is told
+    /// about itself, and the list of every other device stays out of the answer.
+    #[must_use]
+    pub fn paired_at(&self, device_id: DeviceId) -> Option<Timestamp> {
+        self.issued
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .find(|issued| issued.device_id == device_id)
+            .map(|issued| issued.paired_at)
+    }
+
     /// Every paired device and when it paired, newest first — what the operator picks from to retire
     /// a lost till (production-readiness **O1**).
     ///
@@ -1312,6 +1326,45 @@ mod tests {
         let listed = pairing.paired_devices();
         assert_eq!(listed.len(), 1, "only the retired device left the list");
         assert_eq!(listed[0].1.as_milliseconds_since_epoch(), 1_000);
+    }
+
+    #[test]
+    fn paired_at_names_one_device_and_nothing_once_it_is_retired() {
+        let pairing = Pairing::new();
+        let (first, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
+        let first = block_on(redeem(&pairing, &first, at(1_000)))
+            .expect("redeem")
+            .expect("token");
+        let (second, _) = pairing.mint(at(2_000), Minter::Boot).expect("mint");
+        let second = block_on(redeem(&pairing, &second, at(9_000)))
+            .expect("redeem")
+            .expect("token");
+        let first = pairing
+            .device_for(&first)
+            .expect("the first device is paired");
+        let second = pairing
+            .device_for(&second)
+            .expect("the second device is paired");
+        let paired_ms = |device_id| {
+            pairing
+                .paired_at(device_id)
+                .map(Timestamp::as_milliseconds_since_epoch)
+        };
+
+        assert_eq!(paired_ms(first), Some(1_000), "each device's own instant");
+        assert_eq!(paired_ms(second), Some(9_000));
+
+        block_on(pairing.revoke(second)).expect("no registry, so no failure");
+        assert_eq!(
+            paired_ms(second),
+            None,
+            "a retired device has no pairing to report"
+        );
+        assert_eq!(
+            paired_ms(first),
+            Some(1_000),
+            "and its neighbour keeps its own"
+        );
     }
 
     #[test]

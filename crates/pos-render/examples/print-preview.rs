@@ -39,7 +39,8 @@ use std::path::PathBuf;
 use pos_ports::printer::TextStyle;
 use pos_render::{Bitmap, FontLibrary, TextRenderer};
 
-/// 80 mm at 203 dpi — the width `pos_edge::printing` assumes until the console sends a real one.
+/// 80 mm at 203 dpi — the width `pos_edge::printing` draws for a printer the console names no paper
+/// for. A 58 mm printer is 384.
 const DOTS: NonZeroU16 = NonZeroU16::new(576).expect("576 is not zero");
 /// A comfortable receipt body at that resolution.
 const SIZE: NonZeroU16 = NonZeroU16::new(24).expect("24 is not zero");

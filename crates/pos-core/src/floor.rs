@@ -147,6 +147,7 @@ mod tests {
     use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, TableId};
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
 
     fn area(n: u128) -> AreaId {
         AreaId::new(Ulid::from_u128(n))
@@ -207,11 +208,15 @@ mod tests {
                 station_id: station(1),
                 name: DisplayName::new("Oven"),
                 backup_station_id: Some(station(2)),
+                late_after_seconds: None,
+                ticket_language: Open::default(),
             })
             .with_station(KitchenStation {
                 station_id: station(2),
                 name: DisplayName::new("Bar"),
                 backup_station_id: None,
+                late_after_seconds: None,
+                ticket_language: Open::default(),
             })
     }
 
@@ -237,6 +242,8 @@ mod tests {
             station_id: station(1),
             name: DisplayName::new("Oven"),
             backup_station_id: Some(station(9)),
+            late_after_seconds: None,
+            ticket_language: Open::default(),
         });
         assert_eq!(station_violations(&plan).len(), 1);
     }
@@ -247,6 +254,8 @@ mod tests {
             station_id: station(1),
             name: DisplayName::new("Oven"),
             backup_station_id: Some(station(1)),
+            late_after_seconds: None,
+            ticket_language: Open::default(),
         });
         assert_eq!(station_violations(&plan).len(), 1);
     }

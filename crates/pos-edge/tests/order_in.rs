@@ -404,3 +404,156 @@ mod channel_prices {
         assert_eq!(takeaway.total, Money::new(CurrencyCode::VND, 120_000));
     }
 }
+
+/// QR ordering is one switch, the `qr_ordering_enabled` capability (ADR-0160 decision 5). The intake
+/// refuses a QR order where the store's configuration switches it off, and decides by the channel
+/// list alone, as before the switch, where the configuration does not carry it. Each case reads its
+/// configuration through the edge's own reader, as a synced document arrives.
+mod qr_switch {
+    use std::sync::Arc;
+
+    use pos_edge::config_client::session_from_config;
+    use pos_edge::{Edge, EdgeOrderIn, InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity};
+    use pos_fakes::FakeStore;
+    use pos_fakes::executor::run_ready;
+    use pos_ports::PortError;
+    use pos_ports::order_in::{
+        ExternalReference, InboundOrder, InboundOrderLine, OrderAcceptance, OrderIn,
+    };
+    use pos_proto::SalesChannel;
+    use pos_proto::error::ErrorStatus;
+    use pos_proto::ids::{DeviceId, MenuItemId, TableId};
+    use pos_proto::quantity::Quantity;
+    use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
+
+    use super::{seeded_session, store};
+
+    /// What submitting `channel`'s order does at a store whose synced configuration is `document`.
+    fn submit_under(
+        document: &serde_json::Value,
+        channel: SalesChannel,
+    ) -> Result<OrderAcceptance, PortError> {
+        let edge = Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(store()),
+            session_from_config(&seeded_session(), document),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator");
+        let intake = EdgeOrderIn::new(
+            Arc::new(edge),
+            InMemoryQueueNumbers::new(),
+            DeviceId::new(Ulid::from_u128(20)),
+        );
+        run_ready(intake.submit(&InboundOrder {
+            external_reference: ExternalReference::parse("ORDER-1").expect("a valid reference"),
+            sales_channel: Open::from_known(channel),
+            store_id: store(),
+            table_id: (channel == SalesChannel::Qr).then(|| TableId::new(Ulid::from_u128(42))),
+            subject_id: None,
+            lines: vec![InboundOrderLine {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: Vec::new(),
+                quoted_unit_price: None,
+                note: None,
+            }],
+            placed_at: pos_contract_tests::fixtures::instant(),
+        }))
+    }
+
+    /// The refusal a submit under `document` met, which must be the channel list's or the switch's.
+    fn refusal(document: &serde_json::Value) -> String {
+        let refused = submit_under(document, SalesChannel::Qr)
+            .expect_err("the store does not take this QR order");
+        assert_eq!(refused.status(), ErrorStatus::FailedPrecondition);
+        refused.message().to_owned()
+    }
+
+    #[test]
+    fn with_no_switch_the_channel_list_alone_decides_as_before() {
+        for allowing in [
+            serde_json::json!({}),
+            serde_json::json!({ "channels": { "enabled": ["SALES_CHANNEL_QR", "SALES_CHANNEL_DINE_IN"] } }),
+        ] {
+            assert!(
+                submit_under(&allowing, SalesChannel::Qr)
+                    .expect("an edge that updates before its cloud takes what it took")
+                    .created,
+                "{allowing}"
+            );
+        }
+        let message = refusal(&serde_json::json!({
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+        }));
+        assert!(
+            message.contains("sales channel"),
+            "the list refuses it: {message}"
+        );
+    }
+
+    #[test]
+    fn the_switch_published_off_refuses_it_even_where_the_list_names_qr() {
+        // As a cloud that knows the switch publishes it off: `qr.enabled` follows it.
+        let message = refusal(&serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+            "channels": { "enabled": ["SALES_CHANNEL_QR"] },
+        }));
+        assert!(
+            message.contains("qr_ordering_enabled"),
+            "it names the switch: {message}"
+        );
+    }
+
+    #[test]
+    fn the_flag_as_it_was_before_the_switch_decides_nothing() {
+        // The console's capability form published every flag, this one `false`, while nothing read
+        // it and the guest page took orders. A store like that keeps taking them at this edge.
+        for stale in [
+            serde_json::json!({ "qr_ordering_enabled": false }),
+            serde_json::json!({ "qr_ordering_enabled": false, "qr": { "enabled": true } }),
+        ] {
+            assert!(
+                submit_under(&stale, SalesChannel::Qr)
+                    .expect("a flag nothing read does not refuse")
+                    .created,
+                "{stale}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_switch_on_still_leaves_the_channel_list_to_apply() {
+        assert!(
+            submit_under(
+                &serde_json::json!({ "qr_ordering_enabled": true, "qr": { "enabled": true } }),
+                SalesChannel::Qr,
+            )
+            .expect("the switch is on and nothing restricts the channel")
+            .created
+        );
+        let message = refusal(&serde_json::json!({
+            "qr_ordering_enabled": true,
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+        }));
+        assert!(
+            message.contains("sales channel"),
+            "the list refuses it: {message}"
+        );
+    }
+
+    #[test]
+    fn the_switch_off_decides_nothing_about_another_channel() {
+        let switched_off = serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+        });
+        assert!(
+            submit_under(&switched_off, SalesChannel::Takeaway)
+                .expect("a takeaway order does not ask the QR switch")
+                .created
+        );
+    }
+}

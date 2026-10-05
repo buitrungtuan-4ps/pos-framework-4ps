@@ -28,9 +28,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{DeviceId, StationId};
+use crate::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use crate::text::DisplayName;
 use crate::wire_enum;
-use crate::wire_enum::Open;
+use crate::wire_enum::{Open, is_absent};
 
 wire_enum! {
     /// What kind of device this is.
@@ -96,6 +97,44 @@ impl DeviceConnection {
     }
 }
 
+wire_enum! {
+    /// The paper a printer takes, which decides how many characters a line holds and how wide a
+    /// raster it accepts
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2). Nothing a printer reports says so, so an operator says so in the console. Each
+    /// is at 203 dpi, which almost every thermal printer runs at.
+    PaperWidth, prefix = "PAPER_WIDTH";
+    /// 80 mm paper, 42 characters a line and 576 dots: what every printer was taken to be before
+    /// the field existed.
+    Millimetres80 = "MILLIMETRES_80",
+    /// 80 mm paper laid out at 48 characters a line, as some 80 mm printers are set up, and 576
+    /// dots.
+    Millimetres80Columns48 = "MILLIMETRES_80_COLUMNS_48",
+    /// 58 mm paper, 32 characters a line and 384 dots.
+    Millimetres58 = "MILLIMETRES_58",
+}
+
+impl PaperWidth {
+    /// Characters a line holds in the printer's standard font. `UNSPECIFIED` is 80 mm's.
+    #[must_use]
+    pub const fn columns(self) -> u16 {
+        match self {
+            Self::Unspecified | Self::Millimetres80 => 42,
+            Self::Millimetres80Columns48 => 48,
+            Self::Millimetres58 => 32,
+        }
+    }
+
+    /// Printable dots a line, the widest raster the printer takes. `UNSPECIFIED` is 80 mm's.
+    #[must_use]
+    pub const fn dots_per_line(self) -> u16 {
+        match self {
+            Self::Unspecified | Self::Millimetres80 | Self::Millimetres80Columns48 => 576,
+            Self::Millimetres58 => 384,
+        }
+    }
+}
+
 /// One approved device the store may address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +190,79 @@ pub struct PublishedDevice {
     /// opens only over USB, and only when the edge writes the printer's bytes itself.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drawer_attached: bool,
+    /// The paper the printer takes. Read it through [`PublishedDevice::paper_width`], which reads an
+    /// absent or unknown value as 80 mm. Left off the wire while absent, as `agent_device_id` is, so
+    /// a node that sets none is written as before.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub paper_width: Open<PaperWidth>,
+    /// Whether the printer cuts its paper. Read it through [`PublishedDevice::cuts_paper`]: absent is
+    /// `true`, which every printer was taken to do. `false` is a printer with no cutter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cuts_paper: Option<bool>,
+    /// On a [`DeviceKind::Terminal`], the printer this till's receipts, receipt copies and pre-bills
+    /// go to
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 4): a [`DeviceKind::Printer`] in this same node that serves no station.
+    ///
+    /// **Absent means the store's receipt printer**, where every till's receipts went before the
+    /// field existed. A paired device is this till through the print-agent binding that already
+    /// exists ([ADR-0112](../../../docs/adr/0112-print-agents.md)), so a device bound to no terminal
+    /// prints at the store's. Left off the wire while absent, so a node that sets none is written as
+    /// before, and an edge that predates the field ignores it and prints at the store's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_printer_id: Option<DeviceId>,
+    /// On a [`DeviceKind::Terminal`], the language this till's receipts, receipt copies and pre-bills
+    /// print in, over the store's `printing.receipt_language`. Read it through
+    /// [`PublishedDevice::receipt_language`]. Left off the wire while absent.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub receipt_language: Open<ReceiptLanguage>,
+    /// On a [`DeviceKind::Terminal`], the second language this till's receipts, receipt copies and
+    /// pre-bills print in, over the store's `printing.receipt_second_language`: the same choices,
+    /// none included, so a till can print in one language where the store prints in two. Read it
+    /// through [`PublishedDevice::receipt_second_language`]. Left off the wire while absent.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub receipt_second_language: Open<ReceiptSecondLanguage>,
+}
+
+impl PublishedDevice {
+    /// The paper the printer takes.
+    ///
+    /// An absent value, `PAPER_WIDTH_UNSPECIFIED` and a value this release does not know all read as
+    /// [`PaperWidth::Millimetres80`], which is what every printer was taken to be before the console
+    /// could say otherwise.
+    #[must_use]
+    pub fn paper_width(&self) -> PaperWidth {
+        match self.paper_width.known() {
+            PaperWidth::Unspecified | PaperWidth::Millimetres80 => PaperWidth::Millimetres80,
+            PaperWidth::Millimetres80Columns48 => PaperWidth::Millimetres80Columns48,
+            PaperWidth::Millimetres58 => PaperWidth::Millimetres58,
+        }
+    }
+
+    /// Whether the printer cuts its paper: `true` unless the console says it has no cutter.
+    #[must_use]
+    pub fn cuts_paper(&self) -> bool {
+        self.cuts_paper.unwrap_or(true)
+    }
+
+    /// The language this till's receipts print in, or `None` for the store's.
+    ///
+    /// An absent value, `RECEIPT_LANGUAGE_UNSPECIFIED` and a value this release does not know are
+    /// all the store's. A value from a newer release is never offered for a store that cannot honour
+    /// it (ADR-0160 decision 5), so the store's is what such a till was printing anyway.
+    #[must_use]
+    pub fn receipt_language(&self) -> Option<ReceiptLanguage> {
+        Some(self.receipt_language.known()).filter(|known| *known != ReceiptLanguage::Unspecified)
+    }
+
+    /// The second language this till's receipts print in, or `None` for the store's, read as
+    /// [`Self::receipt_language`] is. [`ReceiptSecondLanguage::None`] is a choice, not the store's:
+    /// a till that prints in one language where the store prints in two.
+    #[must_use]
+    pub fn receipt_second_language(&self) -> Option<ReceiptSecondLanguage> {
+        Some(self.receipt_second_language.known())
+            .filter(|known| *known != ReceiptSecondLanguage::Unspecified)
+    }
 }
 
 /// The `devices` config node: the store's approved, addressable devices.
@@ -184,10 +296,12 @@ impl PublishedDevices {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+    use super::{DeviceConnection, DeviceKind, PaperWidth, PublishedDevice, PublishedDevices};
     use crate::ids::{DeviceId, StationId};
+    use crate::printing::{ReceiptLanguage, ReceiptSecondLanguage};
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
+    use crate::wire_enum::Open;
 
     fn device(station: Option<StationId>) -> PublishedDevice {
         PublishedDevice {
@@ -199,6 +313,11 @@ mod tests {
             station_id: station,
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: Open::default(),
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: Open::default(),
+            receipt_second_language: Open::default(),
         }
     }
 
@@ -335,6 +454,150 @@ mod tests {
         assert!(json.contains(r#""drawer_attached":true"#), "{json}");
         let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
         assert!(back.devices().first().expect("one device").drawer_attached);
+    }
+
+    #[test]
+    fn a_printer_nobody_set_paper_for_is_an_80_mm_printer_that_cuts_and_writes_neither_field() {
+        // The ADR-0112 rule once more: a fleet that sets nothing publishes the node it did before,
+        // and every printer reads as the one this framework always took it to be.
+        let json = serde_json::to_string(&PublishedDevices::new(vec![device(None)])).expect("json");
+        assert!(!json.contains("paper_width"), "{json}");
+        assert!(!json.contains("cuts_paper"), "{json}");
+        let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
+        let printer = back.devices().first().expect("one device");
+        assert_eq!(printer.paper_width(), PaperWidth::Millimetres80);
+        assert_eq!(
+            (
+                printer.paper_width().columns(),
+                printer.paper_width().dots_per_line()
+            ),
+            (42, 576)
+        );
+        assert!(printer.cuts_paper());
+    }
+
+    #[test]
+    fn a_paper_and_a_printer_with_no_cutter_round_trip_and_a_newer_paper_keeps_its_token() {
+        let raw = r#"{"devices":[
+            {"device_id":"00000000000000000000000001","kind":"DEVICE_KIND_PRINTER",
+             "connection":"DEVICE_CONNECTION_USB","address":"/dev/usb/lp0","name":"Counter",
+             "paper_width":"PAPER_WIDTH_MILLIMETRES_58","cuts_paper":false},
+            {"device_id":"00000000000000000000000002","kind":"DEVICE_KIND_PRINTER",
+             "connection":"DEVICE_CONNECTION_NETWORK","address":"192.0.2.12:9100","name":"Bar",
+             "paper_width":"PAPER_WIDTH_MILLIMETRES_112"}
+        ]}"#;
+        let node: PublishedDevices = serde_json::from_str(raw).expect("the node parses");
+        let [narrow, newer] = node.devices() else {
+            panic!("two printers: {node:?}");
+        };
+        assert_eq!(narrow.paper_width(), PaperWidth::Millimetres58);
+        assert_eq!(
+            (
+                narrow.paper_width().columns(),
+                narrow.paper_width().dots_per_line()
+            ),
+            (32, 384)
+        );
+        assert!(!narrow.cuts_paper());
+        assert_eq!(
+            PaperWidth::Millimetres80Columns48.columns(),
+            48,
+            "80 mm paper laid out at 48 a line"
+        );
+        // A paper from a newer release prints as an 80 mm printer, as before the field existed,
+        // and goes back out as it came.
+        assert_eq!(newer.paper_width(), PaperWidth::Millimetres80);
+        assert!(newer.cuts_paper());
+        let json = serde_json::to_string(&node).expect("json");
+        assert!(
+            json.contains(r#""paper_width":"PAPER_WIDTH_MILLIMETRES_58","cuts_paper":false"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#""paper_width":"PAPER_WIDTH_MILLIMETRES_112""#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_till_that_sets_nothing_writes_none_of_its_fields_and_prints_as_the_store_does() {
+        // ADR-0160 decision 4 on the ADR-0112 rule: a fleet that sets nothing per till publishes
+        // the node it did before, from a terminal written before the fields existed as much as
+        // from one written now.
+        let till = PublishedDevice {
+            kind: DeviceKind::Terminal.into(),
+            connection: Open::default(),
+            address: String::new(),
+            name: DisplayName::new("Bar till"),
+            ..device(None)
+        };
+        let json = serde_json::to_string(&PublishedDevices::new(vec![till])).expect("json");
+        for field in [
+            "receipt_printer_id",
+            "receipt_language",
+            "receipt_second_language",
+        ] {
+            assert!(!json.contains(field), "{field} is not written: {json}");
+        }
+        let old = r#"{"devices":[
+            {"device_id":"00000000000000000000000007","kind":"DEVICE_KIND_TERMINAL",
+             "connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Bar till"}
+        ]}"#;
+        for raw in [json.as_str(), old] {
+            let node: PublishedDevices = serde_json::from_str(raw).expect("the node parses");
+            let read = node.devices().first().expect("the terminal");
+            assert_eq!(read.receipt_printer_id, None, "{raw}");
+            assert_eq!(read.receipt_language(), None, "the store's language: {raw}");
+            assert_eq!(read.receipt_second_language(), None, "the store's: {raw}");
+        }
+    }
+
+    #[test]
+    fn a_tills_printer_and_languages_round_trip_and_a_newer_language_keeps_its_token() {
+        let raw = r#"{"devices":[
+            {"device_id":"00000000000000000000000002","kind":"DEVICE_KIND_PRINTER",
+             "connection":"DEVICE_CONNECTION_NETWORK","address":"192.0.2.12:9100","name":"Bar"},
+            {"device_id":"00000000000000000000000007","kind":"DEVICE_KIND_TERMINAL",
+             "connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Bar till",
+             "receipt_printer_id":"00000000000000000000000002",
+             "receipt_language":"RECEIPT_LANGUAGE_EN",
+             "receipt_second_language":"RECEIPT_SECOND_LANGUAGE_NONE"},
+            {"device_id":"00000000000000000000000008","kind":"DEVICE_KIND_TERMINAL",
+             "connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Terrace till",
+             "receipt_language":"RECEIPT_LANGUAGE_JA",
+             "receipt_second_language":"RECEIPT_SECOND_LANGUAGE_UNSPECIFIED"}
+        ]}"#;
+        let node: PublishedDevices = serde_json::from_str(raw).expect("the node parses");
+        let [_, bar, terrace] = node.devices() else {
+            panic!("a printer and two terminals: {node:?}");
+        };
+        assert_eq!(
+            bar.receipt_printer_id,
+            Some(DeviceId::new(Ulid::from_u128(2)))
+        );
+        assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+        assert_eq!(
+            bar.receipt_second_language(),
+            Some(ReceiptSecondLanguage::None),
+            "none is a choice: this till prints in one language whatever the store prints in"
+        );
+        // A language from a newer release, and the zero value, are the store's.
+        assert_eq!(terrace.receipt_language(), None);
+        assert_eq!(terrace.receipt_second_language(), None);
+
+        let json = serde_json::to_string(&node).expect("json");
+        assert!(
+            json.contains(
+                r#""receipt_printer_id":"00000000000000000000000002","receipt_language":"RECEIPT_LANGUAGE_EN","receipt_second_language":"RECEIPT_SECOND_LANGUAGE_NONE""#
+            ),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#""receipt_language":"RECEIPT_LANGUAGE_JA""#),
+            "a newer language goes back out as it came: {json}"
+        );
+        let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(back, node);
     }
 
     #[test]

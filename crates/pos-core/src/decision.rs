@@ -388,6 +388,17 @@ pub enum BillCommand {
         /// Whether the edge has collected and verified a manager's PIN for this act.
         pin_verified: bool,
     },
+    /// Waive one of the bill's fees, before it settles
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// Money forgiven, as a reduction is, so the bill must still be open and the act needs
+    /// [`Permission::WaiveFee`], which is PIN-flagged. Which fee, and whether its rule lets it be
+    /// waived, is [`billing::waivable_fee`](crate::billing::waivable_fee)'s to answer from the rules
+    /// the bill froze, before anybody is asked to approve.
+    WaiveFee {
+        /// Whether the edge has collected and verified a PIN for this act.
+        pin_verified: bool,
+    },
 }
 
 /// Refuses a proposed split that is not a partition of `covers`
@@ -480,6 +491,27 @@ fn reduction_permission(kind: ReductionKind) -> Result<Permission, DomainError> 
     }
 }
 
+/// Authorises `permission` and, where the grant asks for a PIN on the spot, refuses unless the
+/// edge has verified one (§9). The one shape every PIN-flagged bill act is decided in.
+///
+/// # Errors
+///
+/// [`DomainError::PermissionDenied`] naming `permission` if it is not granted, or its PIN was not
+/// verified.
+fn require_with_pin(
+    ctx: &DecisionCtx,
+    permission: Permission,
+    pin_verified: bool,
+) -> Result<(), DomainError> {
+    let grant = ctx.require(permission)?;
+    if grant.pin_required && !pin_verified {
+        return Err(DomainError::PermissionDenied {
+            permission: permission.meta().id,
+        });
+    }
+    Ok(())
+}
+
 /// Decides a bill command against the bill's current state.
 ///
 /// Settling proves the settlement invariant through [`billing::settle`](crate::billing::settle) —
@@ -493,7 +525,8 @@ fn reduction_permission(kind: ReductionKind) -> Result<Permission, DomainError> 
 ///   terminal — a post-settlement refund is a new signed movement, ADR-0028, not a transition here).
 /// - [`DomainError::PaymentsDoNotSumToTotal`] / [`DomainError::NegativeChange`] / [`DomainError::Empty`]
 ///   from the settlement invariant.
-/// - [`DomainError::PermissionDenied`] if a bill void is not granted or its PIN was not verified.
+/// - [`DomainError::PermissionDenied`] if a bill void or a fee waive is not granted, or its PIN was
+///   not verified.
 pub fn decide_bill(
     current: BillState,
     command: BillCommand,
@@ -530,22 +563,11 @@ pub fn decide_bill(
             // The machine first, so a settled or voided bill is refused before anything is
             // computed about money that is no longer owed.
             let next_state = Bill::step(current, BillTrigger::Reduce)?;
-            let permission = reduction_permission(kind)?;
-            let grant = ctx.require(permission)?;
-            if grant.pin_required && !pin_verified {
-                return Err(DomainError::PermissionDenied {
-                    permission: permission.meta().id,
-                });
-            }
+            require_with_pin(ctx, reduction_permission(kind)?, pin_verified)?;
             // Above the role's ceiling it is a second, manager-only act — which is what
             // `billing.discount.override_ceiling` has been published for all along.
             if kind == ReductionKind::Discount && over_ceiling(amount, ceiling)? {
-                let over = ctx.require(Permission::OverrideDiscountCeiling)?;
-                if over.pin_required && !pin_verified {
-                    return Err(DomainError::PermissionDenied {
-                        permission: Permission::OverrideDiscountCeiling.meta().id,
-                    });
-                }
+                require_with_pin(ctx, Permission::OverrideDiscountCeiling, pin_verified)?;
             }
             // The sum, not this reduction alone: two reductions that are each legal can be
             // illegal together, and only the total can say so.
@@ -588,16 +610,22 @@ pub fn decide_bill(
         }
         BillCommand::Void { pin_verified } => {
             let next_state = Bill::step(current, BillTrigger::Void)?;
-            let grant = ctx.require(Permission::VoidBill)?;
-            if grant.pin_required && !pin_verified {
-                return Err(DomainError::PermissionDenied {
-                    permission: Permission::VoidBill.meta().id,
-                });
-            }
+            require_with_pin(ctx, Permission::VoidBill, pin_verified)?;
             Ok(BillDecision {
                 next_state,
                 settlement: None,
                 effects: vec![Effect::PrintVoidBillSlip],
+            })
+        }
+        BillCommand::WaiveFee { pin_verified } => {
+            // The machine first, as for a reduction: a waive takes money off what the bill owes,
+            // and a settled or voided bill owes nothing to take it off.
+            let next_state = Bill::step(current, BillTrigger::Reduce)?;
+            require_with_pin(ctx, Permission::WaiveFee, pin_verified)?;
+            Ok(BillDecision {
+                next_state,
+                settlement: None,
+                effects: Vec::new(),
             })
         }
     }
@@ -1309,6 +1337,82 @@ mod tests {
         .expect("voids");
         assert_eq!(decision.next_state, BillState::Voided);
         assert!(decision.effects.contains(&Effect::PrintVoidBillSlip));
+    }
+
+    #[test]
+    fn waiving_a_fee_needs_an_open_bill_the_permission_and_a_pin() {
+        // ADR-0159 decision 5, decided as a void is: the permission, then its PIN.
+        let bare = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::WaiveFee { pin_verified: true },
+                &bare,
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.fee.waive"
+            })
+        ));
+        let granted = ctx_with(
+            PermissionSet::EMPTY.with(Permission::WaiveFee),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::WaiveFee {
+                    pin_verified: false
+                },
+                &granted,
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.fee.waive"
+            })
+        ));
+        let decision = decide_bill(
+            BillState::Open,
+            BillCommand::WaiveFee { pin_verified: true },
+            &granted,
+        )
+        .expect("waived");
+        assert_eq!(decision.next_state, BillState::Open, "the bill stays open");
+        assert!(decision.effects.is_empty());
+
+        // Held directly, where the store decides with each person's own set: no PIN.
+        let direct = DecisionCtx {
+            granted_directly: PermissionSet::EMPTY.with(Permission::WaiveFee),
+            ..granted
+        };
+        assert!(
+            decide_bill(
+                BillState::Open,
+                BillCommand::WaiveFee {
+                    pin_verified: false
+                },
+                &direct,
+            )
+            .is_ok()
+        );
+
+        // A bill that no longer owes anything has no fee to forgive, whoever asks.
+        for closed in [
+            BillState::Settled,
+            BillState::Voided,
+            BillState::Split,
+            BillState::Merged,
+        ] {
+            assert!(
+                matches!(
+                    decide_bill(
+                        closed,
+                        BillCommand::WaiveFee { pin_verified: true },
+                        &granted,
+                    ),
+                    Err(DomainError::Transition(_))
+                ),
+                "{closed:?}"
+            );
+        }
     }
 
     #[test]

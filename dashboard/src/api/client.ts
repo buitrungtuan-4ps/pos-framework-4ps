@@ -17,6 +17,7 @@ import type {
   Alert,
   ApiKeySummary,
   Assignment,
+  AssignmentTarget,
   Area,
   AuditEntry,
   AuditFilter,
@@ -37,6 +38,7 @@ import type {
   ConfigNodes,
   ConfigVersion,
   CreateApiKeyResponse,
+  CreatedAssignment,
   CreatedId,
   DailyRevenue,
   DailyRollup,
@@ -44,6 +46,7 @@ import type {
   Device,
   CreateTerminalResponse,
   DeviceProposalSummary,
+  PaperWidth,
   DisplayCategory,
   DisplaySubcategory,
   AdmittedDevice,
@@ -70,6 +73,8 @@ import type {
   NodePreview,
   ModifierGroup,
   PermissionInfo,
+  PermissionsPublishReport,
+  PermissionsReadiness,
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
@@ -89,6 +94,14 @@ import type {
   QrGuardrails,
   VendorPolicy,
   EffectiveSetting,
+  EffectiveFees,
+  FeePublishReport,
+  FeeRule,
+  FeeRuleFields,
+  FeeScope,
+  PreviewFeeRule,
+  SampleBill,
+  SampleLineInput,
   SettingDefinition,
   SettingPresetsReport,
   SettingPublishReport,
@@ -378,6 +391,42 @@ async function requestVoidIfMatch(
   if (!response.ok) {
     throw await failure(response);
   }
+}
+
+// The request fields that name where a new assignment grants its role (ADR-0158 decision 3).
+function assignmentTargetFields(target: AssignmentTarget): Record<string, string> {
+  switch (target.kind) {
+    case "store":
+      return { store_id: target.storeId };
+    case "group":
+      return { store_group_id: target.groupId };
+    case "tenant":
+      return { scope_kind: "ASSIGNMENT_SCOPE_TENANT" };
+  }
+}
+
+// A people write that may publish the `permissions` node at once (ADR-0158 decision 7). Removing
+// an assignment, or archiving a person or a role, answers `200` with how each store's publish
+// went; any other write answers `204`, which is `null` here. A conditional write passes the `etag`
+// it read the record at, as `requestVoidIfMatch` does.
+async function requestPublishReport(
+  method: string,
+  path: string,
+  etag?: ETag,
+  body?: unknown,
+): Promise<PermissionsPublishReport | null> {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      ...(etag === undefined ? {} : { "if-match": `"${etag}"` }),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  return response.status === 200 ? ((await response.json()) as PermissionsPublishReport) : null;
 }
 
 async function requestVoid(method: string, path: string, body?: unknown): Promise<void> {
@@ -770,8 +819,50 @@ export const api = {
       version,
       { tenant_id: tenantId, drawer_attached: drawerAttached },
     ),
+  // Saying what paper an approved printer takes and whether it cuts it, conditional on the version
+  // the row was read at, as the drawer mark is (ADR-0094, ADR-0160). The store hears it on the next
+  // publish.
+  setPrinterPaper: (
+    tenantId: string,
+    id: string,
+    paperWidth: PaperWidth,
+    cutsPaper: boolean,
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/paper`,
+      version,
+      { tenant_id: tenantId, paper_width: paperWidth, cuts_paper: cutsPaper },
+    ),
+  // Saying which printer a till's receipts go to and the languages they print in, each `null` for
+  // the store's, conditional on the version the terminal was read at, as the paper is (ADR-0094,
+  // ADR-0160 decision 4). The three are the till's whole receipt state. The store hears it on the
+  // next publish.
+  setTerminalReceipt: (
+    tenantId: string,
+    id: string,
+    receipt: {
+      readonly printerId: string | null;
+      readonly language: string | null;
+      readonly secondLanguage: string | null;
+    },
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/receipt`,
+      version,
+      {
+        tenant_id: tenantId,
+        receipt_printer_id: receipt.printerId,
+        receipt_language: receipt.language,
+        receipt_second_language: receipt.secondLanguage,
+      },
+    ),
   // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
-  // pick and a drawer mark all wait on this before the store hears about them.
+  // pick, a drawer mark, a printer's paper and a till's receipts all wait on this before the store
+  // hears about them.
   publishDevices: (tenantId: string, storeId: string) =>
     requestJson<PublishDevicesResponse>("POST", "/admin/devices/publish", {
       tenant_id: tenantId,
@@ -866,13 +957,15 @@ export const api = {
     ),
   createEmployee: (tenantId: string, code: string, name: string) =>
     requestJson<CreatedId>("POST", "/admin/employees", { tenant_id: tenantId, code, name }),
+  // Archiving publishes to every store the person works at, and answers how each went; any other
+  // update answers `204`, read as `null` (ADR-0158 decision 7).
   updateEmployee: (
     id: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
     etag: ETag,
   ) =>
-    requestVoidIfMatch("PATCH", `/admin/employees/${encodeURIComponent(id)}`, etag, {
+    requestPublishReport("PATCH", `/admin/employees/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       status: fields.status,
@@ -885,57 +978,80 @@ export const api = {
 
   listRoles: (tenantId: string) =>
     requestJson<RoleTemplate[]>("GET", `/admin/roles?${tenantQuery(tenantId)}`),
+  // Both lists are always sent: what this role grants directly, and what it grants only with
+  // approval (ADR-0158 decision 4). The editor is where a PIN-flagged permission starts with
+  // approval; the server reads a create that leaves the second list out as granting none.
   createRole: (
     tenantId: string,
     name: string,
-    permissions: string[],
+    grants: { permissions: string[]; permissionsWithApproval: string[] },
     discountCeilingMinor: number | null,
   ) =>
     requestJson<CreatedId>("POST", "/admin/roles", {
       tenant_id: tenantId,
       name,
-      permissions,
+      permissions: grants.permissions,
+      permissions_with_approval: grants.permissionsWithApproval,
       discount_ceiling_minor: discountCeilingMinor,
     }),
+  // Archiving publishes to every store where someone holds the role, and answers how each went;
+  // any other update answers `204`, read as `null` (ADR-0158 decision 7).
   updateRole: (
     id: string,
     tenantId: string,
     fields: {
       name: string;
       permissions: string[];
+      permissionsWithApproval: string[];
       discountCeilingMinor: number | null;
       status: EntityStatus;
     },
     etag: ETag,
   ) =>
-    requestVoidIfMatch("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
+    requestPublishReport("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       permissions: fields.permissions,
+      permissions_with_approval: fields.permissionsWithApproval,
       discount_ceiling_minor: fields.discountCeilingMinor,
       status: fields.status,
     }),
 
+  // Everyone who works at a store: its own assignments, its groups' and the tenant's, each with its
+  // scope (ADR-0158 decision 3).
   listAssignmentsByStore: (tenantId: string, storeId: string) =>
     requestJson<Assignment[]>(
       "GET",
       `/admin/assignments?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
+  // One store's assignment reaches the store when someone publishes; one to a group or to every
+  // store publishes at once, and answers how each store's publish went (ADR-0158 decision 7).
   createAssignment: (
     tenantId: string,
     employeeId: string,
-    storeId: string,
+    target: AssignmentTarget,
     roleTemplateId: string,
   ) =>
-    requestJson<CreatedId>("POST", "/admin/assignments", {
+    requestJson<CreatedAssignment>("POST", "/admin/assignments", {
       tenant_id: tenantId,
       employee_id: employeeId,
-      store_id: storeId,
+      ...assignmentTargetFields(target),
       role_template_id: roleTemplateId,
     }),
+  // Publishes to the assignment's store at once, and answers how it went (ADR-0158 decision 7).
   removeAssignment: (tenantId: string, id: string) =>
-    requestVoid("DELETE", `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),
+    requestPublishReport(
+      "DELETE",
+      `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
 
+  // What each role held at a store does not grant, before the store enforces each person's own
+  // permissions (ADR-0158, Rollout). Needs console.people.read; it names no person.
+  permissionsReadiness: (tenantId: string, storeId: string) =>
+    requestJson<PermissionsReadiness>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/permissions/readiness?${tenantQuery(tenantId)}`,
+    ),
   // The pos-core permission catalogue (§9) the role editor offers, so the console never invents a
   // permission string — it presents these and stores a chosen subset.
   permissionCatalogue: () => requestJson<PermissionInfo[]>("GET", "/admin/people/permissions"),
@@ -1029,7 +1145,13 @@ export const api = {
   createStation: (
     tenantId: string,
     storeId: string,
-    fields: { name: string; backupStationId: string | null; isDefault: boolean },
+    fields: {
+      name: string;
+      backupStationId: string | null;
+      isDefault: boolean;
+      lateAfterSeconds: number | null;
+      ticketLanguage: string | null;
+    },
   ) =>
     requestJson<CreatedId>("POST", "/admin/kitchen/stations", {
       tenant_id: tenantId,
@@ -1037,7 +1159,11 @@ export const api = {
       name: fields.name,
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
+      late_after_seconds: fields.lateAfterSeconds,
+      ticket_language: fields.ticketLanguage,
     }),
+  // The station's whole new state: a field left out is cleared, so archiving or restoring a station
+  // sends back what it has.
   updateStation: (
     stationId: string,
     tenantId: string,
@@ -1045,6 +1171,8 @@ export const api = {
       name: string;
       backupStationId: string | null;
       isDefault: boolean;
+      lateAfterSeconds: number | null;
+      ticketLanguage: string | null;
       status: EntityStatus;
     },
     etag: ETag,
@@ -1054,6 +1182,8 @@ export const api = {
       name: fields.name,
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
+      late_after_seconds: fields.lateAfterSeconds,
+      ticket_language: fields.ticketLanguage,
       status: fields.status,
     }),
   listRoutingRules: (tenantId: string, storeId: string) =>
@@ -1102,7 +1232,10 @@ export const api = {
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
-  createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),
+  // A new tenant starts with six roles (ADR-0158), which the cloud names in `language`, the
+  // language this console is shown in, and in English where the console carries no such pack.
+  createTenant: (name: string, language: string) =>
+    requestJson<Tenant>("POST", "/admin/tenants", { name, language }),
   // Rename or archive a tenant (ADR-0065, production-readiness O2). `etag` is the version the caller
   // read it at (ADR-0094): a save against a version the registry no longer holds is refused `412`
   // rather than overwriting whoever edited in between.
@@ -1175,14 +1308,19 @@ export const api = {
     ),
   // The whole membership, not a delta: the operator's mental model is a *set* ("these are the
   // airport shops"), and a delta API makes two admins' concurrent edits merge into a cohort neither
-  // of them chose. Under `If-Match` the second one is refused instead.
+  // of them chose. Under `If-Match` the second one is refused instead. `stores` reports each store
+  // that joined or left a group some assignment names, published its staff at once (ADR-0158).
   setStoreGroupMembers: (
     tenantId: string,
     groupId: string,
     storeIds: readonly string[],
     etag: ETag,
   ) =>
-    requestJsonIfMatch<{ store_ids: string[]; etag: ETag }>(
+    requestJsonIfMatch<{
+      store_ids: string[];
+      etag: ETag;
+      stores?: PermissionsPublishReport["stores"];
+    }>(
       "PUT",
       `/admin/store-groups/${encodeURIComponent(groupId)}/members`,
       etag,
@@ -1683,6 +1821,68 @@ export const api = {
       tenant_id: tenantId,
       ...(storeId ? { store_id: storeId } : {}),
     }),
+  // Fees (ADR-0159): a rule written once, at the tenant, a brand or one store, and every store it
+  // reaches republished in the same request — each answering how its publish went, so a `200` is
+  // not "every store charges it". A rule's rate and amount are prices, so the reads and the sample
+  // bill are behind console.reports.revenue; a write publishes, so it is console.config.publish.
+  listFees: (tenantId: string) =>
+    requestJson<{ rules: FeeRule[] }>("GET", `/admin/fees?${tenantQuery(tenantId)}`).then(
+      (body) => body.rules,
+    ),
+  // A new fee: the cloud mints its id and answers it with the publish report.
+  createFee: (tenantId: string, scope: FeeScope, scopeId: string, rule: FeeRuleFields) =>
+    requestJson<FeePublishReport>("POST", "/admin/fees", {
+      tenant_id: tenantId,
+      scope,
+      scope_id: scopeId,
+      rule,
+    }),
+  // A fee at one scope: where it is written, it replaces the rule; at a narrower scope, it
+  // overrides the broader one for the stores that scope reaches.
+  putFee: (tenantId: string, scope: FeeScope, scopeId: string, rule: FeeRuleFields) =>
+    requestJson<FeePublishReport>("PUT", "/admin/fees", {
+      tenant_id: tenantId,
+      scope,
+      scope_id: scopeId,
+      rule,
+    }),
+  deleteFee: (tenantId: string, scope: FeeScope, scopeId: string, feeId: string) =>
+    requestJson<FeePublishReport>(
+      "DELETE",
+      `/admin/fees?${new URLSearchParams({
+        tenant_id: tenantId,
+        scope,
+        scope_id: scopeId,
+        fee_id: feeId,
+      }).toString()}`,
+    ),
+  // What one store runs: each fee, where its rule comes from, and what stops the store applying it.
+  effectiveFees: (tenantId: string, storeId: string) =>
+    requestJson<EffectiveFees>(
+      "GET",
+      `/admin/fees/effective?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  // Republishes one store's fees, or every store of the tenant without `storeId`.
+  publishFees: (tenantId: string, storeId?: string) =>
+    requestJson<FeePublishReport>("POST", "/admin/fees/publish", {
+      tenant_id: tenantId,
+      ...(storeId ? { store_id: storeId } : {}),
+    }),
+  // A sample bill at one store with `rules` in place: writes and publishes nothing.
+  previewFees: (
+    tenantId: string,
+    storeId: string,
+    salesChannel: SalesChannel,
+    rules: readonly PreviewFeeRule[],
+    lines: readonly SampleLineInput[],
+  ) =>
+    requestJson<SampleBill>("POST", "/admin/fees/preview", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      sales_channel: salesChannel,
+      rules,
+      lines,
+    }),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
@@ -1790,6 +1990,16 @@ export const api = {
     downloadCsv(
       `/admin/stores/${encodeURIComponent(storeId)}/revenue/export?${rollupWindowQuery(tenantId, window)}`,
       "revenue.csv",
+    ),
+  // The fees by code, one row per day per code (ADR-0159). T2, like the revenue export.
+  exportRevenueFeesCsv: (
+    tenantId: string,
+    storeId: string,
+    window?: { from?: string; to?: string; limit?: number },
+  ) =>
+    downloadCsv(
+      `/admin/stores/${encodeURIComponent(storeId)}/revenue/fees/export?${rollupWindowQuery(tenantId, window)}`,
+      "revenue-fees.csv",
     ),
   // Dry-run classifies every row and writes nothing; apply merges the valid rows on confirm.
   dryRunTranslationsCsv: (tenantId: string, file: Blob) =>

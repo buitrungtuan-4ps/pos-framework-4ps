@@ -8,6 +8,8 @@
 //! proven without a database, while the store-specific behaviour (RLS, partitioning, the rollup and
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
+mod assignment_contract;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -44,17 +46,22 @@ use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::campaigns::{CampaignStore, CampaignStoreError};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, Course, DisplayCategory, DisplaySubcategory,
-    ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu, MenuId,
-    MenuPlacement, MenuSection, ModifierGroup, TaxClass,
+    ItemCategory, ItemCategoryId, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu,
+    MenuId, MenuPlacement, MenuSection, ModifierGroup, TaxClass,
 };
 use pos_cloud::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
 use pos_cloud::cloud::AdmittedDevice;
-use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
+use pos_cloud::config_tree::{
+    CapabilityValidator, ConfigLevel, ConfigStoreError, ConfigTree, ConfigTreeState,
+    ConfigTreeStore, PublishedVersion,
+};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
+use pos_cloud::data_migrations::{DataMigrations, InMemoryDataMigrations};
 use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, DeviceWriteOutcome, PersistedDeviceProposal,
 };
+use pos_cloud::fees::InMemoryFeeRules;
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use pos_cloud::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
@@ -74,13 +81,15 @@ use pos_cloud::media::{
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::paging::{Page, PageRequest};
 use pos_cloud::people::{
-    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
-    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
-    RoleTemplateStoreError, RoleTemplateUpdate, is_known_permission, permission_catalogue,
+    Assignment, AssignmentId, AssignmentScope, AssignmentStore, AssignmentStoreError, Employee,
+    EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId,
+    RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate, is_known_permission,
+    permission_catalogue,
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
+use pos_cloud::qr_ordering;
 use pos_cloud::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use pos_cloud::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use pos_cloud::registry::{
@@ -95,6 +104,9 @@ use pos_cloud::release_source::{
     FetchedArtifact, FetchedRelease, ReleaseSource, ReleaseSourceError,
 };
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
+use pos_cloud::starting_roles::{
+    RoleSeeder, seed_starting_roles, starting_role_grants, starting_role_name,
+};
 use pos_cloud::store_groups::{
     BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId, StoreGroupStore,
     StoreGroupStoreError,
@@ -109,6 +121,7 @@ use pos_cloud::webhook::{
 use pos_cloud::{Cloud, IngestOutcome, StoreOwner, StoreOwners, http};
 use pos_contract_tests::fixtures;
 use pos_core::activation::{ActivationCode, CodeStatus};
+use pos_core::permission::Role;
 use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
@@ -116,10 +129,11 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::chain::{ChainHash, ChainLink};
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::fees::PublishedFees;
 use pos_proto::ids::CampaignId;
 use pos_proto::ids::{
     AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
@@ -127,11 +141,12 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction, ReasonCode};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::Open;
+use pos_proto::wire_enum::{Open, WireEnum as _};
 use sha2::{Digest as _, Sha256};
 
 /// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
@@ -1174,9 +1189,7 @@ impl FakeConfigTrees {
     }
 
     /// Puts a store-layer document in the tree, as a publish would, so a read has something to
-    /// find. Only the Store layer is written: the console's country comparison reads exactly
-    /// `store.locale.country_code`, and a helper that also filled the layers above it would let a
-    /// test pass on inheritance the real read does not perform.
+    /// find. Only the Store layer is written, which is where the console's node publishes write.
     fn seed_store_layer(&self, tenant: TenantId, store: StoreId, layer: serde_json::Value) {
         let version = self.mint();
         let state = ConfigTreeState {
@@ -3780,6 +3793,110 @@ async fn the_roster_read_refuses_an_identifier_that_is_not_a_ulid() {
     }
 }
 
+// --- Fees by code (`GET /admin/stores/{id}/revenue/fees/export`, ADR-0159 decision 4) -----------
+
+#[tokio::test]
+async fn the_fees_export_is_a_row_per_day_per_code_and_needs_the_revenue_permission() {
+    // Seeded directly, in the stored blob's own shape, as the roster's read is: what is under test
+    // is the route. The fold that fills `by_fee` has its own tests, and so has its
+    // materialised-equals-a-re-scan property.
+    let day = |date: &str, by_fee: serde_json::Value| {
+        serde_json::json!({
+            "business_date": date, "currency_code": "VND", "bills": 4, "gross": 400_000,
+            "reductions": 0, "service_charge": 20_000, "tax": 32_000, "net": 452_000,
+            "by_item": {}, "by_fee": by_fee,
+        })
+    };
+    let seeded: StoredRollups =
+        serde_json::from_value(serde_json::json!({ "days": {}, "revenue": {
+            "2026-03-15": day("2026-03-15", serde_json::json!({
+                "SVC": { "name": "Service charge", "bills": 3, "amount": 15_000, "tax": 1_200 },
+                "PACK": { "name": "Packaging", "bills": 1, "amount": 5_000, "tax": 0 },
+            })),
+            "2026-03-16": day("2026-03-16", serde_json::json!({})),
+            "2026-03-17": day("2026-03-17", serde_json::json!({
+                "SVC": { "name": "Phí phục vụ", "bills": 2, "amount": 10_000, "tax": 800 },
+            })),
+        }}))
+        .expect("a stored rollup");
+    let rollups = FakeRollups::default();
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the revenue");
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_with_admin(
+        Cloud::new(FakeStore::new()),
+        rollups,
+        FakeKeys::default(),
+        admin.clone(),
+    );
+    let router = http::router(app.with_audit(Arc::new(AuditSink::new(audit.clone()))));
+    let uri = format!(
+        "/admin/stores/{}/revenue/fees/export?tenant_id={}&from=2026-03-15&to=2026-03-17",
+        store_id().as_ulid(),
+        tenant().as_ulid()
+    );
+
+    // A fee's takings are prices, so T2: a role that may read the console but not revenue is
+    // refused, as the revenue export refuses it.
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-fees"),
+        (AdminRole::Ops, "ops-fees"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&uri, &cookie))
+            .await
+            .expect("route the export");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{role:?}");
+    }
+
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-fees").await;
+    let exported = router
+        .oneshot(get_with_cookie(&uri, &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let headers = exported.headers();
+    assert_eq!(
+        [&headers["content-type"], &headers["content-disposition"]],
+        [
+            "text/csv; charset=utf-8",
+            "attachment; filename=\"revenue-fees.csv\""
+        ]
+    );
+    // One row per day per code, oldest day first and then by code; the day with no fee has none.
+    assert_eq!(
+        text_body(exported).await,
+        "business_date,currency_code,fee_code,fee_name,bills,amount,tax\n\
+         2026-03-15,VND,PACK,Packaging,1,5000,0\n\
+         2026-03-15,VND,SVC,Service charge,3,15000,1200\n\
+         2026-03-17,VND,SVC,Phí phục vụ,2,10000,800\n"
+    );
+
+    // Audited by the rows it exported, never their contents.
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.action == "reports.export_revenue_fees")
+        .expect("the export was recorded");
+    assert_eq!(
+        (
+            entry.tenant_id,
+            entry.entity_id.clone(),
+            entry.after.clone()
+        ),
+        (
+            Some(tenant()),
+            store_id().to_string(),
+            Some(serde_json::json!({ "domain": "revenue_fees", "rows": 3 }))
+        )
+    );
+}
+
 // --- The `/internal` shared secret (ADR-0097) ---------------------------------------------------
 
 /// A `POST` to an `/internal` route with a wrong key, or none at all.
@@ -4246,6 +4363,13 @@ struct DeviceRow {
     agent_device_id: Option<DeviceProposalId>,
     /// Ticked in the console, never discovered (ADR-0165). `false` until somebody does.
     drawer_attached: bool,
+    /// Chosen in the console, never discovered (ADR-0160). `None` until somebody does.
+    paper_width: Option<PaperWidth>,
+    cuts_paper: Option<bool>,
+    /// A till's own receipts, chosen in the console (ADR-0160 decision 4). `None` is the store's.
+    receipt_printer_id: Option<DeviceProposalId>,
+    receipt_language: Option<ReceiptLanguage>,
+    receipt_second_language: Option<ReceiptSecondLanguage>,
     status: DeviceProposalStatus,
     /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
     /// reason about. Bumped by every write that changes the row.
@@ -4265,6 +4389,29 @@ impl FakeDevices {
         *next += 1;
         Version::new(next.to_string())
     }
+
+    /// Applies `change` to the tenant's **approved** row `id` if it is still at `expected`, as the
+    /// adapter's conditional `UPDATE … WHERE xmin::text = $n` does.
+    fn write_approved(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        expected: &str,
+        change: impl FnOnce(&mut DeviceRow),
+    ) -> DeviceWriteOutcome {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
+        }) else {
+            return DeviceWriteOutcome::NotFound;
+        };
+        if row.version.as_str() != expected {
+            return DeviceWriteOutcome::VersionMismatch;
+        }
+        change(row);
+        row.version = self.mint();
+        DeviceWriteOutcome::Updated
+    }
 }
 
 impl DeviceProposalStore for FakeDevices {
@@ -4282,6 +4429,11 @@ impl DeviceProposalStore for FakeDevices {
             station_id: None,
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: None,
+            receipt_second_language: None,
             status: DeviceProposalStatus::Pending,
             version: self.mint(),
         });
@@ -4314,6 +4466,15 @@ impl DeviceProposalStore for FakeDevices {
                 station_id: row.station_id.map(|id| id.to_string()),
                 agent_device_id: row.agent_device_id.map(|id| id.to_string()),
                 drawer_attached: row.drawer_attached,
+                paper_width: row.paper_width.map(|paper| paper.as_wire().to_owned()),
+                cuts_paper: row.cuts_paper,
+                receipt_printer_id: row.receipt_printer_id.map(|id| id.to_string()),
+                receipt_language: row
+                    .receipt_language
+                    .map(|language| language.as_wire().to_owned()),
+                receipt_second_language: row
+                    .receipt_second_language
+                    .map(|language| language.as_wire().to_owned()),
                 status: row.status.as_wire().to_owned(),
                 version: row.version.to_string(),
             })
@@ -4362,6 +4523,11 @@ impl DeviceProposalStore for FakeDevices {
             station_id: None,
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: None,
+            receipt_second_language: None,
             // Created resolved. The console write by a named admin *is* the decision, because
             // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
             status: DeviceProposalStatus::Approved,
@@ -4377,18 +4543,9 @@ impl DeviceProposalStore for FakeDevices {
         agent: Option<DeviceProposalId>,
         expected: &str,
     ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
-        let mut rows = self.rows.lock().expect("lock");
-        let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
-        }) else {
-            return Ok(DeviceWriteOutcome::NotFound);
-        };
-        if row.version.as_str() != expected {
-            return Ok(DeviceWriteOutcome::VersionMismatch);
-        }
-        row.agent_device_id = agent;
-        row.version = self.mint();
-        Ok(DeviceWriteOutcome::Updated)
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.agent_device_id = agent;
+        }))
     }
 
     async fn set_drawer(
@@ -4398,18 +4555,39 @@ impl DeviceProposalStore for FakeDevices {
         drawer_attached: bool,
         expected: &str,
     ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
-        let mut rows = self.rows.lock().expect("lock");
-        let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
-        }) else {
-            return Ok(DeviceWriteOutcome::NotFound);
-        };
-        if row.version.as_str() != expected {
-            return Ok(DeviceWriteOutcome::VersionMismatch);
-        }
-        row.drawer_attached = drawer_attached;
-        row.version = self.mint();
-        Ok(DeviceWriteOutcome::Updated)
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.drawer_attached = drawer_attached;
+        }))
+    }
+
+    async fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.paper_width = Some(paper_width);
+            row.cuts_paper = Some(cuts_paper);
+        }))
+    }
+
+    async fn set_receipt(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        printer: Option<DeviceProposalId>,
+        language: Option<ReceiptLanguage>,
+        second_language: Option<ReceiptSecondLanguage>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.receipt_printer_id = printer;
+            row.receipt_language = language;
+            row.receipt_second_language = second_language;
+        }))
     }
 }
 
@@ -5115,6 +5293,430 @@ async fn a_printer_marked_with_a_drawer_publishes_the_mark_and_the_mark_needs_it
     assert_eq!(
         published["drawer_attached"], true,
         "the store hears that a drawer is wired to its counter printer"
+    );
+}
+
+/// A printer is set to 58 mm paper with no cutter, and the published node carries both
+/// (**ADR-0160** decision 2), under the drawer mark's conditional write.
+///
+/// The default is asserted first, because a fleet upgrade rests on it: a printer nobody set
+/// publishes neither field, so its store prints as it always has. And a paper this release does not
+/// know is refused by name before anything is written.
+#[tokio::test]
+async fn a_printers_paper_is_validated_by_name_and_published_as_set() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "192.0.2.10:9100").await;
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let unset = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert!(
+        unset["paper_width"].is_null() && unset["cuts_paper"].is_null(),
+        "a printer nobody set publishes neither field: {unset}"
+    );
+
+    let path = format!("/admin/devices/proposals/{counter}/paper");
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    for refused in [
+        "PAPER_WIDTH_MILLIMETRES_112",
+        "PAPER_WIDTH_UNSPECIFIED",
+        "58",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_config_with_etag(
+                &path,
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid.clone(),
+                    "paper_width": refused,
+                    "cuts_paper": true,
+                }),
+                &cookie,
+                &version,
+            ))
+            .await
+            .expect("route the refused paper");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], "paper_width",
+            "{body}"
+        );
+        assert_eq!(
+            body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE",
+            "{body}"
+        );
+    }
+
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid.clone(),
+        "paper_width": "PAPER_WIDTH_MILLIMETRES_58",
+        "cuts_paper": false,
+    });
+    let unconditional = router
+        .clone()
+        .oneshot(post_with_cookie(&path, &body, &cookie))
+        .await
+        .expect("route the unconditional write");
+    assert_eq!(
+        unconditional.status(),
+        StatusCode::BAD_REQUEST,
+        "no If-Match is refused, not a silent last-write-wins"
+    );
+    let saved = router
+        .clone()
+        .oneshot(post_config_with_etag(&path, &body, &cookie, &version))
+        .await
+        .expect("route the paper");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+    let replayed = router
+        .clone()
+        .oneshot(post_config_with_etag(&path, &body, &cookie, &version))
+        .await
+        .expect("route the stale write");
+    assert_eq!(
+        replayed.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert_eq!(
+        (&published["paper_width"], &published["cuts_paper"]),
+        (
+            &serde_json::json!("PAPER_WIDTH_MILLIMETRES_58"),
+            &serde_json::json!(false)
+        ),
+        "the store hears its counter printer takes 58 mm paper and has no cutter: {published}"
+    );
+}
+
+/// Approves the proposal `id` as a network printer serving `station`, or the counter with `None`.
+async fn approve_on_network(
+    router: &axum::Router,
+    cookie: &str,
+    tenant_ulid: &str,
+    id: &str,
+    station: Option<&str>,
+) {
+    let station = station.map_or_else(String::new, |station| format!("&station_id={station}"));
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network{station}"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+}
+
+/// Says where the terminal `id`'s receipts go, at `version`, and answers the status and the body,
+/// `null` for a `204`.
+async fn post_till_receipt(
+    router: &axum::Router,
+    cookie: &str,
+    id: &str,
+    version: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{id}/receipt"),
+            body,
+            cookie,
+            version,
+        ))
+        .await
+        .expect("route the till's receipts");
+    let status = response.status();
+    let body = body_bytes(response).await;
+    (
+        status,
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A store's devices for the till tests: its counter's printer, a station's (`oven`), one still
+/// pending, another store's approved counter printer (`theirs`), and two terminals, `bar` and
+/// `door`, each by id.
+struct TillStore {
+    router: axum::Router,
+    cookie: String,
+    token: String,
+    tenant_ulid: String,
+    store_ulid: String,
+    counter: String,
+    oven: String,
+    pending: String,
+    theirs: String,
+    bar: String,
+    door: String,
+}
+
+async fn till_store() -> TillStore {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "192.0.2.10:9100").await;
+    approve_on_network(&router, &cookie, &tenant_ulid, &counter, None).await;
+    let oven = propose_printer(&router, &token, &store_ulid, "Oven", "192.0.2.11:9100").await;
+    let station = StationId::new(Ulid::from_u128(0x5A)).to_string();
+    approve_on_network(&router, &cookie, &tenant_ulid, &oven, Some(&station)).await;
+    let pending = propose_printer(&router, &token, &store_ulid, "Spare", "192.0.2.12:9100").await;
+    let elsewhere = StoreId::new(Ulid::from_u128(0xB0FF));
+    let neighbour = issue_store_key(&keys, tenant(), elsewhere, &[Scope::ManageDevices]);
+    let theirs = propose_printer(
+        &router,
+        &neighbour,
+        &elsewhere.as_ulid().to_string(),
+        "Their counter",
+        "192.0.2.13:9100",
+    )
+    .await;
+    approve_on_network(&router, &cookie, &tenant_ulid, &theirs, None).await;
+    let bar = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Bar till").await;
+    let door = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Door till").await;
+    TillStore {
+        router,
+        cookie,
+        token,
+        tenant_ulid,
+        store_ulid,
+        counter,
+        oven,
+        pending,
+        theirs,
+        bar,
+        door,
+    }
+}
+
+/// Each way a till's receipts can be said wrongly is refused `400` naming the field
+/// (**ADR-0160** decision 4), and a device the tenant has not approved is a `404`.
+///
+/// The printer has to be one the till's own store prints a bill on: approved, a printer, serving no
+/// station, in the same store. Each refusal leaves the terminal as it was, so the store goes on
+/// printing that till's receipts as it does.
+#[tokio::test]
+async fn a_tills_receipts_are_refused_by_name_unless_they_name_its_stores_receipt_printer() {
+    let TillStore {
+        router,
+        cookie,
+        token,
+        tenant_ulid,
+        store_ulid,
+        counter,
+        oven,
+        pending,
+        theirs,
+        bar,
+        door,
+    } = till_store().await;
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+
+    let body = |printer: &str, language: &str, second: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid.clone(),
+            "receipt_printer_id": printer,
+            "receipt_language": language,
+            "receipt_second_language": second,
+        })
+    };
+    let (en, none) = ("RECEIPT_LANGUAGE_EN", "RECEIPT_SECOND_LANGUAGE_NONE");
+    let refused_as = |refused: &serde_json::Value, field: &str, reason: &str| {
+        assert_eq!(refused["error"]["details"][0]["field"], field, "{refused}");
+        assert_eq!(
+            refused["error"]["details"][0]["reason"], reason,
+            "{refused}"
+        );
+    };
+
+    let at = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let (status, refused) =
+        post_till_receipt(&router, &cookie, &counter, &at, &body(&counter, en, none)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a printer is not a till");
+    refused_as(&refused, "id", "WRONG_KIND");
+
+    for (printer, reason) in [
+        ("not-a-ulid", "NOT_A_ULID"),
+        (pending.as_str(), "UNKNOWN_REFERENCE"),
+        (theirs.as_str(), "UNKNOWN_REFERENCE"),
+        (oven.as_str(), "WRONG_KIND"),
+        (door.as_str(), "WRONG_KIND"),
+    ] {
+        let sent = body(printer, en, none);
+        let (status, refused) = post_till_receipt(&router, &cookie, &bar, &version, &sent).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{sent}");
+        refused_as(&refused, "receipt_printer_id", reason);
+    }
+
+    for (language, second, field) in [
+        ("RECEIPT_LANGUAGE_JA", none, "receipt_language"),
+        ("RECEIPT_LANGUAGE_UNSPECIFIED", none, "receipt_language"),
+        (en, "RECEIPT_LANGUAGE_EN", "receipt_second_language"),
+        (
+            en,
+            "RECEIPT_SECOND_LANGUAGE_UNSPECIFIED",
+            "receipt_second_language",
+        ),
+    ] {
+        let sent = body(&counter, language, second);
+        let (status, refused) = post_till_receipt(&router, &cookie, &bar, &version, &sent).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{sent}");
+        refused_as(&refused, field, "INVALID_ENUM_VALUE");
+    }
+
+    let unknown = DeviceId::new(Ulid::from_u128(0xDEAD)).to_string();
+    let (status, _) = post_till_receipt(
+        &router,
+        &cookie,
+        &unknown,
+        &version,
+        &body(&counter, en, none),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a device the tenant has not approved"
+    );
+    let (status, _) = post_till_receipt(
+        &router,
+        &cookie,
+        &pending,
+        &version,
+        &body(&counter, en, none),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a pending proposal is not a device yet"
+    );
+
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    for field in [
+        "receipt_printer_id",
+        "receipt_language",
+        "receipt_second_language",
+    ] {
+        assert!(
+            published[field].is_null(),
+            "nothing refused was written: {published}"
+        );
+    }
+}
+
+/// A till's receipt printer and languages are saved under the paper's conditional write, published
+/// as set, and cleared back to the store's (**ADR-0160** decision 4).
+///
+/// The default is asserted first, because a fleet upgrade rests on it: a terminal nobody set
+/// publishes none of the three fields, so every till prints as the store does.
+#[tokio::test]
+async fn a_tills_receipt_printer_and_languages_are_published_as_set_and_cleared_to_the_stores() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let fields = [
+        "receipt_printer_id",
+        "receipt_language",
+        "receipt_second_language",
+    ];
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "192.0.2.10:9100").await;
+    approve_on_network(&router, &cookie, &tenant_ulid, &counter, None).await;
+    let bar_printer = propose_printer(&router, &token, &store_ulid, "Bar", "192.0.2.14:9100").await;
+    approve_on_network(&router, &cookie, &tenant_ulid, &bar_printer, None).await;
+    let bar = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Bar till").await;
+
+    let unset = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        fields.iter().all(|field| unset[*field].is_null()),
+        "a terminal nobody set publishes none of the fields: {unset}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    let chosen = serde_json::json!({
+        "tenant_id": tenant_ulid.clone(),
+        "receipt_printer_id": bar_printer.clone(),
+        "receipt_language": "RECEIPT_LANGUAGE_EN",
+        "receipt_second_language": "RECEIPT_SECOND_LANGUAGE_NONE",
+    });
+    let unconditional = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{bar}/receipt"),
+            &chosen,
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional write");
+    assert_eq!(
+        unconditional.status(),
+        StatusCode::BAD_REQUEST,
+        "no If-Match is refused, not a silent last-write-wins"
+    );
+    let (status, _) = post_till_receipt(&router, &cookie, &bar, &version, &chosen).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = post_till_receipt(&router, &cookie, &bar, &version, &chosen).await;
+    assert_eq!(
+        status,
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert_eq!(
+        fields.map(|field| published[field].clone()),
+        [
+            serde_json::json!(bar_printer),
+            serde_json::json!("RECEIPT_LANGUAGE_EN"),
+            serde_json::json!("RECEIPT_SECOND_LANGUAGE_NONE"),
+        ],
+        "the store hears the bar till prints at the bar, in English alone: {published}"
+    );
+    let printer = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert!(
+        fields.iter().all(|field| printer[*field].is_null()),
+        "the store's receipt printer is unchanged: {printer}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    let cleared = serde_json::json!({ "tenant_id": tenant_ulid.clone() });
+    let (status, _) = post_till_receipt(&router, &cookie, &bar, &version, &cleared).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cleared = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        fields.iter().all(|field| cleared[*field].is_null()),
+        "fields left out are the store's again: {cleared}"
     );
 }
 
@@ -6998,7 +7600,15 @@ async fn a_signed_qr_order_is_accepted_and_awaits_staff_confirmation() {
     let secret = TableTokenSecret::new("qr-endpoint-secret");
     let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
     let (known, _price) = known_menu_item();
-    let router = qr_router(secret, FakeIntake::new(), EmptyConfigTrees, clock());
+    // A store that has turned QR ordering on, which is all it publishes (ADR-0160 decision 5).
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        order_store(),
+        &[(NOW_MS, serde_json::json!({ "qr_ordering_enabled": true }))],
+    );
+    let router = qr_router(secret, FakeIntake::new(), trees, clock());
     let response = router
         .oneshot(post_json("/v1/qr/orders", &qr_body(&token, "qr-1", known)))
         .await
@@ -7039,6 +7649,721 @@ async fn an_unsigned_qr_token_is_forbidden_and_never_reaches_intake() {
         response.status(),
         StatusCode::FORBIDDEN,
         "an untrusted table token is refused before intake"
+    );
+}
+
+// --- QR ordering is one switch (ADR-0160 decision 5) -------------------------------------------
+
+/// Gives `store` a tree whose history publishes each document on the Store layer in turn, at the
+/// instant beside it, as a run of console publishes would. Each version's id is minted at its
+/// instant, which is what a rollback reads to tell a version from before the switch.
+fn seed_versions(
+    trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store: StoreId,
+    versions: &[(i64, serde_json::Value)],
+) {
+    let mut tree = ConfigTree::new(store, CapabilityValidator);
+    for (n, (at_ms, document)) in (1_u128..).zip(versions) {
+        let at = u64::try_from(*at_ms).expect("an instant after the epoch");
+        tree.publish(
+            ConfigLevel::Store,
+            document.clone(),
+            ConfigVersionId::new(Ulid::from_parts(at, n)),
+            Vec::new(),
+        )
+        .expect("a document the validator accepts");
+    }
+    let version = trees.mint();
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .insert((tenant_id, store), Versioned::new(tree.state(), version));
+}
+
+/// The document a store runs: its newest version's, which its edge holds and the guest intake reads.
+fn running_document(
+    trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store: StoreId,
+) -> serde_json::Value {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant_id, store))
+        .and_then(|row| {
+            row.record
+                .history
+                .last()
+                .map(|version| version.effective.clone())
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// How many versions a store's tree holds.
+fn version_count(trees: &FakeConfigTrees, tenant_id: TenantId, store: StoreId) -> usize {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant_id, store))
+        .map_or(0, |row| row.record.history.len())
+}
+
+/// A guest's order is refused until the store's published configuration turns the switch on.
+/// `qr.enabled`, which the intake read before, decides nothing now: a store that publishes it alone
+/// has not turned QR ordering on.
+#[tokio::test]
+async fn a_guest_qr_order_is_refused_until_the_store_turns_its_switch_on() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
+    let (known, _price) = known_menu_item();
+
+    let refused = |router: axum::Router, reference: &'static str| {
+        let body = qr_body(&token, reference, known);
+        async move {
+            let response = router
+                .oneshot(post_json("/v1/qr/orders", &body))
+                .await
+                .expect("route the QR order");
+            (response.status(), json_body(response).await)
+        }
+    };
+
+    // Nothing published: the switch's default, which is off.
+    let (status, body) = refused(
+        qr_router(secret.clone(), FakeIntake::new(), EmptyConfigTrees, clock()),
+        "qr-none",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        body["error"]["message"], "QR ordering is not enabled for this store",
+        "{body}"
+    );
+
+    for (reference, document) in [
+        (
+            "qr-node-only",
+            serde_json::json!({ "qr": { "enabled": true } }),
+        ),
+        (
+            "qr-switched-off",
+            serde_json::json!({ "qr_ordering_enabled": false }),
+        ),
+    ] {
+        let trees = FakeConfigTrees::default();
+        seed_versions(
+            &trees,
+            tenant(),
+            order_store(),
+            &[(NOW_MS, document.clone())],
+        );
+        let (status, body) = refused(
+            qr_router(secret.clone(), FakeIntake::new(), trees, clock()),
+            reference,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{document}: {body}");
+    }
+}
+
+/// The capability and channel publishes over one tree, so a test can turn the switch and see what
+/// follows it.
+fn qr_switch_app(admin: FakeAdmin, trees: FakeConfigTrees) -> axum::Router {
+    config_capabilities_app(admin.clone(), trees.clone()).merge(http::config_channels_router(
+        trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// The Store layer of [`store_id`]'s tree, as the last publish left it.
+fn qr_store_layer(trees: &FakeConfigTrees) -> serde_json::Value {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .map_or(serde_json::Value::Null, |row| row.record.layers[2].clone())
+}
+
+/// Publishes one body to one route as the console would, and expects it accepted.
+async fn publish_ok(router: &axum::Router, cookie: &str, uri: &str, mut body: serde_json::Value) {
+    if let serde_json::Value::Object(map) = &mut body {
+        map.insert(
+            "tenant_id".to_owned(),
+            serde_json::json!(tenant().as_ulid().to_string()),
+        );
+        map.insert(
+            "store_id".to_owned(),
+            serde_json::json!(store_id().as_ulid().to_string()),
+        );
+    }
+    let response = router
+        .clone()
+        .oneshot(put_with_cookie(uri, &body, cookie))
+        .await
+        .expect("route the publish");
+    let status = response.status();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{uri}: {}",
+        json_body(response).await
+    );
+}
+
+/// Turning the switch publishes `qr.enabled` and the QR channel with it, so an edge on an earlier
+/// release, which reads only the channel list, and anything still reading `qr.enabled` agree.
+#[tokio::test]
+async fn turning_the_qr_switch_on_and_off_carries_qr_enabled_and_the_qr_channel_with_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+
+    // A list without the switch: the switch is off, so the list keeps QR out and `qr.enabled`,
+    // which would read as on while absent, is written off.
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_DINE_IN"] }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN"])
+    );
+    assert_eq!(layer["qr"], serde_json::json!({ "enabled": false }));
+    assert!(
+        layer.get("qr_ordering_enabled").is_none(),
+        "the switch was not written"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": true } }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(layer["qr_ordering_enabled"], true);
+    assert_eq!(layer["qr"]["enabled"], true);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_QR"]),
+        "the QR channel joins the store's own list"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": false } }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(layer["qr_ordering_enabled"], false);
+    assert_eq!(layer["qr"]["enabled"], false);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN"])
+    );
+}
+
+/// A `qr` publish without `enabled` takes the store's switch, and one with it — an older console's
+/// checkbox, or a cohort copy — sets the switch, with what follows it.
+#[tokio::test]
+async fn a_qr_publish_takes_the_switch_and_one_naming_enabled_sets_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let guardrails = serde_json::json!({
+        "staff_confirmation_required": false,
+        "per_table_limit": 5,
+        "rate_window_secs": 60,
+    });
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_TAKEAWAY"] }),
+    )
+    .await;
+    publish_ok(&router, &cookie, "/admin/config/qr", guardrails.clone()).await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["qr"],
+        serde_json::json!({
+            "staff_confirmation_required": false,
+            "per_table_limit": 5,
+            "rate_window_secs": 60,
+            "enabled": false,
+        }),
+        "the guardrails, and `enabled` following the switch, which is off"
+    );
+    assert!(layer.get("qr_ordering_enabled").is_none());
+
+    let mut named = guardrails;
+    if let serde_json::Value::Object(map) = &mut named {
+        map.insert("enabled".to_owned(), serde_json::json!(true));
+    }
+    publish_ok(&router, &cookie, "/admin/config/qr", named).await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["qr_ordering_enabled"], true,
+        "`enabled` is the switch"
+    );
+    assert_eq!(layer["qr"]["enabled"], true);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_TAKEAWAY", "SALES_CHANNEL_QR"])
+    );
+}
+
+/// A channel list the console publishes has its QR channel set by the switch, and keeps what a
+/// list means: an empty list takes no channel and stays empty, and a list of QR alone keeps it.
+#[tokio::test]
+async fn a_published_channel_list_follows_the_switch_and_keeps_what_a_list_means() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let list = |trees: &FakeConfigTrees| qr_store_layer(trees)["channels"]["enabled"].clone();
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": true } }),
+    )
+    .await;
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_DELIVERY"] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!(["SALES_CHANNEL_DELIVERY", "SALES_CHANNEL_QR"]),
+        "the switch is on, so the list carries QR"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": [] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!([]),
+        "an empty list takes no channel"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": false } }),
+    )
+    .await;
+    assert_eq!(list(&trees), serde_json::json!([]), "and stays empty");
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_QR"] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!(["SALES_CHANNEL_QR"]),
+        "taking QR out of a list of QR alone would empty it and refuse every order"
+    );
+}
+
+/// The preview of a switch publish shows what follows the switch, as the publish would write it.
+#[tokio::test]
+async fn a_preview_of_the_qr_switch_shows_what_follows_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        store_id(),
+        &[(
+            NOW_MS,
+            serde_json::json!({
+                "qr_ordering_enabled": true,
+                "channels": { "enabled": ["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_QR"] },
+            }),
+        )],
+    );
+    let router = people_preview_app(admin, FakePeople::default(), trees);
+    let cookie = admin_cookie(&router).await;
+    let previewed = router
+        .oneshot(post_with_cookie(
+            "/admin/config/preview",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "node": "capabilities",
+                "arguments": { "flags": { "qr_ordering_enabled": false } },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let preview = json_body(previewed).await;
+    assert_eq!(
+        preview["diff"],
+        serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+        }),
+        "{preview}"
+    );
+}
+
+/// A tenant with one store per case, in a registry the one-time setting reads.
+async fn registry_with(stores: &[(StoreId, bool)]) -> FakeRegistry {
+    let registry = FakeRegistry::default();
+    registry
+        .create_tenant(&TenantRecord {
+            tenant_id: tenant(),
+            name: "Pizza 4P's".to_owned(),
+            status: EntityStatus::Active,
+        })
+        .await
+        .expect("seed the tenant");
+    for (store, active) in stores {
+        seed_store(&registry, tenant(), *store, *active);
+    }
+    registry
+}
+
+fn numbered_store(n: u128) -> StoreId {
+    StoreId::new(Ulid::from_u128(0x0E5_0000 + n))
+}
+
+/// The stores of [`the_one_time_setting_gives_every_store_the_switch_it_ran_and_runs_once`], one
+/// per way a store could stand before the switch.
+const TOOK_QR: u128 = 1;
+const INTAKE_OFF: u128 = 2;
+const DEAD_FLAG: u128 = 3;
+const QR_BESIDE_DINE_IN: u128 = 4;
+const EMPTY_LIST: u128 = 5;
+const NEVER_PUBLISHED: u128 = 6;
+const ARCHIVED_WITHOUT_QR: u128 = 7;
+const LAYERS_ONLY: u128 = 8;
+
+/// A registry and trees holding those stores, each as a console from before the switch left it.
+async fn a_fleet_from_before_the_switch() -> (FakeRegistry, FakeConfigTrees) {
+    let registry = registry_with(&[
+        (numbered_store(TOOK_QR), true),
+        (numbered_store(INTAKE_OFF), true),
+        (numbered_store(DEAD_FLAG), true),
+        (numbered_store(QR_BESIDE_DINE_IN), true),
+        (numbered_store(EMPTY_LIST), true),
+        (numbered_store(NEVER_PUBLISHED), true),
+        (numbered_store(ARCHIVED_WITHOUT_QR), false),
+        (numbered_store(LAYERS_ONLY), true),
+    ])
+    .await;
+    let trees = FakeConfigTrees::default();
+    for (store, document) in [
+        // No flag, `qr.enabled` absent and no list: the guest intake and the edge both took it.
+        (TOOK_QR, serde_json::json!({ "tips_enabled": true })),
+        // The guest intake refused it; nothing else needs saying, as the switch is off unset.
+        (
+            INTAKE_OFF,
+            serde_json::json!({ "qr": { "enabled": false } }),
+        ),
+        // The console's capability form wrote `false` into the flag while nothing read it.
+        (
+            DEAD_FLAG,
+            serde_json::json!({ "qr_ordering_enabled": false, "qr": { "per_table_limit": 5 } }),
+        ),
+        // The guest page was off, and the list still named QR beside dine-in.
+        (
+            QR_BESIDE_DINE_IN,
+            serde_json::json!({
+                "qr": { "enabled": false },
+                "channels": { "enabled": ["SALES_CHANNEL_QR", "SALES_CHANNEL_DINE_IN"] },
+            }),
+        ),
+        // A dead flag left on beside an empty list: the intake took it and the edge refused it,
+        // as it will under the switch.
+        (
+            EMPTY_LIST,
+            serde_json::json!({ "qr_ordering_enabled": true, "channels": { "enabled": [] } }),
+        ),
+        // The edge refused it: the list leaves QR out.
+        (
+            ARCHIVED_WITHOUT_QR,
+            serde_json::json!({ "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] } }),
+        ),
+    ] {
+        seed_versions(
+            &trees,
+            tenant(),
+            numbered_store(store),
+            &[(NOW_MS - 60_000, document)],
+        );
+    }
+    // Layers and no history: nothing was ever published, so nothing reached the edge.
+    trees.seed_store_layer(
+        tenant(),
+        numbered_store(LAYERS_ONLY),
+        serde_json::json!({ "qr": { "enabled": true } }),
+    );
+    (registry, trees)
+}
+
+/// Every store's switch is set from what it did before the switch, by publishing a new version,
+/// and a store whose switch, `qr.enabled` and channel list agree is left alone. The run is
+/// recorded, and a second one publishes nothing.
+#[tokio::test]
+async fn the_one_time_setting_gives_every_store_the_switch_it_ran_and_runs_once() {
+    let (registry, trees) = a_fleet_from_before_the_switch().await;
+    let took_qr = numbered_store(TOOK_QR);
+    let dead_flag = numbered_store(DEAD_FLAG);
+    let qr_beside_dine_in = numbered_store(QR_BESIDE_DINE_IN);
+    let archived_without_qr = numbered_store(ARCHIVED_WITHOUT_QR);
+    let record = InMemoryDataMigrations::new();
+    let now = Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("an instant");
+
+    let first = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the run completes");
+    assert_eq!(first.since, now, "the change began when the run did");
+    assert_eq!(
+        first.report,
+        Some(qr_ordering::MigrationReport {
+            published: 4,
+            unchanged: 2,
+            unconfigured: 2,
+            failed: Vec::new(),
+        })
+    );
+    assert_eq!(
+        record.recorded_time(qr_ordering::MIGRATION).await,
+        Ok(Some(now)),
+        "the run is recorded"
+    );
+
+    assert_eq!(
+        running_document(&trees, tenant(), took_qr),
+        serde_json::json!({ "tips_enabled": true, "qr_ordering_enabled": true }),
+        "a store taking QR orders with no flag keeps taking them"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), dead_flag),
+        serde_json::json!({ "qr_ordering_enabled": true, "qr": { "per_table_limit": 5 } }),
+        "the flag nothing read is replaced by what the store did"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), qr_beside_dine_in),
+        serde_json::json!({
+            "qr": { "enabled": false },
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+            "qr_ordering_enabled": false,
+        }),
+        "off, and the list follows it"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), archived_without_qr),
+        serde_json::json!({
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+        }),
+        "an archived store is set too, and `qr.enabled` follows its switch"
+    );
+    for (store, versions) in [
+        (INTAKE_OFF, 1),
+        (EMPTY_LIST, 1),
+        (NEVER_PUBLISHED, 0),
+        (LAYERS_ONLY, 0),
+    ] {
+        assert_eq!(
+            version_count(&trees, tenant(), numbered_store(store)),
+            versions,
+            "left alone: store {store}"
+        );
+    }
+
+    let second = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the second run completes");
+    assert_eq!(second.since, now, "the first run's time is kept");
+    assert_eq!(second.report, None, "a recorded run does not run again");
+    assert_eq!(
+        version_count(&trees, tenant(), took_qr),
+        2,
+        "nothing more is published"
+    );
+}
+
+/// One store the cloud cannot publish to does not stop the others, and is reported by id. The run
+/// is still recorded: run again, it would read stores published to since as stores from before the
+/// switch.
+#[tokio::test]
+async fn a_store_the_one_time_setting_cannot_publish_to_is_reported_and_the_rest_are_set() {
+    let settable = numbered_store(11);
+    let unpublishable = numbered_store(12);
+    let registry = registry_with(&[(settable, true), (unpublishable, true)]).await;
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        settable,
+        &[(NOW_MS - 1_000, serde_json::json!({}))],
+    );
+    // A version the validator would refuse today, so any publish composed on it is refused.
+    let invalid = serde_json::json!({ "pay_first_enabled": true, "tables_enabled": true });
+    trees.rows.lock().expect("lock").insert(
+        (tenant(), unpublishable),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    invalid.clone(),
+                    serde_json::json!({}),
+                ],
+                history: vec![PublishedVersion {
+                    id: ConfigVersionId::new(Ulid::from_parts(1_000, 1)),
+                    effective: invalid,
+                    nodes: Vec::new(),
+                }],
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+    let record = InMemoryDataMigrations::new();
+
+    let run = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the run completes");
+    let report = run.report.expect("the run ran");
+    assert_eq!(report.published, 1);
+    assert_eq!(report.failed, vec![(tenant(), unpublishable)]);
+    assert_eq!(
+        running_document(&trees, tenant(), settable)["qr_ordering_enabled"],
+        true
+    );
+    assert!(
+        record
+            .recorded_time(qr_ordering::MIGRATION)
+            .await
+            .expect("the record reads")
+            .is_some(),
+        "recorded, and the failed store is left to an operator"
+    );
+}
+
+/// A rollback to a version from before the switch gives it the switch it ran, while a version
+/// published since is restored as it was, even one that never set the switch.
+#[tokio::test]
+async fn a_rollback_to_a_version_from_before_the_switch_gives_it_the_switch_it_ran() {
+    let since = Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("an instant");
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        store_id(),
+        &[
+            // Before the switch: the dead flag written off, and the store taking QR orders.
+            (
+                NOW_MS - 10_000,
+                serde_json::json!({ "qr_ordering_enabled": false, "qr": { "per_table_limit": 3 } }),
+            ),
+            // Since: a store that never set its switch, so QR ordering is off.
+            (NOW_MS + 10_000, serde_json::json!({ "tips_enabled": true })),
+            (
+                NOW_MS + 20_000,
+                serde_json::json!({ "tips_enabled": false }),
+            ),
+        ],
+    );
+    let ids: Vec<String> = trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .map(|row| {
+            row.record
+                .history
+                .iter()
+                .map(|version| version.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let router = http::router(
+        app_full(
+            Cloud::new(FakeStore::new()),
+            FakeRollups::default(),
+            FakeKeys::default(),
+            provisioned_admin(),
+            trees.clone(),
+        )
+        .with_qr_switch_since(since),
+    );
+    let cookie = admin_cookie(&router).await;
+    let base = format!("/admin/stores/{}/config", store_id().as_ulid());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let roll_back_to = |version: String, current: String| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let uri = format!("{base}/rollback?tenant_id={tenant_ulid}");
+        async move {
+            let response = router
+                .oneshot(post_config_with_etag(
+                    &uri,
+                    &serde_json::json!({ "version_id": version }),
+                    &cookie,
+                    &current,
+                ))
+                .await
+                .expect("route the rollback");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await["config_version_id"]
+                .as_str()
+                .expect("a new version id")
+                .to_owned()
+        }
+    };
+
+    let restored = roll_back_to(ids[0].clone(), ids[2].clone()).await;
+    assert_eq!(
+        running_document(&trees, tenant(), store_id()),
+        serde_json::json!({ "qr_ordering_enabled": true, "qr": { "per_table_limit": 3 } }),
+        "the version from before the switch comes back with the switch it ran"
+    );
+
+    roll_back_to(ids[1].clone(), restored).await;
+    assert_eq!(
+        running_document(&trees, tenant(), store_id()),
+        serde_json::json!({ "tips_enabled": true }),
+        "a version published since is restored as it was, QR ordering off"
     );
 }
 
@@ -7834,6 +9159,17 @@ fn registry_app_with_audit(
     registry: FakeRegistry,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
+    registry_app_over_people(admin, registry, FakePeople::default(), audit)
+}
+
+/// As [`registry_app_with_audit`], over a people store the test keeps a handle on, so it can read
+/// the roles a new tenant starts with (ADR-0158).
+fn registry_app_over_people(
+    admin: FakeAdmin,
+    registry: FakeRegistry,
+    people: FakePeople,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -7842,7 +9178,13 @@ fn registry_app_with_audit(
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::registry_router(registry, admin, clock(), audit))
+    http::router(app).merge(http::registry_router(
+        registry,
+        admin,
+        clock(),
+        audit,
+        Arc::new(RoleSeeder::new(people)),
+    ))
 }
 
 // --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
@@ -9484,7 +10826,11 @@ async fn registry_writes_record_to_the_audit_trail() {
         .to_owned();
 
     let recorded = audit.list(None, 10).await.expect("list audit entries");
-    assert_eq!(recorded.len(), 2, "each successful write records one entry");
+    assert_eq!(
+        recorded.len(),
+        3,
+        "each successful write records one entry, and a new tenant's starting roles one more"
+    );
     let store_entry = recorded
         .iter()
         .find(|entry| entry.action == "store.create")
@@ -9511,6 +10857,182 @@ async fn registry_writes_record_to_the_audit_trail() {
     assert!(
         recorded.iter().any(|entry| entry.action == "tenant.create"),
         "the tenant create was recorded too"
+    );
+}
+
+/// Creates a tenant through the route, the way the console does, and returns its id.
+async fn create_tenant(router: &axum::Router, cookie: &str, body: &serde_json::Value) -> TenantId {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/tenants", body, cookie))
+        .await
+        .expect("route create tenant");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .expect("a ULID")
+}
+
+/// The roles a people store holds for a tenant.
+async fn roles_of(people: &FakePeople, tenant: TenantId) -> Vec<Versioned<RoleTemplate>> {
+    RoleTemplateStore::list(people, tenant)
+        .await
+        .expect("list roles")
+}
+
+/// A tenant the console creates starts with six roles, one for each of `pos-core`'s built-in roles,
+/// named in the language it was created in and granting what the catalogue's defaults say
+/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)): a default
+/// role holds a permission directly, and every other role holds a PIN-flagged one with approval.
+/// The seeding is audited by ids and counts, never a name.
+#[tokio::test]
+async fn a_new_tenant_starts_with_six_roles_granting_the_catalogue_defaults() {
+    let audit = FakeAudit::default();
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let tenant_id = create_tenant(&router, &cookie, &body).await;
+
+    let roles = roles_of(&people, tenant_id).await;
+    assert_eq!(roles.len(), Role::ALL.len(), "one role per built-in role");
+    for role in Role::ALL {
+        let name = starting_role_name(*role, Some("vi"));
+        let seeded = roles
+            .iter()
+            .find(|seeded| seeded.record.name == name)
+            .unwrap_or_else(|| panic!("{role:?} is seeded as {name}"));
+        let (directly, with_approval) = starting_role_grants(*role);
+        assert_eq!(seeded.record.permissions, directly, "{role:?} directly");
+        assert_eq!(
+            seeded.record.permissions_with_approval, with_approval,
+            "{role:?} with approval"
+        );
+        assert_eq!(seeded.record.discount_ceiling_minor, None);
+        assert_eq!(seeded.record.status, EntityStatus::Active);
+    }
+    let cook = starting_role_name(Role::Cook, Some("vi"));
+    let cook = roles
+        .iter()
+        .find(|seeded| seeded.record.name == cook)
+        .expect("the cook");
+    assert!(
+        cook.record
+            .permissions_with_approval
+            .contains(&"billing.bill.void".to_owned()),
+        "a role the catalogue does not default to a PIN-flagged act holds it with approval"
+    );
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let seed = recorded
+        .iter()
+        .find(|entry| entry.action == "role.seed")
+        .expect("the seeding is audited");
+    let after = seed.after.as_ref().expect("an after");
+    assert_eq!(after["created"], 6);
+    assert_eq!(after["kept"], 0);
+    assert_eq!(after["role_template_ids"].as_array().map(Vec::len), Some(6));
+    assert_eq!(seed.entity_id, tenant_id.to_string());
+    let trail = serde_json::to_string(after).expect("serialise");
+    assert!(
+        !trail.contains(&cook.record.name),
+        "ids and counts, never a name: {trail}"
+    );
+}
+
+/// Seeding a tenant again writes nothing: each starting role's id is derived from the tenant's,
+/// so the six are found, and a role the owner has since renamed keeps its new name (ADR-0158).
+#[tokio::test]
+async fn seeding_a_tenant_again_writes_nothing_and_keeps_a_rename() {
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let tenant_id = create_tenant(&router, &cookie, &body).await;
+
+    let cashier_name = starting_role_name(Role::Cashier, Some("vi"));
+    let roles = roles_of(&people, tenant_id).await;
+    let cashier = roles
+        .iter()
+        .find(|seeded| seeded.record.name == cashier_name)
+        .expect("the cashier");
+    let rename = RoleTemplateUpdate {
+        role_template_id: cashier.record.role_template_id,
+        tenant_id,
+        name: "Front of house".to_owned(),
+        permissions: cashier.record.permissions.clone(),
+        permissions_with_approval: cashier.record.permissions_with_approval.clone(),
+        discount_ceiling_minor: None,
+        status: EntityStatus::Active,
+    };
+    RoleTemplateStore::update(&people, &rename, &cashier.etag)
+        .await
+        .expect("rename");
+
+    let again = seed_starting_roles(&people, tenant_id, Some("vi"))
+        .await
+        .expect("seed again");
+    assert!(again.created.is_empty(), "nothing is written twice");
+    assert_eq!(again.kept.len(), 6);
+    let after = roles_of(&people, tenant_id).await;
+    assert_eq!(after.len(), 6);
+    assert!(
+        after
+            .iter()
+            .any(|seeded| seeded.record.name == "Front of house"),
+        "the rename stands"
+    );
+}
+
+/// Without a language, or with one the console's packs do not carry, the starting roles are named
+/// in English; and a tenant created later leaves an earlier one's roles alone (ADR-0158).
+#[tokio::test]
+async fn a_tenant_created_without_a_language_names_its_roles_in_english() {
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let first = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let first = create_tenant(&router, &cookie, &first).await;
+
+    for body in [
+        serde_json::json!({ "name": "Pizza 4P's Japan" }),
+        serde_json::json!({ "name": "Pizza 4P's India", "language": "hi" }),
+    ] {
+        let tenant_id = create_tenant(&router, &cookie, &body).await;
+        let names: Vec<String> = roles_of(&people, tenant_id)
+            .await
+            .into_iter()
+            .map(|seeded| seeded.record.name)
+            .collect();
+        for role in Role::ALL {
+            assert!(
+                names.contains(&starting_role_name(*role, None)),
+                "{body}: {names:?}"
+            );
+        }
+    }
+    assert_eq!(
+        roles_of(&people, first).await.len(),
+        6,
+        "the first tenant is untouched by the others"
     );
 }
 
@@ -17106,6 +18628,10 @@ impl StationStore for FakeFloor {
                 name: station.name.clone(),
                 backup_station_id: station.backup_station_id,
                 is_default: station.is_default,
+                late_after_seconds: station.late_after_seconds,
+                ticket_language: station
+                    .ticket_language
+                    .map(|language| language.as_wire().to_owned()),
                 status: EntityStatus::Active,
             },
             version.clone(),
@@ -17167,6 +18693,10 @@ impl StationStore for FakeFloor {
         row.record.name.clone_from(&update.name);
         row.record.backup_station_id = update.backup_station_id;
         row.record.is_default = update.is_default;
+        row.record.late_after_seconds = update.late_after_seconds;
+        row.record.ticket_language = update
+            .ticket_language
+            .map(|language| language.as_wire().to_owned());
         row.record.status = update.status;
         row.etag = version.clone();
         Ok(UpdateOutcome::Updated(version))
@@ -17217,6 +18747,11 @@ impl RoutingRuleStore for FakeFloor {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one store's stations and routing rules through create, update, list and remove, \
+              against the same fake"
+)]
 async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     let store = FakeFloor::default();
     let mine = tenant();
@@ -17233,6 +18768,8 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
             name: "Oven".to_owned(),
             backup_station_id: Some(bar),
             is_default: true,
+            late_after_seconds: Some(240),
+            ticket_language: None,
         },
     )
     .await
@@ -17250,6 +18787,8 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
                 name: "Pizza oven".to_owned(),
                 backup_station_id: None,
                 is_default: false,
+                late_after_seconds: None,
+                ticket_language: None,
                 status: EntityStatus::Active,
             },
             &stations[0].etag,
@@ -17265,6 +18804,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     assert_eq!(oven_view.record.name, "Pizza oven");
     assert_eq!(oven_view.record.backup_station_id, None);
     assert!(!oven_view.record.is_default);
+    assert_eq!(oven_view.record.late_after_seconds, None);
 
     // Two routing rules — one by item, one by course — then remove one (returns false the 2nd time).
     let item_rule = RoutingRuleId::new(Ulid::from_u128(50));
@@ -17360,6 +18900,7 @@ impl RoleTemplateStore for FakeRoleTemplates {
                 tenant_id: template.tenant_id,
                 name: template.name.clone(),
                 permissions: template.permissions.clone(),
+                permissions_with_approval: template.permissions_with_approval.clone(),
                 discount_ceiling_minor: template.discount_ceiling_minor,
                 status: EntityStatus::Active,
             },
@@ -17418,6 +18959,9 @@ impl RoleTemplateStore for FakeRoleTemplates {
         }
         row.record.name.clone_from(&template.name);
         row.record.permissions.clone_from(&template.permissions);
+        row.record
+            .permissions_with_approval
+            .clone_from(&template.permissions_with_approval);
         row.record.discount_ceiling_minor = template.discount_ceiling_minor;
         row.record.status = template.status;
         row.etag = version.clone();
@@ -17427,28 +18971,48 @@ impl RoleTemplateStore for FakeRoleTemplates {
 
 /// The assignment store as an in-memory list — the same seam the binary implements. An assignment is
 /// removed (offboarding), not archived.
+///
+/// A group assignment reaches the stores `groups` holds when it is read, as the adapter's join on
+/// `store_group_members` does, so a test that hands the same [`FakeStoreGroups`] to the group routes
+/// ([`FakePeople::over`]) sees a membership change move who works where.
 #[derive(Clone, Default)]
 struct FakeAssignments {
     rows: Arc<Mutex<Vec<Assignment>>>,
+    groups: FakeStoreGroups,
+}
+
+impl FakeAssignments {
+    /// The rows of `tenant` that `keep` selects, in the order they were written.
+    fn select(&self, tenant: TenantId, keep: impl Fn(&Assignment) -> bool) -> Vec<Assignment> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && keep(row))
+            .cloned()
+            .collect()
+    }
 }
 
 impl AssignmentStore for FakeAssignments {
     async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
         let mut rows = self.rows.lock().expect("lock");
+        // One per person and store, per person and group, and tenant-wide: the adapter's unique
+        // indexes, one per scope.
         if rows.iter().any(|row| {
             row.tenant_id == assignment.tenant_id
                 && row.employee_id == assignment.employee_id
-                && row.store_id == assignment.store_id
+                && row.scope == assignment.scope
         }) {
-            return Err(AssignmentStoreError::new(
-                "the employee is already assigned to that store",
+            return Err(AssignmentStoreError::AlreadyAssigned(
+                "the employee is already assigned there".to_owned(),
             ));
         }
         rows.push(Assignment {
             assignment_id: assignment.assignment_id,
             tenant_id: assignment.tenant_id,
             employee_id: assignment.employee_id,
-            store_id: assignment.store_id,
+            scope: assignment.scope,
             role_template_id: assignment.role_template_id,
             // Stored unresolved: this fake holds only assignments, so it has no roster to join
             // against — exactly the state the adapter's `LEFT JOIN` reports when no employee row
@@ -17464,14 +19028,37 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
+        let member_of: Vec<StoreGroupId> = self
+            .groups
+            .members
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant && row.store_id == store_id)
-            .cloned()
-            .collect())
+            .filter(|((owner, _), stores)| *owner == tenant && stores.contains(&store_id))
+            .map(|((_, group_id), _)| *group_id)
+            .collect();
+        Ok(self.select(tenant, |row| match row.scope {
+            AssignmentScope::Store(at) => at == store_id,
+            AssignmentScope::StoreGroup(group_id) => member_of.contains(&group_id),
+            AssignmentScope::Tenant => true,
+        }))
+    }
+
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self.select(tenant, |row| {
+            row.scope == AssignmentScope::StoreGroup(store_group_id)
+        }))
+    }
+
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self.select(tenant, |row| row.scope == AssignmentScope::Tenant))
     }
 
     async fn list_for_employee(
@@ -17479,14 +19066,7 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         employee_id: EmployeeId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|row| row.tenant_id == tenant && row.employee_id == employee_id)
-            .cloned()
-            .collect())
+        Ok(self.select(tenant, |row| row.employee_id == employee_id))
     }
 
     async fn list_for_role(
@@ -17494,14 +19074,7 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         role_template_id: RoleTemplateId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
-            .cloned()
-            .collect())
+        Ok(self.select(tenant, |row| row.role_template_id == role_template_id))
     }
 
     async fn get(
@@ -17510,12 +19083,9 @@ impl AssignmentStore for FakeAssignments {
         assignment_id: AssignmentId,
     ) -> Result<Option<Assignment>, AssignmentStoreError> {
         Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .find(|row| row.tenant_id == tenant && row.assignment_id == assignment_id)
-            .cloned())
+            .select(tenant, |row| row.assignment_id == assignment_id)
+            .into_iter()
+            .next())
     }
 
     async fn remove(
@@ -17559,6 +19129,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 "billing.discount.apply".to_owned(),
                 "sales.item.open".to_owned(),
             ],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         })
         .await
@@ -17570,6 +19141,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
             tenant_id: other,
             name: "Cashier".to_owned(),
             permissions: vec![],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         })
         .await
@@ -17581,6 +19153,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 tenant_id: mine,
                 name: "Cashier".to_owned(),
                 permissions: vec![],
+                permissions_with_approval: Vec::new(),
                 discount_ceiling_minor: None,
             })
             .await
@@ -17601,6 +19174,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                     tenant_id: mine,
                     name: "Cashier".to_owned(),
                     permissions: vec!["sales.item.open".to_owned()],
+                    permissions_with_approval: Vec::new(),
                     discount_ceiling_minor: None,
                     status: EntityStatus::Archived,
                 },
@@ -17619,83 +19193,17 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
     assert_eq!(view.record.status, EntityStatus::Archived);
 }
 
+/// The in-memory assignment store holds the seam's contract, the one `PostgresPeople` is held to in
+/// `tests/assignment_store_postgres.rs`: every scope, reach through a group's membership as it
+/// changes, one assignment per person and place, and nothing across a tenant.
 #[tokio::test]
-async fn assignment_store_binds_person_to_store_and_removes_scoped_by_tenant() {
-    let store = FakeAssignments::default();
-    let mine = tenant();
-    let other = TenantId::new(Ulid::from_u128(0xB0B));
-    let where_they_work = store_id();
-    let alice = EmployeeId::new(Ulid::from_u128(1));
-    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
-    let assignment = AssignmentId::new(Ulid::from_u128(20));
-
-    store
-        .assign(&NewAssignment {
-            assignment_id: assignment,
-            tenant_id: mine,
-            employee_id: alice,
-            store_id: where_they_work,
-            role_template_id: cashier,
-        })
-        .await
-        .expect("assign alice");
-    // The same person at the same store twice is refused.
-    assert!(
-        store
-            .assign(&NewAssignment {
-                assignment_id: AssignmentId::new(Ulid::from_u128(21)),
-                tenant_id: mine,
-                employee_id: alice,
-                store_id: where_they_work,
-                role_template_id: cashier,
-            })
-            .await
-            .is_err(),
-        "a person is assigned to a store at most once"
-    );
-
-    // Readable both ways, and tenant-scoped.
-    assert_eq!(
-        store
-            .list_for_store(mine, where_they_work)
-            .await
-            .expect("by store")
-            .len(),
-        1
-    );
-    assert_eq!(
-        store
-            .list_for_employee(mine, alice)
-            .await
-            .expect("by employee")
-            .len(),
-        1
-    );
-    assert!(
-        store
-            .list_for_store(other, where_they_work)
-            .await
-            .expect("other tenant")
-            .is_empty(),
-        "another tenant sees none of these assignments"
-    );
-
-    // Removing across a tenant boundary matches nothing; removing within the tenant offboards.
-    assert!(
-        !store
-            .remove(other, assignment)
-            .await
-            .expect("remove across tenant")
-    );
-    assert!(store.remove(mine, assignment).await.expect("remove"));
-    assert!(
-        store
-            .list_for_employee(mine, alice)
-            .await
-            .expect("after remove")
-            .is_empty(),
-        "the assignment is gone"
-    );
+async fn the_in_memory_assignment_store_holds_the_contract() {
+    let groups = FakeStoreGroups::default();
+    let assignments = FakeAssignments {
+        groups: groups.clone(),
+        ..FakeAssignments::default()
+    };
+    assignment_contract::holds(&assignments, &groups, 0).await;
 }
 
 /// The three people seams as one type — what a router that carries a single `people` state needs (the
@@ -17780,6 +19288,23 @@ impl RoleTemplateStore for FakePeople {
 }
 
 impl FakePeople {
+    /// A roster whose group assignments reach the stores `groups` holds — the store-group fake the
+    /// same test's group routes write, so a membership change there moves who works where.
+    fn over(groups: &FakeStoreGroups) -> Self {
+        Self {
+            assignments: FakeAssignments {
+                groups: groups.clone(),
+                ..FakeAssignments::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The store groups this roster's group assignments reach through.
+    fn groups(&self) -> FakeStoreGroups {
+        self.assignments.groups.clone()
+    }
+
     /// Fills in each assignment's `employee_name`/`employee_code` from the roster this fake also
     /// holds — the in-memory stand-in for the adapter's `LEFT JOIN`.
     ///
@@ -17823,6 +19348,24 @@ impl AssignmentStore for FakePeople {
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
         let rows = self.assignments.list_for_store(tenant, store_id).await?;
+        self.resolved(tenant, rows).await
+    }
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .assignments
+            .list_for_group(tenant, store_group_id)
+            .await?;
+        self.resolved(tenant, rows).await
+    }
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self.assignments.list_tenant_wide(tenant).await?;
         self.resolved(tenant, rows).await
     }
     async fn list_for_employee(
@@ -17891,6 +19434,30 @@ fn people_app(
     config: FakeConfigTrees,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
+    people_app_with_settings(
+        admin,
+        people,
+        registry,
+        config,
+        FakeSettings::default(),
+        audit,
+    )
+}
+
+/// [`people_app`] over the tenant settings a test chooses, which the PIN route reads for the
+/// fewest digits a PIN may have
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+fn people_app_with_settings<S>(
+    admin: FakeAdmin,
+    people: FakePeople,
+    registry: FakeRegistry,
+    config: FakeConfigTrees,
+    settings: S,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router
+where
+    S: pos_cloud::settings::SettingsStore + Send + Sync + 'static,
+{
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -17903,6 +19470,8 @@ fn people_app(
         .merge(http::people_router(
             people.clone(),
             registry,
+            people.groups(),
+            settings,
             config.clone(),
             admin.clone(),
             clock(),
@@ -17945,6 +19514,7 @@ async fn seed_a_cashier(people: &FakePeople, store: StoreId) -> (EmployeeId, Rol
             tenant_id: mine,
             name: "Cashier".to_owned(),
             permissions: vec!["billing.discount.apply".to_owned()],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -17956,7 +19526,7 @@ async fn seed_a_cashier(people: &FakePeople, store: StoreId) -> (EmployeeId, Rol
             assignment_id: AssignmentId::new(Ulid::from_u128(1)),
             tenant_id: mine,
             employee_id: alice,
-            store_id: store,
+            scope: AssignmentScope::Store(store),
             role_template_id: cashier,
         },
     )
@@ -18440,6 +20010,371 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
     assert!(
         doc["stations"]["default_station_id"].as_str().is_some(),
         "the default station rode into the node"
+    );
+}
+
+/// Each kitchen station says when its tickets are late
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2): a threshold outside a minute to an hour is refused naming the field, a write holds to
+/// the version it read and is audited with the threshold, and the publish carries a station's
+/// threshold and leaves it off a station that sets none, so the edge reads its ten minutes there.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one station's threshold from the refused writes through the guarded update to the \
+              published node, against the same data"
+)]
+async fn a_stations_late_threshold_is_checked_guarded_audited_and_published() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let station = |name: &str, late: serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "name": name,
+            "late_after_seconds": late,
+        })
+    };
+
+    for refused in [
+        serde_json::json!(59),
+        serde_json::json!(3601),
+        serde_json::json!(-60),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/kitchen/stations",
+                &station("Oven", refused.clone()),
+                &cookie,
+            ))
+            .await
+            .expect("route the create");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await;
+        assert!(
+            body.to_string().contains("late_after_seconds"),
+            "the refusal names the field: {body}"
+        );
+    }
+
+    let oven = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &station("Oven", serde_json::json!(240)),
+            &cookie,
+        ))
+        .await
+        .expect("create the oven");
+    assert_eq!(oven.status(), StatusCode::CREATED);
+    let oven_etag = etag_of(&oven);
+    let oven_id = json_body(oven).await["id"].as_str().expect("id").to_owned();
+    let bar = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Bar" }),
+            &cookie,
+        ))
+        .await
+        .expect("create the bar");
+    assert_eq!(bar.status(), StatusCode::CREATED);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/kitchen/stations/{oven_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the oven");
+    assert_eq!(json_body(read).await["late_after_seconds"], 240);
+
+    // An update out of bounds is refused before anything is compared or written.
+    let update = |late: serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Oven",
+            "late_after_seconds": late,
+            "status": "active",
+        })
+    };
+    let out_of_bounds = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(3601)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(out_of_bounds.status(), StatusCode::BAD_REQUEST);
+
+    let saved = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(300)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+
+    // A console still holding the version from before that save is refused, and the save stands.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(900)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the stale update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let updated = recorded
+        .iter()
+        .find(|entry| entry.action == "kitchen.station.update")
+        .expect("the save is audited");
+    assert_eq!(
+        updated
+            .after
+            .as_ref()
+            .map(|after| after["late_after_seconds"].clone()),
+        Some(serde_json::json!(300))
+    );
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish the floor");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the effective config");
+    let doc = json_body(effective).await;
+    let stations = doc["stations"]["stations"]
+        .as_array()
+        .expect("the stations node");
+    let named = |name: &str| {
+        stations
+            .iter()
+            .find(|station| station["name"] == name)
+            .cloned()
+            .expect("the station is published")
+    };
+    assert_eq!(named("Oven")["late_after_seconds"], 300);
+    assert!(
+        named("Bar").get("late_after_seconds").is_none(),
+        "a station that sets no threshold publishes none"
+    );
+}
+
+/// Each kitchen station says which language its tickets print in
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2), from the receipt language's own tokens: one this release does not know, or
+/// `RECEIPT_LANGUAGE_UNSPECIFIED`, is refused `400 INVALID_ENUM_VALUE` naming the field; a write holds
+/// to the version it read and is audited with the language; and the publish carries a station's
+/// language and leaves it off a station that sets none, so the edge prints there as it always did.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one station's language from the refused writes through the guarded update to the \
+              published node, against the same data"
+)]
+async fn a_stations_ticket_language_is_checked_guarded_audited_and_published() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let station = |name: &str, language: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "name": name,
+            "ticket_language": language,
+        })
+    };
+
+    for refused in ["RECEIPT_LANGUAGE_JA", "RECEIPT_LANGUAGE_UNSPECIFIED", "EN"] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/kitchen/stations",
+                &station("Oven", refused),
+                &cookie,
+            ))
+            .await
+            .expect("route the create");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await.to_string();
+        assert!(
+            body.contains("ticket_language") && body.contains("INVALID_ENUM_VALUE"),
+            "the refusal names the field: {body}"
+        );
+    }
+
+    let oven = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &station("Oven", "RECEIPT_LANGUAGE_EN"),
+            &cookie,
+        ))
+        .await
+        .expect("create the oven");
+    assert_eq!(oven.status(), StatusCode::CREATED);
+    let oven_etag = etag_of(&oven);
+    let oven_id = json_body(oven).await["id"].as_str().expect("id").to_owned();
+    let bar = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Bar" }),
+            &cookie,
+        ))
+        .await
+        .expect("create the bar");
+    assert_eq!(bar.status(), StatusCode::CREATED);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/kitchen/stations/{oven_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the oven");
+    assert_eq!(
+        json_body(read).await["ticket_language"],
+        "RECEIPT_LANGUAGE_EN"
+    );
+
+    let update = |language: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Oven",
+            "ticket_language": language,
+            "status": "active",
+        })
+    };
+    let unknown = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_JA"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+
+    let saved = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_VI"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+
+    // A console still holding the version from before that save is refused, and the save stands.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_COUNTRY"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the stale update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let updated = recorded
+        .iter()
+        .find(|entry| entry.action == "kitchen.station.update")
+        .expect("the save is audited");
+    assert_eq!(
+        updated
+            .after
+            .as_ref()
+            .map(|after| after["ticket_language"].clone()),
+        Some(serde_json::json!("RECEIPT_LANGUAGE_VI"))
+    );
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish the floor");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the effective config");
+    let doc = json_body(effective).await;
+    let stations = doc["stations"]["stations"]
+        .as_array()
+        .expect("the stations node");
+    let named = |name: &str| {
+        stations
+            .iter()
+            .find(|station| station["name"] == name)
+            .cloned()
+            .expect("the station is published")
+    };
+    assert_eq!(named("Oven")["ticket_language"], "RECEIPT_LANGUAGE_VI");
+    assert!(
+        named("Bar").get("ticket_language").is_none(),
+        "a station that sets no language publishes none"
     );
 }
 
@@ -19680,6 +21615,7 @@ async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, Role
             tenant_id: tenant(),
             name: "Old".to_owned(),
             permissions: Vec::new(),
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -19690,6 +21626,7 @@ async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, Role
         tenant_id: tenant(),
         name: "Old".to_owned(),
         permissions: Vec::new(),
+        permissions_with_approval: Vec::new(),
         discount_ceiling_minor: None,
         status: EntityStatus::Archived,
     };
@@ -19832,6 +21769,7 @@ async fn removing_an_assignment_takes_the_person_off_the_stores_node_at_once() {
         Some(serde_json::json!({
             "id": grant.to_string(),
             "employee_id": alice.to_string(),
+            "scope_kind": "ASSIGNMENT_SCOPE_STORE",
             "store_id": store_id().to_string(),
             "role_template_id": cashier.to_string(),
         })),
@@ -19874,7 +21812,7 @@ async fn archiving_a_person_tells_every_store_they_work_at_and_a_rename_tells_no
             assignment_id: AssignmentId::new(Ulid::from_u128(2)),
             tenant_id: tenant(),
             employee_id: alice,
-            store_id: second,
+            scope: AssignmentScope::Store(second),
             role_template_id: cashier,
         },
     )
@@ -19975,6 +21913,7 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
             tenant_id: tenant(),
             name: "Cook".to_owned(),
             permissions: vec!["sales.ticket.bump".to_owned()],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -19986,7 +21925,7 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
             assignment_id: AssignmentId::new(Ulid::from_u128(2)),
             tenant_id: tenant(),
             employee_id: alice,
-            store_id: elsewhere,
+            scope: AssignmentScope::Store(elsewhere),
             role_template_id: cook,
         },
     )
@@ -20057,13 +21996,11 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
     );
 }
 
-/// A person with several roles at one store holds the union of their permissions and the highest of
-/// their ceilings (ADR-0158 decision 3). The schema keeps one assignment per person and store
-/// today, so the second grant is written beside the first directly, as an assignment that reaches a
-/// store group or every store will one day write it.
+/// A person with a store's role and a tenant-wide one holds, at that store, the union of their
+/// permissions and the highest of their ceilings (ADR-0158 decision 3). The tenant-wide grant is
+/// made through the route, which publishes it to the store at once.
 #[tokio::test]
-async fn a_person_with_two_roles_at_a_store_holds_both() {
-    let admin = provisioned_admin();
+async fn a_person_with_a_stores_role_and_a_tenant_wide_role_holds_both_there() {
     let people = FakePeople::default();
     let config = FakeConfigTrees::default();
     let (alice, _cashier) = seed_a_cashier(&people, store_id()).await;
@@ -20078,34 +22015,27 @@ async fn a_person_with_two_roles_at_a_store_holds_both() {
                 "cash.shift.open".to_owned(),
                 "billing.discount.apply".to_owned(),
             ],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: Some(50_000),
         },
     )
     .await
     .expect("create role");
-    people
-        .assignments
-        .rows
-        .lock()
-        .expect("lock")
-        .push(Assignment {
-            assignment_id: AssignmentId::new(Ulid::from_u128(2)),
-            tenant_id: tenant(),
-            employee_id: alice,
-            store_id: store_id(),
-            role_template_id: lead,
-            employee_name: None,
-            employee_code: None,
-        });
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
     let router = people_app(
-        admin,
+        provisioned_admin(),
         people,
-        FakeRegistry::default(),
+        registry,
         config.clone(),
         Arc::new(NoopAuditRecorder),
     );
     let owner = admin_cookie(&router).await;
-    publish_people(&router, &owner, store_id()).await;
+    let everywhere = [("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned())];
+    let created =
+        post_assignment(&router, &owner, &assignment_body(alice, lead, &everywhere)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(publish_report(created).await, vec![applied(store_id())]);
 
     let staff = staff_at(&config, store_id()).await;
     assert_eq!(staff.len(), 1, "one person, listed once");
@@ -20118,6 +22048,282 @@ async fn a_person_with_two_roles_at_a_store_holds_both() {
         staff[0]["discount_ceiling_minor"], 50_000,
         "the higher ceiling"
     );
+}
+
+/// A role grants each permission directly or with approval
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 4), and a create says which in two lists. One that leaves `permissions_with_approval`
+/// out grants every permission it lists directly, as before the list existed, and reads back as
+/// it was sent, PIN-flagged ids included: only a direct holder approves, so a script or an old
+/// console tab must not create roles whose holders can no longer approve. The console's role
+/// editor, which always sends both lists, is where a PIN-flagged permission starts with approval.
+/// The audit entry records both lists apart.
+#[tokio::test]
+async fn a_new_role_grants_with_approval_only_what_it_says() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        admin,
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    for (body, directly, with_approval) in [
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Shift lead",
+                "permissions": ["billing.bill.void", "sales.line.add", "cash.drawer.open_no_sale"],
+            }),
+            serde_json::json!([
+                "billing.bill.void",
+                "sales.line.add",
+                "cash.drawer.open_no_sale"
+            ]),
+            serde_json::json!([]),
+        ),
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Manager",
+                "permissions": ["billing.bill.void", "sales.line.add"],
+                "permissions_with_approval": [],
+            }),
+            serde_json::json!(["billing.bill.void", "sales.line.add"]),
+            serde_json::json!([]),
+        ),
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Server",
+                "permissions": ["sales.line.add"],
+                "permissions_with_approval": ["sales.line.void_fired"],
+            }),
+            serde_json::json!(["sales.line.add"]),
+            serde_json::json!(["sales.line.void_fired"]),
+        ),
+    ] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/roles", &body, &owner))
+            .await
+            .expect("route the create");
+        assert_eq!(created.status(), StatusCode::CREATED, "{body}");
+        let id = json_body(created).await["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let read = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/roles/{id}?tenant_id={tenant_ulid}"),
+                &owner,
+            ))
+            .await
+            .expect("route the read");
+        let role = json_body(read).await;
+        assert_eq!(role["permissions"], directly, "granted directly: {body}");
+        assert_eq!(
+            role["permissions_with_approval"], with_approval,
+            "granted with approval: {body}"
+        );
+    }
+
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let after = recorded
+        .iter()
+        .filter(|entry| entry.action == "role.create")
+        .filter_map(|entry| entry.after.as_ref())
+        .find(|after| after["name"] == "Server")
+        .expect("the create is audited");
+    assert_eq!(after["permissions"], serde_json::json!(["sales.line.add"]));
+    assert_eq!(
+        after["permissions_with_approval"],
+        serde_json::json!(["sales.line.void_fired"])
+    );
+}
+
+/// What a role grants with approval must be catalogue permissions, each PIN-flagged and none also
+/// granted directly (ADR-0158 decision 4). A create or an update that lists otherwise is refused
+/// `400`, naming the field and why.
+#[tokio::test]
+async fn a_role_write_refuses_an_approval_that_is_unknown_unflagged_or_also_direct() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_app_with_audit(admin, people, Arc::new(NoopAuditRecorder));
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/roles/{}", cashier.as_ulid());
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{url}?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+    let etag = etag_of(&read);
+
+    for (directly, with_approval, refused_fields, reason) in [
+        (
+            serde_json::json!([]),
+            serde_json::json!(["not.a.real.permission"]),
+            vec!["permissions_with_approval"],
+            "INVALID_ENUM_VALUE",
+        ),
+        (
+            serde_json::json!([]),
+            serde_json::json!(["sales.line.add"]),
+            vec!["permissions_with_approval"],
+            "INVALID_VALUE",
+        ),
+        (
+            serde_json::json!(["billing.bill.void"]),
+            serde_json::json!(["billing.bill.void"]),
+            vec!["permissions", "permissions_with_approval"],
+            "MUTUALLY_EXCLUSIVE",
+        ),
+    ] {
+        let body = serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Cashier",
+            "permissions": directly,
+            "permissions_with_approval": with_approval,
+            "status": "active",
+        });
+        for request in [
+            post_with_cookie("/admin/roles", &body, &owner),
+            patch_with_etag(&url, &body, &owner, &etag),
+        ] {
+            let refused = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("route the write");
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{body}");
+            let error = json_body(refused).await;
+            let named: Vec<(&str, &str)> = error["error"]["details"]
+                .as_array()
+                .expect("details")
+                .iter()
+                .map(|detail| {
+                    (
+                        detail["field"].as_str().expect("a field"),
+                        detail["reason"].as_str().expect("a reason"),
+                    )
+                })
+                .collect();
+            let expected: Vec<(&str, &str)> = refused_fields
+                .iter()
+                .map(|field| (*field, reason))
+                .collect();
+            assert_eq!(named, expected, "{error}");
+        }
+    }
+}
+
+/// An update written before roles said what they grant with approval keeps working (ADR-0158
+/// decision 4). Leaving `permissions_with_approval` out keeps what the role grants with approval,
+/// less anything the update now grants directly, and the store's node lists each person's two
+/// lists apart.
+#[tokio::test]
+async fn an_update_that_leaves_approval_out_keeps_it_less_what_it_now_grants_directly() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    // The Cashier as migration 0074 leaves one: the direct list as it was, and two acts with approval.
+    people.roles.rows.lock().expect("lock")[0]
+        .record
+        .permissions_with_approval = vec![
+        "billing.bill.void".to_owned(),
+        "sales.line.void_fired".to_owned(),
+    ];
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/roles/{}", cashier.as_ulid());
+    let read_url = format!("{url}?tenant_id={tenant_ulid}");
+
+    // A console from before the list: the void is now granted directly, and nothing else is said.
+    let before = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let updated = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Cashier",
+                "permissions": ["billing.discount.apply", "sales.line.void_fired"],
+                "status": "active",
+            }),
+            &owner,
+            &etag_of(&before),
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+    let after = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let after_etag = etag_of(&after);
+    let role = json_body(after).await;
+    assert_eq!(
+        role["permissions_with_approval"],
+        serde_json::json!(["billing.bill.void"]),
+        "kept, less the void it now grants directly: {role}"
+    );
+    publish_people(&router, &owner, store_id()).await;
+    let staff = staff_at(&config, store_id()).await;
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!(["billing.discount.apply", "sales.line.void_fired"])
+    );
+    assert_eq!(
+        staff[0]["permissions_with_approval"],
+        serde_json::json!(["billing.bill.void"])
+    );
+
+    // Saying `[]` is saying something: nothing with approval.
+    let cleared = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Cashier",
+                "permissions": ["billing.discount.apply"],
+                "permissions_with_approval": [],
+                "status": "active",
+            }),
+            &owner,
+            &after_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
+    let cleared = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let role = json_body(cleared).await;
+    assert_eq!(role["permissions_with_approval"], serde_json::json!([]));
 }
 
 /// The main app merged with the provider-catalogue router (ADR-0153).
@@ -20248,6 +22454,1039 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
     assert!(rule_ids.contains(&"seats.requires.tables"));
 }
 
+/// The console offers a switch only where a release reads it (ADR-0160 decision 5): tabs, pay-first,
+/// barcode entry and queue numbers stay in the catalogue, marked not offered, and the presets that
+/// turn them on still name them; every other flag is offered.
+#[tokio::test]
+async fn the_catalogue_offers_only_the_switches_a_release_reads() {
+    let admin = provisioned_admin();
+    let router = capabilities_app(admin.clone());
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let body = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/capabilities", &viewer))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+
+    let offered: Vec<(&str, bool)> = body["flags"]
+        .as_array()
+        .expect("flags array")
+        .iter()
+        .map(|flag| {
+            (
+                flag["key"].as_str().expect("a key"),
+                flag["offered"].as_bool().expect("offered is a boolean"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        offered,
+        vec![
+            ("tables_enabled", true),
+            ("tabs_enabled", false),
+            ("seats_enabled", true),
+            ("kds_enabled", true),
+            ("courses_enabled", true),
+            ("pay_first_enabled", false),
+            ("barcode_enabled", false),
+            ("queue_number_enabled", false),
+            ("tips_enabled", true),
+            ("qr_ordering_enabled", true),
+        ]
+    );
+    let counter = body["presets"]
+        .as_array()
+        .expect("presets array")
+        .iter()
+        .find(|preset| preset["id"] == "counter")
+        .expect("the counter preset");
+    assert!(
+        counter["keys"]
+            .as_array()
+            .expect("keys")
+            .contains(&serde_json::json!("pay_first_enabled")),
+        "the preset is unchanged: {counter}"
+    );
+}
+
+// --- ADR-0158 decision 3: an assignment reaches a store, a store group or every store -----------
+
+/// A store these tests assign people through, numbered so the reports' store order is the order
+/// the tests list them in.
+fn shop(n: u128) -> StoreId {
+    StoreId::new(Ulid::from_u128(0x4000 + n))
+}
+
+/// Seeds a person through the seam and returns their id.
+async fn seed_person(people: &FakePeople, n: u128, code: &str, name: &str) -> EmployeeId {
+    let employee_id = EmployeeId::new(Ulid::from_u128(n));
+    EmployeeStore::create(
+        people,
+        &NewEmployee {
+            employee_id,
+            tenant_id: tenant(),
+            code: code.to_owned(),
+            name: name.to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    employee_id
+}
+
+/// Seeds an active store group holding `members`, in the groups the roster's group assignments
+/// reach through, and returns its id.
+fn seed_group(people: &FakePeople, n: u128, members: &[StoreId]) -> StoreGroupId {
+    let group_id = StoreGroupId::new(Ulid::from_u128(n));
+    people.groups().seed(
+        StoreGroup {
+            group_id,
+            tenant_id: tenant(),
+            name: format!("Group {n}"),
+            status: EntityStatus::Active,
+        },
+        members,
+    );
+    group_id
+}
+
+/// Seeds an assignment through the seam, as one written earlier.
+async fn seed_assignment(
+    people: &FakePeople,
+    n: u128,
+    employee_id: EmployeeId,
+    scope: AssignmentScope,
+    role_template_id: RoleTemplateId,
+) -> AssignmentId {
+    let assignment_id = AssignmentId::new(Ulid::from_u128(n));
+    AssignmentStore::assign(
+        people,
+        &NewAssignment {
+            assignment_id,
+            tenant_id: tenant(),
+            employee_id,
+            scope,
+            role_template_id,
+        },
+    )
+    .await
+    .expect("assign");
+    assignment_id
+}
+
+/// The staff codes a store's node lists now.
+async fn codes_at(config: &FakeConfigTrees, store: StoreId) -> Vec<String> {
+    staff_at(config, store)
+        .await
+        .iter()
+        .map(|member| member["code"].as_str().expect("a code").to_owned())
+        .collect()
+}
+
+/// A `POST /admin/assignments` body for `employee` with `role`, at the target `fields` name.
+fn assignment_body(
+    employee: EmployeeId,
+    role: RoleTemplateId,
+    fields: &[(&str, String)],
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "employee_id": employee.as_ulid().to_string(),
+        "role_template_id": role.as_ulid().to_string(),
+    });
+    for (field, value) in fields {
+        body[*field] = serde_json::json!(value);
+    }
+    body
+}
+
+/// Assigns through the route, as the console does.
+async fn post_assignment(
+    router: &axum::Router,
+    cookie: &str,
+    body: &serde_json::Value,
+) -> axum::response::Response {
+    router
+        .clone()
+        .oneshot(post_with_cookie("/admin/assignments", body, cookie))
+        .await
+        .expect("route the assignment")
+}
+
+/// The assignments a listing returns, read through the route.
+async fn listed(router: &axum::Router, cookie: &str, query: &str) -> Vec<serde_json::Value> {
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/assignments?tenant_id={}&{query}",
+                tenant().as_ulid()
+            ),
+            cookie,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(response.status(), StatusCode::OK, "{query}");
+    json_body(response)
+        .await
+        .as_array()
+        .expect("an array")
+        .clone()
+}
+
+/// The people routes and the store-group routes over one roster and one set of groups, as
+/// `main.rs` wires them: a membership change reaches the people the group's assignments name.
+fn people_and_groups_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    registry: FakeRegistry,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    people_app(
+        admin.clone(),
+        people.clone(),
+        registry.clone(),
+        config.clone(),
+        Arc::clone(&audit),
+    )
+    .merge(http::store_group_router(
+        people.groups(),
+        registry,
+        config,
+        Vec::new(),
+        people,
+        admin,
+        clock(),
+        audit,
+    ))
+}
+
+/// An assignment to every store publishes at once to each open store of the tenant, and not to an
+/// archived one; a store opened afterwards lists the person from its first publish (ADR-0158
+/// decision 3).
+#[tokio::test]
+async fn an_assignment_to_every_store_reaches_each_open_store_and_one_opened_later() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    seed_store(&registry, tenant(), shop(1), true);
+    seed_store(&registry, tenant(), shop(2), false);
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry.clone(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+
+    let everywhere = [("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned())];
+    let created =
+        post_assignment(&router, &owner, &assignment_body(bao, cashier, &everywhere)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        publish_report(created).await,
+        vec![applied(store_id()), applied(shop(1))],
+        "published at once to each open store, and not to the archived one"
+    );
+    assert_eq!(codes_at(&config, store_id()).await, vec!["C01", "C02"]);
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C02"]);
+    assert_eq!(versions_at(&config, shop(2)).await, 0);
+
+    // A store the tenant opens afterwards: nobody names it, and its first publish lists Bao.
+    seed_store(&registry, tenant(), shop(3), true);
+    publish_people(&router, &owner, shop(3)).await;
+    assert_eq!(codes_at(&config, shop(3)).await, vec!["C02"]);
+    let rows = listed(&router, &owner, "scope_kind=ASSIGNMENT_SCOPE_TENANT").await;
+    assert_eq!(rows.len(), 1, "the tenant's rows, listed by their kind");
+    assert_eq!(rows[0]["scope_kind"], "ASSIGNMENT_SCOPE_TENANT");
+    assert!(rows[0].get("store_id").is_none() && rows[0].get("store_group_id").is_none());
+}
+
+/// An assignment to a store group publishes at once to exactly the stores the group holds, and
+/// each listing shows the scope it is at (ADR-0158 decision 3).
+#[tokio::test]
+async fn an_assignment_to_a_group_reaches_exactly_its_members() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [shop(1), shop(2), shop(3)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1), shop(2)]);
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+
+    let through = [("store_group_id", airport.as_ulid().to_string())];
+    let created = post_assignment(&router, &owner, &assignment_body(bao, cashier, &through)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        publish_report(created).await,
+        vec![applied(shop(1)), applied(shop(2))],
+        "each member, and nobody else"
+    );
+    for member in [shop(1), shop(2)] {
+        assert_eq!(codes_at(&config, member).await, vec!["C02"]);
+    }
+    assert_eq!(versions_at(&config, shop(3)).await, 0, "not a member");
+    assert_eq!(
+        versions_at(&config, store_id()).await,
+        0,
+        "nor a store outside the group"
+    );
+
+    let by_group = listed(
+        &router,
+        &owner,
+        &format!("store_group_id={}", airport.as_ulid()),
+    )
+    .await;
+    assert_eq!(by_group.len(), 1);
+    assert_eq!(by_group[0]["scope_kind"], "ASSIGNMENT_SCOPE_STORE_GROUP");
+    assert_eq!(by_group[0]["store_group_id"], airport.as_ulid().to_string());
+    assert_eq!(by_group[0]["employee_name"], "Bao");
+    let at_member = listed(&router, &owner, &format!("store_id={}", shop(1).as_ulid())).await;
+    assert_eq!(
+        at_member, by_group,
+        "a member's listing shows who works there through it"
+    );
+    assert!(
+        listed(&router, &owner, &format!("store_id={}", shop(3).as_ulid()))
+            .await
+            .is_empty()
+    );
+    let refused = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/assignments?tenant_id={}&scope_kind=ASSIGNMENT_SCOPE_STORE",
+                tenant().as_ulid()
+            ),
+            &owner,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "scope_kind");
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+}
+
+/// A store that joins or leaves a group some assignment names gains or loses those people, and is
+/// told at once; a group nothing names changes nobody's node (ADR-0158 decisions 3 and 7).
+#[tokio::test]
+async fn a_store_that_joins_or_leaves_a_named_group_is_told_at_once() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [shop(1), shop(2), shop(3)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    let quiet = seed_group(&people, 0x6A2, &[shop(1)]);
+    seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    let router = people_and_groups_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    publish_people(&router, &owner, shop(1)).await;
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C02"]);
+
+    let move_members = |group: StoreGroupId, members: Vec<StoreId>| {
+        let router = router.clone();
+        let owner = owner.clone();
+        let groups = people.groups();
+        async move {
+            let etag = StoreGroupStore::list_groups(&groups, tenant())
+                .await
+                .expect("list groups")
+                .into_iter()
+                .find(|row| row.record.group_id == group)
+                .expect("the group")
+                .etag;
+            let ids: Vec<String> = members.iter().map(|id| id.as_ulid().to_string()).collect();
+            router
+                .oneshot(put_with_etag(
+                    &format!("/admin/store-groups/{}/members", group.as_ulid()),
+                    &serde_json::json!({ "tenant_id": tenant().as_ulid().to_string(), "store_ids": ids }),
+                    &owner,
+                    etag.as_str(),
+                ))
+                .await
+                .expect("route the membership")
+        }
+    };
+
+    let moved = move_members(airport, vec![shop(2)]).await;
+    assert_eq!(moved.status(), StatusCode::OK);
+    assert_eq!(
+        publish_report(moved).await,
+        vec![applied(shop(1)), applied(shop(2))],
+        "the store that left and the store that joined"
+    );
+    assert!(
+        codes_at(&config, shop(1)).await.is_empty(),
+        "off the store that left"
+    );
+    assert_eq!(
+        codes_at(&config, shop(2)).await,
+        vec!["C02"],
+        "on the one that joined"
+    );
+    assert_eq!(
+        versions_at(&config, shop(3)).await,
+        0,
+        "untouched by the change"
+    );
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    assert!(
+        recorded
+            .iter()
+            .any(|entry| entry.action == "permissions.publish"
+                && entry.after.as_ref().is_some_and(|after| {
+                    after["store_group_id"] == serde_json::json!(airport.to_string())
+                })),
+        "the publish names the group that caused it"
+    );
+
+    let unnamed = move_members(quiet, vec![shop(3)]).await;
+    assert_eq!(unnamed.status(), StatusCode::OK);
+    assert!(
+        publish_report(unnamed).await.is_empty(),
+        "no assignment names it"
+    );
+    assert_eq!(versions_at(&config, shop(3)).await, 0);
+}
+
+/// Assigning a person where they already hold an assignment is a conflict, not an outage: `409`
+/// `ALREADY_EXISTS` naming the field that names the place, at each scope. The refused one writes
+/// nothing, records nothing in the trail and publishes nothing, so a store the first reached is
+/// published once (ADR-0158 decision 3).
+#[tokio::test]
+async fn a_second_assignment_at_the_same_place_is_refused_409_and_changes_nothing() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let published = async || {
+        [
+            versions_at(&config, store_id()).await,
+            versions_at(&config, shop(1)).await,
+        ]
+    };
+    let recorded = async || audit.list(None, 100).await.expect("list audit").len();
+
+    for (field, value) in [
+        ("store_id", store_id().as_ulid().to_string()),
+        ("store_group_id", airport.as_ulid().to_string()),
+        ("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned()),
+    ] {
+        let body = assignment_body(bao, cashier, &[(field, value)]);
+        let created = post_assignment(&router, &owner, &body).await;
+        assert_eq!(created.status(), StatusCode::CREATED, "{field}");
+        let (versions, entries) = (published().await, recorded().await);
+
+        let again = post_assignment(&router, &owner, &body).await;
+        assert_eq!(again.status(), StatusCode::CONFLICT, "{field}");
+        let error = json_body(again).await;
+        assert_eq!(error["error"]["status"], "ALREADY_EXISTS", "{error}");
+        assert_eq!(error["error"]["details"][0]["field"], field, "{error}");
+        assert_eq!(
+            error["error"]["details"][0]["reason"], "ALREADY_EXISTS",
+            "{error}"
+        );
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("change or remove")),
+            "it says what resolves it: {error}"
+        );
+        assert_eq!(published().await, versions, "nothing published ({field})");
+        assert_eq!(recorded().await, entries, "nothing recorded ({field})");
+    }
+    let held = AssignmentStore::list_for_employee(&people, tenant(), bao)
+        .await
+        .expect("list");
+    assert_eq!(
+        held.len(),
+        3,
+        "one at each place, and no refused one written"
+    );
+}
+
+/// Removing an assignment to a group or to every store publishes at once to every store it
+/// reached, and the trail records its scope (ADR-0158 decision 7).
+#[tokio::test]
+async fn removing_a_wider_assignment_tells_every_store_it_reached() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(&people, 0xCA3, "C03", "Cam").await;
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1), shop(2)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1), shop(2)]);
+    let grouped = seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    let everywhere = seed_assignment(&people, 3, cam, AssignmentScope::Tenant, cashier).await;
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    for store in [store_id(), shop(1), shop(2)] {
+        publish_people(&router, &owner, store).await;
+    }
+    let remove = |assignment: AssignmentId| {
+        router.clone().oneshot(delete_with_cookie(
+            &format!(
+                "/admin/assignments/{}?tenant_id={}",
+                assignment.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &owner,
+        ))
+    };
+
+    let removed = remove(grouped).await.expect("route the removal");
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert_eq!(
+        publish_report(removed).await,
+        vec![applied(shop(1)), applied(shop(2))]
+    );
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C03"], "Bao is off");
+    assert_eq!(
+        versions_at(&config, store_id()).await,
+        1,
+        "not a member: untouched"
+    );
+
+    let removed = remove(everywhere).await.expect("route the removal");
+    assert_eq!(
+        publish_report(removed).await,
+        vec![applied(store_id()), applied(shop(1)), applied(shop(2))]
+    );
+    assert_eq!(
+        codes_at(&config, store_id()).await,
+        vec!["C01"],
+        "Cam is off every store"
+    );
+    assert!(codes_at(&config, shop(2)).await.is_empty());
+
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let removal = recorded
+        .iter()
+        .find(|entry| entry.action == "assignment.remove" && entry.entity_id == grouped.to_string())
+        .expect("the removal is recorded");
+    assert_eq!(
+        removal.before,
+        Some(serde_json::json!({
+            "id": grouped.to_string(),
+            "employee_id": bao.to_string(),
+            "scope_kind": "ASSIGNMENT_SCOPE_STORE_GROUP",
+            "store_group_id": airport.to_string(),
+            "role_template_id": cashier.to_string(),
+        })),
+        "the ids and the scope, and no name or code"
+    );
+}
+
+/// Archiving a person, or a role, publishes at once to every store their assignments reach through
+/// a group or the tenant, not only those named one by one (ADR-0158 decision 7).
+#[tokio::test]
+async fn an_archive_reaches_the_stores_a_group_or_the_tenant_reaches() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(&people, 0xCA3, "C03", "Cam").await;
+    let lead = RoleTemplateId::new(Ulid::from_u128(0x1EAD));
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: lead,
+            tenant_id: tenant(),
+            name: "Shift lead".to_owned(),
+            permissions: vec!["cash.shift.open".to_owned()],
+            permissions_with_approval: Vec::new(),
+            discount_ceiling_minor: None,
+        },
+    )
+    .await
+    .expect("create role");
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1), shop(2)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    seed_assignment(&people, 3, cam, AssignmentScope::Tenant, lead).await;
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config,
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let archive = |url: String, body: serde_json::Value| {
+        let router = router.clone();
+        let owner = owner.clone();
+        let tenant_ulid = tenant_ulid.clone();
+        async move {
+            let read = router
+                .clone()
+                .oneshot(get_with_cookie(
+                    &format!("{url}?tenant_id={tenant_ulid}"),
+                    &owner,
+                ))
+                .await
+                .expect("route the read");
+            let archived = router
+                .oneshot(patch_with_etag(&url, &body, &owner, &etag_of(&read)))
+                .await
+                .expect("route the archive");
+            assert_eq!(archived.status(), StatusCode::OK, "{url}");
+            publish_report(archived).await
+        }
+    };
+
+    let person = archive(
+        format!("/admin/employees/{}", bao.as_ulid()),
+        serde_json::json!({ "tenant_id": tenant_ulid, "name": "Bao", "status": "archived" }),
+    )
+    .await;
+    assert_eq!(person, vec![applied(shop(1))], "the group's member");
+    let role = archive(
+        format!("/admin/roles/{}", lead.as_ulid()),
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Shift lead",
+            "permissions": ["cash.shift.open"],
+            "status": "archived",
+        }),
+    )
+    .await;
+    assert_eq!(
+        role,
+        vec![applied(store_id()), applied(shop(1)), applied(shop(2))],
+        "every open store, through the tenant-wide assignment"
+    );
+}
+
+/// A refused assignment's status and the `(field, reason)` pairs its refusal names, in order.
+async fn refusal_of(
+    router: &axum::Router,
+    cookie: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, Vec<(String, String)>) {
+    let refused = post_assignment(router, cookie, body).await;
+    let status = refused.status();
+    let named = json_body(refused).await["error"]["details"]
+        .as_array()
+        .expect("details")
+        .iter()
+        .map(|detail| {
+            (
+                detail["field"].as_str().expect("a field").to_owned(),
+                detail["reason"].as_str().expect("a reason").to_owned(),
+            )
+        })
+        .collect();
+    (status, named)
+}
+
+/// `(field, reason)` pairs, owned, as [`refusal_of`] returns them.
+fn named(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(field, reason)| ((*field).to_owned(), (*reason).to_owned()))
+        .collect()
+}
+
+/// An assignment names exactly one target: its scope's own id, and no other. Anything else is a
+/// `400` naming each field at fault, and writes nothing; with no `scope_kind`, or
+/// `ASSIGNMENT_SCOPE_UNSPECIFIED`, the id sent names the scope (ADR-0158 decision 3).
+#[tokio::test]
+async fn an_assignment_names_exactly_its_scopes_own_id() {
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let airport = seed_group(&people, 0x6A1, &[store_id()]);
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        FakeConfigTrees::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let store = ("store_id", store_id().as_ulid().to_string());
+    let group = ("store_group_id", airport.as_ulid().to_string());
+    let kind = |token: &str| ("scope_kind", token.to_owned());
+    for (fields, expected) in [
+        (
+            vec![store.clone(), group.clone()],
+            named(&[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "MUTUALLY_EXCLUSIVE"),
+            ]),
+        ),
+        (vec![], named(&[("store_id", "REQUIRED")])),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_TENANT"), store.clone()],
+            named(&[("store_id", "MUTUALLY_EXCLUSIVE")]),
+        ),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_STORE_GROUP"), store.clone()],
+            named(&[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "REQUIRED"),
+            ]),
+        ),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_BRAND"), store.clone()],
+            named(&[("scope_kind", "INVALID_ENUM_VALUE")]),
+        ),
+    ] {
+        let body = assignment_body(bao, cashier, &fields);
+        assert_eq!(
+            refusal_of(&router, &owner, &body).await,
+            (StatusCode::BAD_REQUEST, expected),
+            "{fields:?}"
+        );
+    }
+    assert!(
+        AssignmentStore::list_for_employee(&people, tenant(), bao)
+            .await
+            .expect("list")
+            .is_empty(),
+        "no refusal wrote anything"
+    );
+
+    // `ASSIGNMENT_SCOPE_UNSPECIFIED` is no scope of its own: the id sent says which, and a store's
+    // assignment publishes as before, when someone presses publish.
+    let body = assignment_body(bao, cashier, &[kind("ASSIGNMENT_SCOPE_UNSPECIFIED"), store]);
+    let created = post_assignment(&router, &owner, &body).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert!(body.get("stores").is_none(), "nothing published: {body}");
+}
+
+/// An assignment to a group the tenant does not have — another tenant's included — is `404`, and
+/// to one it has archived `409`, naming `store_group_id` (ADR-0158 decision 7).
+#[tokio::test]
+async fn an_assignment_to_a_group_needs_one_of_its_tenants_own_open_groups() {
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let closed = StoreGroupId::new(Ulid::from_u128(0x6A2));
+    let foreign = StoreGroupId::new(Ulid::from_u128(0x6A3));
+    for (group_id, tenant_id, status) in [
+        (closed, tenant(), EntityStatus::Archived),
+        (
+            foreign,
+            TenantId::new(Ulid::from_u128(0xB0B)),
+            EntityStatus::Active,
+        ),
+    ] {
+        let group = StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Elsewhere".to_owned(),
+            status,
+        };
+        people.groups().seed(group, &[store_id()]);
+    }
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        FakeRegistry::default(),
+        FakeConfigTrees::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    for (group_id, status, reason) in [
+        (
+            StoreGroupId::new(Ulid::from_u128(0xDEAD)),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        ),
+        (foreign, StatusCode::NOT_FOUND, "NOT_FOUND"),
+        (closed, StatusCode::CONFLICT, "ARCHIVED"),
+    ] {
+        let fields = [("store_group_id", group_id.as_ulid().to_string())];
+        let body = assignment_body(bao, cashier, &fields);
+        assert_eq!(
+            refusal_of(&router, &owner, &body).await,
+            (status, named(&[("store_group_id", reason)])),
+            "{group_id}"
+        );
+    }
+    assert!(
+        AssignmentStore::list_for_employee(&people, tenant(), bao)
+            .await
+            .expect("list")
+            .is_empty(),
+        "no refusal wrote anything"
+    );
+}
+
+// --- ADR-0158 Rollout: what each role at a store lacks before the store enforces -----------------
+
+/// The readiness read over the people and settings fakes, with the one store these tests read
+/// seeded active.
+fn readiness_app(admin: FakeAdmin, people: &FakePeople, settings: FakeSettings) -> axum::Router {
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::permissions_readiness_router(
+        people.clone(),
+        settings,
+        registry,
+        people.groups(),
+        admin,
+        clock(),
+    ))
+}
+
+/// The readiness read's address for `store`.
+fn readiness_url(store: StoreId) -> String {
+    format!(
+        "/admin/stores/{}/permissions/readiness?tenant_id={}",
+        store.as_ulid(),
+        tenant().as_ulid()
+    )
+}
+
+/// Seeds the three people the readiness test reads: Alice as a Cashier at the store, Bao with a
+/// tenant-wide role granting everything a store decides, and Cam with only a role since archived.
+async fn seed_readiness(people: &FakePeople) {
+    let (_alice, _cashier) = seed_a_cashier(people, store_id()).await;
+    let everything: Vec<String> = pos_core::permission::Permission::ALL
+        .iter()
+        .map(|permission| permission.meta())
+        .filter(|meta| meta.group != pos_core::permission::PermissionGroup::CloudAdministration)
+        .map(|meta| meta.id.to_owned())
+        .collect();
+    let (lead, old) = (
+        RoleTemplateId::new(Ulid::from_u128(0x1EAD)),
+        RoleTemplateId::new(Ulid::from_u128(0x01D)),
+    );
+    for (role_template_id, name, permissions) in [(lead, "Lead", everything), (old, "Old", vec![])]
+    {
+        let new = NewRoleTemplate {
+            role_template_id,
+            tenant_id: tenant(),
+            name: name.to_owned(),
+            permissions,
+            permissions_with_approval: Vec::new(),
+            discount_ceiling_minor: None,
+        };
+        RoleTemplateStore::create(people, &new)
+            .await
+            .expect("create role");
+    }
+    people
+        .roles
+        .rows
+        .lock()
+        .expect("lock")
+        .iter_mut()
+        .for_each(|row| {
+            if row.record.role_template_id == old {
+                row.record.status = EntityStatus::Archived;
+            }
+        });
+    let bao = seed_person(people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(people, 0xCA3, "C03", "Cam").await;
+    seed_assignment(people, 2, bao, AssignmentScope::Tenant, lead).await;
+    seed_assignment(people, 3, cam, AssignmentScope::Store(store_id()), old).await;
+}
+
+/// Before a store enforces each person's own permissions, the console reads what each role held
+/// there does not grant (ADR-0158, Rollout). It needs `console.people.read`, as every read of the
+/// store's staff does; it names roles and counts people, and names nobody.
+#[tokio::test]
+async fn the_readiness_read_lists_each_roles_gaps_and_names_nobody() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    seed_readiness(&people).await;
+    let settings = FakeSettings::default();
+    let router = readiness_app(admin.clone(), &people, settings.clone());
+
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-ready"),
+        (AdminRole::Ops, "ops-ready"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&readiness_url(store_id()), &cookie))
+            .await
+            .expect("route the read");
+        assert_eq!(
+            refused.status(),
+            StatusCode::FORBIDDEN,
+            "{role:?} lacks console.people.read"
+        );
+    }
+
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-ready").await;
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(&readiness_url(store_id()), &owner))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    let body = json_body(read).await;
+    assert_eq!(body["store_id"], store_id().as_ulid().to_string());
+    assert_eq!(body["enforced"], false, "the default");
+    assert!(body.get("enforced_scope").is_none() && body.get("enforced_scope_id").is_none());
+    assert_eq!(
+        body["people_without_role"], 1,
+        "Cam holds only an archived role"
+    );
+    let roles = body["roles"].as_array().expect("roles");
+    let names: Vec<&str> = roles
+        .iter()
+        .filter_map(|role| role["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Cashier", "Lead"],
+        "the archived role is not listed"
+    );
+    assert_eq!(roles[0]["people"], 1);
+    assert_eq!(
+        roles[0]["missing"][0],
+        serde_json::json!({ "id": "sales.item.mark_unavailable", "group": "SALES", "risk": "LOW" }),
+        "an everyday permission first, the catalogue's first"
+    );
+    assert!(
+        !roles[0]["missing"]
+            .as_array()
+            .expect("missing")
+            .iter()
+            .any(|permission| permission["id"] == "billing.discount.apply"),
+        "what the role grants is not missing"
+    );
+    assert_eq!(roles[1]["people"], 1, "reached through the tenant");
+    assert_eq!(roles[1]["missing"], serde_json::json!([]));
+    let text = body.to_string();
+    for person in ["Alice", "Bao", "Cam", "C01", "C02", "C03"] {
+        assert!(!text.contains(person), "no person is named: {text}");
+    }
+
+    // The store's own value, and where it comes from.
+    pos_cloud::settings::SettingsStore::put(
+        &settings,
+        tenant(),
+        &pos_cloud::settings::SettingValue {
+            setting_key: "permissions.enforced".to_owned(),
+            scope: Open::from_known(pos_proto::settings::SettingScope::Store),
+            scope_id: store_id().to_string(),
+            value: serde_json::json!(true),
+            update_time: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+        },
+    )
+    .await
+    .expect("write the value");
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(&readiness_url(store_id()), &owner))
+        .await
+        .expect("route the read");
+    let body = json_body(read).await;
+    assert_eq!(body["enforced"], true);
+    assert_eq!(body["enforced_scope"], "SETTING_SCOPE_STORE");
+    assert_eq!(body["enforced_scope_id"], store_id().to_string());
+
+    let elsewhere = router
+        .oneshot(get_with_cookie(
+            &readiness_url(StoreId::new(Ulid::from_u128(0xDEAD))),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        elsewhere.status(),
+        StatusCode::NOT_FOUND,
+        "a store the tenant does not have"
+    );
+}
+
 // --- Remote device retirement (`POST /admin/stores/{id}/devices/revoke`, ADR-0118 §6) -----------
 
 /// The main app merged with the device-revoke router, sharing one config-tree fake so the test can
@@ -20287,7 +23526,7 @@ async fn published_deny_list(
         return Vec::new();
     };
     state
-        .layer(pos_cloud::config_tree::ConfigLevel::Store)
+        .layer(ConfigLevel::Store)
         .get("revoked_devices")
         .and_then(|node| node.get("device_ids"))
         .and_then(serde_json::Value::as_array)
@@ -20904,11 +24143,78 @@ async fn a_store_s_event_retention_is_published_within_its_range() {
     }
 }
 
-/// The cloud's bounds on `event_log_days` are the edge's. The two crates share no dependency, so
-/// this pins the numbers here and the edge's own test pins them there.
+/// The cloud's bounds on `event_log_days` are the edge's: both take them from the `retention`
+/// node's type in `pos-proto`, and this pins the numbers.
 #[test]
 fn the_cloud_bounds_event_retention_as_the_edge_does() {
     assert_eq!(http::EVENT_LOG_DAYS, 30..=3650);
+}
+
+/// The `retention` node the route publishes reads back through the type the edge reads it with,
+/// at every figure the route takes, its bounds included; and a figure past what the type holds is
+/// refused as one past the bounds is.
+#[tokio::test]
+async fn the_retention_node_reads_back_through_its_type() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees.clone(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let publish = |days: u32| {
+        put_with_cookie(
+            "/admin/config/retention",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "event_log_days": days,
+            }),
+            &cookie,
+        )
+    };
+
+    for days in [30_u16, 45, 3650] {
+        let published = router
+            .clone()
+            .oneshot(publish(u32::from(days)))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK, "{days}");
+        let tree = trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a tree");
+        let node = &tree.record.layers[2]["retention"];
+        let read = pos_proto::retention::PublishedRetention::read(node).expect("an object");
+        assert_eq!(read.event_log_days(), Some(days));
+        assert_eq!(&serde_json::to_value(read).expect("serialise"), node);
+    }
+    for refused in [70_000, u32::MAX] {
+        let response = router
+            .clone()
+            .oneshot(publish(refused))
+            .await
+            .expect("route the publish");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused} days");
+        let body = json_body(response).await;
+        assert_eq!(
+            body["error"]["message"],
+            "event_log_days must be between 30 and 3650"
+        );
+        assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    }
 }
 
 /// A range refusal about two fields names only the one actually out of range.
@@ -21125,12 +24431,13 @@ async fn an_authorisation_refusal_names_no_field() {
     );
 }
 
-/// A mutual-exclusion refusal names **both** fields — the one case where that is right.
+/// A mutual-exclusion refusal names **every** field of the set — the one case where that is right.
 ///
 /// Every other multi-field refusal in Q3b was narrowed to name only what was wrong. This one is the
 /// deliberate exception, and the distinction is worth a test because it looks like the same bug:
-/// `/admin/assignments` wants exactly one of `store_id` or `employee_id`, so when the caller sends
-/// neither or both, *the pair* is the mistake and neither field alone is at fault.
+/// `/admin/assignments` wants exactly one of `store_id`, `employee_id`, `store_group_id` or
+/// `scope_kind`, so when the caller sends none or several, *the set* is the mistake and no field
+/// alone is at fault.
 #[tokio::test]
 async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mistake() {
     let router = people_app_with_audit(
@@ -21152,12 +24459,15 @@ async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mi
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     let body = json_body(refused).await;
     assert_eq!(
-        body["error"]["message"], "name exactly one of store_id or employee_id",
+        body["error"]["message"],
+        "name exactly one of store_id, employee_id, store_group_id or scope_kind",
         "got {body}"
     );
     assert_eq!(body["error"]["details"][0]["field"], "store_id");
     assert_eq!(body["error"]["details"][0]["reason"], "MUTUALLY_EXCLUSIVE");
     assert_eq!(body["error"]["details"][1]["field"], "employee_id");
+    assert_eq!(body["error"]["details"][2]["field"], "store_group_id");
+    assert_eq!(body["error"]["details"][3]["field"], "scope_kind");
 }
 
 // --- Inventory authoring admin routes (ADR-0079, ADR-0095) --------------------------------------
@@ -24610,6 +27920,7 @@ fn store_group_app(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
+    let people = FakePeople::over(&groups);
     http::router(app)
         .merge(http::catalog_router(
             catalog.clone(),
@@ -24627,9 +27938,10 @@ fn store_group_app(
                 FakeCampaigns,
                 FakeInventory::default(),
                 FakeReasonCodes::default(),
-                FakePeople::default(),
+                people.clone(),
                 FakeFloor::default(),
             ),
+            people,
             admin.clone(),
             clock(),
             Arc::new(NoopAuditRecorder),
@@ -26755,6 +30067,733 @@ async fn a_release_report_shows_only_its_own_pairs() {
     assert!(pairs[0].get("node_value").is_none());
 }
 
+// --- Reads after a rollback: what the store runs, without its settings ------------------------
+
+/// The store's version before the rollback: its `tax`, `locale` and QR guardrails, as the console
+/// publishes them on the Store layer.
+fn restored_store_layer() -> serde_json::Value {
+    serde_json::json!({
+        "tax": { "rates": [] },
+        "locale": {
+            "currency_code": "VND",
+            "timezone": "Asia/Ho_Chi_Minh",
+            "cutoff_hour": 4,
+        },
+        "qr": {
+            "staff_confirmation_required": false,
+            "per_table_limit": 5,
+            "rate_window_secs": 60,
+        },
+    })
+}
+
+/// The settings compile's fields on the `qr` and `locale` nodes, which it writes on the Tenant layer.
+fn tenant_layer_settings() -> serde_json::Value {
+    serde_json::json!({
+        "qr": { "table_order": "TABLE_ORDER_JOIN" },
+        "locale": { "tax_rounding": "TAX_ROUNDING_DOWN" },
+    })
+}
+
+/// Gives a store a tree as a rollback leaves it: the settings on the Tenant layer, then
+/// [`restored_store_layer`], then a publish that changed the guardrails, rolled back
+/// ([`ConfigTree::restore`], the rollback route's own restore). The restored document is on the
+/// Tenant layer and the Store layer is empty.
+fn seed_rolled_back(config_trees: &FakeConfigTrees, tenant_id: TenantId, store_id: StoreId) {
+    let version = |n: u128| ConfigVersionId::new(Ulid::from_u128(n));
+    let mut tree = ConfigTree::new(store_id, CapabilityValidator);
+    tree.publish(
+        ConfigLevel::Tenant,
+        tenant_layer_settings(),
+        version(1),
+        Vec::new(),
+    )
+    .expect("the settings publish");
+    tree.publish(
+        ConfigLevel::Store,
+        restored_store_layer(),
+        version(2),
+        Vec::new(),
+    )
+    .expect("the store's publish");
+    let mut changed = restored_store_layer();
+    changed["qr"]["per_table_limit"] = serde_json::json!(9);
+    tree.publish(ConfigLevel::Store, changed, version(3), Vec::new())
+        .expect("the publish rolled back");
+    tree.restore(version(2), version(4)).expect("the rollback");
+    let state = tree.state();
+    assert_eq!(
+        state.layers[2],
+        serde_json::json!({}),
+        "a rollback empties the Store layer"
+    );
+    let version = config_trees.mint();
+    config_trees
+        .rows
+        .lock()
+        .expect("lock")
+        .insert((tenant_id, store_id), Versioned::new(state, version));
+}
+
+/// The console's node forms over `config_trees`: the QR guardrails among them.
+fn config_form_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// The release routes, with the catalog routes over the same catalog, so a release can carry a menu
+/// authored in the test.
+fn menu_release_app(
+    registry: FakeRegistry,
+    config_trees: FakeConfigTrees,
+    scheduled: FakeScheduledPublishes,
+) -> axum::Router {
+    let admin = provisioned_admin();
+    let catalog = FakeCatalog::default();
+    http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::catalog_router(
+        catalog.clone(),
+        admin.clone(),
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+    .merge(http::config_release_router(
+        FakeReleases::default(),
+        scheduled,
+        FakeStoreGroups::default(),
+        registry,
+        config_trees,
+        http::batch_nodes(
+            catalog,
+            FakeTaxRates::default(),
+            FakeCampaigns,
+            FakeInventory::default(),
+            FakeReasonCodes::default(),
+            FakePeople::default(),
+            FakeFloor::default(),
+        ),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// Creates a release for `store` and schedules it carrying `nodes`, and returns the schedule's
+/// response. `wall_clock` gives the release a Monday-04:00 local moment; otherwise it is instant.
+async fn schedule_a_release(
+    router: &axum::Router,
+    cookie: &str,
+    tenant_id: TenantId,
+    store: StoreId,
+    wall_clock: bool,
+    nodes: serde_json::Value,
+) -> axum::response::Response {
+    let tenant = tenant_id.as_ulid().to_string();
+    let moment = if wall_clock {
+        serde_json::json!({ "wall_clock_date": "2027-02-08", "wall_clock_time": "04:00" })
+    } else {
+        serde_json::json!({ "instant_at_ms": 1_800_000_000_000_i64 })
+    };
+    let mut draft = serde_json::json!({ "tenant_id": tenant, "name": "After the rollback" });
+    if let (Some(draft), Some(moment)) = (draft.as_object_mut(), moment.as_object()) {
+        draft.extend(moment.clone());
+    }
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/config-releases", &draft, cookie))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let release_id = json_body(created).await["release_id"]
+        .as_str()
+        .expect("release_id")
+        .to_owned();
+    router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/schedule"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "nodes": nodes,
+                "store_ids": [store.as_ulid().to_string()],
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route the schedule")
+}
+
+/// After a rollback the QR form reads the guardrails the store runs, which the rollback restored,
+/// rather than nothing; and not the setting beside them.
+#[tokio::test]
+async fn after_a_rollback_the_qr_form_reads_the_restored_guardrails() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let store = StoreId::new(Ulid::from_u128(0x2B01));
+    let config_trees = FakeConfigTrees::default();
+    seed_rolled_back(&config_trees, tenant_id, store);
+    let router = config_form_app(provisioned_admin(), config_trees);
+    let cookie = admin_cookie(&router).await;
+
+    let read = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/qr?tenant_id={}&store_id={}",
+                tenant_id.as_ulid(),
+                store.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(read).await,
+        restored_store_layer()["qr"],
+        "the restored guardrails, without the `table_order` setting the store runs beside them"
+    );
+}
+
+/// After a rollback a wall-clock release finds the timezone the store runs, and times the store by
+/// it, rather than refusing it as a store with no published locale.
+#[tokio::test]
+async fn after_a_rollback_a_wall_clock_release_reads_the_restored_timezone() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let store = StoreId::new(Ulid::from_u128(0x2B02));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_rolled_back(&config_trees, tenant_id, store);
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeReleases::default(),
+        FakeScheduledPublishes::default(),
+        FakeStoreGroups::default(),
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let scheduled = schedule_a_release(
+        &router,
+        &cookie,
+        tenant_id,
+        store,
+        true,
+        serde_json::json!([{ "node": "campaigns", "arguments": {} }]),
+    )
+    .await;
+    assert_eq!(scheduled.status(), StatusCode::OK);
+    let report = json_body(scheduled).await;
+    // Monday 04:00 in Ho Chi Minh City (UTC+7) is 21:00 UTC the day before.
+    assert_eq!(
+        report["pairs"][0]["effective_at_ms"].as_i64(),
+        Some(1_802_034_000_000),
+        "{report}"
+    );
+}
+
+/// After a rollback a `menu` batch finds the `tax` and `locale` the store runs, and publishes to it
+/// rather than skipping it.
+#[tokio::test]
+async fn after_a_rollback_a_menu_batch_finds_the_restored_tax_and_locale() {
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let store = StoreId::new(Ulid::from_u128(0x2B03));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_rolled_back(&config_trees, tenant_id, store);
+    let group_id = StoreGroupId::new(Ulid::from_u128(0x2B10));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Rolled back".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[store],
+    );
+    let router = store_group_app(
+        provisioned_admin(),
+        groups,
+        registry,
+        config_trees,
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+
+    let published = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "node": "menu",
+                "arguments": { "menu_id": menu_id },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let report = json_body(published).await;
+    assert_eq!(report["results"][0]["outcome"], "applied", "{report}");
+}
+
+/// After a rollback a release carrying a `menu` finds the `tax` and `locale` the store runs, and is
+/// scheduled rather than refused for want of them.
+#[tokio::test]
+async fn after_a_rollback_a_release_carrying_a_menu_finds_the_restored_tax_and_locale() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let store = StoreId::new(Ulid::from_u128(0x2B04));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_rolled_back(&config_trees, tenant_id, store);
+    let scheduled = FakeScheduledPublishes::default();
+    let router = menu_release_app(registry, config_trees, scheduled.clone());
+    let cookie = admin_cookie(&router).await;
+    let menu_id = author_a_menu(&router, &cookie, &tenant_id.as_ulid().to_string()).await;
+
+    let response = schedule_a_release(
+        &router,
+        &cookie,
+        tenant_id,
+        store,
+        false,
+        serde_json::json!([{ "node": "menu", "arguments": { "menu_id": menu_id } }]),
+    )
+    .await;
+    let status = response.status();
+    assert_eq!(status, StatusCode::OK, "{}", json_body(response).await);
+    let rows = scheduled.rows.lock().expect("lock");
+    assert!(
+        rows.iter()
+            .any(|row| row.store_id == store && row.node_key == "menu"),
+        "the menu is scheduled for the store"
+    );
+}
+
+/// A node that holds nothing but settings still reads as no node: the QR form reads `null`, a
+/// `menu` batch skips the store for want of `locale`, and a release carrying a menu is refused for
+/// it, as before.
+#[tokio::test]
+async fn a_node_holding_only_settings_still_reads_as_no_node() {
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let store = StoreId::new(Ulid::from_u128(0x2B05));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store, true);
+    let config_trees = FakeConfigTrees::default();
+    // The settings compile has written `qr.table_order` and `locale.tax_rounding`; the console has
+    // published a tax table and nothing else.
+    config_trees.rows.lock().expect("lock").insert(
+        (tenant_id, store),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    tenant_layer_settings(),
+                    serde_json::json!({}),
+                    serde_json::json!({ "tax": { "rates": [] } }),
+                    serde_json::json!({}),
+                ],
+                history: Vec::new(),
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+
+    let forms = config_form_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&forms).await;
+    let read = forms
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/qr?tenant_id={}&store_id={}",
+                tenant_id.as_ulid(),
+                store.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(json_body(read).await, serde_json::Value::Null);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(0x2B11));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Settings only".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[store],
+    );
+    let batch = store_group_app(
+        provisioned_admin(),
+        groups,
+        registry.clone(),
+        config_trees.clone(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&batch).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&batch, &cookie, &tenant).await;
+    let report = json_body(
+        batch
+            .oneshot(post_with_cookie(
+                &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+                &serde_json::json!({
+                    "tenant_id": tenant,
+                    "node": "menu",
+                    "arguments": { "menu_id": menu_id },
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the batch publish"),
+    )
+    .await;
+    assert_eq!(report["results"][0]["outcome"], "skipped", "{report}");
+    assert!(
+        report["results"][0]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("`locale`")),
+        "{report}"
+    );
+
+    let releases = menu_release_app(registry, config_trees, FakeScheduledPublishes::default());
+    let cookie = admin_cookie(&releases).await;
+    let menu_id = author_a_menu(&releases, &cookie, &tenant).await;
+    let refused = schedule_a_release(
+        &releases,
+        &cookie,
+        tenant_id,
+        store,
+        false,
+        serde_json::json!([{ "node": "menu", "arguments": { "menu_id": menu_id } }]),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(message.contains("`locale`"), "{message}");
+}
+
+/// A form never reads a settings field: the QR form leaves out the `table_order` a settings write
+/// put on the node, which the store runs beside the guardrails.
+#[tokio::test]
+async fn a_form_read_leaves_out_the_settings_on_its_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+    let guardrails = restored_store_layer()["qr"].clone();
+    config_trees.seed_store_layer(tenant(), first, serde_json::json!({ "qr": guardrails }));
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "qr.table_order",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "TABLE_ORDER_JOIN",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        sent_to(&tree.record)["qr"]["table_order"],
+        "TABLE_ORDER_JOIN",
+        "the store runs the setting"
+    );
+
+    let read = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/qr?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                first.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        json_body(read).await,
+        guardrails,
+        "and the form does not show it"
+    );
+}
+
+// --- Revocations, the kill switch and the fleet row after a rollback ------------------------------
+
+/// The two devices a store had retired before its rollback.
+fn retired_before_the_rollback() -> [String; 2] {
+    [
+        Ulid::from_u128(0x21).to_string(),
+        Ulid::from_u128(0x22).to_string(),
+    ]
+}
+
+/// The rollout a store ran before its rollback, as `PUT /admin/config/ota` writes one.
+fn restored_rollout() -> serde_json::Value {
+    serde_json::json!({
+        "target_version": "1.4.0",
+        "min_ring": "fleet",
+        "rollout_percent": 40,
+        "signing_key_id": "a1a1a1a1a1a1a1a1",
+        "revoked_key_ids": [],
+    })
+}
+
+/// Gives a store a tree as a rollback leaves it: a deny-list of [`retired_before_the_rollback`], a
+/// rollout and a published country on the Store layer, a placement on the Device layer, then a
+/// publish that dropped them, rolled back ([`ConfigTree::restore`], the rollback route's own
+/// restore). What the store runs is on the Tenant layer; the Store and Device layers are empty.
+fn seed_rolled_back_with_retirements(
+    config_trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) {
+    let version = |n: u128| ConfigVersionId::new(Ulid::from_u128(n));
+    let mut tree = ConfigTree::new(store_id, CapabilityValidator);
+    tree.publish(
+        ConfigLevel::Store,
+        serde_json::json!({
+            "revoked_devices": { "device_ids": retired_before_the_rollback() },
+            "fleet_update": restored_rollout(),
+            "locale": { "country_code": "VN", "currency_code": "VND" },
+        }),
+        version(1),
+        Vec::new(),
+    )
+    .expect("the store's publish");
+    tree.publish(
+        ConfigLevel::Device,
+        serde_json::json!({ "device_ota": { "ring": "fleet", "canary_bucket": 10 } }),
+        version(2),
+        Vec::new(),
+    )
+    .expect("the placement");
+    tree.publish(
+        ConfigLevel::Store,
+        serde_json::json!({}),
+        version(3),
+        Vec::new(),
+    )
+    .expect("the publish rolled back");
+    tree.restore(version(2), version(4)).expect("the rollback");
+    let state = tree.state();
+    assert_eq!(
+        (&state.layers[2], &state.layers[3]),
+        (&serde_json::json!({}), &serde_json::json!({})),
+        "a rollback empties the Store and Device layers"
+    );
+    let version = config_trees.mint();
+    config_trees
+        .rows
+        .lock()
+        .expect("lock")
+        .insert((tenant_id, store_id), Versioned::new(state, version));
+}
+
+/// A revocation after a rollback keeps every device the store had retired: the store runs the
+/// restored list with the new device on it, rather than a list of the new device alone.
+#[tokio::test]
+async fn after_a_rollback_a_revocation_keeps_every_device_the_store_had_retired() {
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store_id());
+    let router = device_revoke_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let uri = format!("/admin/stores/{}/devices/revoke", store_id().as_ulid());
+    let revoke = |device: String| {
+        router.clone().oneshot(post_with_cookie(
+            &uri,
+            &serde_json::json!({ "tenant_id": tenant_ulid, "local_device_id": device }),
+            &cookie,
+        ))
+    };
+    let [first, second] = retired_before_the_rollback();
+    let third = Ulid::from_u128(0x23).to_string();
+    let every_one = vec![first.clone(), second, third.clone()];
+
+    let response = revoke(third).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        running_document(&config, tenant(), store_id())["revoked_devices"]["device_ids"],
+        serde_json::json!(every_one),
+        "the two retired before the rollback stay retired"
+    );
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        every_one,
+        "written on the Store layer, as before, holding the whole list"
+    );
+
+    // Idempotent as before: a device the rollback restored adds nothing.
+    let response = revoke(first).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        every_one
+    );
+}
+
+/// After a rollback the OTA reads answer the rollout and the placement the store runs, and the kill
+/// switch halts that rollout, keeping the rest of it.
+#[tokio::test]
+async fn after_a_rollback_the_kill_switch_halts_the_rollout_the_store_runs() {
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store_id());
+    let router = ota_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let read = |path: &str| {
+        router.clone().oneshot(get_with_cookie(
+            &format!("{path}?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+    };
+
+    let rollout = read("/admin/config/ota")
+        .await
+        .expect("route the rollout read");
+    assert_eq!(json_body(rollout).await, restored_rollout());
+    let placement = read("/admin/config/ota/placement")
+        .await
+        .expect("route the placement read");
+    assert_eq!(
+        json_body(placement).await,
+        serde_json::json!({ "ring": "fleet", "canary_bucket": 10 })
+    );
+
+    let halted = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/ota/halt",
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "halted": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the halt");
+    assert_eq!(halted.status(), StatusCode::OK);
+    let mut expected = restored_rollout();
+    expected["halted"] = serde_json::json!(true);
+    assert_eq!(
+        running_document(&config, tenant(), store_id())["fleet_update"],
+        expected,
+        "the restored rollout, halted, the rest of it kept"
+    );
+}
+
+/// The kill switch on a store never rolled back halts its published rollout and resumes it, keeping
+/// the rest of the rollout either way.
+#[tokio::test]
+async fn the_kill_switch_halts_and_resumes_a_published_rollout() {
+    let config = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let mut body = restored_rollout();
+    body["tenant_id"] = serde_json::json!(tenant_ulid);
+    body["store_id"] = serde_json::json!(store_ulid);
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie("/admin/config/ota", &body, &cookie))
+        .await
+        .expect("route the rollout publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    for halted in [true, false] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/config/ota/halt",
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "store_id": store_ulid,
+                    "halted": halted,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the halt");
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut expected = restored_rollout();
+        expected["halted"] = serde_json::json!(halted);
+        let tree = config
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a tree");
+        assert_eq!(tree.record.layers[2]["fleet_update"], expected, "{halted}");
+    }
+}
+
+/// After a rollback the fleet row compares the store's region against the country the store runs,
+/// which the rollback restored, rather than reporting no country.
+#[tokio::test]
+async fn after_a_rollback_the_fleet_row_shows_the_restored_country() {
+    let store = store_id();
+    let mut row = store_in_handover(store, Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let fleet = FakeFleet::default().with_row(tenant(), row);
+    let config = FakeConfigTrees::default();
+    seed_rolled_back_with_retirements(&config, tenant(), store);
+    let router = fleet_app_with_config(provisioned_admin(), fleet, config);
+    let cookie = admin_cookie(&router).await;
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{store}?tenant_id={}", tenant().as_ulid()),
+            &cookie,
+        ))
+        .await
+        .expect("route the single-store read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["profile_country"], "VN");
+    assert_eq!(body["region_agreement"], "differs");
+}
+
 // --- The anchor ledger (ADR-0131 decision 4) -----------------------------------------------------
 
 /// An anchor ledger in memory, and the one place these cases can see what the cloud decided.
@@ -28339,15 +32378,23 @@ fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
         config_trees.clone(),
         FakeWebhooks::default(),
     );
-    let router = http::router(app).merge(http::settings_router(
-        FakeSettings::default(),
-        registry,
-        groups.clone(),
-        config_trees.clone(),
-        admin,
-        clock(),
-        Arc::new(NoopAuditRecorder),
-    ));
+    let router = http::router(app)
+        .merge(http::settings_router(
+            FakeSettings::default(),
+            registry,
+            groups.clone(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        // The tender publish, whose node the tip keys share (ADR-0160).
+        .merge(http::config_channels_router(
+            config_trees.clone(),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ));
     (router, config_trees, groups)
 }
 
@@ -28558,11 +32605,42 @@ async fn a_new_store_is_given_the_owners_values_once() {
         .await
         .expect("route the presets");
     assert_eq!(applied.status(), StatusCode::OK);
-    assert_eq!(json_body(applied).await["applied"][0], NO_SHIFT_SELLING);
+    assert_eq!(
+        json_body(applied).await["applied"],
+        serde_json::json!([
+            NO_SHIFT_SELLING,
+            "session.idle_lock_seconds",
+            "permissions.enforced",
+            "printing.receipt_language",
+            "qr.table_order"
+        ])
+    );
     assert_eq!(
         tenant_layer_shift(&config_trees, third).await.as_deref(),
         Some("NO_SHIFT_SELLING_REFUSE"),
         "a new store refuses to sell with no shift open (the owner, 2026-09-30)"
+    );
+    assert_eq!(
+        tenant_layer_session(&config_trees, third).await,
+        Some(serde_json::json!({ "idle_lock_seconds": 120 })),
+        "a new store's till locks after two minutes without a touch (the owner, 2026-10-01)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "permissions").await,
+        Some(serde_json::json!({ "enforced": true })),
+        "a new store decides with each person's own permissions from its first day (ADR-0158)"
+    );
+    // One token for every country, because the store has no country yet when the console gives it
+    // these values. Its edge reads the language from its `locale` node once that names one.
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "printing").await,
+        Some(serde_json::json!({ "receipt_language": "RECEIPT_LANGUAGE_COUNTRY" })),
+        "a new store prints its receipts in its country's language (the owner, 2026-10-01)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "qr").await,
+        Some(serde_json::json!({ "table_order": "TABLE_ORDER_JOIN" })),
+        "a new store's guest orders join the table's order (the owner, 2026-10-01)"
     );
 
     let again = router
@@ -28745,6 +32823,168 @@ async fn the_catalogue_lists_each_setting_with_its_default_and_new_store_value()
 }
 
 #[tokio::test]
+async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    // Offered as the screen draws them: a choice of language, and a switch.
+    let catalogue = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+        .await
+        .expect("route the catalogue");
+    let body = json_body(catalogue).await;
+    let listed = |key: &str| {
+        body["settings"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|setting| setting["setting_key"] == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("{key} is listed"))
+    };
+    let language = listed("printing.receipt_language");
+    assert_eq!(language["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(language["default"], "RECEIPT_LANGUAGE_DISPLAY");
+    assert_eq!(language["preset"], "RECEIPT_LANGUAGE_COUNTRY");
+    let on_settle = listed("printing.receipt_printed_on_settle");
+    assert_eq!(on_settle["kind"], "SETTING_KIND_BOOL");
+    assert_eq!(on_settle["default"], true);
+    // A bilingual receipt is a choice each store makes, so a new store is given none (the owner,
+    // 2026-10-01).
+    let second = listed("printing.receipt_second_language");
+    assert_eq!(second["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(second["default"], "RECEIPT_SECOND_LANGUAGE_NONE");
+    assert!(second["preset"].is_null(), "{second}");
+    // The size a line the printer cannot draw is drawn at, in printer dots (ADR-0160 decision 6).
+    let size = listed("printing.font_size_dots");
+    assert_eq!(size["kind"], "SETTING_KIND_INT");
+    assert_eq!(size["unit"], "SETTING_UNIT_COUNT");
+    assert_eq!(size["min"], 16);
+    assert_eq!(size["max"], 48);
+    assert_eq!(size["default"], 24);
+    assert!(size["preset"].is_null(), "{size}");
+
+    // A store that turns the switch off and sets a size has both on its `printing` node.
+    for (setting_key, value) in [
+        (
+            "printing.receipt_printed_on_settle",
+            serde_json::json!(false),
+        ),
+        ("printing.font_size_dots", serde_json::json!(32)),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": setting_key,
+                    "scope": "SETTING_SCOPE_STORE",
+                    "scope_id": first.to_string(),
+                    "value": value,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{setting_key}");
+    }
+    assert_eq!(
+        tenant_layer_node(&config_trees, first, "printing").await,
+        Some(serde_json::json!({ "receipt_printed_on_settle": false, "font_size_dots": 32 }))
+    );
+}
+
+/// `qr.table_order` (ADR-0160 item 2) is a setting on a node the console's QR guardrails also
+/// publish. Written on the Tenant layer, it reaches the store beside the guardrails the Store layer
+/// holds, and leaves them as they are.
+#[tokio::test]
+async fn the_qr_table_order_reaches_the_qr_node_beside_its_guardrails() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    let catalogue = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let table_order = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "qr.table_order")
+        .cloned()
+        .expect("the setting is listed");
+    assert_eq!(table_order["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(
+        table_order["default"], "TABLE_ORDER_SEPARATE",
+        "a store that sets nothing keeps a guest's order separate, as before"
+    );
+    assert_eq!(table_order["preset"], "TABLE_ORDER_JOIN");
+    assert_eq!(
+        table_order["values"],
+        serde_json::json!(["TABLE_ORDER_SEPARATE", "TABLE_ORDER_JOIN"])
+    );
+    assert_eq!(table_order["since"], "0.14.1");
+
+    let guardrails = serde_json::json!({
+        "enabled": true,
+        "staff_confirmation_required": true,
+        "per_table_limit": 5,
+    });
+    config_trees.seed_store_layer(
+        tenant(),
+        first,
+        serde_json::json!({ "qr": guardrails.clone() }),
+    );
+    let written = router
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "qr.table_order",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "TABLE_ORDER_JOIN",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["qr"],
+        serde_json::json!({ "table_order": "TABLE_ORDER_JOIN" })
+    );
+    assert_eq!(
+        tree.record.layers[2]["qr"], guardrails,
+        "the guardrails untouched"
+    );
+    assert_eq!(
+        sent_to(&tree.record)["qr"],
+        serde_json::json!({
+            "enabled": true,
+            "staff_confirmation_required": true,
+            "per_table_limit": 5,
+            "table_order": "TABLE_ORDER_JOIN",
+        }),
+        "the store is sent one `qr` node with both"
+    );
+}
+
+#[tokio::test]
 async fn a_value_of_the_wrong_kind_is_refused_with_the_reason_the_register_gives() {
     let (router, config_trees, _) = settings_app();
     let cookie = admin_cookie(&router).await;
@@ -28794,8 +33034,27 @@ async fn tenant_layer_session(
     config_trees: &FakeConfigTrees,
     store_id: StoreId,
 ) -> Option<serde_json::Value> {
+    tenant_layer_node(config_trees, store_id, "session").await
+}
+
+/// What a store is sent: its four layers merged, as the sync path composes them (ADR-0033).
+fn sent_to(tree: &ConfigTreeState) -> serde_json::Value {
+    pos_cloud::config_tree::merge::merge_layers(&[
+        &tree.layers[0],
+        &tree.layers[1],
+        &tree.layers[2],
+        &tree.layers[3],
+    ])
+}
+
+/// The `node` a store's Tenant layer carries, if any.
+async fn tenant_layer_node(
+    config_trees: &FakeConfigTrees,
+    store_id: StoreId,
+    node: &str,
+) -> Option<serde_json::Value> {
     let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
-    tree.record.layers[0].get("session").cloned()
+    tree.record.layers[0].get(node).cloned()
 }
 
 #[tokio::test]
@@ -28880,6 +33139,143 @@ async fn a_whole_number_setting_is_published_to_every_store_as_a_number() {
     assert!(attempts.get("values").is_none(), "a number has no list");
 }
 
+/// The archive interval (ADR-0160 decision 6) is written on a node of its own, `backup`, on each
+/// store's Tenant layer, as a number in hours; the console is told its unit and that it cannot be
+/// written as zero.
+#[tokio::test]
+async fn the_archive_interval_reaches_each_store_on_a_backup_node_of_its_own() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number("backup.interval_hours", &serde_json::json!(6)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    for store_id in settings_stores() {
+        assert_eq!(
+            tenant_layer_node(&config_trees, store_id, "backup").await,
+            Some(serde_json::json!({ "interval_hours": 6 })),
+            "a number, on the node the edge reads it from"
+        );
+    }
+
+    // No published value switches archiving off.
+    let refused = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number("backup.interval_hours", &serde_json::json!(0)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["reason"],
+        "OUT_OF_RANGE"
+    );
+
+    let catalogue = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let interval = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "backup.interval_hours")
+        .expect("the archive interval is listed");
+    assert_eq!(interval["unit"], "SETTING_UNIT_HOURS");
+    assert_eq!(interval["min"], 1);
+    assert_eq!(interval["max"], 168);
+    assert_eq!(interval["default"], 24);
+}
+
+/// The enforcement switch (ADR-0158 Rollout) is written on each store's Tenant layer, and the
+/// merge puts it beside the staff the people compiler wrote on the Store layer. A store with no
+/// people node receives the switch alone, with no `staff` key, which the edge reads as the switch
+/// and nothing about its roster.
+#[tokio::test]
+async fn the_permissions_switch_reaches_each_store_beside_its_people() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, _] = settings_stores();
+    let people = serde_json::json!({
+        "store_id": first.to_string(),
+        "staff": [{
+            "id": Ulid::from_u128(0xE1).to_string(),
+            "code": "C01",
+            "name": "Staff one",
+            "permissions": ["sales.line.add"],
+            "pin_phc": null
+        }]
+    });
+    config_trees.seed_store_layer(
+        tenant(),
+        first,
+        serde_json::json!({ "permissions": people.clone() }),
+    );
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "permissions.enforced",
+                "scope": "SETTING_SCOPE_TENANT",
+                "scope_id": tenant().as_ulid().to_string(),
+                "value": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert!(
+        outcomes(&json_body(written).await)
+            .iter()
+            .all(|(_, outcome)| outcome == "SETTING_PUBLISH_APPLIED")
+    );
+
+    // The staffed store: the switch on the Tenant layer, the people untouched on the Store layer,
+    // and the two together in what the store is sent.
+    let staffed = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        staffed.record.layers[0]["permissions"],
+        serde_json::json!({ "enforced": true })
+    );
+    assert_eq!(staffed.record.layers[2]["permissions"], people);
+    let sent = sent_to(&staffed.record);
+    assert_eq!(sent["permissions"]["enforced"], true);
+    assert_eq!(sent["permissions"]["staff"], people["staff"]);
+
+    // A store with no people node is sent the switch alone. With no `staff` key the edge keeps
+    // the roster it holds rather than reading the store as staffed by nobody.
+    let unstaffed = config_trees
+        .load(tenant(), second)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        sent_to(&unstaffed.record)["permissions"],
+        serde_json::json!({ "enforced": true })
+    );
+}
+
 #[tokio::test]
 async fn a_number_outside_its_bounds_or_not_whole_is_refused_and_reaches_no_store() {
     let (router, config_trees, _) = settings_app();
@@ -28933,4 +33329,1441 @@ async fn a_number_outside_its_bounds_or_not_whole_is_refused_and_reaches_no_stor
     for store_id in settings_stores() {
         assert_eq!(tenant_layer_session(&config_trees, store_id).await, None);
     }
+}
+
+/// The tip keys are settings on a `tender_keys` node of their own (ADR-0160 decision 2), written on
+/// each store's Tenant layer. The `tender` node the tender publish writes on the Store layer is left
+/// as it was, and a store whose tender was never published receives the keys and no `tender` node.
+#[tokio::test]
+async fn the_tip_keys_reach_a_store_on_their_own_node_and_leave_its_tender_alone() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, third] = settings_stores();
+    let accepted =
+        serde_json::json!({ "accepted": ["PAYMENT_METHOD_CASH", "PAYMENT_METHOD_CARD"] });
+    let effective = |store_id: StoreId| {
+        get_with_cookie(
+            &format!(
+                "/admin/stores/{}/config?tenant_id={}",
+                store_id.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &cookie,
+        )
+    };
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/tender",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": first.to_string(),
+                "accepted": accepted["accepted"],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the tender publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    for (key, value) in [
+        ("tender_keys.first_tip_percent", 10),
+        ("tender_keys.second_tip_percent", 0),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": key,
+                    "scope": "SETTING_SCOPE_TENANT",
+                    "scope_id": tenant().as_ulid().to_string(),
+                    "value": value,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{key}");
+    }
+    let keys = serde_json::json!({ "first_tip_percent": 10, "second_tip_percent": 0 });
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["tender_keys"], keys,
+        "on the Tenant layer"
+    );
+    assert!(tree.record.layers[0].get("tender").is_none());
+    assert_eq!(
+        tree.record.layers[2]["tender"], accepted,
+        "the store's tender as published"
+    );
+
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(effective(first))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(listed["tender"], accepted);
+    assert_eq!(listed["tender_keys"], keys);
+    let unlisted = json_body(router.oneshot(effective(third)).await.expect("route")).await;
+    assert_eq!(unlisted["tender_keys"], keys);
+    assert!(
+        unlisted.get("tender").is_none(),
+        "no tender node, so the store takes every tender as before"
+    );
+}
+
+// --- The fewest digits a PIN may have (ADR-0160 decision 2) ------------------------------------
+
+const PIN_MIN_LENGTH: &str = "session.pin_min_length";
+
+/// A settings store whose database is down: every call fails.
+#[derive(Clone, Copy)]
+struct UnreachableSettings;
+
+impl pos_cloud::settings::SettingsStore for UnreachableSettings {
+    async fn list(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<Vec<pos_cloud::settings::SettingValue>, pos_cloud::settings::SettingsStoreError>
+    {
+        Err(pos_cloud::settings::SettingsStoreError::new(
+            "the database is down",
+        ))
+    }
+
+    async fn put(
+        &self,
+        _tenant_id: TenantId,
+        _value: &pos_cloud::settings::SettingValue,
+    ) -> Result<(), pos_cloud::settings::SettingsStoreError> {
+        Err(pos_cloud::settings::SettingsStoreError::new(
+            "the database is down",
+        ))
+    }
+
+    async fn delete(
+        &self,
+        _tenant_id: TenantId,
+        _setting_key: &str,
+        _scope: pos_proto::settings::SettingScope,
+        _scope_id: &str,
+    ) -> Result<bool, pos_cloud::settings::SettingsStoreError> {
+        Err(pos_cloud::settings::SettingsStoreError::new(
+            "the database is down",
+        ))
+    }
+}
+
+/// One person of the tenant with no PIN yet, for a test to set one for.
+async fn a_person_without_a_pin(people: &FakePeople) -> EmployeeId {
+    let employee_id = EmployeeId::new(Ulid::from_u128(0x919));
+    EmployeeStore::create(
+        people,
+        &NewEmployee {
+            employee_id,
+            tenant_id: tenant(),
+            code: "C09".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    employee_id
+}
+
+/// Sets `pin` for `employee_id` through the PIN route.
+async fn put_pin(
+    router: &axum::Router,
+    cookie: &str,
+    employee_id: EmployeeId,
+    pin: &str,
+) -> axum::response::Response {
+    router
+        .clone()
+        .oneshot(put_with_cookie(
+            &format!("/admin/employees/{employee_id}/pin"),
+            &serde_json::json!({ "tenant_id": tenant().as_ulid().to_string(), "pin": pin }),
+            cookie,
+        ))
+        .await
+        .expect("route the PIN")
+}
+
+/// The message of the refusal a PIN of the wrong length earns, after checking it names the field.
+async fn pin_refusal(response: axum::response::Response) -> String {
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["details"][0]["field"], "pin", "{body}");
+    assert_eq!(
+        body["error"]["details"][0]["reason"], "OUT_OF_RANGE",
+        "{body}"
+    );
+    body["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Whether `employee_id` has a PIN, as the console's read of one person says.
+async fn has_pin(router: &axum::Router, cookie: &str, employee_id: EmployeeId) -> bool {
+    let person = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/employees/{employee_id}?tenant_id={}",
+                    tenant().as_ulid()
+                ),
+                cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    person["has_pin"] == serde_json::json!(true)
+}
+
+/// A PIN is four to eight digits until the tenant writes a minimum. From then on a PIN set or reset
+/// has at least that many digits, and never more than eight, and the refusal names the range. A PIN
+/// set before is left as it was. The minimum is written through the settings routes and read by the
+/// PIN route from the same store, as `main.rs` wires them.
+#[tokio::test]
+async fn a_pin_set_once_the_tenant_asks_for_more_digits_has_at_least_that_many() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let settings = FakeSettings::default();
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let config = FakeConfigTrees::default();
+    let router = people_app_with_settings(
+        admin.clone(),
+        people.clone(),
+        registry.clone(),
+        config.clone(),
+        settings.clone(),
+        Arc::new(NoopAuditRecorder),
+    )
+    .merge(http::settings_router(
+        settings,
+        registry,
+        FakeStoreGroups::default(),
+        config,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let person = a_person_without_a_pin(&people).await;
+
+    // Nothing written: four to eight digits, as before.
+    for pin in ["123", "123456789"] {
+        assert_eq!(
+            pin_refusal(put_pin(&router, &cookie, person, pin).await).await,
+            "the PIN must be 4 to 8 digits",
+            "{pin}"
+        );
+    }
+    let four = put_pin(&router, &cookie, person, "1234").await;
+    assert_eq!(four.status(), StatusCode::NO_CONTENT);
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number(PIN_MIN_LENGTH, &serde_json::json!(6)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+
+    // The four-digit PIN is not touched: the store goes on taking it until it is reset.
+    assert!(has_pin(&router, &cookie, person).await);
+    for pin in ["12345", "123456789"] {
+        assert_eq!(
+            pin_refusal(put_pin(&router, &cookie, person, pin).await).await,
+            "the PIN must be 6 to 8 digits",
+            "{pin}"
+        );
+    }
+    for pin in ["123456", "12345678"] {
+        let set = put_pin(&router, &cookie, person, pin).await;
+        assert_eq!(set.status(), StatusCode::NO_CONTENT, "{pin}");
+    }
+}
+
+/// A PIN is never held to four when the tenant's minimum cannot be read: the route answers as it
+/// does for any store it cannot reach, and no PIN is set.
+#[tokio::test]
+async fn a_pin_is_refused_while_the_tenants_settings_cannot_be_read() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let router = people_app_with_settings(
+        admin,
+        people.clone(),
+        registry,
+        FakeConfigTrees::default(),
+        UnreachableSettings,
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let person = a_person_without_a_pin(&people).await;
+
+    let refused = put_pin(&router, &cookie, person, "12345678").await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "UNAVAILABLE", "{body}");
+    assert!(!has_pin(&router, &cookie, person).await, "no PIN was set");
+}
+
+/// The minimum is the tenant's alone, because a person may work at every store: it cannot be
+/// written for one store, a brand or a group. Written for every store, it reaches each store's
+/// `session` node beside the other session settings, and the node still reads as the edge reads
+/// it.
+#[tokio::test]
+async fn the_pin_minimum_is_written_for_the_whole_tenant_and_rides_the_session_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    for (scope, scope_id) in [
+        ("SETTING_SCOPE_STORE", first.to_string()),
+        ("SETTING_SCOPE_BRAND", settings_brand().to_string()),
+        ("SETTING_SCOPE_STORE_GROUP", settings_group().to_string()),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": PIN_MIN_LENGTH,
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "value": 6,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{scope}");
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], "scope", "{scope}");
+        assert_eq!(
+            body["error"]["details"][0]["reason"], "SCOPE_NOT_ALLOWED",
+            "{scope}"
+        );
+    }
+    for store_id in settings_stores() {
+        assert_eq!(tenant_layer_session(&config_trees, store_id).await, None);
+    }
+
+    for (setting_key, value) in [(PIN_MIN_LENGTH, 6), (LOCKOUT_ATTEMPTS, 3)] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &put_number(setting_key, &serde_json::json!(value)),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{setting_key}");
+    }
+    for store_id in settings_stores() {
+        let tree = config_trees
+            .load(tenant(), store_id)
+            .await
+            .expect("load")
+            .expect("a tree");
+        let sent = sent_to(&tree.record)["session"].clone();
+        assert_eq!(
+            sent,
+            serde_json::json!({ "lockout_attempts": 3, "pin_min_length": 6 })
+        );
+        let session: pos_proto::session::PublishedSession =
+            serde_json::from_value(sent).expect("the edge reads the node");
+        assert_eq!(session.pin_min_length(), 6);
+        assert_eq!(session.lockout_attempts(), 3, "the lockout is unaffected");
+        assert_eq!(session.lockout_minutes(), 5);
+    }
+}
+
+// --- Fees (ADR-0159 decision 1) -----------------------------------------------------------------
+
+fn fees_brand() -> pos_cloud::registry::BrandId {
+    pos_cloud::registry::BrandId::new(Ulid::from_u128(0x7A01))
+}
+
+/// Two stores of the brand, and a third that no brand holds.
+fn fees_stores() -> [StoreId; 3] {
+    [
+        StoreId::new(Ulid::from_u128(0x7B01)),
+        StoreId::new(Ulid::from_u128(0x7B02)),
+        StoreId::new(Ulid::from_u128(0x7B03)),
+    ]
+}
+
+fn fee_item(n: u128) -> MenuItemId {
+    MenuItemId::new(Ulid::from_u128(0x7C00 + n))
+}
+
+fn fee_category(n: u128) -> ItemCategoryId {
+    ItemCategoryId::new(Ulid::from_u128(0x7D00 + n))
+}
+
+fn fee_tax_class(n: u128) -> TaxClassId {
+    TaxClassId::new(Ulid::from_u128(0x7E00 + n))
+}
+
+/// Three items, two of them in the one category, and two tax classes.
+fn fee_catalog() -> FakeCatalog {
+    let catalog = FakeCatalog::default();
+    for (n, category) in [
+        (1, Some(fee_category(1))),
+        (2, Some(fee_category(1))),
+        (3, None),
+    ] {
+        catalog.items.lock().expect("lock").push(Versioned::new(
+            CatalogItem {
+                menu_item_id: fee_item(n),
+                tenant_id: tenant(),
+                name: format!("Item {n}"),
+                name_translations: BTreeMap::new(),
+                tax_class_id: fee_tax_class(1),
+                item_category_id: category,
+                item_subcategory_id: None,
+                course_id: None,
+                image_ref: None,
+                status: EntityStatus::Active,
+            },
+            Version::new("1"),
+        ));
+    }
+    catalog
+        .categories
+        .lock()
+        .expect("lock")
+        .push(Versioned::new(
+            ItemCategory {
+                item_category_id: fee_category(1),
+                tenant_id: tenant(),
+                name: "Pizza".to_owned(),
+                status: EntityStatus::Active,
+            },
+            Version::new("1"),
+        ));
+    for n in [1, 2] {
+        catalog
+            .tax_classes
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(
+                TaxClass {
+                    tax_class_id: fee_tax_class(n),
+                    tenant_id: tenant(),
+                    name: format!("Class {n}"),
+                    status: EntityStatus::Active,
+                },
+                Version::new("1"),
+            ));
+    }
+    catalog
+}
+
+/// The brand's first store bills in đồng, with a menu of two items and a tax table for one class;
+/// its second bills in yen; the third has nothing published.
+fn seed_fee_stores(config_trees: &FakeConfigTrees) {
+    let [first, second, _] = fees_stores();
+    let vnd = pos_proto::money::CurrencyCode::VND;
+    let menu = pos_proto::MenuBook::new().with(
+        SalesChannel::DineIn,
+        pos_proto::MenuCatalog::new()
+            .with(pos_proto::MenuEntry::new(
+                fee_item(1),
+                DisplayName::new("Margherita"),
+                pos_proto::money::Money::new(vnd, 95_000),
+                fee_tax_class(1),
+            ))
+            .with(pos_proto::MenuEntry::new(
+                fee_item(3),
+                DisplayName::new("Lemonade"),
+                pos_proto::money::Money::new(vnd, 30_000),
+                fee_tax_class(1),
+            )),
+    );
+    let tax = pos_proto::locale::TaxRateTable::new()
+        .with(
+            fee_tax_class(1),
+            SalesChannel::DineIn,
+            TaxRate::from_basis_points(800),
+        )
+        .with(
+            fee_tax_class(1),
+            SalesChannel::Takeaway,
+            TaxRate::from_basis_points(800),
+        );
+    config_trees.seed_store_layer(
+        tenant(),
+        first,
+        serde_json::json!({
+            "locale": { "currency_code": "VND" },
+            "tax": serde_json::to_value(&tax).expect("encode the tax table"),
+            "menu": serde_json::to_value(&menu).expect("encode the menu"),
+        }),
+    );
+    config_trees.seed_store_layer(
+        tenant(),
+        second,
+        serde_json::json!({ "locale": { "currency_code": "JPY" } }),
+    );
+}
+
+/// The brand and its three stores, the third held by no brand.
+fn fees_registry() -> FakeRegistry {
+    let registry = FakeRegistry::default();
+    let [first, second, third] = fees_stores();
+    registry.brands.lock().expect("lock").push(Versioned::new(
+        BrandRecord {
+            brand_id: fees_brand(),
+            tenant_id: tenant(),
+            name: "Brand".to_owned(),
+            status: EntityStatus::Active,
+        },
+        Version::new("1"),
+    ));
+    for (store_id, brand_id) in [
+        (first, Some(fees_brand())),
+        (second, Some(fees_brand())),
+        (third, None),
+    ] {
+        registry.stores.lock().expect("lock").push(Versioned::new(
+            StoreRecord {
+                store_id,
+                tenant_id: tenant(),
+                brand_id,
+                name: format!("Store {}", store_id.as_ulid()),
+                status: EntityStatus::Active,
+            },
+            Version::new("1"),
+        ));
+    }
+    registry
+}
+
+/// The fee routes over fakes. The brand's first store bills in đồng with a menu and a tax table,
+/// its second bills in yen, and the third has nothing published yet.
+fn fees_app() -> (axum::Router, FakeConfigTrees, FakeAudit, FakeAdmin) {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let registry = fees_registry();
+    let catalog = fee_catalog();
+    seed_fee_stores(&config_trees);
+    let audit = FakeAudit::default();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::fees_router(
+        InMemoryFeeRules::new(),
+        registry,
+        catalog,
+        config_trees.clone(),
+        admin.clone(),
+        clock(),
+        Arc::new(AuditSink::new(audit.clone())),
+    ));
+    (router, config_trees, audit, admin)
+}
+
+/// A `POST` or `PUT /admin/fees` body.
+fn fee_body(scope: &str, scope_id: &str, rule: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "scope": scope,
+        "scope_id": scope_id,
+        "rule": rule,
+    })
+}
+
+/// A percentage of every line, as the console starts a new rule.
+fn percent_fee(code: &str, percent: i64) -> serde_json::Value {
+    serde_json::json!({
+        "code": code,
+        "display_name": "Service charge",
+        "display_name_translations": { "vi": "Phí phục vụ" },
+        "kind": "FEE_KIND_PERCENT",
+        "rate": { "numerator": percent, "denominator": 100 },
+    })
+}
+
+/// A fee per bill in `currency`.
+fn amount_fee(code: &str, currency: &str, amount: i64) -> serde_json::Value {
+    serde_json::json!({
+        "code": code,
+        "display_name": "Delivery",
+        "kind": "FEE_KIND_AMOUNT_PER_BILL",
+        "amount": { "currency_code": currency, "amount_minor": amount },
+    })
+}
+
+/// `rule` with its `fee_id` set, as a `PUT` sends it.
+fn with_fee_id(rule: &serde_json::Value, fee_id: &str) -> serde_json::Value {
+    let mut rule = rule.clone();
+    if let Some(fields) = rule.as_object_mut() {
+        fields.insert("fee_id".to_owned(), serde_json::json!(fee_id));
+    }
+    rule
+}
+
+/// The `fees` node a store's Store layer carries, parsed as the edge parses it.
+async fn store_fees(config_trees: &FakeConfigTrees, store_id: StoreId) -> Option<PublishedFees> {
+    let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
+    let node = tree.record.layers[2].get("fees")?;
+    serde_json::from_str(&node.to_string()).ok()
+}
+
+fn tenant_scope_id() -> String {
+    tenant().as_ulid().to_string()
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one fee through its life against the same stores: written for the tenant, overridden \
+              for a brand, read back per store, written again unchanged, the override removed, and \
+              the list read — split, each part would rebuild the rules the next one starts from"
+)]
+async fn a_tenant_fee_reaches_every_store_and_a_brand_rule_for_the_same_fee_wins_at_its_stores() {
+    let (router, config_trees, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, third] = fees_stores();
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body(
+                "FEE_SCOPE_TENANT",
+                &tenant_scope_id(),
+                &percent_fee("SERVICE", 5),
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    let fee_id = body["fee_id"].as_str().expect("a minted fee id").to_owned();
+    assert_eq!(
+        outcomes(&body),
+        vec![
+            (first.to_string(), "FEE_PUBLISH_APPLIED".to_owned()),
+            (second.to_string(), "FEE_PUBLISH_APPLIED".to_owned()),
+            (third.to_string(), "FEE_PUBLISH_APPLIED".to_owned()),
+        ]
+    );
+    for store_id in fees_stores() {
+        let fees = store_fees(&config_trees, store_id)
+            .await
+            .expect("a fees node");
+        let [fee] = fees.fees.as_slice() else {
+            panic!("one fee at {store_id}: {fees:?}");
+        };
+        assert_eq!(fee.fee_id.to_string(), fee_id);
+        assert_eq!(fee.localized_name("vi").as_str(), "Phí phục vụ");
+    }
+
+    // The same fee, written for the brand at 10 %, replaces the tenant's at the brand's stores.
+    let brand = fees_brand().to_string();
+    let overridden = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/fees",
+            &fee_body(
+                "FEE_SCOPE_BRAND",
+                &brand,
+                &with_fee_id(&percent_fee("SERVICE", 10), &fee_id),
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(overridden.status(), StatusCode::OK);
+    assert_eq!(
+        outcomes(&json_body(overridden).await),
+        vec![
+            (first.to_string(), "FEE_PUBLISH_APPLIED".to_owned()),
+            (second.to_string(), "FEE_PUBLISH_APPLIED".to_owned()),
+        ],
+        "the brand's two stores, and not the third"
+    );
+    let rate_at = |fees: &PublishedFees| fees.fees.first().and_then(|fee| fee.rate);
+    let first_fees = store_fees(&config_trees, first).await.expect("a fees node");
+    let third_fees = store_fees(&config_trees, third).await.expect("a fees node");
+    assert_eq!(
+        rate_at(&first_fees).map(pos_proto::money::Ratio::numerator),
+        Some(10)
+    );
+    assert_eq!(
+        rate_at(&third_fees).map(pos_proto::money::Ratio::numerator),
+        Some(5)
+    );
+
+    // Where each store's fee comes from.
+    let effective = |store_id: StoreId| {
+        get_with_cookie(
+            &format!(
+                "/admin/fees/effective?tenant_id={}&store_id={store_id}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        )
+    };
+    let first_runs = json_body(
+        router
+            .clone()
+            .oneshot(effective(first))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(first_runs["fees"][0]["scope"], "FEE_SCOPE_BRAND");
+    assert_eq!(first_runs["fees"][0]["published"]["rate"]["numerator"], 10);
+    assert_eq!(first_runs["publishable"], true);
+    let third_runs = json_body(
+        router
+            .clone()
+            .oneshot(effective(third))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(third_runs["fees"][0]["scope"], "FEE_SCOPE_TENANT");
+
+    // Written again unchanged, no store is given a new version.
+    let again = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/fees",
+            &fee_body(
+                "FEE_SCOPE_BRAND",
+                &brand,
+                &with_fee_id(&percent_fee("SERVICE", 10), &fee_id),
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert!(
+        outcomes(&json_body(again).await)
+            .iter()
+            .all(|(_, outcome)| outcome == "FEE_PUBLISH_UNCHANGED")
+    );
+
+    // The brand's rule removed, its stores run the tenant's again.
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/fees?tenant_id={}&scope=FEE_SCOPE_BRAND&scope_id={brand}&fee_id={fee_id}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the delete");
+    assert_eq!(removed.status(), StatusCode::OK);
+    let first_fees = store_fees(&config_trees, first).await.expect("a fees node");
+    assert_eq!(
+        rate_at(&first_fees).map(pos_proto::money::Ratio::numerator),
+        Some(5)
+    );
+
+    let listed = json_body(
+        router
+            .oneshot(get_with_cookie(
+                &format!("/admin/fees?tenant_id={}", tenant().as_ulid()),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    let rules = listed["rules"].as_array().expect("a list of rules");
+    assert_eq!(
+        rules.len(),
+        1,
+        "the tenant's rule, and the brand's no longer"
+    );
+    assert_eq!(rules[0]["scope"], "FEE_SCOPE_TENANT");
+    assert_eq!(rules[0]["rule"]["fee_id"], fee_id.as_str());
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "each refusal a store's configuration causes, against the same stores: a currency on \
+              a write and on a delete that would uncover it, a tax class, and a publish to a store \
+              that changed currency after its fees reached it"
+)]
+async fn a_rule_a_store_could_not_apply_is_refused_and_a_store_that_cannot_keeps_its_fees() {
+    let (router, config_trees, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, third] = fees_stores();
+
+    // A delivery fee in đồng reaches the brand's second store, which bills in yen.
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body(
+                "FEE_SCOPE_TENANT",
+                &tenant_scope_id(),
+                &amount_fee("DELIVERY", "VND", 15_000),
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "rule.amount");
+    assert_eq!(body["error"]["details"][0]["reason"], "CURRENCY_MISMATCH");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&second.to_string())),
+        "the refusal names the store by id: {body}"
+    );
+    assert!(
+        store_fees(&config_trees, first).await.is_none(),
+        "nothing was written"
+    );
+
+    // The yen store given its own rule for the fee first, the đồng rule applies everywhere else.
+    let fee_id = Ulid::from_u128(0x7F01).to_string();
+    for (scope, scope_id, rule) in [
+        (
+            "FEE_SCOPE_STORE",
+            second.to_string(),
+            amount_fee("DELIVERY", "JPY", 300),
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            tenant_scope_id(),
+            amount_fee("DELIVERY", "VND", 15_000),
+        ),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/fees",
+                &fee_body(scope, &scope_id, &with_fee_id(&rule, &fee_id)),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK, "{scope}");
+    }
+
+    // Removing the yen rule would leave the yen store charging đồng.
+    let uncovering = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/fees?tenant_id={}&scope=FEE_SCOPE_STORE&scope_id={second}&fee_id={fee_id}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the delete");
+    assert_eq!(uncovering.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(uncovering).await;
+    assert_eq!(body["error"]["details"][0]["field"], "fee_id");
+    assert_eq!(body["error"]["details"][0]["reason"], "CURRENCY_MISMATCH");
+
+    // A fee taxed at a class the first store has no rate for.
+    let taxed = serde_json::json!({
+        "code": "SERVICE",
+        "display_name": "Service charge",
+        "kind": "FEE_KIND_PERCENT",
+        "rate": { "numerator": 5, "denominator": 100 },
+        "tax": "FEE_TAX_TAX_CLASS",
+        "tax_class_id": fee_tax_class(2).to_string(),
+    });
+    let unrated = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body("FEE_SCOPE_STORE", &first.to_string(), &taxed),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(unrated.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(unrated).await;
+    assert_eq!(body["error"]["details"][0]["field"], "rule.tax_class_id");
+    assert_eq!(
+        body["error"]["details"][0]["reason"],
+        "TAX_RATE_NOT_CONFIGURED"
+    );
+
+    // A store that comes to bill in yen after the đồng rule reached it is not sent its fees again,
+    // and keeps the ones it has.
+    config_trees.seed_store_layer(
+        tenant(),
+        third,
+        serde_json::json!({ "locale": { "currency_code": "JPY" } }),
+    );
+    let published = router
+        .oneshot(post_with_cookie(
+            "/admin/fees/publish",
+            &serde_json::json!({ "tenant_id": tenant_scope_id() }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let body = json_body(published).await;
+    let stores = body["stores"].as_array().expect("a list of stores");
+    let third_result = stores
+        .iter()
+        .find(|store| store["store_id"] == third.to_string())
+        .expect("the third store");
+    assert_eq!(third_result["outcome"], "FEE_PUBLISH_REFUSED");
+    assert_eq!(third_result["faults"][0]["fee_id"], fee_id.as_str());
+    assert_eq!(third_result["faults"][0]["reason"], "CURRENCY_MISMATCH");
+    assert!(store_fees(&config_trees, third).await.is_none());
+}
+
+#[tokio::test]
+async fn a_rule_is_refused_field_by_field() {
+    let (router, _, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let tenant_id = tenant_scope_id();
+    let unknown_item = serde_json::json!({
+        "code": "PACKAGING",
+        "display_name": "Packaging",
+        "kind": "FEE_KIND_AMOUNT_PER_UNIT",
+        "amount": { "currency_code": "VND", "amount_minor": 3_000 },
+        "item_scope": "FEE_ITEMS_INCLUDE",
+        "menu_item_ids": [Ulid::from_u128(0x7C99).to_string()],
+    });
+    for (scope, rule, field, reason) in [
+        (
+            "FEE_SCOPE_TENANT",
+            percent_fee("SERVICE", 150),
+            "rule.rate",
+            "OUT_OF_RANGE",
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            serde_json::json!({
+                "code": "SERVICE",
+                "display_name": "Service charge",
+                "kind": "FEE_KIND_PERCENT",
+            }),
+            "rule.rate",
+            "REQUIRED",
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            serde_json::json!({
+                "code": "COVER",
+                "display_name": "Cover charge",
+                "kind": "FEE_KIND_PER_GUEST",
+            }),
+            "rule.kind",
+            "INVALID_ENUM_VALUE",
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            serde_json::json!({ "code": " ", "display_name": "Service charge" }),
+            "rule.code",
+            "REQUIRED",
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            unknown_item,
+            "rule.menu_item_ids",
+            "UNKNOWN_REFERENCE",
+        ),
+        (
+            "FEE_SCOPE_TENANT",
+            with_fee_id(&percent_fee("SERVICE", 5), &Ulid::from_u128(1).to_string()),
+            "rule.fee_id",
+            "INVALID_VALUE",
+        ),
+        (
+            "FEE_SCOPE_STORE_GROUP",
+            percent_fee("SERVICE", 5),
+            "scope",
+            "INVALID_ENUM_VALUE",
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/fees",
+                &fee_body(scope, &tenant_id, &rule),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{field} {reason}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], field, "{body}");
+        assert_eq!(body["error"]["details"][0]["reason"], reason, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_category_is_compiled_into_its_items_and_a_list_must_name_one_the_menu_has() {
+    let (router, config_trees, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, ..] = fees_stores();
+
+    let packaging = serde_json::json!({
+        "code": "PACKAGING",
+        "display_name": "Packaging",
+        "kind": "FEE_KIND_AMOUNT_PER_UNIT",
+        "amount": { "currency_code": "VND", "amount_minor": 3_000 },
+        "channels": ["SALES_CHANNEL_TAKEAWAY", "SALES_CHANNEL_DINE_IN"],
+        "item_scope": "FEE_ITEMS_INCLUDE",
+        "item_category_ids": [fee_category(1).to_string()],
+    });
+    let written = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body("FEE_SCOPE_STORE", &first.to_string(), &packaging),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::CREATED);
+    let fees = store_fees(&config_trees, first).await.expect("a fees node");
+    let [fee] = fees.fees.as_slice() else {
+        panic!("one fee: {fees:?}");
+    };
+    assert_eq!(
+        fee.menu_item_ids,
+        vec![fee_item(1), fee_item(2)],
+        "the category's two items, compiled when the store was published"
+    );
+
+    // A second fee under the code the store already runs would be charged as a second fee.
+    let clash = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body("FEE_SCOPE_TENANT", &tenant_scope_id(), &{
+                let mut rule = percent_fee("PACKAGING", 5);
+                if let Some(fields) = rule.as_object_mut() {
+                    fields.insert("display_name".to_owned(), serde_json::json!("Packaging"));
+                }
+                rule
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(clash.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(clash).await;
+    assert_eq!(body["error"]["details"][0]["field"], "rule.code");
+    assert_eq!(body["error"]["details"][0]["reason"], "ALREADY_EXISTS");
+
+    // An include list of an item no store it reaches has on its menu.
+    let nothing_on_the_menu = serde_json::json!({
+        "code": "BOX",
+        "display_name": "Box",
+        "kind": "FEE_KIND_AMOUNT_PER_UNIT",
+        "amount": { "currency_code": "VND", "amount_minor": 2_000 },
+        "item_scope": "FEE_ITEMS_INCLUDE",
+        "menu_item_ids": [fee_item(2).to_string()],
+    });
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body("FEE_SCOPE_STORE", &first.to_string(), &nothing_on_the_menu),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "rule.menu_item_ids");
+    assert_eq!(body["error"]["details"][0]["reason"], "NOT_ON_MENU");
+}
+
+#[tokio::test]
+async fn the_fee_routes_go_by_role_and_the_trail_keeps_ids_and_counts() {
+    let (router, _, audit, admin) = fees_app();
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let list = format!("/admin/fees?tenant_id={}", tenant().as_ulid());
+
+    // A rule's rate and amount are prices: neither Ops nor a Viewer reads them.
+    for cookie in [&ops, &viewer] {
+        let read = router
+            .clone()
+            .oneshot(get_with_cookie(&list, cookie))
+            .await
+            .expect("route the read");
+        assert_eq!(read.status(), StatusCode::FORBIDDEN);
+    }
+    // A write publishes, which Ops may do and a Viewer may not.
+    let body = fee_body(
+        "FEE_SCOPE_TENANT",
+        &tenant_scope_id(),
+        &percent_fee("SERVICE", 5),
+    );
+    let by_viewer = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/fees", &body, &viewer))
+        .await
+        .expect("route the write");
+    assert_eq!(by_viewer.status(), StatusCode::FORBIDDEN);
+    let by_ops = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/fees", &body, &ops))
+        .await
+        .expect("route the write");
+    assert_eq!(by_ops.status(), StatusCode::CREATED);
+    let fee_id = json_body(by_ops).await["fee_id"]
+        .as_str()
+        .expect("a fee id")
+        .to_owned();
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "fee.create");
+    assert_eq!(entry.entity_type, "fee_rule");
+    assert_eq!(
+        entry.entity_id,
+        format!("{fee_id} FEE_SCOPE_TENANT {}", tenant().as_ulid())
+    );
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "stores": 3, "applied": 3, "unchanged": 0, "refused": 0, "failed": 0,
+        }))
+    );
+    let recorded = serde_json::to_string(&entry.after).expect("encode");
+    assert!(
+        !recorded.contains("SERVICE") && !recorded.contains("Service charge"),
+        "ids and counts only: {recorded}"
+    );
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sample bill read four ways against the same store — with the rule, without it, \
+              with a line its menu does not sell, and at a store with nothing published — and by \
+              a role that may not read prices; split, each would rebuild the same fixture"
+)]
+async fn a_sample_bill_shows_a_rule_before_it_is_written_and_writes_nothing() {
+    let (router, config_trees, audit, admin) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, third] = fees_stores();
+    let preview = |store_id: StoreId, rules: &serde_json::Value, lines: &serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_scope_id(),
+            "store_id": store_id.to_string(),
+            "rules": rules,
+            "lines": lines,
+        })
+    };
+    let sample = serde_json::json!([
+        { "menu_item_id": fee_item(1).to_string(), "quantity": 2 },
+        { "menu_item_id": fee_item(3).to_string(), "quantity": 1 },
+    ]);
+    let service = serde_json::json!([{
+        "scope": "FEE_SCOPE_TENANT",
+        "scope_id": tenant_scope_id(),
+        "rule": percent_fee("SERVICE", 5),
+    }]);
+
+    let previewed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees/preview",
+            &preview(first, &service, &sample),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let bill = json_body(previewed).await;
+    let minor = |value: &serde_json::Value| value["amount_minor"].as_i64();
+    assert_eq!(minor(&bill["lines"][0]["line_total"]), Some(190_000));
+    assert_eq!(bill["lines"][0]["quantity"], 2);
+    assert_eq!(minor(&bill["subtotal"]), Some(220_000));
+    assert_eq!(bill["fee_lines"][0]["code"], "SERVICE");
+    assert_eq!(minor(&bill["fee_lines"][0]["amount"]), Some(11_000));
+    assert_eq!(minor(&bill["fee_lines"][0]["tax"]), Some(880));
+    assert_eq!(bill["tax_lines"][0]["rate_basis_points"], 800);
+    assert_eq!(minor(&bill["tax_total"]), Some(18_480));
+    assert_eq!(minor(&bill["total_due"]), Some(249_480));
+
+    // A preview writes nothing and publishes nothing.
+    assert!(store_fees(&config_trees, first).await.is_none());
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fees?tenant_id={}", tenant().as_ulid()),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(listed["rules"], serde_json::json!([]));
+    assert!(audit.entries.lock().expect("lock").is_empty());
+
+    // Without the rule, the same lines carry no fee.
+    let plain = json_body(
+        router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/fees/preview",
+                &preview(first, &serde_json::json!([]), &sample),
+                &cookie,
+            ))
+            .await
+            .expect("route the preview"),
+    )
+    .await;
+    assert_eq!(plain["fee_lines"], serde_json::json!([]));
+    assert_eq!(minor(&plain["total_due"]), Some(237_600));
+
+    // A line the store's menu does not sell, and a store with nothing published to price from.
+    for (store_id, lines, field, reason) in [
+        (
+            first,
+            serde_json::json!([{ "menu_item_id": fee_item(2).to_string(), "quantity": 1 }]),
+            "lines",
+            "NOT_ON_MENU",
+        ),
+        (third, sample.clone(), "store_id", "NOT_PUBLISHED"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/fees/preview",
+                &preview(store_id, &service, &lines),
+                &cookie,
+            ))
+            .await
+            .expect("route the preview");
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{reason}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], field);
+        assert_eq!(body["error"]["details"][0]["reason"], reason);
+    }
+
+    // A preview shows prices, so it needs what reading a rule needs.
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .oneshot(post_with_cookie(
+            "/admin/fees/preview",
+            &preview(first, &service, &sample),
+            &ops,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+}
+
+/// The fee routes, the settings routes and the locale publish over one config tree, as the cloud
+/// serves them, so what a setting writes is what a sample bill reads.
+fn fees_and_settings_app() -> (axum::Router, FakeConfigTrees) {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let registry = fees_registry();
+    seed_fee_stores(&config_trees);
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app)
+        .merge(http::fees_router(
+            InMemoryFeeRules::new(),
+            registry.clone(),
+            fee_catalog(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::settings_router(
+            FakeSettings::default(),
+            registry,
+            FakeStoreGroups::default(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::config_locale_router(
+            &pos_cloud::countries::registry(),
+            config_trees.clone(),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ));
+    (router, config_trees)
+}
+
+/// The fee, the tax and the total of a sample bill of one Margherita at a 5.05 % fee.
+async fn sampled(router: &axum::Router, cookie: &str, store_id: StoreId) -> [Option<i64>; 3] {
+    let body = serde_json::json!({
+        "tenant_id": tenant_scope_id(),
+        "store_id": store_id.to_string(),
+        "rules": [{
+            "scope": "FEE_SCOPE_TENANT",
+            "scope_id": tenant_scope_id(),
+            "rule": {
+                "code": "SERVICE",
+                "display_name": "Service charge",
+                "kind": "FEE_KIND_PERCENT",
+                "rate": { "numerator": 505, "denominator": 10_000 },
+            },
+        }],
+        "lines": [{ "menu_item_id": fee_item(1).to_string(), "quantity": 1 }],
+    });
+    let previewed = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/fees/preview", &body, cookie))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let bill = json_body(previewed).await;
+    [
+        bill["fee_lines"][0]["amount"]["amount_minor"].as_i64(),
+        bill["tax_total"]["amount_minor"].as_i64(),
+        bill["total_due"]["amount_minor"].as_i64(),
+    ]
+}
+
+/// A store's tax rounding (ADR-0160) is a setting on its `locale` node, written on its Tenant
+/// layer, while a locale publish writes the country's fields on its Store layer. The node the
+/// store receives carries both, whichever was written last, and a sample bill at the store rounds
+/// its fee and its tax as the store's edge will: 5.05 % of 95,000 is 4,797.5, and 8 % of the line
+/// and the fee is 7,983.84 at half-up or 7,983.76 rounded down.
+#[tokio::test]
+async fn a_store_set_to_round_tax_down_keeps_its_country_and_is_shown_the_tax_it_will_charge() {
+    let (router, config_trees) = fees_and_settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = fees_stores();
+    assert_eq!(
+        sampled(&router, &cookie, first).await,
+        [Some(4_798), Some(7_984), Some(107_782)],
+        "half-up while the store sets nothing"
+    );
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "setting_key": "locale.tax_rounding",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "TAX_ROUNDING_DOWN",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["locale"],
+        serde_json::json!({ "tax_rounding": "TAX_ROUNDING_DOWN" }),
+        "the setting alone, on the Tenant layer"
+    );
+    assert_eq!(
+        tree.record.layers[2]["locale"],
+        serde_json::json!({ "currency_code": "VND" }),
+        "the store's own locale is not touched"
+    );
+    let down = [Some(4_797), Some(7_983), Some(107_780)];
+    assert_eq!(sampled(&router, &cookie, first).await, down);
+
+    // The store's locale published again, as when its country is set: the setting stays.
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "store_id": first.to_string(),
+                "country_code": "VN",
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/stores/{}/config?tenant_id={}",
+                    first.as_ulid(),
+                    tenant().as_ulid()
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(effective["locale"]["tax_rounding"], "TAX_ROUNDING_DOWN");
+    assert_eq!(effective["locale"]["country_code"], "VN");
+    assert_eq!(effective["locale"]["timezone"], "Asia/Ho_Chi_Minh");
+    assert_eq!(sampled(&router, &cookie, first).await, down);
 }
