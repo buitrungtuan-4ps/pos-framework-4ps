@@ -419,6 +419,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A device bound to a till the store does not list can release it from its Devices screen.** A
+  device bound by hand, through the store server, to a terminal the published `devices` node does
+  not list was stuck: the **This device** card said it was none of the store's tills, **Bind**
+  answered that it was already another till, and nothing offered to release it. Noted at #634.
+  - `GET /api/print/agent` names the terminal this device holds when the node does not list it, as
+    `unlisted_agent_device_id`. The field is absent otherwise, and it is never another device's
+    binding.
+  - The card then says *This device is bound to a till the store no longer has*, in English and
+    Vietnamese, and offers **Release**, which asks first as it does for one of the store's tills.
+
 - **The kill switch halts the rollout the store runs when the halt is written.** A halt read the
   store's tree, set `halted` on the `fleet_update` it found, then published that node through a
   write that read the tree again. A rollout published in between was overwritten by the older one,

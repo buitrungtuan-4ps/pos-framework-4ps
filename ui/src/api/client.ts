@@ -417,9 +417,10 @@ export const api = {
   printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
   testPrinter: (deviceId: string) =>
     request<TestPrintResponse>("POST", `/api/printers/${deviceId}/test`),
-  // The store's tills, and which of them this device, another device or none is (ADR-0112): what
-  // the Devices screen's *This device* card shows. `403` unless the signed-in person's own role
-  // grants `admin.device.manage`, whether or not the store enforces each person's own set.
+  // The store's tills, and which of them this device, another device or none is (ADR-0112), with
+  // the till this device is when the store does not list it: what the Devices screen's *This device*
+  // card shows. `403` unless the signed-in person's own role grants `admin.device.manage`, whether
+  // or not the store enforces each person's own set.
   terminals: () => request<TerminalsResponse>("GET", "/api/print/agent"),
   // Makes this device that till, exclusively. `200` for each of the three outcomes, which are
   // answers about the store rather than faults in the request, so the screen says which.

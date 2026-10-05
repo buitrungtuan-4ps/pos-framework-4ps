@@ -63,6 +63,15 @@ struct AgentResponse {
 struct TerminalsResponse {
     /// The published `TERMINAL` entries, in the order the `devices` node lists them.
     terminals: Vec<TerminalResponse>,
+    /// The terminal **this** device holds when the `devices` node does not list it, which a release
+    /// names. Absent when this device holds a listed terminal or none.
+    ///
+    /// A claim does not look the terminal up in the node, so a device can be bound by hand to an id
+    /// the node does not list. Without this the card says the device is none of the store's tills, a
+    /// bind answers that it is already another, and nothing on a screen can release it. Only ever
+    /// the caller's own binding: never another device's, and never a person.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unlisted_agent_device_id: Option<String>,
 }
 
 /// One published terminal, and whether a device holds it.
@@ -116,7 +125,7 @@ fn needs_manage_devices() -> Response {
 }
 
 /// `GET /api/print/agent`: the store's published terminals, each held by this device, another
-/// device or nobody.
+/// device or nobody, and the terminal this device holds if the node does not list it.
 ///
 /// What the till's **This device** card is drawn from. It answers *another device* and never which
 /// one, and nothing about when an agent last asked for work: a paired device's id would enumerate
@@ -124,7 +133,8 @@ fn needs_manage_devices() -> Response {
 /// claim (`HELD_BY_ANOTHER_DEVICE`) already would.
 ///
 /// Read from the published node and the binding record as they stand, so a terminal the console
-/// has not published is not listed, whatever the record holds.
+/// has not published is not listed, whatever the record holds: this device's own binding to one is
+/// named apart, so the card can release it.
 async fn terminals<S, A>(
     State(deps): State<Arc<PrintAgentDeps<S, A>>>,
     Extension(actor): Extension<Actor>,
@@ -158,7 +168,28 @@ where
             held,
         });
     }
-    Json(TerminalsResponse { terminals }).into_response()
+    // Asked of this device only: another device's binding to a terminal the node does not list
+    // stays unreported, as the read never says which other device holds anything.
+    let unlisted_agent_device_id = match deps.agents.agent_for(actor.device_id).await {
+        Ok(holds) => holds
+            .filter(|agent| {
+                !published_terminals(&session.devices).any(|terminal| terminal.device_id == *agent)
+            })
+            .map(|agent| agent.to_string()),
+        Err(error) => {
+            tracing::warn!(%error, "could not read a print-agent binding");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the store could not read the binding",
+            )
+                .into_response();
+        }
+    };
+    Json(TerminalsResponse {
+        terminals,
+        unlisted_agent_device_id,
+    })
+    .into_response()
 }
 
 /// A paired device claims a terminal's agent identity, exclusively.
