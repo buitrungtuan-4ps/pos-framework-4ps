@@ -835,8 +835,34 @@ export const api = {
       version,
       { tenant_id: tenantId, paper_width: paperWidth, cuts_paper: cutsPaper },
     ),
+  // Saying which printer a till's receipts go to and the languages they print in, each `null` for
+  // the store's, conditional on the version the terminal was read at, as the paper is (ADR-0094,
+  // ADR-0160 decision 4). The three are the till's whole receipt state. The store hears it on the
+  // next publish.
+  setTerminalReceipt: (
+    tenantId: string,
+    id: string,
+    receipt: {
+      readonly printerId: string | null;
+      readonly language: string | null;
+      readonly secondLanguage: string | null;
+    },
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/receipt`,
+      version,
+      {
+        tenant_id: tenantId,
+        receipt_printer_id: receipt.printerId,
+        receipt_language: receipt.language,
+        receipt_second_language: receipt.secondLanguage,
+      },
+    ),
   // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
-  // pick, a drawer mark and a printer's paper all wait on this before the store hears about them.
+  // pick, a drawer mark, a printer's paper and a till's receipts all wait on this before the store
+  // hears about them.
   publishDevices: (tenantId: string, storeId: string) =>
     requestJson<PublishDevicesResponse>("POST", "/admin/devices/publish", {
       tenant_id: tenantId,

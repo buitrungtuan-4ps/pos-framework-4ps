@@ -12,6 +12,10 @@
 //! device attestation, so a manager who signs in on a phone and claims a terminal gets a phone as
 //! the agent. These tests pin what the gates *do* buy — that it cannot happen casually, and that a
 //! second box cannot quietly take a live binding over.
+//!
+//! The read the till's **This device** card is drawn from sits behind the same two gates, and says
+//! of each published terminal whether this device, another device or nobody holds it — never which
+//! other device.
 
 use std::sync::Arc;
 
@@ -27,9 +31,10 @@ use pos_edge::{
 };
 use pos_fakes::FakeStore;
 use pos_proto::ClockSource;
-use pos_proto::ids::{EmployeeId, StoreId};
+use pos_proto::devices::PublishedDevices;
+use pos_proto::ids::{DeviceId, EmployeeId, StoreId};
 use pos_proto::ulid::Ulid;
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 /// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
@@ -44,6 +49,51 @@ const PIN: &str = "2468";
 /// the published `devices` node.
 const TILL: &str = "0000000000000000000000000E";
 
+/// Two more terminals and a printer, for the read: one terminal for each answer it gives.
+const BAR: &str = "0000000000000000000000000F";
+const SPARE: &str = "0000000000000000000000000G";
+const PRINTER: &str = "0000000000000000000000000H";
+
+/// A paired device's bearer token and the id the pairing minted for it.
+type Paired = (String, DeviceId);
+
+/// One published terminal, as the console's devices publish writes it.
+fn terminal(id: &str, name: &str) -> Value {
+    json!({
+        "device_id": id,
+        "kind": "DEVICE_KIND_TERMINAL",
+        "connection": "DEVICE_CONNECTION_UNSPECIFIED",
+        "address": "",
+        "name": name,
+    })
+}
+
+/// A receipt printer, which is not a till.
+fn printer() -> Value {
+    json!({
+        "device_id": PRINTER,
+        "kind": "DEVICE_KIND_PRINTER",
+        "connection": "DEVICE_CONNECTION_NETWORK",
+        "address": "192.0.2.10:9100",
+        "name": "Counter printer",
+    })
+}
+
+/// A `devices` node listing `devices`, parsed as the edge parses the published one.
+fn node(devices: &[Value]) -> PublishedDevices {
+    serde_json::from_value(json!({ "devices": devices })).expect("the node parses")
+}
+
+/// Three terminals with the printer between them: the read lists the terminals in this order.
+fn three_tills() -> PublishedDevices {
+    node(&[
+        terminal(TILL, "Counter till"),
+        printer(),
+        terminal(BAR, "Bar till"),
+        terminal(SPARE, "Spare till"),
+    ])
+}
+
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
     use argon2::password_hash::PasswordHasher as _;
@@ -56,6 +106,13 @@ fn hash_of(pin: &str) -> String {
 /// The domain router and **two** paired device tokens: the binding is exclusive, and one token
 /// cannot prove that.
 async fn paired_pair() -> (Router, String, String) {
+    let (router, [(holder, _), (other, _)]) =
+        paired_pair_publishing(PublishedDevices::default()).await;
+    (router, holder, other)
+}
+
+/// The same, over a store that publishes `devices`, with each device's minted id.
+async fn paired_pair_publishing(devices: PublishedDevices) -> (Router, [Paired; 2]) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)));
     let mut staff = StaffRoster::new();
     staff.insert(
@@ -78,32 +135,34 @@ async fn paired_pair() -> (Router, String, String) {
             pin_phc: Some(hash_of(PIN)),
         },
     );
+    let mut session = EdgeSession::bootstrap().with_staff(staff);
+    session.devices = devices;
     let edge = Arc::new(
         Edge::new(
             FakeStore::default(),
             identity,
-            EdgeSession::bootstrap().with_staff(staff),
+            session,
             Arc::new(InMemoryReceipts::new()),
         )
         .expect("seed"),
     );
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
-    let mut tokens = Vec::new();
+    let mut paired = Vec::new();
     for _ in 0..2 {
         let (code, _) = pairing
             .mint(now, Minter::Boot)
             .expect("mint a pairing code");
-        tokens.push(
-            pairing
-                .redeem(&code, now)
-                .await
-                .expect("redeem")
-                .token()
-                .expect("a fresh code pairs a device")
-                .as_str()
-                .to_owned(),
-        );
+        let token = pairing
+            .redeem(&code, now)
+            .await
+            .expect("redeem")
+            .token()
+            .expect("a fresh code pairs a device");
+        let device = pairing
+            .device_for(&token)
+            .expect("a freshly issued token resolves");
+        paired.push((token.as_str().to_owned(), device));
     }
     let router = pos_edge::http::domain_router(
         edge,
@@ -115,9 +174,9 @@ async fn paired_pair() -> (Router, String, String) {
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),
     );
-    let holder = tokens.remove(0);
-    let other = tokens.remove(0);
-    (router, holder, other)
+    let other = paired.pop().expect("two devices paired");
+    let holder = paired.pop().expect("two devices paired");
+    (router, [holder, other])
 }
 
 async fn sign_in(app: &Router, token: &str, code: &str) {
@@ -160,6 +219,50 @@ async fn post_agent(app: &Router, token: &str, path: &str, agent: &str) -> (Stat
         .expect("read the body")
         .to_bytes();
     (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Reads the store's terminals as `token`'s device: the status, the refusal's `pos-error-reason`,
+/// and the body as JSON (`null` when it is not).
+async fn get_terminals(app: &Router, token: &str) -> (StatusCode, Option<String>, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/print/agent")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("route the request");
+    let status = response.status();
+    let reason = response
+        .headers()
+        .get("pos-error-reason")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    (
+        status,
+        reason,
+        serde_json::from_slice(&body).unwrap_or(Value::Null),
+    )
+}
+
+/// What the read says of each terminal, in its order.
+fn held(body: &Value) -> Vec<&str> {
+    body["terminals"]
+        .as_array()
+        .expect("a list of terminals")
+        .iter()
+        .map(|terminal| terminal["held"].as_str().expect("a held token"))
+        .collect()
 }
 
 /// A manager at the box binds a terminal, and a second box cannot take it over.
@@ -244,4 +347,113 @@ async fn an_agent_id_that_is_not_a_ulid_is_refused() {
     sign_in(&app, &token, MANAGER_CODE).await;
     let (status, _) = post_agent(&app, &token, "/api/print/agent", "not-a-ulid").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// The read lists the published terminals in the node's order, the printer left out, and says of
+/// each whether this device, another device or nobody holds it: never which other device.
+#[tokio::test]
+async fn the_read_says_which_terminal_this_device_another_device_or_nobody_holds() {
+    let (app, [(holder, holder_device), (other, other_device)]) =
+        paired_pair_publishing(three_tills()).await;
+    sign_in(&app, &holder, MANAGER_CODE).await;
+    sign_in(&app, &other, MANAGER_CODE).await;
+    assert_eq!(
+        post_agent(&app, &holder, "/api/print/agent", TILL).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post_agent(&app, &other, "/api/print/agent", BAR).await.0,
+        StatusCode::OK
+    );
+
+    let (status, _, body) = get_terminals(&app, &holder).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({ "terminals": [
+            { "agent_device_id": TILL, "name": "Counter till", "held": "THIS_DEVICE" },
+            { "agent_device_id": BAR, "name": "Bar till", "held": "ANOTHER_DEVICE" },
+            { "agent_device_id": SPARE, "name": "Spare till", "held": "NONE" },
+        ]}),
+        "three fields a terminal, and nothing about who holds one or when it last printed"
+    );
+    let (_, _, seen_by_other) = get_terminals(&app, &other).await;
+    assert_eq!(
+        held(&seen_by_other),
+        ["ANOTHER_DEVICE", "THIS_DEVICE", "NONE"]
+    );
+    for answer in [body.to_string(), seen_by_other.to_string()] {
+        for device in [holder_device, other_device] {
+            assert!(
+                !answer.contains(&device.to_string()),
+                "a paired device's id would enumerate the store's pairings: {answer}"
+            );
+        }
+    }
+}
+
+/// The read follows the record: a bind shows at once, and so does a release.
+#[tokio::test]
+async fn the_read_follows_a_bind_and_a_release() {
+    let (app, [(token, _), _]) = paired_pair_publishing(three_tills()).await;
+    sign_in(&app, &token, MANAGER_CODE).await;
+    assert_eq!(
+        held(&get_terminals(&app, &token).await.2),
+        ["NONE", "NONE", "NONE"]
+    );
+
+    assert_eq!(
+        post_agent(&app, &token, "/api/print/agent", BAR).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        held(&get_terminals(&app, &token).await.2),
+        ["NONE", "THIS_DEVICE", "NONE"]
+    );
+
+    assert_eq!(
+        post_agent(&app, &token, "/api/print/agent/revoke", BAR)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        held(&get_terminals(&app, &token).await.2),
+        ["NONE", "NONE", "NONE"]
+    );
+}
+
+/// A store that publishes no terminal, whether it publishes no node or only a printer, reads an
+/// empty list: the till then says where terminals are created.
+#[tokio::test]
+async fn a_store_that_publishes_no_terminal_reads_an_empty_list() {
+    for devices in [PublishedDevices::default(), node(&[printer()])] {
+        let (app, [(token, _), _]) = paired_pair_publishing(devices).await;
+        sign_in(&app, &token, MANAGER_CODE).await;
+        let (status, _, body) = get_terminals(&app, &token).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!({ "terminals": [] }));
+    }
+}
+
+/// The read is refused where the claim is: to an unpaired caller, to a paired device with nobody
+/// signed in, and to a signed-in person who may not manage devices.
+#[tokio::test]
+async fn the_read_is_refused_to_whoever_may_not_bind() {
+    let (app, [(token, _), _]) = paired_pair_publishing(three_tills()).await;
+    assert_eq!(
+        get_terminals(&app, "not-a-token").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        get_terminals(&app, &token).await.0,
+        StatusCode::FORBIDDEN,
+        "the signed-in gate answers before the permission is considered"
+    );
+
+    sign_in(&app, &token, WAITER_CODE).await;
+    let (status, reason, body) = get_terminals(&app, &token).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reason.as_deref(), Some("PERMISSION_DENIED"));
+    assert_eq!(body, Value::Null, "no terminal is listed to a waiter");
 }

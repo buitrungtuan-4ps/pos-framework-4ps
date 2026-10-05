@@ -27,12 +27,12 @@ use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::events::BillFeeLine;
-use pos_proto::ids::{BillId, OrderId, TableId};
+use pos_proto::ids::{BillId, DeviceId, OrderId, TableId};
 use pos_proto::money::Money;
 
 use crate::app::{AppError, Edge, EdgeSession, PreBill, fee_records_in};
 use crate::http::{bad_request, error_response, parse_ulid};
-use crate::printing::{PrintOutcome, Printers, short_reference};
+use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
 /// What a table owes, as the till shows it.
 #[derive(Debug, Serialize)]
@@ -233,7 +233,14 @@ where
         return error_response(&AppError::NothingToPrint);
     };
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(printers.as_deref(), &edge, order_id, pre_bills).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bills,
+    )
+    .await
 }
 
 /// `POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order
@@ -254,7 +261,14 @@ where
         return error_response(&refused);
     }
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(printers.as_deref(), &edge, order_id, pre_bills).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bills,
+    )
+    .await
 }
 
 /// `POST /api/bills/{id}/check/print` — one open bill's pre-bill, for the guest paying that part of
@@ -278,17 +292,25 @@ where
         return error_response(&AppError::UnknownBill);
     };
     let pre_bill = edge.pre_bill_for_bill(bill_id).map(|one| vec![one]);
-    print_all(printers.as_deref(), &edge, order_id, pre_bill).await
+    print_all(
+        printers.as_deref(),
+        &edge,
+        actor.device_id,
+        order_id,
+        pre_bill,
+    )
+    .await
 }
 
-/// Prints each pre-bill under the order's short reference — the one its kitchen tickets carry — and
-/// says what came of each.
+/// Prints each pre-bill under the order's short reference — the one its kitchen tickets carry — at
+/// the printer of the till `device` is, and says what came of each.
 ///
 /// Nothing to print is a `409 NOTHING_TO_PRINT` rather than an empty success, because a till that
 /// pressed the button and got a blank list would tell the server the paper is on its way.
 async fn print_all<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
+    device: DeviceId,
     order_id: OrderId,
     pre_bills: Result<Vec<PreBill>, AppError>,
 ) -> Response
@@ -304,6 +326,12 @@ where
     };
     let reference = short_reference(&order_id.to_string());
     let session = edge.session();
+    // The till's own receipt printer and languages, where its terminal names them (ADR-0160
+    // decision 4), the same for each part of a split table.
+    let till = match printers {
+        Some(printers) => printers.till_for(&session, device).await,
+        None => TillPrinting::STORE,
+    };
     let mut prints = Vec::with_capacity(pre_bills.len());
     for pre_bill in &pre_bills {
         let outcome = match printers {
@@ -312,6 +340,7 @@ where
                 printers
                     .print_pre_bill(
                         &session,
+                        &till,
                         edge.store_id(),
                         edge.print_job_id(),
                         &reference,

@@ -44,6 +44,7 @@ use pos_ports::order_in::{ExternalReference, InboundOrder, OrderIn};
 use pos_proto::determinism::ClockSource;
 use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{StoreId, TableId, TenantId};
+use pos_proto::qr::{PublishedQr, QrBusinessHours};
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, Timestamp};
 
@@ -306,11 +307,19 @@ async fn qr_config_for<T: ConfigTreeStore>(
         return QrConfig::default();
     };
     let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
-    let Some(effective) = tree.current_effective() else {
-        return QrConfig::default();
-    };
+    tree.current_effective()
+        .map_or_else(QrConfig::default, qr_config_from)
+}
+
+/// [`qr_config_for`]'s reading of a store's effective document.
+fn qr_config_from(effective: &serde_json::Value) -> QrConfig {
     let default = QrConfig::default();
-    let qr = effective.get("qr");
+    // Field by field, as the edge reads the same node ([`PublishedQr::guardrails`]): a field that is
+    // absent or malformed falls back to its default, and takes no other field down.
+    let qr = effective
+        .get(PublishedQr::NODE)
+        .and_then(PublishedQr::guardrails)
+        .unwrap_or_default();
     let store_online = effective
         .get("order_relay")
         .and_then(|relay| relay.get("enabled"))
@@ -319,40 +328,28 @@ async fn qr_config_for<T: ConfigTreeStore>(
     QrConfig {
         enabled: crate::qr_ordering::switch_of(effective),
         store_online,
-        business_hours: parse_business_hours(qr),
+        business_hours: qr.business_hours.and_then(business_hours),
         staff_confirmation_required: qr
-            .and_then(|node| node.get("staff_confirmation_required"))
-            .and_then(serde_json::Value::as_bool)
+            .staff_confirmation_required
             .unwrap_or(default.staff_confirmation_required),
-        per_table_limit: qr
-            .and_then(|node| node.get("per_table_limit"))
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(default.per_table_limit),
+        per_table_limit: qr.per_table_limit.unwrap_or(default.per_table_limit),
         window: qr
-            .and_then(|node| node.get("rate_window_secs"))
-            .and_then(serde_json::Value::as_u64)
+            .rate_window_secs
             .map_or(default.window, Duration::from_secs),
     }
 }
 
-/// Parses an optional `qr.business_hours` object of `{ open_hour, close_hour, tz_offset_minutes }`.
-/// Any missing or malformed hour yields `None` (always open) rather than refusing every order.
-fn parse_business_hours(qr: Option<&serde_json::Value>) -> Option<BusinessHours> {
-    let hours = qr?.get("business_hours")?;
-    let open_hour = u8::try_from(hours.get("open_hour")?.as_u64()?).ok()?;
-    let close_hour = u8::try_from(hours.get("close_hour")?.as_u64()?).ok()?;
-    if open_hour > 23 || close_hour > 23 {
+/// The window a node's `qr.business_hours` sets, or `None` (always open) for an hour past 23, which
+/// the console refuses to write, rather than refusing every order. An hour the node does not carry
+/// as a whole number is no hours already ([`QrBusinessHours`]), and an absent offset is UTC.
+fn business_hours(hours: QrBusinessHours) -> Option<BusinessHours> {
+    if hours.open_hour > 23 || hours.close_hour > 23 {
         return None;
     }
-    let offset_minutes = hours
-        .get("tz_offset_minutes")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
     Some(BusinessHours {
-        open_hour,
-        close_hour,
-        offset_minutes,
+        open_hour: hours.open_hour,
+        close_hour: hours.close_hour,
+        offset_minutes: hours.tz_offset_minutes.unwrap_or(0),
     })
 }
 
@@ -410,10 +407,88 @@ fn rejection_response(reason: QrRejection) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{TableRateLimiter, current_hour, is_open_at};
+    use super::{
+        DEFAULT_PER_TABLE_LIMIT, DEFAULT_WINDOW_SECS, TableRateLimiter, current_hour, is_open_at,
+        qr_config_from,
+    };
     use core::time::Duration;
     use pos_proto::ids::{StoreId, TableId};
     use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    /// The guardrails as the guest intake read them field by field before the `qr` node had a type
+    /// in `pos-proto`: the reference the typed reading is held to below.
+    fn read_before(qr: Option<&Value>) -> (Option<(u8, u8, i64)>, bool, u32, u64) {
+        let hours = (|| {
+            let hours = qr?.get("business_hours")?;
+            let open_hour = u8::try_from(hours.get("open_hour")?.as_u64()?).ok()?;
+            let close_hour = u8::try_from(hours.get("close_hour")?.as_u64()?).ok()?;
+            if open_hour > 23 || close_hour > 23 {
+                return None;
+            }
+            let offset = hours.get("tz_offset_minutes").and_then(Value::as_i64);
+            Some((open_hour, close_hour, offset.unwrap_or(0)))
+        })();
+        let field = |key: &str| qr.and_then(|node| node.get(key));
+        (
+            hours,
+            field("staff_confirmation_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            field("per_table_limit")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(DEFAULT_PER_TABLE_LIMIT),
+            field("rate_window_secs")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_WINDOW_SECS),
+        )
+    }
+
+    #[test]
+    fn the_typed_reading_of_the_guardrails_is_the_field_by_field_one() {
+        let nodes = [
+            json!({
+                "enabled": true,
+                "staff_confirmation_required": false,
+                "per_table_limit": 5,
+                "rate_window_secs": 300,
+                "business_hours": { "open_hour": 10, "close_hour": 22, "tz_offset_minutes": 420 },
+                "table_order": "TABLE_ORDER_JOIN"
+            }),
+            json!({ "staff_confirmation_required": "no", "per_table_limit": -1, "table_order": 7 }),
+            json!({ "per_table_limit": 5_000_000_000_u64, "rate_window_secs": 2.5 }),
+            json!({ "business_hours": { "open_hour": 24, "close_hour": 2 } }),
+            json!({ "business_hours": { "open_hour": 22, "close_hour": 2, "tz_offset_minutes": "x" } }),
+            json!({ "business_hours": { "open_hour": "9", "close_hour": 17 } }),
+            json!({ "business_hours": [9, 17] }),
+            json!({}),
+            json!([false, 1]),
+            json!(null),
+        ];
+        for node in nodes {
+            let config = qr_config_from(&json!({ "qr": node }));
+            let read = (
+                config
+                    .business_hours
+                    .map(|hours| (hours.open_hour, hours.close_hour, hours.offset_minutes)),
+                config.staff_confirmation_required,
+                config.per_table_limit,
+                config.window.as_secs(),
+            );
+            assert_eq!(read, read_before(Some(&node)), "{node}");
+        }
+        let unpublished = qr_config_from(&json!({}));
+        assert_eq!(
+            (
+                unpublished.staff_confirmation_required,
+                unpublished.per_table_limit,
+                unpublished.window.as_secs(),
+            ),
+            (true, DEFAULT_PER_TABLE_LIMIT, DEFAULT_WINDOW_SECS)
+        );
+        assert!(unpublished.business_hours.is_none());
+    }
 
     fn store() -> StoreId {
         StoreId::new(Ulid::from_u128(1))

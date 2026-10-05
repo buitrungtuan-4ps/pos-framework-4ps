@@ -709,6 +709,107 @@
         }
       }
     },
+    "/admin/devices/proposals/{id}/receipt": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin says which printer a till's receipts, receipt copies and pre-bills go to, and the\nlanguages they print in\n([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 4).",
+        "description": "The paper's guards, for the paper's reasons: `ManageDevices`, an `If-Match`, and an audit entry.\nUnlike an agent pick, the printer is checked here, against the tenant's approved devices: it must\nbe a printer of the terminal's own store that serves no station, because a kitchen's printer is\nfor its tickets and another store's is in another building. What the check cannot see is a\nprinter that leaves the approved set later: the publish then leaves that till printing at the\nstore's receipt printer.",
+        "operationId": "admin_set_terminal_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The terminal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the terminal was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's store that serves no station; `receipt_language`, one of `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and `receipt_second_language`, one of `RECEIPT_SECOND_LANGUAGE_NONE`, `RECEIPT_SECOND_LANGUAGE_VI` and `RECEIPT_SECOND_LANGUAGE_EN`. Each is `null` or absent for the store's: its receipt printer, `printing.receipt_language` and `printing.receipt_second_language`. The three are the till's whole receipt state, so a field left out is the store's again",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Saved. It reaches the store on the next devices publish, `POST /admin/devices/publish`; an edge older than 0.14.1 ignores it. A device paired at the store prints by it once it is bound to the terminal, `POST /api/print/agent`"
+          },
+          "400": {
+            "description": "The device is not a terminal (`id`, `WRONG_KIND`), `receipt_printer_id` is not an approved device of its store (`UNKNOWN_REFERENCE`) or not a printer serving no station (`WRONG_KIND`), a language is not one of its choices, an id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The terminal changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/fees": {
       "get": {
         "tags": [
@@ -4250,7 +4351,7 @@
     },
     {
       "name": "printers",
-      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2). The rest of the device-onboarding surface is still coverage debt; this write is documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, and that nothing reaches a store until its devices are published."
+      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), and which printer a till's receipts go to and the languages they print in (decision 4). The rest of the device-onboarding surface is still coverage debt; these writes are documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints as the store does, and that nothing reaches a store until its devices are published."
     },
     {
       "name": "reports",

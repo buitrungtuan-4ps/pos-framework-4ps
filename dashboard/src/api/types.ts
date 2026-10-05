@@ -127,6 +127,19 @@ export interface DeviceProposalSummary {
   readonly paper_width: PaperWidth | null;
   /** Whether an operator says this printer cuts its paper; `null` until somebody says (a cut). */
   readonly cuts_paper: boolean | null;
+  /**
+   * On a terminal, the printer an operator says its receipts, receipt copies and pre-bills go to
+   * (ADR-0160 decision 4). `null` until somebody says, which the till prints as the store's
+   * receipt printer.
+   */
+  readonly receipt_printer_id: string | null;
+  /** On a terminal, the `RECEIPT_LANGUAGE_…` token its receipts print in; `null` is the store's. */
+  readonly receipt_language: string | null;
+  /**
+   * On a terminal, the `RECEIPT_SECOND_LANGUAGE_…` token its receipts print in second; `null` is
+   * the store's.
+   */
+  readonly receipt_second_language: string | null;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**
@@ -1761,6 +1774,12 @@ export interface CapabilityFlag {
   readonly key: string;
   readonly default_on: boolean;
   readonly description: string;
+  /**
+   * Whether the console offers the flag as a switch (ADR-0160 decision 5). `false` for a flag no
+   * release reads yet, so turning it on would change nothing at any store. Absent from a cloud older
+   * than the field, which offered every flag.
+   */
+  readonly offered?: boolean;
 }
 
 /** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */
@@ -1950,9 +1969,9 @@ export interface SettingDefinition {
   /** For a whole number, the largest value it takes. */
   readonly max?: number;
   /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_COUNT` or
-   * `_MINOR_UNITS`, an amount in the store currency's smallest unit — which the console names in the
-   * operator's language.
+   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_HOURS`, `_COUNT`,
+   * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
+   * percentage — which the console names in the operator's language.
    */
   readonly unit?: string;
   /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */

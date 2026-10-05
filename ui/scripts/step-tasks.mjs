@@ -377,7 +377,7 @@ export const TASKS = [
   {
     task: "Start a counter order for a walk-in guest",
     budget: 2,
-    note: "One tap on the counter screen opens a tableless order with the day's next queue number and lands on it (ADR-0146, F12). Before it, a store with no tables could charge an order somebody else started and could not start one.",
+    note: "One tap on the counter screen opens a tableless order with the day's next queue number and lands on it (ADR-0146, F12). Before it, a store with no tables could charge an order somebody else started and could not start one. A store that asks each guest whether they eat in or take away takes a second tap, on the answer (ADR-0160 decision 2), which the budget allows.",
     steps: [{ route: "/counter", action: "newOrder" }],
     outcome: { route: "/order/:id", mark: "order-open" },
   },

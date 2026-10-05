@@ -123,6 +123,10 @@ export interface LiveOrder {
   // its bill has been split (ADR-0128). `bill_id` names only the newest. Absent from an edge older
   // than the field, which never had a way to show a till a split table anyway.
   open_bill_ids?: string[];
+  // The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book of
+  // its channel, and whether the guest eats in (ADR-0160 decision 2). Absent from an edge older than
+  // the field, and for an order the edge cannot name a channel for.
+  sales_channel?: string;
   lines: LiveLine[];
 }
 
@@ -255,6 +259,19 @@ export interface MenuResponse {
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.
   accepted_tender: string[] | null;
+  // The tip keys the pay screen offers, each a whole percentage of the bill, in the store's order,
+  // without a key set to 0 or to a percentage an earlier key offers (ADR-0160 decision 2). Empty when
+  // no key is left, and the pay screen then shows no tip row. Absent from an edge older than the
+  // setting, and the till then offers the three keys it always did.
+  tip_percents?: number[];
+  // The most guests the pay screen's even split offers: every number from two up to it (ADR-0160
+  // decision 2). Absent from an edge older than the setting, and the till then offers two to six.
+  split_ways_max?: number;
+  // The channel the counter opens a walk-in on (ADR-0160 decision 2): `WALK_IN_CHANNEL_TAKEAWAY`,
+  // `WALK_IN_CHANNEL_DINE_IN`, or `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. The
+  // counter shows the book of that channel. Absent from an edge older than the setting, which opens
+  // every walk-in for takeaway, and the counter then shows the takeaway book, as it always did.
+  walk_in_channel?: string;
 }
 
 // One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display
@@ -734,6 +751,28 @@ export interface PrinterEntry {
 /** What came of a test page — the same tokens a receipt's print reports. */
 export interface TestPrintResponse {
   print: string;
+}
+
+/**
+ * One of the store's tills, from `GET /api/print/agent`
+ * ([ADR-0112](../../../docs/adr/0112-print-agents.md)): a `TERMINAL` entry the console created, and
+ * who holds it. `held` is `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`, and never says which other
+ * device.
+ */
+export interface TerminalEntry {
+  agent_device_id: string;
+  name: string;
+  held: string;
+}
+
+/** The store's tills, in the order the store published them. */
+export interface TerminalsResponse {
+  terminals: TerminalEntry[];
+}
+
+/** What a bind came to: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`. */
+export interface BindResponse {
+  outcome: string;
 }
 
 /** What printing pre-bills came to: one outcome per document, in the order they were sent. */

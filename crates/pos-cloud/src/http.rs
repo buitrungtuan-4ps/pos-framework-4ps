@@ -111,10 +111,11 @@ use pos_proto::inventory::{
 use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
-use pos_proto::printing::ReceiptLanguage;
+use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
+use pos_proto::session::PublishedSession;
 use pos_proto::settings::{SettingScope, ValueRefusal};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
@@ -241,7 +242,7 @@ use crate::releases::{
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
-use crate::settings::SettingsStore;
+use crate::settings::{SettingsStore, SettingsStoreError};
 use crate::starting_roles::StartingRoles;
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
@@ -3157,6 +3158,10 @@ where
             "/admin/devices/proposals/{id}/paper",
             post(admin_set_printer_paper::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/receipt",
+            post(admin_set_terminal_receipt::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -3889,8 +3894,216 @@ where
     .await
 }
 
-/// The answer to a conditional write on an approved device: an agent pick, a drawer mark or a
-/// printer's paper.
+/// An operator says where an approved terminal's receipts go and the languages they print in.
+///
+/// The three fields are the till's whole receipt state, as a station's update is its whole state: an
+/// absent or `null` field is the store's again.
+#[derive(Debug, Clone, Deserialize)]
+struct SetReceiptRequest {
+    /// The tenant the terminal belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The printer this till's receipts, receipt copies and pre-bills go to (a ULID), or `null` for
+    /// the store's receipt printer.
+    #[serde(default)]
+    receipt_printer_id: Option<String>,
+    /// The language they print in, as a `RECEIPT_LANGUAGE_…` token, or `null` for the store's.
+    #[serde(default)]
+    receipt_language: Option<String>,
+    /// The second language they print in, as a `RECEIPT_SECOND_LANGUAGE_…` token, or `null` for the
+    /// store's.
+    #[serde(default)]
+    receipt_second_language: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/receipt",
+    params(
+        ("id" = String, Path, description = "The terminal's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the terminal was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's \
+                       store that serves no station; `receipt_language`, one of \
+                       `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, \
+                       `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and \
+                       `receipt_second_language`, one of `RECEIPT_SECOND_LANGUAGE_NONE`, \
+                       `RECEIPT_SECOND_LANGUAGE_VI` and `RECEIPT_SECOND_LANGUAGE_EN`. Each is \
+                       `null` or absent for the store's: its receipt printer, \
+                       `printing.receipt_language` and `printing.receipt_second_language`. The \
+                       three are the till's whole receipt state, so a field left out is the \
+                       store's again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`; an edge older than 0.14.1 \
+                                      ignores it. A device paired at the store prints by it once \
+                                      it is bound to the terminal, `POST /api/print/agent`"),
+        (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), \
+                                      `receipt_printer_id` is not an approved device of its store \
+                                      (`UNKNOWN_REFERENCE`) or not a printer serving no station \
+                                      (`WRONG_KIND`), a language is not one of its choices, an id \
+                                      is not a ULID, or If-Match is absent, malformed, or a \
+                                      wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The terminal changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says which printer a till's receipts, receipt copies and pre-bills go to, and the
+/// languages they print in
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
+///
+/// The paper's guards, for the paper's reasons: `ManageDevices`, an `If-Match`, and an audit entry.
+/// Unlike an agent pick, the printer is checked here, against the tenant's approved devices: it must
+/// be a printer of the terminal's own store that serves no station, because a kitchen's printer is
+/// for its tickets and another store's is in another building. What the check cannot see is a
+/// printer that leaves the approved set later: the publish then leaves that till printing at the
+/// store's receipt printer.
+async fn admin_set_terminal_receipt<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetReceiptRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let printer = match request.receipt_printer_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("receipt_printer_id", raw)]) {
+            Ok([printer]) => Some(DeviceProposalId::new(printer)),
+            Err(refusal) => return refusal,
+        },
+    };
+    let language = match optional_choice::<ReceiptLanguage>(
+        "receipt_language",
+        request.receipt_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let second_language = match optional_choice::<ReceiptSecondLanguage>(
+        "receipt_second_language",
+        request.receipt_second_language.as_deref(),
+    ) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let approved = match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Approved)
+        .await
+    {
+        Ok(approved) => approved,
+        Err(error) => return device_error_response(&error),
+    };
+    if let Some(refusal) = till_receipt_refusal(&approved, id, printer) {
+        return refusal;
+    }
+    let written = state
+        .devices
+        .set_receipt(
+            tenant_id,
+            id,
+            printer,
+            language,
+            second_language,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_receipt",
+        serde_json::json!({
+            "receipt_printer_id": printer.map(|printer| printer.to_string()),
+            "receipt_language": language.map(ReceiptLanguage::as_wire),
+            "receipt_second_language": second_language.map(ReceiptSecondLanguage::as_wire),
+        }),
+        written,
+    )
+    .await
+}
+
+/// Why `id` may not have its receipts printed at `printer`, among the tenant's `approved` devices, or
+/// `None` when it may.
+///
+/// A `404` for a device the tenant has not approved, as a conditional write answers, and a `400`
+/// naming the field otherwise: `id` when the device is not a terminal, because only a till prints a
+/// guest's paper for itself, and `receipt_printer_id` when the printer is not an approved device of
+/// the terminal's store, or is one that is not a printer serving no station.
+fn till_receipt_refusal(
+    approved: &[DeviceProposalSummary],
+    id: DeviceProposalId,
+    printer: Option<DeviceProposalId>,
+) -> Option<Response> {
+    let id = id.to_string();
+    let Some(terminal) = approved.iter().find(|row| row.id == id) else {
+        return Some(not_found("device"));
+    };
+    if terminal.kind != DeviceKind::Terminal.as_wire() {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "only a terminal has a receipt printer and receipt languages of its own",
+            &[("id", "WRONG_KIND")],
+        ));
+    }
+    let printer = printer?.to_string();
+    match approved
+        .iter()
+        .find(|row| row.id == printer && row.store_id == terminal.store_id)
+    {
+        None => Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "receipt_printer_id must name an approved printer in the terminal's store",
+            &[("receipt_printer_id", "UNKNOWN_REFERENCE")],
+        )),
+        Some(row) if row.kind != DeviceKind::Printer.as_wire() || row.station_id.is_some() => {
+            Some(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "receipt_printer_id must name a printer that serves no station: a station's \
+                 printer prints that kitchen's tickets",
+                &[("receipt_printer_id", "WRONG_KIND")],
+            ))
+        }
+        Some(_) => None,
+    }
+}
+
+/// The answer to a conditional write on an approved device: an agent pick, a drawer mark, a
+/// printer's paper or a till's receipts.
 ///
 /// A write that changed the row is audited as `action`, with what the device now says as the
 /// entry's `after`: each of them decides what a store does with real paper or real cash. A stale
@@ -5477,7 +5690,7 @@ where
     }
 
     for key in prerequisites {
-        match read_store_node(config_trees, tenant_id, store_id, key).await {
+        match read_store_node_as_run(config_trees, tenant_id, store_id, key).await {
             Ok(serde_json::Value::Null) => {
                 return MemberOutcome::skipped(format!(
                     "this store has no `{key}` node yet; publish one to it before this"
@@ -5995,6 +6208,8 @@ struct PeopleState<P, R, Cfg, A, C> {
     registry: R,
     /// The tenant's store groups, through which a group assignment reaches its stores (ADR-0122).
     groups: Arc<dyn GroupMembership>,
+    /// The fewest digits the tenant lets a PIN have, which the PIN route applies (ADR-0160).
+    pin_minimum: Arc<dyn PinMinimum>,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -6047,6 +6262,42 @@ where
                 status: group.record.status,
                 store_ids,
             }))
+        })
+    }
+}
+
+/// What the PIN route reads of a tenant's settings: the fewest digits a PIN may have,
+/// `session.pin_min_length`
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2). A trait object rather than another type parameter on [`PeopleState`], for the reason
+/// [`GroupMembership`] gives: one handler reads it.
+trait PinMinimum: Send + Sync {
+    /// The fewest digits a PIN set now may have at `tenant_id`: the value the tenant wrote for every
+    /// store, read through [`PublishedSession::pin_min_length`] so its bounds and its default, four,
+    /// are the register's.
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>>;
+}
+
+/// The register key the PIN route reads.
+const PIN_MIN_LENGTH_KEY: &str = "session.pin_min_length";
+
+impl<S> PinMinimum for S
+where
+    S: SettingsStore + Send + Sync,
+{
+    fn fewest_digits(&self, tenant_id: TenantId) -> BoxFuture<'_, Result<u32, SettingsStoreError>> {
+        Box::pin(async move {
+            let tenant = tenant_id.as_ulid().to_string();
+            let written = self.list(tenant_id).await?.into_iter().find(|value| {
+                value.setting_key == PIN_MIN_LENGTH_KEY
+                    && value.scope.known() == SettingScope::Tenant
+                    && value.scope_id == tenant
+            });
+            let session = PublishedSession {
+                pin_min_length: written.and_then(|value| value.value.as_i64()),
+                ..PublishedSession::default()
+            };
+            Ok(session.pin_min_length())
         })
     }
 }
@@ -6326,10 +6577,16 @@ struct CreateAssignmentRequest {
     role_template_id: String,
 }
 
-/// A PIN must be 4–8 digits. Its defence is the Argon2id cost plus the edge's attempt rate-limit, not
-/// length (ADR-0030/0070); this only rejects the obviously-wrong (non-digits, too short/long).
-fn pin_is_well_formed(pin: &str) -> bool {
-    (4..=8).contains(&pin.len()) && pin.bytes().all(|byte| byte.is_ascii_digit())
+/// The most digits a PIN may have.
+const PIN_MAX_DIGITS: u32 = 8;
+
+/// A PIN must be digits, from `fewest` to [`PIN_MAX_DIGITS`] of them: four to eight until the tenant
+/// sets a minimum of its own (`session.pin_min_length`, ADR-0160). Its defence is the Argon2id cost
+/// plus the edge's attempt lockout, not its length (ADR-0030/0070); the minimum is the tenant's
+/// policy, and this otherwise only rejects the obviously wrong.
+fn pin_is_well_formed(pin: &str, fewest: u32) -> bool {
+    u32::try_from(pin.len()).is_ok_and(|digits| (fewest..=PIN_MAX_DIGITS).contains(&digits))
+        && pin.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Hashes a PIN with Argon2id under a fresh 16-byte CSPRNG salt — the same primitive and shape as
@@ -6381,10 +6638,13 @@ fn people_entropy_unavailable() -> Response {
 /// assignment to a group or every store publish the `permissions` node to every store the change
 /// reaches before they answer, and answer with each store's outcome; every other write publishes as
 /// before, when someone presses publish.
-pub fn people_router<P, R, G, Cfg, A, C>(
+///
+/// Setting a PIN reads the tenant's `settings` for the fewest digits a PIN may have (ADR-0160).
+pub fn people_router<P, R, G, St, Cfg, A, C>(
     people: P,
     registry: R,
     groups: G,
+    settings: St,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -6394,6 +6654,7 @@ where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
     G: StoreGroupStore + Send + Sync + 'static,
+    St: SettingsStore + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6438,6 +6699,7 @@ where
             people,
             registry,
             groups: Arc::new(groups),
+            pin_minimum: Arc::new(settings),
             config_trees,
             admin,
             clock,
@@ -6834,6 +7096,11 @@ where
 /// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
 /// returned, stored raw, or **audited** — the entry records only that a PIN was set, by whom
 /// (ADR-0070).
+///
+/// A PIN has at least the digits the tenant's `session.pin_min_length` asks for, four where it asks
+/// for none, and at most eight (ADR-0160). This is the one place the minimum is applied: the edge
+/// holds only a PIN's hash. Raising the minimum leaves a PIN already set as it is. If the tenant's
+/// settings cannot be read, the PIN is refused rather than held to four.
 async fn admin_set_employee_pin<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6865,10 +7132,14 @@ where
         Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
         Err(refusal) => return refusal,
     };
-    if !pin_is_well_formed(&request.pin) {
+    let fewest = match state.pin_minimum.fewest_digits(tenant_id).await {
+        Ok(fewest) => fewest,
+        Err(error) => return people_error_response(&error),
+    };
+    if !pin_is_well_formed(&request.pin, fewest) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
-            "the PIN must be 4 to 8 digits",
+            format!("the PIN must be {fewest} to {PIN_MAX_DIGITS} digits"),
             &[("pin", "OUT_OF_RANGE")],
         );
     }
@@ -7357,7 +7628,8 @@ where
 /// group or role the tenant does not have is `404` — another tenant's group included — and one it
 /// has archived is `409` (decision 7): a grant to a retired person, store or group would publish
 /// nobody, and one with a retired role would grant nothing, while the console showed it as a grant.
-/// Each refusal names the field that carried the id.
+/// Each refusal names the field that carried the id. A person who already holds an assignment
+/// there is `409` too ([`already_assigned`]), and nothing is written, audited or published.
 ///
 /// An assignment to one store publishes as before, when someone presses publish, and answers `201`
 /// with its id. One to a group or to every store publishes the `permissions` node at once to every
@@ -7457,8 +7729,29 @@ where
             };
             (StatusCode::CREATED, Json(created)).into_response()
         }
+        Err(AssignmentStoreError::AlreadyAssigned(_)) => already_assigned(scope),
         Err(error) => people_error_response(&error),
     }
+}
+
+/// The `409` an assignment earns where the person already holds one: a person holds one per store,
+/// one per group and one tenant-wide (ADR-0158 decision 3). It names the field that names the place,
+/// `store_id`, `store_group_id` or `scope_kind` for every store.
+///
+/// A conflict rather than an outage: before the store said which, this was the people service's
+/// `503`, which sent the operator to retry what can never succeed. What resolves it is the
+/// assignment that is there, changed or removed.
+fn already_assigned(scope: AssignmentScope) -> Response {
+    let field = match scope {
+        AssignmentScope::Store(_) => "store_id",
+        AssignmentScope::StoreGroup(_) => "store_group_id",
+        AssignmentScope::Tenant => "scope_kind",
+    };
+    api_error_with_details(
+        ErrorStatus::AlreadyExists,
+        "the employee is already assigned there: change or remove that assignment instead",
+        &[(field, "ALREADY_EXISTS")],
+    )
 }
 
 /// The scope a new assignment's fields name, with the id that names it as sent, before it is
@@ -7880,6 +8173,27 @@ struct CapabilityFlagView {
     key: &'static str,
     default_on: bool,
     description: &'static str,
+    /// Whether the console offers the flag as a switch: `false` for one no release reads yet
+    /// ([`offered`]).
+    offered: bool,
+}
+
+/// Whether the console offers `capability` as a switch
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 5: every switch the console offers changes behaviour at the edge).
+///
+/// `false` for the four nothing reads yet: no domain rule, edge route or till screen acts on
+/// `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` or `queue_number_enabled`. No tab, no
+/// pay-first flow and no barcode entry exists, and every tableless order is given a queue number
+/// whatever the switch says. Only the console stops offering them. A store's stored value is kept,
+/// published and parsed as before, the presets still name them, and the §10 rules still apply to
+/// them. A flag is offered again in the change that gives it a reader.
+const fn offered(capability: pos_core::capability::Capability) -> bool {
+    use pos_core::capability::Capability;
+    !matches!(
+        capability,
+        Capability::Tabs | Capability::PayFirst | Capability::Barcode | Capability::QueueNumber
+    )
 }
 
 /// One capability preset (§10) — a named starting profile the console offers as a button, given as the
@@ -7941,7 +8255,8 @@ where
         .with_state(CapabilitiesState { admin, clock })
 }
 
-/// Serves the §10 capability catalogue for the console's form editor.
+/// Serves the §10 capability catalogue for the console's form editor. Each flag says whether the
+/// console offers it as a switch ([`offered`]).
 async fn admin_list_capabilities<A, C>(
     State(state): State<CapabilitiesState<A, C>>,
     headers: HeaderMap,
@@ -7971,6 +8286,7 @@ where
                 key: meta.key,
                 default_on: meta.default_on,
                 description: meta.description,
+                offered: offered(capability),
             }
         })
         .collect();
@@ -9153,7 +9469,13 @@ where
         .into_response()
 }
 
-/// Composes the `revoked_devices` node from the one the tree currently holds plus `listed`.
+/// Composes the `revoked_devices` node from the one the store runs plus `listed`.
+///
+/// The list is read from the tree's layers composed ([`ConfigTreeState::effective`]) and written,
+/// with `listed` added, onto the Store layer as before. Read from the Store layer alone it was wrong
+/// after a rollback, which restores a version onto the Tenant layer and empties the Store layer: the
+/// append wrote a list of `listed` alone, and since a list replaces when layers merge, the store
+/// stopped refusing every device it had retired.
 ///
 /// Called on every attempt of the conditional-write retry, so the merge always sees the tree as just
 /// read. Three properties, all load-bearing:
@@ -9179,8 +9501,9 @@ fn append_revoked_device(
     listed: &str,
 ) -> Result<Vec<(String, serde_json::Value)>, Response> {
     let mut ids: Vec<String> = before
-        .map(|state| state.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("revoked_devices"))
+        .map(ConfigTreeState::effective)
+        .as_ref()
+        .and_then(|document| document.get("revoked_devices"))
         .and_then(|node| node.get("device_ids"))
         .and_then(serde_json::Value::as_array)
         .map(|entries| {
@@ -10086,8 +10409,22 @@ fn accepted_tokens<E: WireEnum>() -> impl Iterator<Item = &'static str> {
         .map(WireEnum::as_wire)
 }
 
-/// Reads a store's current Store-layer node value by key, or `null` when it has none.
-async fn read_store_node<Cfg>(
+/// A store's `node_key` node as the store runs it, without the node's settings fields, or `null`
+/// when it runs none.
+///
+/// Read from the tree's four layers composed ([`ConfigTree::effective`]), not from the Store layer
+/// alone. A rollback writes the restored version onto the Tenant layer and empties the others
+/// ([`ConfigTree::restore_with`]), so a Store-layer read answered `null` for every node the store
+/// still ran: the console's forms went blank, and its checks refused a store that held the node. A
+/// node a tenant or brand layer sets is read with the store's own, because the store runs it.
+///
+/// The fields the settings register puts on the node (`pos_proto::settings::register`) are left
+/// out. They are written on the Tenant layer by the settings compile, and they are the settings
+/// store's to decide (ADR-0160 decision 3): a form that read one and saved the node back would pin
+/// it on the Store layer, where it would shadow every later settings change for the store. A node
+/// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
+/// holding only `tax_rounding` is not the locale a menu waits for.
+async fn read_store_node_as_run<Cfg>(
     config_trees: &Cfg,
     tenant_id: TenantId,
     store_id: StoreId,
@@ -10101,14 +10438,37 @@ where
         .await
         .map(strip_tree_version)
     {
-        Ok(Some(state)) => Ok(state
-            .layers
-            .get(2)
-            .and_then(|layer| layer.get(node_key))
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)),
+        Ok(Some(state)) => {
+            let composed = ConfigTree::from_state(store_id, CapabilityValidator, state).effective();
+            Ok(node_as_run(node_key, composed.get(node_key)))
+        }
         Ok(None) => Ok(serde_json::Value::Null),
         Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+/// The answer [`read_store_node_as_run`] gives for `node`, the store's `node_key` as its layers
+/// compose it: the node without its settings fields, and `null` for a node the store does not run
+/// or one that holds nothing but settings. A node that is not an object is answered as it is.
+fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::Value {
+    match node {
+        None => serde_json::Value::Null,
+        Some(value) if only_settings(node_key, value) => serde_json::Value::Null,
+        Some(serde_json::Value::Object(fields)) => {
+            let register = pos_proto::settings::register();
+            serde_json::Value::Object(
+                fields
+                    .iter()
+                    .filter(|(field, _)| {
+                        !register.iter().any(|setting| {
+                            setting.node == node_key && setting.field == field.as_str()
+                        })
+                    })
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect(),
+            )
+        }
+        Some(other) => other.clone(),
     }
 }
 
@@ -10242,7 +10602,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "channels").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "channels").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10321,7 +10681,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "tender").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "tender").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10400,7 +10760,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "origins").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "origins").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10656,7 +11016,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "qr").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "qr").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10713,10 +11073,9 @@ where
     .await
 }
 
-/// The range a store's `event_log_days` may take (ADR-0145). The edge holds the same bounds as
-/// `pos_edge::EVENT_LOG_DAYS` and ignores a value outside them; the two crates share no dependency,
-/// so each side's test pins the numbers and a change to one fails until the other agrees.
-pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u32> = 30..=3650;
+/// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
+/// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
+pub use pos_proto::retention::EVENT_LOG_DAYS;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
@@ -10755,7 +11114,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "retention").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "retention").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -10792,7 +11151,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    if !EVENT_LOG_DAYS.contains(&request.event_log_days) {
+    if !u16::try_from(request.event_log_days).is_ok_and(|days| EVENT_LOG_DAYS.contains(&days)) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
             "event_log_days must be between 30 and 3650",
@@ -10848,7 +11207,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    match read_store_node(&state.config_trees, tenant_id, store_id, "vendors").await {
+    match read_store_node_as_run(&state.config_trees, tenant_id, store_id, "vendors").await {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),
         Err(response) => response,
     }
@@ -11056,15 +11415,27 @@ fn station_late_after(seconds: Option<i64>) -> Result<Option<u32>, Response> {
     reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
 )]
 fn station_ticket_language(token: Option<&str>) -> Result<Option<ReceiptLanguage>, Response> {
+    optional_choice("ticket_language", token)
+}
+
+/// A choice a request names by its wire token: `None` where it names none, which leaves the choice
+/// to whatever stands for it, or a token of `E` this release knows.
+///
+/// # Errors
+///
+/// A `400 INVALID_ENUM_VALUE` naming `field` for a token this release does not know, and for `E`'s
+/// `UNSPECIFIED`, which is what an older reader takes a newer token to be and never a choice.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn optional_choice<E: WireEnum>(field: &str, token: Option<&str>) -> Result<Option<E>, Response> {
     let Some(token) = token else {
         return Ok(None);
     };
-    match ReceiptLanguage::from_wire(token) {
-        Some(known) if known != ReceiptLanguage::Unspecified => Ok(Some(known)),
-        _ => Err(enum_refusal(
-            "ticket_language",
-            accepted_tokens::<ReceiptLanguage>(),
-        )),
+    match E::from_wire(token) {
+        Some(known) if known != E::UNSPECIFIED => Ok(Some(known)),
+        _ => Err(enum_refusal(field, accepted_tokens::<E>())),
     }
 }
 
@@ -12332,7 +12703,7 @@ where
 /// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
 /// is not a guess here, it is the accurate answer.
 fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
-    PublishedDevices::new(
+    PublishedDevices::new(with_listed_receipt_printers(
         approved
             .iter()
             .filter_map(|row| {
@@ -12383,10 +12754,62 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                         .as_deref()
                         .map_or_else(Open::default, Open::parse),
                     cuts_paper: row.cuts_paper,
+                    // Verbatim, as the paper is, and absent where nobody has said: the edge reads
+                    // absent as the store's receipt printer and languages (ADR-0160 decision 4). A
+                    // printer id that will not parse drops the printer, as an agent's does, and one
+                    // that names no printer of this node is dropped below.
+                    receipt_printer_id: row
+                        .receipt_printer_id
+                        .as_deref()
+                        .and_then(|raw| raw.parse::<Ulid>().ok())
+                        .map(DeviceId::new),
+                    receipt_language: row
+                        .receipt_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
+                    receipt_second_language: row
+                        .receipt_second_language
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
                 })
             })
             .collect(),
-    )
+    ))
+}
+
+/// `devices` with each till's `receipt_printer_id` that names no printer of `devices` serving no
+/// station left out (ADR-0160 decision 4).
+///
+/// The rule for a till whose receipt printer goes: the till is published without the field, and
+/// prints at the store's receipt printer, rather than the publish being refused, because the store
+/// must keep printing. A printer goes when it is no longer approved, which archiving one would be,
+/// or when its row cannot be published, as one approved with no connection cannot. The till's
+/// languages stay, and the console still shows the printer it names, so an operator can choose
+/// another.
+fn with_listed_receipt_printers(mut devices: Vec<PublishedDevice>) -> Vec<PublishedDevice> {
+    let receipt_printers: BTreeSet<DeviceId> = devices
+        .iter()
+        .filter(|device| {
+            device.kind.known() == pos_proto::devices::DeviceKind::Printer
+                && device.station_id.is_none()
+        })
+        .map(|device| device.device_id)
+        .collect();
+    for device in &mut devices {
+        if let Some(printer) = device
+            .receipt_printer_id
+            .filter(|printer| !receipt_printers.contains(printer))
+        {
+            tracing::warn!(
+                till = %device.device_id,
+                %printer,
+                "a till names a receipt printer the store's devices do not list; it is published \
+                 printing at the store's receipt printer"
+            );
+            device.receipt_printer_id = None;
+        }
+    }
+    devices
 }
 
 /// The first device in `node` that names an agent the node cannot resolve to a `TERMINAL`.
@@ -13489,11 +13912,13 @@ where
 /// The country a store's published `locale` node names, or `None` when it has never published one
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
-/// Reads the Store layer, which is where `admin_publish_locale` writes. A value that is not two
-/// ASCII letters answers `None` rather than an error: a node written by a fork, or by a build older
-/// than the required-`country_code` change, is a store this console still has to be able to draw.
+/// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
+/// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant
+/// layer. A value that is not two ASCII letters answers `None` rather than an error: a node written
+/// by a fork, or by a build older than the required-`country_code` change, is a store this console
+/// still has to be able to draw.
 fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
-    tree.layer(ConfigLevel::Store)
+    tree.effective()
         .get("locale")?
         .get("country_code")?
         .as_str()
@@ -19246,7 +19671,7 @@ fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Respon
 }
 
 /// The `503` for a settings store that did not answer.
-fn settings_store_error_response(error: &crate::settings::SettingsStoreError) -> Response {
+fn settings_store_error_response(error: &SettingsStoreError) -> Response {
     tracing::error!(%error, "the settings store failed");
     service_unavailable("settings")
 }
@@ -21517,6 +21942,9 @@ where
 ///
 /// The refusal names the node and what it is waiting for, because "the configuration is invalid" is
 /// the message that sent the operator to the logs.
+///
+/// A node that carries nothing but settings is not held ([`only_settings`]): the settings compile
+/// writes `locale.tax_rounding` on the Tenant layer of a store whose locale was never published.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
@@ -21526,9 +21954,10 @@ fn check_prerequisites(
     publishing: &[String],
 ) -> Result<(), Response> {
     let held = |key: &str| {
-        effective_before
-            .as_object()
-            .is_some_and(|map| map.get(key).is_some_and(|value| !value.is_null()))
+        effective_before.as_object().is_some_and(|map| {
+            map.get(key)
+                .is_some_and(|value| !value.is_null() && !only_settings(key, value))
+        })
     };
     for node in publishing {
         for need in prerequisites_for(node) {
@@ -21545,6 +21974,23 @@ fn check_prerequisites(
         }
     }
     Ok(())
+}
+
+/// Whether `value`, the store's `node`, carries only fields the settings register writes there
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+///
+/// Such a node is the settings and nothing else: a `locale` holding `tax_rounding` alone has no
+/// currency, timezone or cutoff, so it is not the locale a menu waits for.
+fn only_settings(node: &str, value: &serde_json::Value) -> bool {
+    let register = pos_proto::settings::register();
+    value.as_object().is_some_and(|fields| {
+        !fields.is_empty()
+            && fields.keys().all(|field| {
+                register
+                    .iter()
+                    .any(|setting| setting.node == node && setting.field == field)
+            })
+    })
 }
 
 /// Sets `nodes` on the layer at `level`, preserving every other key.
@@ -22576,10 +23022,14 @@ where
     .await
 }
 
-/// Flips the kill switch on a store's published rollout: loads its authored `fleet_update`, sets
-/// `halted`, and re-publishes — preserving the rest of the rollout, so an operator halts a bad rollout
-/// (or resumes a paused one) without re-typing the target, ring, and key. `400` if the store has no
-/// rollout to halt.
+/// Flips the kill switch on a store's published rollout: loads the `fleet_update` the store runs, sets
+/// `halted`, and re-publishes it on the Store layer — preserving the rest of the rollout, so an
+/// operator halts a bad rollout (or resumes a paused one) without re-typing the target, ring, and
+/// key. `400` if the store has no rollout to halt.
+///
+/// The rollout is read from the tree's layers composed ([`ConfigTreeState::effective`]): a rollback
+/// restores a version onto the Tenant layer and empties the Store layer, and a halt that read the
+/// Store layer alone refused a store running the restored rollout.
 async fn admin_halt_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -22616,9 +23066,8 @@ where
     let state_before = &loaded.state;
     let Some(mut node) = state_before
         .as_ref()
-        .map(|s| s.layer(ConfigLevel::Store))
-        .and_then(|layer| layer.get("fleet_update"))
-        .cloned()
+        .map(ConfigTreeState::effective)
+        .and_then(|document| document.get("fleet_update").cloned())
     else {
         return api_error(
             ErrorStatus::InvalidArgument,
@@ -22720,8 +23169,9 @@ where
         .into_response()
 }
 
-/// Reads a store's currently-published rollout — the authored `fleet_update` node — or `null` if none
-/// is published. Behind [`ConsolePermission::Read`].
+/// Reads a store's currently-published rollout — the `fleet_update` node the store runs, its layers
+/// composed so a rollout a rollback restored reads as it runs — or `null` if none is published.
+/// Behind [`ConsolePermission::Read`].
 async fn admin_get_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -22759,9 +23209,8 @@ where
         Ok(state_before) => {
             let rollout = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Store))
-                .and_then(|layer| layer.get("fleet_update"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("fleet_update").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(rollout)).into_response()
         }
@@ -22831,8 +23280,9 @@ where
     .await
 }
 
-/// Reads a store's published placement — the authored `device_ota` node — or `null` if the store has
-/// never been placed. Behind [`ConsolePermission::Read`].
+/// Reads a store's published placement — the `device_ota` node the store runs, its layers composed
+/// so a placement a rollback restored reads as it runs — or `null` if the store has never been
+/// placed. Behind [`ConsolePermission::Read`].
 async fn admin_get_placement<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -22870,9 +23320,8 @@ where
         Ok(state_before) => {
             let placement = state_before
                 .as_ref()
-                .map(|s| s.layer(ConfigLevel::Device))
-                .and_then(|layer| layer.get("device_ota"))
-                .cloned()
+                .map(ConfigTreeState::effective)
+                .and_then(|document| document.get("device_ota").cloned())
                 .unwrap_or(serde_json::Value::Null);
             (StatusCode::OK, Json(placement)).into_response()
         }
@@ -34535,7 +34984,8 @@ where
     publishable_membership(groups, tenant_id, group_id).await
 }
 
-/// Reads each target store's published `locale.timezone`, for the wall-clock conversion.
+/// Reads each target store's `locale.timezone` as the store runs it ([`read_store_node_as_run`]),
+/// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
 /// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
@@ -34550,7 +35000,7 @@ where
 {
     let mut targets = Vec::with_capacity(stores.len());
     for store_id in stores {
-        let locale = read_store_node(config_trees, tenant_id, *store_id, "locale").await?;
+        let locale = read_store_node_as_run(config_trees, tenant_id, *store_id, "locale").await?;
         targets.push(TargetStore {
             store_id: *store_id,
             timezone: locale
@@ -34727,7 +35177,9 @@ where
                 continue;
             }
             for store_id in &stores {
-                match read_store_node(&state.config_trees, tenant_id, *store_id, needed).await {
+                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
+                    .await
+                {
                     Ok(serde_json::Value::Null) => {
                         return api_error(
                             ErrorStatus::Unprocessable,
@@ -35239,6 +35691,114 @@ mod client_ip_tests {
 }
 
 #[cfg(test)]
+mod devices_compile_tests {
+    //! What a till's receipts compile to ([`super::compile_devices`], ADR-0160 decision 4), and the
+    //! rule for a till whose receipt printer leaves the store's approved devices: it is published
+    //! without the field, and prints at the store's receipt printer.
+    use super::{DeviceProposalSummary, compile_devices};
+    use pos_proto::devices::PublishedDevice;
+    use pos_proto::ids::DeviceId;
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
+    use pos_proto::ulid::Ulid;
+
+    /// An approved row of the one store, as the device store lists it.
+    fn row(
+        id: u128,
+        kind: &str,
+        connection: Option<&str>,
+        station: Option<u128>,
+    ) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            id: Ulid::from_u128(id).to_string(),
+            store_id: Ulid::from_u128(0x5).to_string(),
+            kind: kind.to_owned(),
+            name: format!("Device {id}"),
+            address: String::new(),
+            connection: connection.map(str::to_owned),
+            station_id: station.map(|station| Ulid::from_u128(station).to_string()),
+            agent_device_id: None,
+            drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
+            receipt_printer_id: None,
+            receipt_language: None,
+            receipt_second_language: None,
+            status: "approved".to_owned(),
+            version: "1".to_owned(),
+        }
+    }
+
+    /// The bar till, naming `printer` and printing in English then Vietnamese.
+    fn bar_till(printer: u128) -> DeviceProposalSummary {
+        DeviceProposalSummary {
+            receipt_printer_id: Some(Ulid::from_u128(printer).to_string()),
+            receipt_language: Some("RECEIPT_LANGUAGE_EN".to_owned()),
+            receipt_second_language: Some("RECEIPT_SECOND_LANGUAGE_VI".to_owned()),
+            ..row(7, "terminal", None, None)
+        }
+    }
+
+    /// The compiled entry for `id`.
+    fn compiled(rows: &[DeviceProposalSummary], id: u128) -> PublishedDevice {
+        compile_devices(rows)
+            .devices()
+            .iter()
+            .find(|device| device.device_id == DeviceId::new(Ulid::from_u128(id)))
+            .cloned()
+            .expect("the device is published")
+    }
+
+    #[test]
+    fn a_till_carries_its_receipt_printer_and_languages_and_one_nobody_set_carries_none() {
+        let rows = [
+            row(1, "printer", Some("network"), None),
+            row(2, "printer", Some("network"), None),
+            bar_till(2),
+            row(8, "terminal", None, None),
+        ];
+        let bar = compiled(&rows, 7);
+        assert_eq!(
+            bar.receipt_printer_id,
+            Some(DeviceId::new(Ulid::from_u128(2)))
+        );
+        assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+        assert_eq!(
+            bar.receipt_second_language(),
+            Some(ReceiptSecondLanguage::Vietnamese)
+        );
+        let door = serde_json::to_value(compiled(&rows, 8)).expect("json");
+        for field in [
+            "receipt_printer_id",
+            "receipt_language",
+            "receipt_second_language",
+        ] {
+            assert!(door.get(field).is_none(), "{field} is not written: {door}");
+        }
+    }
+
+    #[test]
+    fn a_till_whose_receipt_printer_goes_is_published_without_it_and_keeps_its_languages() {
+        // Archived: the printer is no longer among the approved rows. A station's printer, and a
+        // printer approved before a connection was recorded, which the publish holds back, are not
+        // a counter's receipt printer either. Each till prints at the store's instead.
+        for rows in [
+            vec![row(1, "printer", Some("network"), None), bar_till(2)],
+            vec![row(2, "printer", Some("network"), Some(0x5A)), bar_till(2)],
+            vec![row(2, "printer", None, None), bar_till(2)],
+            vec![row(2, "kds", Some("network"), None), bar_till(2)],
+        ] {
+            let bar = compiled(&rows, 7);
+            assert_eq!(bar.receipt_printer_id, None, "{rows:?}");
+            assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
+            assert_eq!(
+                bar.receipt_second_language(),
+                Some(ReceiptSecondLanguage::Vietnamese)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod locale_node_tests {
     //! What a store's `locale` node actually carries
     //! ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
@@ -35248,6 +35808,7 @@ mod locale_node_tests {
     //! write, none of which can tell you whether the node an edge receives is complete.
     use super::{PublishLocaleRequest, checked_locale_node, packed_facts};
     use crate::countries;
+    use pos_proto::locale::{PublishedLocale, PublishedNumberFormat};
     use serde_json::Value;
 
     /// A publish as the console sends one, for a store trading in `currency`.
@@ -35340,69 +35901,77 @@ mod locale_node_tests {
         );
     }
 
-    /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
+    /// The node carries every field the edge reads, and nothing else but the two the cloud keeps for
+    /// itself.
     ///
-    /// Written out rather than derived, because the two sides sit in different crates with nothing
-    /// linking them: `crates/pos-edge/src/config_client.rs` declares what an edge parses, this
-    /// function declares what a cloud sends, and the silence between them is where
-    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
-    /// on them.
+    /// The fields are the type's, `pos_proto::locale::PublishedLocale`, the one the edge applies the
+    /// node through, rather than a list written out here: the node parses as it, sends each field it
+    /// reads and reads back as stated, and sends no other key but the cloud's own. A field added to
+    /// the type does not compile below until it is stated.
     ///
     /// Both directions are checked, because the gap has appeared both ways round: a key the edge
-    /// reads and the cloud never sends is a feature that does nothing, and a key the cloud sends and
-    /// the edge never reads is a payload nobody consumes. Neither shows up as a failure anywhere
-    /// else.
-    ///
-    /// **What it does not do**, because the list is written here rather than read from the edge: it
-    /// cannot tell whether `PublishedLocale` really parses these. Adding a name to the list is what
-    /// makes this pass, so the list is a checklist with teeth on the *node*, not a cross-crate
-    /// check. No crate depends on both, and adding a dependency to make a test possible is the
-    /// wrong trade.
+    /// reads and the cloud never sends is a feature that does nothing, which is where
+    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
+    /// on them, and a key the cloud sends and the edge never reads is a payload nobody consumes.
+    /// Neither shows up as a failure anywhere else.
     ///
     /// Its sibling closes the other half: `every_field_a_locale_node_carries_reaches_the_session`
-    /// in `crates/pos-edge/src/config_client.rs` asserts each of these keys actually moves a session
-    /// field. Between them, each side is checked against real behaviour rather than against nothing.
-    /// What neither catches is a field added to both lists and to neither implementation, which is
-    /// what the per-field tests above are for.
+    /// in `crates/pos-edge/src/config_client.rs` asserts each of these fields actually moves a
+    /// session field.
     #[test]
     fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
-        // `crates/pos-edge/src/config_client.rs`, `struct PublishedLocale`.
-        const READ_BY_THE_EDGE: &[&str] = &[
-            "currency_code",
-            "currency_exponent",
-            "timezone",
-            "cutoff_hour",
-            "prices_include_tax",
-            "cash_rounding_increment",
-            "cash_denominations",
-            "default_retention_days",
-            "number_format",
-            "country_language",
-        ];
-        // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
-        // against a store's region (ADR-0114); `display_language` is applied when the menu book is
-        // compiled rather than onto the session.
+        // Not read through `PublishedLocale`. `country_code` is the fleet console's own comparison
+        // against a store's region (ADR-0114). `display_language` is the store's choice rather than
+        // its country's, and the edge reads it apart from the type, field by field, to name the
+        // menu's items in it and keep it on the session (ADR-0074).
         const THE_CLOUD_S_OWN: &[&str] = &["country_code", "display_language"];
 
-        let node =
-            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
-                .expect("a valid publish");
-        let object = node.as_object().expect("the node is an object");
+        let mut published = request("VN", "VND");
+        published.display_language = Some("vi".to_owned());
+        let node = checked_locale_node(&published, &packed_facts(&countries::registry()))
+            .expect("a valid publish");
+        let sent = node.as_object().expect("the node is an object");
 
-        let missing: Vec<&&str> = READ_BY_THE_EDGE
-            .iter()
-            .filter(|key| !object.contains_key(**key))
+        // The node as the edge reads it, through its text as `session_from_config` parses it, and
+        // written back: an optional field the node sends as `null` reads as absent.
+        let read: PublishedLocale =
+            serde_json::from_str(&node.to_string()).expect("the edge applies the node it is sent");
+        let read = serde_json::to_value(read).expect("serialise");
+        let read = read.as_object().expect("an object");
+
+        // Every key the type reads, from the type: a value stating each field, written.
+        let every_field = serde_json::to_value(PublishedLocale {
+            currency_code: String::new(),
+            currency_exponent: Some(0),
+            timezone: String::new(),
+            cutoff_hour: 0,
+            prices_include_tax: true,
+            cash_rounding_increment: Some(0),
+            cash_denominations: vec![0],
+            default_retention_days: Some(0),
+            number_format: Some(PublishedNumberFormat {
+                decimal_separator: String::new(),
+                group_separator: String::new(),
+                digits_per_group: 0,
+            }),
+            country_language: Some(String::new()),
+        })
+        .expect("serialise");
+        let every_field = every_field.as_object().expect("an object");
+
+        let missing: Vec<&String> = every_field
+            .keys()
+            .filter(|key| !sent.contains_key(*key) || !read.contains_key(*key))
             .collect();
         assert!(
             missing.is_empty(),
             "the edge parses these and the node does not send them, so they do nothing: {missing:?}"
         );
 
-        let unclaimed: Vec<&String> = object
+        let unclaimed: Vec<&String> = sent
             .keys()
             .filter(|key| {
-                !READ_BY_THE_EDGE.contains(&key.as_str())
-                    && !THE_CLOUD_S_OWN.contains(&key.as_str())
+                !every_field.contains_key(*key) && !THE_CLOUD_S_OWN.contains(&key.as_str())
             })
             .collect();
         assert!(
@@ -35425,6 +35994,173 @@ mod locale_node_tests {
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
         );
+    }
+}
+
+#[cfg(test)]
+mod revoked_devices_tests {
+    //! The deny-list a revocation writes ([`super::append_revoked_device`]): the list the store runs,
+    //! read from the tree's layers composed, with the new id appended.
+    use super::append_revoked_device;
+    use crate::config_tree::ConfigTreeState;
+    use pos_core::device_revocation::MAX_REVOKED_DEVICES;
+    use pos_proto::ulid::Ulid;
+    use serde_json::{Value, json};
+
+    /// A tree whose Tenant layer holds `tenant` and whose Store layer holds `store`.
+    fn tree(tenant: Value, store: Value) -> ConfigTreeState {
+        ConfigTreeState {
+            layers: [tenant, json!({}), store, json!({})],
+            history: Vec::new(),
+            k: 8,
+        }
+    }
+
+    fn id(n: u128) -> String {
+        Ulid::from_u128(n).to_string()
+    }
+
+    fn deny_list(ids: &[String]) -> Value {
+        json!({ "revoked_devices": { "device_ids": ids } })
+    }
+
+    /// The ids the append writes onto the Store layer.
+    fn written(before: &ConfigTreeState, listed: &str) -> Vec<String> {
+        let (key, node) = append_revoked_device(Some(before), listed)
+            .expect("appended")
+            .into_iter()
+            .next()
+            .expect("one node");
+        assert_eq!(key, "revoked_devices");
+        serde_json::from_value(node["device_ids"].clone()).expect("a list of ids")
+    }
+
+    #[test]
+    fn a_restored_list_is_kept_and_the_new_id_appended_to_it() {
+        // A rollback leaves the restored list on the Tenant layer and the Store layer empty.
+        let restored = tree(deny_list(&[id(1), id(2)]), json!({}));
+        assert_eq!(written(&restored, &id(3)), vec![id(1), id(2), id(3)]);
+        assert_eq!(
+            written(&restored, &id(1)),
+            vec![id(1), id(2)],
+            "an id already listed adds nothing"
+        );
+    }
+
+    #[test]
+    fn the_list_appended_to_is_the_one_the_store_runs() {
+        // A list on the Store layer replaces one below it when the layers merge, so it is the list
+        // the store runs, and the one a revocation adds to.
+        let both = tree(deny_list(&[id(1)]), deny_list(&[id(2)]));
+        assert_eq!(written(&both, &id(3)), vec![id(2), id(3)]);
+    }
+
+    #[test]
+    fn the_cap_counts_the_list_the_store_runs() {
+        let full: Vec<String> = (1_u128..).take(MAX_REVOKED_DEVICES).map(id).collect();
+        let restored = tree(deny_list(&full), json!({}));
+        let refused =
+            append_revoked_device(Some(&restored), &id(0xFFFF)).expect_err("past the cap");
+        assert_eq!(refused.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(
+            written(&restored, &id(1)).len(),
+            MAX_REVOKED_DEVICES,
+            "an id already listed re-publishes the full list"
+        );
+    }
+}
+
+#[cfg(test)]
+mod node_as_run_tests {
+    //! What a store's node reads as once its layers are composed ([`super::node_as_run`]).
+    use super::node_as_run;
+    use serde_json::{Value, json};
+
+    #[test]
+    fn a_node_reads_without_its_settings_and_one_of_settings_alone_reads_as_none() {
+        let locale = json!({
+            "currency_code": "VND",
+            "timezone": "Asia/Ho_Chi_Minh",
+            "tax_rounding": "TAX_ROUNDING_DOWN",
+        });
+        assert_eq!(
+            node_as_run("locale", Some(&locale)),
+            json!({ "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" })
+        );
+        for (node, settings) in [
+            ("locale", json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })),
+            ("qr", json!({ "table_order": "TABLE_ORDER_JOIN" })),
+        ] {
+            assert_eq!(node_as_run(node, Some(&settings)), Value::Null, "{node}");
+        }
+        assert_eq!(node_as_run("locale", None), Value::Null);
+    }
+
+    #[test]
+    fn a_node_with_no_settings_fields_reads_as_it_is_composed() {
+        // `table_order` is a setting of the `qr` node, not of `channels`.
+        let channels = json!({ "enabled": ["SALES_CHANNEL_DINE_IN"], "table_order": 1 });
+        assert_eq!(node_as_run("channels", Some(&channels)), channels);
+        // An empty node is a node, as the publish check counts it, and a node that is not an
+        // object, `null` included, is answered as it is.
+        for node in [json!({}), Value::Null, json!([1, 2]), json!("text")] {
+            assert_eq!(node_as_run("qr", Some(&node)), node, "{node}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod qr_node_tests {
+    //! The `qr` node the console's QR form publishes reads back through the type the edge and the
+    //! guest intake read it with (`pos_proto::qr::PublishedQr`), every field as it was written.
+    use super::{QrBusinessHoursRequest, QrGuardrailFields, qr_guardrail_node};
+    use pos_proto::qr::{PublishedQr, QrBusinessHours, TableOrder};
+
+    #[test]
+    fn the_node_the_qr_form_writes_reads_back_through_its_type() {
+        for (enabled, hours) in [
+            (
+                Some(false),
+                Some(QrBusinessHoursRequest {
+                    open_hour: 22,
+                    close_hour: 2,
+                    tz_offset_minutes: 420,
+                }),
+            ),
+            (None, None),
+        ] {
+            let fields = QrGuardrailFields {
+                enabled,
+                staff_confirmation_required: false,
+                per_table_limit: 5,
+                rate_window_secs: 300,
+                business_hours: hours.clone(),
+            };
+            let node = qr_guardrail_node(&fields).expect("a valid publish");
+            let read: PublishedQr =
+                serde_json::from_str(&node.to_string()).expect("the node parses");
+            assert_eq!(read.table_order(), TableOrder::Separate);
+            assert_eq!(read.enabled, enabled);
+            assert_eq!(read.staff_confirmation_required, Some(false));
+            assert_eq!(read.per_table_limit, Some(5));
+            assert_eq!(read.rate_window_secs, Some(300));
+            assert_eq!(
+                read.business_hours,
+                hours.map(|hours| QrBusinessHours {
+                    open_hour: hours.open_hour,
+                    close_hour: hours.close_hour,
+                    tz_offset_minutes: Some(hours.tz_offset_minutes),
+                })
+            );
+            assert_eq!(PublishedQr::guardrails(&node), Some(read.clone()));
+
+            // Nothing the form writes is lost or renamed on the way through the type.
+            let mut written_back = serde_json::to_value(&read).expect("serialise");
+            if let serde_json::Value::Object(fields) = &mut written_back {
+                fields.remove("table_order");
+            }
+            assert_eq!(written_back, node);
+        }
     }
 }
 
@@ -35507,6 +36243,63 @@ mod preview_diff_tests {
         let before = json!({"locale": {"currency": "VND"}, "tax": Value::Null});
         super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect_err("a null tax node is no tax node");
+    }
+
+    #[test]
+    fn a_locale_that_carries_only_its_settings_is_not_the_locale_a_menu_needs() {
+        // ADR-0160: a tenant's tax rounding reaches the Tenant layer of every store it covers,
+        // including one whose locale was never published. That store still has no locale.
+        let setting = json!({"tax_rounding": "TAX_ROUNDING_DOWN"});
+        let before = json!({"locale": setting, "tax": {"rates": []}});
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect_err("a setting alone is no locale");
+        let before = json!({
+            "locale": {"currency": "VND", "tax_rounding": "TAX_ROUNDING_DOWN"},
+            "tax": {"rates": []},
+        });
+        super::check_prerequisites(&before, &publishing(&["menu"]))
+            .expect("a published locale with the setting beside it");
+    }
+
+    #[test]
+    fn a_backup_node_of_settings_alone_is_a_settings_only_node() {
+        // ADR-0160 decision 6: the settings compile writes `backup.interval_hours` on the Tenant
+        // layer of every store it reaches, and the node holds nothing else, so the publish check
+        // treats it as it treats a `locale` holding only its tax rounding.
+        assert!(super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6})
+        ));
+        assert!(!super::only_settings(
+            "backup",
+            &json!({"interval_hours": 6, "destination": "elsewhere"})
+        ));
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"backup")),
+            "and no node waits on it"
+        );
+    }
+
+    #[test]
+    fn nothing_waits_on_the_tender_keys_node() {
+        // ADR-0160: the node holds settings and nothing else, which the rule above counts as no node.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"tender_keys"))
+        );
+    }
+
+    #[test]
+    fn nothing_waits_on_the_counter_node() {
+        // ADR-0160: the walk-in channel's node holds settings and nothing else, as `tender_keys` does.
+        assert!(
+            !crate::config_tree::NODE_PREREQUISITES
+                .iter()
+                .any(|(_, needs)| needs.contains(&"counter"))
+        );
     }
 
     #[test]

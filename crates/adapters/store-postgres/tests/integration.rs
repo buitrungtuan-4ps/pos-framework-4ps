@@ -5597,6 +5597,7 @@ mod employees_store {
 
 mod role_templates_and_assignments {
     use super::{block_on, prepared};
+    use pos_proto::error::ErrorStatus;
     use store_postgres::RowUpdate;
 
     /// Role templates insert with two jsonb permission sets — what the role grants directly and what
@@ -6496,29 +6497,31 @@ mod role_templates_and_assignments {
                 )
                 .await
                 .expect("assign");
-            // The same person at the same store twice is refused by the unique index.
-            assert!(
-                people
-                    .insert_assignment(
-                        "01ASSIGN00000000000000000B",
-                        "tenant-a",
-                        "01EMP0000000000000000000A1",
-                        "01STORE000000000000000000S",
-                        "01ROLE000000000000000000A1",
-                    )
-                    .await
-                    .is_err(),
-                "a person is assigned to a store at most once"
-            );
+            // The same person at the same store twice is refused by the unique index, as a conflict
+            // rather than an outage, and the first assignment stays as it was.
+            let refused = people
+                .insert_assignment(
+                    "01ASSIGN00000000000000000B",
+                    "tenant-a",
+                    "01EMP0000000000000000000A1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000B2",
+                )
+                .await
+                .expect_err("a person is assigned to a store at most once");
+            assert_eq!(refused.status(), ErrorStatus::AlreadyExists, "{refused}");
 
             // Readable both ways, tenant-scoped.
+            let at_store = people
+                .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
+                .await
+                .expect("by store");
+            assert_eq!(at_store.len(), 1);
+            let first = at_store.first().expect("a row");
             assert_eq!(
-                people
-                    .fetch_assignments_for_store("tenant-a", "01STORE000000000000000000S")
-                    .await
-                    .expect("by store")
-                    .len(),
-                1
+                (first.id.as_str(), first.role_template_id.as_str()),
+                ("01ASSIGN00000000000000000A", "01ROLE000000000000000000A1"),
+                "the refused duplicate changed nothing"
             );
             assert_eq!(
                 people
@@ -6750,13 +6753,16 @@ mod role_templates_and_assignments {
                     .expect("every store");
             }
 
-            // Each scope holds exactly its id, and one row per person and group or tenant-wide.
-            for (id, employee, kind, group, why) in [
+            // Each scope holds exactly its id, and one row per person and group or tenant-wide. A
+            // second row at a scope the person holds is a conflict; a row the checks refuse is not
+            // one, and stays the database's failure.
+            for (id, employee, kind, group, status, why) in [
                 (
                     "01ASSIGN000000000000BAD01",
                     alice,
                     "STORE_GROUP",
                     None,
+                    ErrorStatus::Unavailable,
                     "a group's row names its group",
                 ),
                 (
@@ -6764,6 +6770,7 @@ mod role_templates_and_assignments {
                     alice,
                     "TENANT",
                     Some(airport),
+                    ErrorStatus::Unavailable,
                     "a tenant-wide row names no group",
                 ),
                 (
@@ -6771,6 +6778,7 @@ mod role_templates_and_assignments {
                     alice,
                     "STORE",
                     None,
+                    ErrorStatus::Unavailable,
                     "a one-store row is not this table's",
                 ),
                 (
@@ -6778,6 +6786,7 @@ mod role_templates_and_assignments {
                     bao,
                     "STORE_GROUP",
                     Some(airport),
+                    ErrorStatus::AlreadyExists,
                     "one per person and group",
                 ),
                 (
@@ -6785,16 +6794,15 @@ mod role_templates_and_assignments {
                     cam,
                     "TENANT",
                     None,
+                    ErrorStatus::AlreadyExists,
                     "one per person tenant-wide",
                 ),
             ] {
-                assert!(
-                    people
-                        .insert_scope_assignment(id, "tenant-a", employee, kind, group, lead)
-                        .await
-                        .is_err(),
-                    "{why}"
-                );
+                let refused = people
+                    .insert_scope_assignment(id, "tenant-a", employee, kind, group, lead)
+                    .await
+                    .expect_err(why);
+                assert_eq!(refused.status(), status, "{why}: {refused}");
             }
             people
                 .insert_scope_assignment(
@@ -7408,6 +7416,7 @@ mod reconcile_query {
 
 mod device_proposals {
     use pos_proto::devices::{DeviceConnection, PaperWidth};
+    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 
     use super::{TENANT_A, block_on, port_err, prepared};
 
@@ -7869,6 +7878,98 @@ mod device_proposals {
                     .expect("cross-tenant write")
                     .is_none(),
                 "the tenant scope stops one tenant setting another's paper"
+            );
+        });
+    }
+
+    /// A till's receipt printer and languages are written and read back through the columns the
+    /// publish reads (ADR-0160 decision 4), under the paper's conditional write, and cleared with
+    /// nulls.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a terminal nobody set reads none of the
+    /// three, which is published as nothing, so no till's receipts change because the columns
+    /// appeared.
+    #[test]
+    fn a_tills_receipts_round_trip_as_tokens_and_a_terminal_nobody_set_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "TILL1")
+                .expect("the terminal")
+        }
+        fn receipts(row: &store_postgres::DeviceProposalRow) -> [Option<&str>; 3] {
+            [
+                row.receipt_printer_id.as_deref(),
+                row.receipt_language.as_deref(),
+                row.receipt_second_language.as_deref(),
+            ]
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Bar till")
+                .await
+                .expect("create the terminal");
+            let till = read(&devices).await;
+            assert_eq!(
+                receipts(&till),
+                [None, None, None],
+                "a terminal nobody set says nothing about its receipts"
+            );
+
+            let moved = devices
+                .set_receipt(
+                    TENANT_A,
+                    "TILL1",
+                    Some("PRN2"),
+                    Some(ReceiptLanguage::English),
+                    Some(ReceiptSecondLanguage::None),
+                    &till.version,
+                )
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [
+                    Some("PRN2"),
+                    Some("RECEIPT_LANGUAGE_EN"),
+                    Some("RECEIPT_SECOND_LANGUAGE_NONE")
+                ],
+                "each language is stored as the token the node carries"
+            );
+            assert!(
+                devices
+                    .set_receipt(TENANT_A, "TILL1", None, None, None, &till.version)
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the receipts"
+            );
+            assert!(
+                devices
+                    .set_receipt("tenant-b", "TILL1", None, None, None, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's receipts"
+            );
+            devices
+                .set_receipt(TENANT_A, "TILL1", None, None, None, &moved)
+                .await
+                .expect("the clearing write")
+                .expect("a matching version clears");
+            assert_eq!(
+                receipts(&read(&devices).await),
+                [None, None, None],
+                "a till cleared is the store's again"
             );
         });
     }

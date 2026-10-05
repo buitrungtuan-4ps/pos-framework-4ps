@@ -8,6 +8,15 @@
 // `qr.enabled` and the QR channel following it (ADR-0160 decision 5) and is offered on Channels &
 // payments, beside its guardrails. Left out of the form, it is also left out of what a preset sets:
 // a preset names no QR flag, so applying one here would have switched a store's QR ordering off.
+//
+// Nor does the form offer a flag no release reads, which the catalogue marks `offered: false`
+// (ADR-0160 decision 5: every switch the console offers changes behaviour at the edge). Left out of
+// the form, such a flag is left out of what a preset sets and of what a publish sends, so a store's
+// stored value stays as it is. A store that has one on is told so in one muted line. One exception
+// keeps table service reachable: table service excludes pay-first (§10), so a publish that leaves
+// tables on for a store whose stored pay-first is on turns pay-first off too, and the line says so.
+// A preset that turns on none of the offered switches, as Retail names only barcode entry, is not
+// offered either: it would only turn every switch off.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 
@@ -60,12 +69,19 @@ const PRESET_KEY: Record<string, MessageKey> = {
   retail: "config.capabilities.preset.retail",
 };
 
+// The two flags of the one rule a hidden switch takes part in: table service excludes pay-first.
+const PAY_FIRST = "pay_first_enabled";
+const TABLES = "tables_enabled";
+
 // A client-side mirror of the §10 inter-flag rules (`pos-core`'s `RULES`), keyed by rule id, so the
 // editor can preview a conflict the instant a toggle creates it. This is a UX convenience only — the
 // server re-runs the real `conflicts` on publish and returns a 422, so it stays authoritative. A rule
 // the server serves but this map does not know is treated as satisfied here (never a false block) and
 // is still enforced on publish.
 const CONFLICT_CHECKS: Record<string, (on: (key: string) => boolean) => boolean> = {
+  // `pay_first_enabled` is not offered (ADR-0160 decision 5), so the form never holds it and this
+  // never fires here: a publish that turns tables on clears a stored pay-first instead (see
+  // `clearsPayFirst`). The cloud still applies the rule on publish.
   "pay_first.excludes.tables": (on) => !(on("pay_first_enabled") && on("tables_enabled")),
   "seats.requires.tables": (on) => !on("seats_enabled") || on("tables_enabled"),
 };
@@ -141,9 +157,53 @@ export function Config() {
   const effective = () => read.value()?.effective ?? null;
   const versions = (): ConfigVersion[] => read.value()?.versions ?? [];
   const catalogue = () => read.value()?.catalogue ?? null;
-  /** The flags the capability form offers: every one but QR ordering's switch. */
+  /**
+   * The flags the capability form offers: every one a release reads, but QR ordering's switch, which
+   * Channels & payments offers.
+   */
   const formFlags = (): readonly CapabilityFlag[] =>
-    (catalogue()?.flags ?? []).filter((flag) => flag.key !== QR_ORDERING_SWITCH);
+    (catalogue()?.flags ?? []).filter(
+      (flag) => flag.key !== QR_ORDERING_SWITCH && flag.offered !== false,
+    );
+  /**
+   * Whether the form offers `preset`: it turns on at least one switch the form offers. A preset that
+   * names none, as Retail names only barcode entry, would only turn every switch off.
+   */
+  const presetOffered = (preset: CapabilityPreset): boolean => {
+    const offered = new Set(formFlags().map((flag) => flag.key));
+    return preset.keys.some((key) => offered.has(key));
+  };
+  /**
+   * Whether a publish now also turns the store's stored pay-first off.
+   *
+   * Table service excludes pay-first (§10's `pay_first.excludes.tables`), and the form no longer
+   * offers pay-first. So a store that has it on, from a Counter preset, could not otherwise turn table
+   * service back on from here: the cloud would refuse the publish and nothing would clear the flag.
+   * Nothing reads the flag, so turning it off changes nothing else. Only in this case: an unread flag
+   * stays unwritten otherwise, and once a release offers pay-first again the form holds it itself.
+   */
+  const clearsPayFirst = (): boolean => {
+    const payFirst = catalogue()?.flags.find((flag) => flag.key === PAY_FIRST);
+    return (
+      payFirst !== undefined &&
+      payFirst.offered === false &&
+      flagInEffective(PAY_FIRST, payFirst.default_on) &&
+      flags()[TABLES] === true
+    );
+  };
+  /** What a publish sends: the form's switches, and pay-first off where `clearsPayFirst` says so. */
+  const publishedFlags = (): Record<string, boolean> =>
+    clearsPayFirst() ? { ...flags(), [PAY_FIRST]: false } : flags();
+  /**
+   * The flags no release reads that this store has on: set before the console stopped offering them,
+   * usually by a preset that named them. Said in one muted line, so an operator who set one is not
+   * left looking for it. Pay-first is said differently while a publish would turn it off.
+   */
+  const unusedFlagsOn = (): string[] =>
+    (catalogue()?.flags ?? [])
+      .filter((flag) => flag.offered === false && flagInEffective(flag.key, flag.default_on))
+      .filter((flag) => !(flag.key === PAY_FIRST && clearsPayFirst()))
+      .map((flag) => flag.key);
 
   /**
    * When the capability flags last reached this store.
@@ -314,21 +374,23 @@ export function Config() {
 
   // The flags whose working value differs from the store's current effective profile — the
   // diff-before-publish, so the operator sees exactly what a publish will change.
-  const flagChanges = () =>
-    formFlags()
+  const flagChanges = () => [
+    ...formFlags()
       .map((flag) => {
         const before = flagInEffective(flag.key, flag.default_on);
         const after = flags()[flag.key] ?? flag.default_on;
         return { key: flag.key, before, after };
       })
-      .filter((row) => row.before !== row.after);
+      .filter((row) => row.before !== row.after),
+    ...(clearsPayFirst() ? [{ key: PAY_FIRST, before: true, after: false }] : []),
+  ];
 
   const publishCapabilities = async () => {
     setCapError("");
     setCapOk("");
     setBusy(true);
     try {
-      const result = await api.publishCapabilities(tenantId(), storeId(), flags());
+      const result = await api.publishCapabilities(tenantId(), storeId(), publishedFlags());
       const message = t("config.capabilities.published", { version: result.config_version_id });
       setCapOk(message);
       toast.ok(message);
@@ -382,7 +444,7 @@ export function Config() {
                 actions={
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="text-sm text-ink-muted">{t("config.capabilities.presets")}</span>
-                    <For each={cat().presets}>
+                    <For each={cat().presets.filter(presetOffered)}>
                       {(preset) => {
                         const key = PRESET_KEY[preset.id];
                         return (
@@ -429,6 +491,20 @@ export function Config() {
                       )}
                     </For>
                   </div>
+                  <Show when={unusedFlagsOn().length > 0 || clearsPayFirst()}>
+                    <p class="text-sm text-ink-muted">
+                      {[
+                        ...(unusedFlagsOn().length > 0
+                          ? [
+                              t("config.capabilities.setButUnused", {
+                                keys: unusedFlagsOn().join(", "),
+                              }),
+                            ]
+                          : []),
+                        ...(clearsPayFirst() ? [t("config.capabilities.payFirstCleared")] : []),
+                      ].join(" ")}
+                    </p>
+                  </Show>
 
                   <Show when={violatedRules().length > 0}>
                     <Banner
@@ -484,7 +560,7 @@ export function Config() {
                     disabled={violatedRules().length > 0}
                     disabledReason={t("config.capabilities.conflicts")}
                     preview={previewNode("capabilities", tenantId(), storeId(), {
-                      flags: flags(),
+                      flags: publishedFlags(),
                     })}
                     onPublish={() => void publishCapabilities()}
                     data-step="publishCapabilities"

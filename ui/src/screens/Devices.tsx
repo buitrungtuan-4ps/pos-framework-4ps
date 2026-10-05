@@ -1,7 +1,13 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { api } from "../api/client";
-import type { IntegrationEntry, MintedCode, PairedDevice, PrinterEntry } from "../api/types";
+import { ApiError, api } from "../api/client";
+import type {
+  IntegrationEntry,
+  MintedCode,
+  PairedDevice,
+  PrinterEntry,
+  TerminalEntry,
+} from "../api/types";
 import { QrCode } from "../components/QrCode";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
@@ -83,9 +89,226 @@ function clockOffsetKey(offsetMs: number): MessageKey {
   return offsetMs < 0 ? "devices.clock_behind" : "devices.clock_exact";
 }
 
+// What a bind came to, in words. An outcome this till does not know is a bind that did not happen.
+function bindOutcomeKey(outcome: string): MessageKey {
+  switch (outcome) {
+    case "BOUND":
+      return "devices.till_bound";
+    case "HELD_BY_ANOTHER_DEVICE":
+      return "devices.till_held_by_another";
+    case "DEVICE_HOLDS_ANOTHER_AGENT":
+      return "devices.till_holds_another";
+    default:
+      return "devices.till_not_bound";
+  }
+}
+
+// Who is a till, in words, or nothing where nobody is. A token this till does not know reads as
+// nobody: the bind is offered, and the store server answers it.
+function heldKey(held: string): MessageKey | null {
+  switch (held) {
+    case "THIS_DEVICE":
+      return "devices.till_held_here";
+    case "ANOTHER_DEVICE":
+      return "devices.till_held_elsewhere";
+    default:
+      return null;
+  }
+}
+
+// Which of the store's tills this device is (ADR-0112, ADR-0160 decision 4). A paired device
+// becomes one through the print-agent binding: its guests' receipts then print where the console
+// says for that till, and printers the console points at the till print through this device's
+// print agent. Nothing on a screen made the binding before this card, so a manager called the store
+// server by hand.
+//
+// Drawn for whoever may manage devices, as retiring one is. The store server decides from the
+// person's own role in every store, so where the store does not enforce each person's own set it
+// refuses the read to somebody `can` lets through. The card is then not drawn, as it would not be
+// where the store enforces, rather than an error on a screen they opened to look at.
+//
+// The bundle is the one its own store server serves, POS Station's window included (ADR-0147), so a
+// store server too old for this read never serves a till that asks it. A page left open while its
+// store server rolls back is the version banner's case, and shows the failed read as any other.
+function ThisDevice() {
+  const [terminals, setTerminals] = createSignal<readonly TerminalEntry[] | null>(null);
+  const [refused, setRefused] = createSignal(false);
+  const [chosen, setChosen] = createSignal<string | null>(null);
+  const [outcome, setOutcome] = createSignal<MessageKey | null>(null);
+  const [failure, setFailure] = createSignal<string | null>(null);
+  const [releasing, setReleasing] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+
+  const load = async () => {
+    try {
+      setTerminals((await api.terminals()).terminals);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 403) {
+        setRefused(true);
+        return;
+      }
+      setFailure(errorMessage(caught));
+    }
+  };
+  onMount(() => void load());
+
+  // The till this device is, if it is one of the store's.
+  const mine = () => terminals()?.find((terminal) => terminal.held === "THIS_DEVICE") ?? null;
+
+  // A bind or a release, then the tills read again: the card says what the store server holds, not
+  // what this screen expects it to.
+  const act = async (send: () => Promise<MessageKey>) => {
+    setBusy(true);
+    setOutcome(null);
+    setFailure(null);
+    try {
+      setOutcome(await send());
+      await load();
+    } catch (caught) {
+      setFailure(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const bind = (agentDeviceId: string) =>
+    act(async () => bindOutcomeKey((await api.bindTerminal(agentDeviceId)).outcome));
+  const release = (agentDeviceId: string) =>
+    act(async () => {
+      await api.releaseTerminal(agentDeviceId);
+      setReleasing(false);
+      return "devices.till_released";
+    });
+
+  return (
+    <Show when={!refused()}>
+      <div class="mt-6 rounded-token border border-line p-3" data-outcome="till">
+        <p class="font-semibold text-ink">{t("devices.till_title")}</p>
+        <Show when={terminals()}>
+          {(listed) => (
+            <Show
+              when={listed().length > 0}
+              fallback={
+                <p class="mt-1 text-sm text-ink-muted" data-outcome="till-empty">
+                  {t("devices.till_empty")}
+                </p>
+              }
+            >
+              <Show
+                when={mine()}
+                fallback={
+                  <p class="mt-1 text-ink" data-outcome="till-status">
+                    {t("devices.till_none")}
+                  </p>
+                }
+              >
+                {(till) => (
+                  <>
+                    <p class="mt-1 font-semibold text-ink" data-outcome="till-status">
+                      {t("devices.till_is", { name: till().name })}
+                    </p>
+                    <Show
+                      when={releasing()}
+                      fallback={
+                        <button
+                          type="button"
+                          class="mt-2 min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
+                          disabled={busy()}
+                          onClick={() => setReleasing(true)}
+                        >
+                          {t("devices.till_release")}
+                        </button>
+                      }
+                    >
+                      <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <span class="text-sm text-ink">
+                          {t("devices.till_release_confirm", { name: till().name })}
+                        </span>
+                        <button
+                          type="button"
+                          class="min-h-touch rounded-token bg-danger px-3 font-semibold text-danger-ink disabled:opacity-50"
+                          disabled={busy()}
+                          onClick={() => void release(till().agent_device_id)}
+                        >
+                          {t("devices.till_release")}
+                        </button>
+                        <button
+                          type="button"
+                          class="min-h-touch rounded-token border border-line px-3 text-ink"
+                          onClick={() => setReleasing(false)}
+                        >
+                          {t("common.cancel")}
+                        </button>
+                      </div>
+                    </Show>
+                  </>
+                )}
+              </Show>
+              <p class="mt-2 text-sm text-ink-muted">{t("devices.till_hint")}</p>
+              {/* Choosing first, then Bind under the choice, as the Today screen reprints: a tap on
+                  the wrong row of a list must not move where a till's paper prints. */}
+              <ul class="mt-2 flex flex-col gap-2">
+                <For each={listed()}>
+                  {(terminal) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="flex min-h-touch w-full items-center gap-3 rounded-token border border-line bg-surface px-3 text-left"
+                        classList={{
+                          "border-2 border-accent font-semibold":
+                            chosen() === terminal.agent_device_id,
+                        }}
+                        aria-pressed={chosen() === terminal.agent_device_id}
+                        onClick={() => setChosen(terminal.agent_device_id)}
+                      >
+                        <span class="min-w-0 flex-1 text-ink">{terminal.name}</span>
+                        <Show when={heldKey(terminal.held)}>
+                          {(key) => <span class="text-sm text-ink-muted">{t(key())}</span>}
+                        </Show>
+                      </button>
+                      <Show
+                        when={
+                          chosen() === terminal.agent_device_id && terminal.held !== "THIS_DEVICE"
+                        }
+                      >
+                        <button
+                          type="button"
+                          class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                          disabled={busy()}
+                          onClick={() => void bind(terminal.agent_device_id)}
+                        >
+                          {t("devices.till_bind", { name: terminal.name })}
+                        </button>
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          )}
+        </Show>
+        <Show when={outcome()}>
+          {(key) => (
+            <p class="mt-2 text-sm text-ink" role="status" data-outcome="till-outcome">
+              {t(key())}
+            </p>
+          )}
+        </Show>
+        <Show when={failure()}>
+          {(message) => (
+            <p class="mt-2 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
 export function Devices() {
-  // Retiring, adding and testing are managing devices (`admin.device.manage`; retiring under
-  // ADR-0158 decision 8). Without it the screen still says what is paired, published and measured.
+  // Retiring, adding, testing and binding this device to a till are managing devices
+  // (`admin.device.manage`; retiring under ADR-0158 decision 8). Without it the screen still says
+  // what is paired, published and measured.
   const manages = () => can("admin.device.manage");
   const [devices, setDevices] = createSignal<readonly PairedDevice[]>([]);
   const [durable, setDurable] = createSignal(true);
@@ -327,6 +550,10 @@ export function Devices() {
           )}
         </Show>
       </div>
+      </Show>
+
+      <Show when={manages()}>
+        <ThisDevice />
       </Show>
 
       <div class="mt-6 rounded-token border border-line p-3">
