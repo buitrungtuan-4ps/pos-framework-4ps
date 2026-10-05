@@ -30844,6 +30844,136 @@ async fn the_kill_switch_halts_and_resumes_a_published_rollout() {
     }
 }
 
+/// The kill switch halts the rollout the store runs when the halt is written, not the one it read
+/// first: a rollout another operator publishes between the halt's read and its write is the one
+/// halted, and the halt answers and is recorded as any halt is.
+///
+/// The halt used to read the tree, then publish a node built from that read through a write that read
+/// the tree again: the newer rollout was overwritten by the older one, halted, and the store would
+/// have run the target nobody had asked for any more.
+#[tokio::test]
+async fn the_kill_switch_halts_a_rollout_published_between_its_read_and_its_write() {
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let mut tree = ConfigTree::new(store_id(), CapabilityValidator);
+    tree.publish(
+        ConfigLevel::Store,
+        serde_json::json!({ "fleet_update": restored_rollout() }),
+        ConfigVersionId::new(Ulid::from_u128(1)),
+        Vec::new(),
+    )
+    .expect("the first rollout");
+    let version = config.mint();
+    config.rows.lock().expect("lock").insert(
+        (tenant(), store_id()),
+        Versioned::new(tree.state(), version),
+    );
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    // Another operator's rollout lands after the halt reads the tree and before it writes.
+    let newer = serde_json::json!({
+        "target_version": "1.5.0",
+        "min_ring": "fleet",
+        "rollout_percent": 60,
+        "signing_key_id": "b2b2b2b2b2b2b2b2",
+        "revoked_key_ids": [],
+    });
+    *config.interpose.lock().expect("lock") = Some(("fleet_update".to_owned(), newer.clone()));
+
+    let halted = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/ota/halt",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "halted": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the halt");
+    assert_eq!(halted.status(), StatusCode::OK);
+    assert!(
+        json_body(halted).await["config_version_id"].is_string(),
+        "the version the halt published, as before"
+    );
+    let mut expected = newer;
+    expected["halted"] = serde_json::json!(true);
+    assert_eq!(
+        running_document(&config, tenant(), store_id())["fleet_update"],
+        expected,
+        "the rollout published meanwhile, halted, and not the one the halt read first"
+    );
+    let recorded: Vec<_> = audit
+        .list(None, 100)
+        .await
+        .expect("list audit")
+        .into_iter()
+        .filter(|entry| entry.action == "config.ota.halt")
+        .map(|entry| (entry.entity_id, entry.after))
+        .collect();
+    assert_eq!(
+        recorded,
+        vec![(
+            store_id().to_string(),
+            Some(serde_json::json!({ "halted": true }))
+        )],
+        "recorded once, as every halt is"
+    );
+}
+
+/// The kill switch on a store with no published rollout is refused `400`, as it always was. The
+/// refusal is decided on the tree the halt would write over, so nothing is published and nothing is
+/// recorded.
+#[tokio::test]
+async fn the_kill_switch_on_a_store_with_no_rollout_is_refused_and_records_nothing() {
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let recorded = audit.list(None, 100).await.expect("list audit").len();
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/ota/halt",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "halted": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the halt");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let error = json_body(refused).await;
+    assert_eq!(
+        error["error"]["message"], "the store has no published rollout to halt",
+        "{error}"
+    );
+    assert_eq!(
+        version_count(&config, tenant(), store_id()),
+        0,
+        "nothing published"
+    );
+    assert_eq!(
+        audit.list(None, 100).await.expect("list audit").len(),
+        recorded,
+        "nothing recorded"
+    );
+}
+
 /// After a rollback the fleet row compares the store's region against the country the store runs,
 /// which the rollback restored, rather than reporting no country.
 #[tokio::test]
