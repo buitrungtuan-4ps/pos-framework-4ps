@@ -136,6 +136,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   it was (`ui/src/components/Keypad.tsx`). No upgrade note: nothing on the wire or in the database
   changes.
 
+- **A console table sorted by a text column puts numbers in order, and sorts a long table faster.**
+  Sorting compares text the way people read it: "Table 2" now comes before "Table 10", and case and
+  accents no longer split names that read the same ("pho" sorts with "Phở"; rows that tie keep their
+  order). Each row's sort value is read once instead of on every comparison
+  (`DataTable` in `dashboard/src/components/kit.tsx`). No upgrade note: nothing on the wire changes.
+
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
   consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
