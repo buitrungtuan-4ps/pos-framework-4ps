@@ -130,6 +130,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The till's number pad names itself to a screen reader and keeps focus where it was.** The keypad
+  on the Pay, Takeaway and Shift screens is now a group named "Numeric keypad" (*Bàn phím số*), a key
+  reached from a keyboard shows a focus ring, and pressing a key no longer pulls focus away from where
+  it was (`ui/src/components/Keypad.tsx`). No upgrade note: nothing on the wire or in the database
+  changes.
+
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
   consequences accepted). Each side read these nodes with code of its own: the edge's `locale`

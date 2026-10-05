@@ -168,6 +168,7 @@
   "kds.sound_tap": "Tap anywhere on the board to let it ring for new food.",
   "kds.stations": "Kitchen stations",
   "kds.title": "Kitchen",
+  "keypad.aria_label": "Numeric keypad",
   "keypad.backspace": "Delete the last digit",
   "keypad.clear": "Clear the amount",
   "keypad.clear_short": "C",
