@@ -41,8 +41,8 @@ use pos_proto::MenuBook;
 use pos_proto::enums::SalesChannel;
 use pos_proto::fees::{FeeItems, FeeKind, FeeTax, PublishedFee, PublishedFees};
 use pos_proto::ids::{FeeId, MenuItemId, TenantId};
-use pos_proto::locale::TaxRateTable;
-use pos_proto::money::{CurrencyCode, Money, Rounding};
+use pos_proto::locale::{LocaleSettings, TaxRateTable};
+use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -429,8 +429,8 @@ pub fn for_store(
 // --- What a store must hold for a rule to apply ---------------------------------------------------
 
 /// What a store's configuration says that a fee rule has to agree with: the currency it bills in,
-/// the tax rates it holds, and the items on its menu; and, for a sample bill, how it rounds and
-/// whether its prices include their tax.
+/// the tax rates it holds, and the items on its menu; and, for a sample bill, how it rounds its
+/// tax, its fees and its total, and whether its prices include their tax.
 ///
 /// Each is absent while the store has not been published that node, and nothing is checked against
 /// a fact the store does not have: a store with no `tax` node has no menu either, because a menu
@@ -445,6 +445,9 @@ pub struct StoreFacts {
     /// The `locale` node's `cash_rounding_increment`, read as the edge reads it: absent, zero or
     /// negative is no cash rounding.
     cash_rounding_increment: Option<i64>,
+    /// The settings on the `locale` node (ADR-0160), read as the edge reads them: the tax rounding
+    /// is [`LocaleSettings::tax_rounding`], so absent, unspecified or unknown is half-up.
+    locale_settings: LocaleSettings,
 }
 
 impl StoreFacts {
@@ -469,6 +472,7 @@ impl StoreFacts {
                 .and_then(|locale| locale.get("cash_rounding_increment"))
                 .and_then(serde_json::Value::as_i64)
                 .filter(|increment| *increment > 0),
+            locale_settings: parsed(locale).unwrap_or_default(),
         }
     }
 
@@ -631,8 +635,8 @@ pub enum SampleBillError {
 /// Nothing here is a second implementation of the bill: each line is priced by [`reprice_line`],
 /// the function an inbound order's lines are priced by, and the totals are [`assemble`]'s, given
 /// what the edge gives it. That is the rules in force for a bill opening on the channel
-/// ([`PublishedFees::in_force`]), no bill-level discount or service charge, the store's cash
-/// rounding and tax posture from its `locale` node, and half-up rounding, as the edge's bill does.
+/// ([`PublishedFees::in_force`]), no bill-level discount or service charge, and the store's cash
+/// rounding, tax posture and tax rounding from its `locale` node, as the edge's bill does.
 ///
 /// # Errors
 ///
@@ -714,7 +718,7 @@ pub fn sample_bill(
         rates,
         sales_channel: channel,
         cash_rounding_increment: facts.cash_rounding_increment,
-        rounding_mode: Rounding::HalfUp,
+        tax_rounding: facts.locale_settings.tax_rounding().rounding(),
         prices_include_tax: facts.prices_include_tax,
         fee_rules: &fee_rules,
         // A sample bill is charged every fee: a waive is an act on one real bill.
@@ -1405,6 +1409,12 @@ mod sampling {
 
     /// A store billing in đồng at 8 % on dine-in, selling a pizza and a lemonade.
     fn facts() -> StoreFacts {
+        facts_at(&serde_json::json!({ "currency_code": "VND", "cash_rounding_increment": 0 }))
+    }
+
+    /// The same store with `locale` as its `locale` node, and a pizza priced so that 5 % of it is
+    /// half a đồng over.
+    fn facts_at(locale: &serde_json::Value) -> StoreFacts {
         let menu = MenuBook::new().with(
             SalesChannel::DineIn,
             MenuCatalog::new()
@@ -1419,6 +1429,12 @@ mod sampling {
                     DisplayName::new("Lemonade"),
                     vnd(30_000),
                     class(),
+                ))
+                .with(MenuEntry::new(
+                    item(4),
+                    DisplayName::new("Burrata"),
+                    vnd(95_010),
+                    class(),
                 )),
         );
         let tax = TaxRateTable::new().with(
@@ -1427,7 +1443,7 @@ mod sampling {
             TaxRate::from_basis_points(800),
         );
         StoreFacts::from_document(&serde_json::json!({
-            "locale": { "currency_code": "VND", "cash_rounding_increment": 0 },
+            "locale": locale,
             "tax": serde_json::to_value(&tax).expect("encode the table"),
             "menu": serde_json::to_value(&menu).expect("encode the menu"),
         }))
@@ -1477,6 +1493,49 @@ mod sampling {
         assert_eq!(fee.tax, vnd(880));
         assert_eq!(totals.service_charge, vnd(11_000));
         assert_eq!(totals.total_due, vnd(249_480));
+    }
+
+    /// A store's sample bill rounds as the store's `locale` node says (ADR-0160), which is how
+    /// its edge bills: 5 % of 95,010 is 4,750.5, and 8 % of the line and the fee is 7,980.88 at
+    /// half-up or 7,980.8 at down, so a store that rounds down is shown each one unit lower. A
+    /// store that says nothing, or names a mode this release does not know, is shown half-up, and
+    /// the total still rounds half-up to the store's coins.
+    #[test]
+    fn a_store_that_rounds_tax_down_is_shown_the_fee_and_tax_its_edge_would_charge() {
+        let preview = |tax_rounding: Option<&str>, coins: i64| {
+            let mut locale = serde_json::json!({
+                "currency_code": "VND", "cash_rounding_increment": coins,
+            });
+            if let (Some(locale), Some(mode)) = (locale.as_object_mut(), tax_rounding) {
+                locale.insert("tax_rounding".to_owned(), mode.into());
+            }
+            let bill = sample_bill(
+                &facts_at(&locale),
+                SalesChannel::DineIn,
+                &[line(4, 1)],
+                &five_percent(),
+            )
+            .expect("a bill");
+            let fee = bill.totals.fee_lines.first().map(|fee| fee.amount);
+            (fee, bill.totals.tax_total, bill.totals.total_due)
+        };
+        let half_up = (Some(vnd(4_751)), vnd(7_981), vnd(107_742));
+        assert_eq!(preview(None, 0), half_up);
+        assert_eq!(preview(Some("TAX_ROUNDING_HALF_UP"), 0), half_up);
+        assert_eq!(
+            preview(Some("TAX_ROUNDING_HALF_EVEN"), 0),
+            half_up,
+            "a mode from a newer release"
+        );
+        assert_eq!(
+            preview(Some("TAX_ROUNDING_DOWN"), 0),
+            (Some(vnd(4_750)), vnd(7_980), vnd(107_740))
+        );
+        assert_eq!(
+            preview(Some("TAX_ROUNDING_DOWN"), 1_000),
+            (Some(vnd(4_750)), vnd(7_980), vnd(108_000)),
+            "107,740 rounds up to the coins, not down"
+        );
     }
 
     #[test]

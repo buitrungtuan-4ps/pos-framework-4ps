@@ -18,6 +18,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
+  text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return as a formula, and the
+  exports wrote names as they were authored or imported. So an item named
+  `=HYPERLINK("http://evil","click")` was a live link in the file of whoever exported and opened it,
+  and older Excel could be made to run a command (OWASP, CSV injection).
+  - Each free-text cell of the exports that starts with one of those characters is written with
+    one leading `'`: an item's name in `items.csv`; a translation's key, locale and string in
+    `translations.csv`; and a fee's code and name in `revenue-fees.csv`. A cell that already starts
+    with `'`s and then one of them gets one more `'`. Ids, tokens, dates and numbers are written as
+    they are, so a negative amount stays a number. `rollups.csv` and `revenue.csv` carry no free
+    text and do not change.
+  - The item and translation imports take that `'` back off, after trimming a cell as they always
+    have, so an exported file imports as what it was made from.
+  - **Upgrade note:** an exported text cell that starts with a formula character now begins with
+    `'`, so a spreadsheet shows the text instead of running it, and importing the same file gives
+    back the original. An imported cell that starts with `'`s and then one of those characters now
+    loses one `'`, so a name typed as `'=Special` into a file of the operator's own imports as
+    `=Special`. Headers, columns, quoting, file names and the audit records do not change; no route,
+    migration, permission or protocol change.
+
 - **Retiring a device needs a signed-in manager**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8).
   `POST /api/pair/revoke` needed only a paired device, so any tablet in the shop could retire
@@ -109,6 +129,51 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 7450 AMT (`2001:3::/32`) and RFC 7535 AS112 (`2001:4:112::/48`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
 
 ### Changed
+
+- **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),
+  consequences accepted). Each side read these nodes with code of its own: the edge's `locale`
+  reader was a private struct the cloud checked against a list of field names, and a test on each
+  side pinned the retention bounds the other used.
+  - `pos_proto::locale::PublishedLocale` is the country's view of the `locale` node, moved from the
+    edge with its fields and its parse unchanged: `currency_code`, `timezone` and `cutoff_hour` stay
+    required, so a node carrying only settings is not read as a country's locale, and
+    `LocaleSettings` stays beside it as the register's view. The cloud's test of the node it
+    publishes reads it through the type instead of the list.
+  - `pos_proto::qr::PublishedQr` carries the guardrails the console's QR form writes beside
+    `table_order`: `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`
+    and `business_hours`. Each is read field by field, as before: a field holding anything but its
+    JSON type reads as absent and takes no other field down, and the guardrails are read apart from
+    `table_order`, so a malformed setting does not stop them. The edge's guardrails and the cloud's
+    guest intake and QR switch read through it.
+  - `pos_proto::retention::PublishedRetention` is the `retention` node, and `EVENT_LOG_DAYS`
+    (30 to 3650 days) is one constant both sides use; `pos_edge::EVENT_LOG_DAYS` and
+    `pos_cloud::http::EVENT_LOG_DAYS` re-export it. `PUT /admin/config/retention` keeps its body,
+    its `400` and its message.
+  - **Upgrade note:** no wire change. The cloud builds and publishes these nodes as before, so no
+    store's configuration version or checksum changes, and a v0.14.0 edge reads them as it did. One
+    intended difference: a `qr` node that is not an object no longer sets `table_order`; earlier
+    releases read a single-value array positionally. No writer produces such a node. A crate that
+    builds a `PublishedQr` field by field adds `..PublishedQr::default()`.
+
+- **The console offers only the capability switches a release reads**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). The Config screen offered `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` and
+  `queue_number_enabled`, and none of them changed anything at any store: no tab, pay-first flow or
+  barcode field exists, and queue numbers are always issued for tableless orders, whatever the switch
+  says.
+  - `GET /admin/capabilities` marks each flag `offered`, and those four `false`. The Config screen
+    leaves them out of its switches and of what a preset or a publish sets, and no longer offers the
+    Retail preset, which named only barcode entry and so would only have turned every switch off. A
+    store that has one on is shown it as set but not used by this release.
+  - Table service still turns on. A store whose stored `pay_first_enabled` is on, as the Counter
+    preset left it, has it turned off by a publish that turns tables on, which the screen says
+    before the publish, and by a store-group copy that turns tables on. Nothing reads the flag, and
+    the cloud's rule that pay-first excludes tables is unchanged.
+  - **Upgrade note:** nothing changes for any store. Queue numbers are issued for tableless orders as
+    before. A store's stored values are kept and sent as before, the cloud's rules and presets are
+    unchanged, and a console reading an older cloud offers every switch and preset as it did. No
+    route, event, migration, permission or protocol change.
 
 - **QR ordering is one switch, `qr_ordering_enabled`**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
@@ -337,6 +402,73 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Assigning a person where they already hold an assignment answers `409`, not `503`.** A person
+  holds at most one assignment per store, one per group and one tenant-wide (ADR-0158 decision 3),
+  and the database refused a second with its unique index. The cloud read that refusal as the
+  database failing, so the console said the people service was unavailable and a retry could never
+  succeed.
+  - The store says which: a unique violation (SQLSTATE `23505`) on either assignment insert is
+    `already_exists`, and every other failure stays `unavailable`.
+  - `POST /admin/assignments` answers `409` `ALREADY_EXISTS`, naming `store_id`, `store_group_id`
+    or `scope_kind`, with a message that says to change or remove the assignment that is there. The
+    refused request writes nothing, records nothing in the audit trail and publishes nothing. The
+    People screen shows the message as it shows every refusal.
+
+  **Upgrade note:** a duplicate assignment now answers `409` instead of `503`. No route, event,
+  migration, permission or setting changes, and the admin OpenAPI document does not list this route.
+
+- **Retiring a device, and sending a guest's order to the kitchen or refusing it, no longer say the
+  store did not respond.** The edge answers each with `204` and no body, and the till read every
+  answer as JSON. So a retirement that had worked said "The store did not respond." and left the
+  device on the list, and a guest's order that had been sent stayed on screen under the same
+  sentence until the queue next refreshed. The till now reads a `204` as done, which the new
+  **Release** on the Devices screen relies on too.
+
+- **The console offers a printer's paper only to a store whose release reads it**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). Only an edge from 0.14.1 reads the paper and cutter the Devices screen sets, and an
+  older one prints on 80 mm paper with a cutter whatever is saved. So a 58 mm printer set for a
+  store still on 0.14.0 went on shearing its receipts, and nothing on screen said why.
+  - For a store whose edge reports a release older than 0.14.1, no printer offers **Paper**, and
+    one line on the card says the store does not read a printer's paper yet and prints on 80 mm
+    paper with a cutter until it updates. The Paper column still shows what was saved.
+  - A store that has not reported its release is offered **Paper** with a note, as Shared settings
+    notes one. A store on 0.14.1 or later sees no change.
+
+- **After a rollback, revoking a device no longer un-revokes the devices retired before it, and
+  the OTA kill switch halts the store's rollout.** A rollback restores a version onto the store's
+  Tenant layer and empties its other layers. A revocation read the deny-list from the Store layer
+  alone, so after a rollback it wrote a list holding only the new device; a list replaces when
+  layers merge, so the store stopped refusing every device retired before the rollback, and a
+  stolen tablet could trade again. The kill switch read the rollout from the Store layer too, and
+  refused a rolled-back store as having no rollout to halt. Both now read the node as the store
+  runs it, its layers composed, and write it where they always did with the change applied. The
+  rollout and placement reads and the fleet row's country read the same way.
+  - **Upgrade note:** no stored data changes. A store that was rolled back and then had a device
+    revoked should be checked: re-revoke any device missing from its list. The console shows the
+    list.
+
+- **After a rollback, the console reads a store's nodes as the store runs them.** A rollback
+  restores a version onto the store's Tenant layer and empties its Store layer, and the console's
+  node forms and three of its checks read a node from the Store layer alone. Until each node was
+  published again, the forms for channels, tender, origins, QR guardrails, event retention and
+  vendor policies showed nothing while the store ran the restored values, and saving one wrote
+  defaults over them; a `menu` batch skipped the store and a release carrying a menu was refused,
+  as if the store had no `tax` or `locale`; and a wall-clock release refused the store as having no
+  timezone. They now read the node from the store's four layers composed, as the store runs it,
+  without the fields the settings register puts on it, so a node holding nothing but settings
+  still reads as unpublished.
+  - **Upgrade note:** no stored data, wire format or route changes. Reads after a rollback now
+    show what the store runs. Where a tenant or brand layer carries a node's own fields, the forms
+    and checks now read them with the store's, because the store runs them.
+
+- **The counter's pay pad offers the store's own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). After the table pay screen took the store's `tender_keys`, the counter's pad still
+  offered 5, 10 and 15 percent at every store. It now offers the same keys in the same order, draws
+  no tip row where the store hides every key, and keeps the cash snap from making two keys the same
+  in whatever order the store sets them. No protocol, migration or permission change.
+
 - **A merge refuses bills on different orders**
   ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
   `POST /api/bills/{id}/merge` checked only that the bills shared a table, and two counter bills
@@ -458,6 +590,247 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   snapped to the store's cash increment as the pay screen's are.
 
 ### Added
+
+- **A manager makes a device one of the store's tills on the till's Devices screen**
+  ([ADR-0112](docs/adr/0112-print-agents.md)). A paired device is a till through the print-agent
+  binding, `POST /api/print/agent`, and nothing on a screen called it, so a till's own receipt
+  printer and a terminal's print agent could be set up only by calling the edge by hand.
+  - **Devices → This device** says which till this device is, or that it is not one of the store's
+    tills yet, and lists the store's terminals, marking the one another device is. **Bind** makes
+    this device the chosen one and says what came of it: bound; another device is already that
+    till, so release it there first; or this device is already another till, so release that
+    first. **Release** asks first, then stops this device being its till, and the card reads the
+    list again after either. A store that publishes no terminal is told they are created in the
+    console under **Devices → Terminals**. The card is drawn for a person who may manage devices,
+    and not for one the edge refuses the list to.
+  - `GET /api/print/agent` (new) lists the published terminals in the node's order, each with
+    `agent_device_id`, `name` and `held`: `THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`. It never
+    names another device, a person or when an agent last asked for work. It sits behind the claim's
+    two gates: a paired device, and a signed-in person whose own role grants `admin.device.manage`,
+    whether or not the store enforces each person's own set. The `403` from all three binding
+    routes now carries `pos-error-reason: PERMISSION_DENIED`.
+  - `POS_DEMO_PROFILE=tills` publishes two terminals in `examples/minimal-edge`, which the browser
+    gate binds.
+
+  **Upgrade note:** `GET /api/print/agent` is new and additive (`docs/snapshots/routes.txt`,
+  `ROUTE_PERMISSIONS`). No event, migration, permission, setting or protocol change. An edge older
+  than this release has no such read, and none is asked for one: the till that reads it is the
+  bundle its own edge serves, and POS Station loads the till from the edge's address
+  ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md)).
+
+- **A till can have its own receipt printer and receipt languages**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 4). Every till's receipts printed at the store's one receipt printer, in the store's
+  receipt languages, so a bar till's bill came out at the counter.
+  - A terminal on the `devices` node can name `receipt_printer_id`, the printer its receipts,
+    receipt copies and pre-bills go to, and `receipt_language` and `receipt_second_language`, the
+    languages they print in. Each is the store's while absent. The second language takes the store
+    setting's own choices, `RECEIPT_SECOND_LANGUAGE_NONE` among them, so a till can print in one
+    language where the store prints in two.
+  - `POST /admin/devices/proposals/{id}/receipt` (new, and documented in
+    `docs/openapi-admin.json`) sets the three, each `null` for the store's, with an `If-Match` and
+    an audit entry. It refuses `400` naming the field: `id` for a device that is not a terminal,
+    `receipt_printer_id` for a device that is not an approved printer of the terminal's store
+    serving no station, and either language for a token outside its choices.
+  - The devices publish carries them as set. A till whose receipt printer is no longer among the
+    store's published printers that serve no station, such as one archived, is published without
+    it and prints at the store's receipt printer: the publish is not refused, and the store keeps
+    printing.
+  - The edge prints a receipt, its copy and a pre-bill asked for at a till at the printer its
+    terminal names, in its languages. A paired device is that till once a manager binds it to the
+    terminal with the print-agent binding, `POST /api/print/agent`
+    ([ADR-0112](docs/adr/0112-print-agents.md)); no agent has to be installed for this. A device
+    bound to no terminal, a terminal that names nothing, and a printer the node does not list as
+    one serving no station print at the store's receipt printer, as before. A till's printer that
+    does not answer is reported as `PRINTER_UNAVAILABLE`, and nothing prints at the counter
+    instead. Kitchen tickets, the shift report and the cash drawer are unchanged: a cash payment
+    at the bar till opens the store's drawer.
+  - The console's **Terminals** card shows each till's **Receipt printer**, **Receipt language**
+    and **Second language**, and **Receipts** sets them. Honour or hide (decision 5): they are
+    offered for a store whose edge reports 0.14.1 or later. For an older store they are hidden and
+    one line says why, and a store that has not reported its release is shown them with a note.
+
+  **Upgrade note:** `PublishedDevice` gains `receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`pos-proto`, additive), left off the node while unset. Nothing changes
+  until a terminal sets a printer or a language and the store's devices are published: until then
+  the edge reads no binding to print a guest's paper, and prints it byte for byte as before. An edge
+  older than 0.14.1 ignores the fields, because `PublishedDevice` has never refused one it does not
+  know. The cash drawer stays the store's until the multi-drawer shift work. Migration
+  `0082_terminal_receipts.sql` adds `device_proposals.receipt_printer_id`, `receipt_language` and
+  `receipt_second_language` (`text`, nullable). It is additive and rollback-safe. No event,
+  permission or protocol change.
+
+- **The console sets how large a store draws what its printers cannot print**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0102](docs/adr/0102-printing-any-script.md)). The size lived in each box's
+  `config.toml` as `font_size_dots`, where the console could not reach it.
+  - A new setting on the `printing` node, `printing.font_size_dots`, from 16 to 48 printer dots per
+    em, default 24, set at the tenant, a brand, a store group or one store. Only a line the printer
+    cannot print in its own characters, such as a Vietnamese dish name, is drawn at it; a line the
+    printer's own character set covers prints in the printer's font. Double-size text is drawn at
+    twice it.
+  - The edge reads the size at each print, so a change applies from the next print, without a
+    restart and without loading the fonts again: `pos-render` gains `TextRenderer::render_at`, which
+    draws a line at a given size. The edge logs the size in force and where it comes from, the
+    store's configuration, `config.toml` or the default, at start-up and at the first print after
+    it changes.
+  - `font_size_dots` is **deprecated**: it applies only while the store's configuration sets none,
+    with a warning while it is the size in use (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the size: a store that sets none prints
+    byte for byte as before, at its box's own size or 24, and a box's own size keeps applying until
+    a setting is written, which then wins. An edge older than this release does not read the
+    `printing` node and keeps its file's size. The settings snapshot and `docs/configuration.md` gain
+    the setting; no route, event, migration, permission or protocol change.
+
+- **The console sets how often a store archives its database**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 6, [ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The interval lived in
+  each box's `config.toml` as `backup_interval_hours`, where the console could not reach it.
+  - A new setting on a new `backup` node, `backup.interval_hours`, from 1 to 168 hours, default 24,
+    set at the tenant, a brand, a store group or one store. It is the most trading a store can lose
+    if its disk dies. The register gains a unit, `SETTING_UNIT_HOURS`, which the console names in
+    English and Vietnamese.
+  - No published value switches archiving off: the bounds start at one hour, and the cloud refuses
+    `0` with `OUT_OF_RANGE`.
+  - The archive loop reads the interval as it schedules each archive, so a change applies from the
+    next archive without a restart. The first archive is still five minutes after the box starts.
+    The edge logs the interval in force and where it comes from, the store's configuration,
+    `config.toml` or the default, when the loop starts and whenever it changes.
+  - `backup_interval_hours` is **deprecated** as a number: it applies only while the store's
+    configuration sets none, with a warning while it is the interval in use.
+    `backup_interval_hours = 0` is not deprecated: it is still the one way to switch archiving off,
+    and no published value overrides it (`deploy/edge/README.md`).
+  - **Upgrade note:** nothing changes until someone sets the interval: the default is today's day,
+    and a box's own number keeps applying until a setting is written, which then wins. A box whose
+    file sets `backup_interval_hours = 0` keeps archiving off whatever is published. An edge older
+    than this release ignores the `backup` node and keeps its file's interval. `pos-proto` gains the
+    `backup` module and the unit, additively; the settings snapshot and `docs/configuration.md` gain
+    the setting. No route, event, migration, permission or protocol change.
+
+- **A tenant sets the fewest digits a staff PIN may have**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A PIN could always be four digits, and nothing let a tenant ask for more.
+  - A new setting, `session.pin_min_length`, from 4 to 8, default 4. It is written in Shared
+    settings for the whole tenant and nowhere narrower, because a person may work at every store;
+    the cloud refuses it at a brand, a store group or one store with `SCOPE_NOT_ALLOWED`. It is a
+    policy choice rather than a defence, which stays the PIN's Argon2id cost and the lockout.
+  - `PUT /admin/employees/{employee_id}/pin` holds a PIN set or reset to it. A PIN shorter than the
+    minimum, or longer than eight digits, is refused `400` with `pin: OUT_OF_RANGE` and a message
+    naming the range, such as "the PIN must be 6 to 8 digits". If the tenant's settings cannot be
+    read, the PIN is refused `503` rather than held to four.
+  - The People screen's PIN dialog names the tenant's range and checks it before sending. If it
+    cannot read the minimum it asks for 4 to 8, and the cloud still refuses a shorter PIN.
+  - Shared settings names no release for it and notes no store as too old, because the cloud applies
+    it whatever release a store runs. The register says so with `0.0.0` as the release it is
+    honoured from.
+  - **Upgrade note:** nothing changes until a tenant sets it: the default is today's four. Raising
+    the minimum does not touch a PIN already set, which keeps working; to move everyone to the new
+    length, reset their PINs. The value rides each store's `session` node, from which the edge reads
+    nothing, so there is no edge or till change. The settings snapshot and `docs/configuration.md`
+    gain the setting; no route, event, migration, permission or protocol change.
+
+- **The counter asks a walk-in guest whether they eat in or take away**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). A store that sets `counter.walk_in_channel` to `WALK_IN_CHANNEL_ASK` opened every
+  walk-in for takeaway, because the till asked nothing.
+  - Under ask, **New order** offers two large answers, **Eat in** and **Take away**. The order opens
+    on the channel tapped, with the day's next queue number as before; the counter shows that
+    channel's book, and the order's header says which answer the guest gave.
+  - `GET /api/orders/live` names each order's `sales_channel`, so a till that reloads on a walk-in
+    shows its book and its answer again.
+  - **Upgrade note:** only a store set to ask sees anything new. A till older than this release
+    opens a walk-in at one tap, which the edge opens for takeaway, and a till reading an older edge
+    never asks. The new response field is additive; no route, event, migration, permission or
+    protocol change.
+
+- **A store chooses the channel its walk-ins take**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md)). The counter
+  opened every walk-in for takeaway, so a café whose guests eat at its counter charged them
+  takeaway's prices and tax.
+  - A new setting on a new `counter` node, `walk_in_channel`: `WALK_IN_CHANNEL_TAKEAWAY`, the
+    default, `WALK_IN_CHANNEL_DINE_IN` or `WALK_IN_CHANNEL_ASK`, set at the tenant, a brand, a store
+    group or one store. No new store is given a value, and a value the edge cannot read is takeaway.
+  - `POST /api/orders` without a channel opens the walk-in on the store's channel, and on takeaway
+    under `WALK_IN_CHANNEL_ASK`, where the till names the guest's choice. A channel the till names
+    still wins. A store that publishes the channels it accepts must accept the one a walk-in takes,
+    or the order is refused as before.
+  - The edge sends the setting with the price book as `walk_in_channel`, and the counter shows the
+    book of the channel its walk-ins open on. It reads the dining room's book for the counter only
+    where the store's walk-ins are eaten in.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's takeaway, a till
+    reading an older edge shows the takeaway book, and an older till ignores the field. The setting
+    lives on a node of its own, not on `channels`, so an edge older than this release ignores it and
+    opens every walk-in for takeaway, and the channels a store accepts are unchanged. The settings
+    snapshot and `docs/configuration.md` gain the setting; no route, event, migration, permission or
+    protocol change.
+
+- **An even split offers as many guests as the store sets**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered an even split between two and six guests at every store.
+  - A new setting on the `tender_keys` node, `split_ways_max`: a count from 2 to 12, default 6, set
+    at the tenant, a brand, a store group or one store. A value out of range or unreadable reads as
+    6.
+  - The edge sends it with the price book as `split_ways_max`, and the pay screen offers every
+    count from two up to it. Up to six the row is the five columns it was; past six it is one row
+    that scrolls sideways, as the kitchen board's station tabs do, so the tenders below it stay on
+    a phone's screen.
+  - **Upgrade note:** nothing changes until a store sets it: the default is today's row, a till
+    reading an older edge offers two to six, an older till ignores the field, and an edge older
+    than this release ignores the `tender_keys` node. No route, event, migration, permission or
+    protocol change.
+
+- **A store sets its own tip keys**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The pay screen offered 5, 10 and 15 percent at every store.
+  - Three new settings on a new `tender_keys` node, `first_tip_percent`, `second_tip_percent` and
+    `third_tip_percent`: each a whole percentage of the bill from 0 to 100, defaulting to 5, 10 and
+    15, set at the tenant, a brand, a store group or one store. `0` hides that key. The register
+    gains the unit `SETTING_UNIT_PERCENT`, which the console names "10%".
+  - The edge reads them from the `tender_keys` node, a value out of range or unreadable as its
+    default, and sends the till the keys to offer as `tip_percents` beside `tips_enabled`: each that
+    is not `0` and does not repeat an earlier key's percentage, in order. The pay screen offers
+    **No tip** and those keys, rounded to the cash increment as before, in any order the store sets
+    them, and shows no tip row when no key is left.
+  - **Upgrade note:** nothing changes until a store sets a key: the defaults are today's keys, a
+    till reading an older edge offers them too, and an older till ignores the field. The keys live
+    on a node of their own, not on `tender`, so an edge older than this release ignores them and
+    keeps today's keys, and the `tender` node and the tender a store accepts are unchanged. The
+    settings snapshot and `docs/configuration.md` gain the three settings; no route, event,
+    migration, permission or protocol change.
+
+- **A store chooses how its tax rounds**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 2). Every tax amount
+  and every fee rounded half-up.
+  - `locale.tax_rounding` is a new setting: `TAX_ROUNDING_HALF_UP`, the default, or
+    `TAX_ROUNDING_DOWN`, which drops the fraction of a minor unit, as many Japanese businesses do
+    with consumption tax. It is set at the tenant, a brand, a store group or one store. No country
+    and no new store is given a value.
+  - It rounds the tax of each tax class, whether prices include their tax or not, the tax of a
+    charge taxed at a class no line is in, and each fee's amount. A tax line's named parts share
+    its tax as it rounded. It does not round the total to the country's coins, which stays
+    half-up, or a line's price, a campaign or a recipe's consumption.
+  - The edge reads it from the store's `locale` node and computes every bill with it: a table's or
+    a bill's check, a pre-bill, each part of a split, a discount's answer, the settle, and the
+    lines a receipt copy computes again.
+  - The fee preview (`POST /admin/fees/preview`) rounds a store's sample bill the same way, so the
+    console shows the fee and tax the store's till will charge. The console's Settings screen
+    offers the setting, in English and Vietnamese.
+  - The setting is written on each store's Tenant layer and the locale publish keeps writing the
+    country's fields on its Store layer, so the store receives both. A `locale` node that carries
+    only the setting is not a published locale: a menu is still refused to a store whose locale
+    was never published.
+  - **Upgrade note:** a new setting on the `locale` node, with a new wire enum `TaxRounding`
+    (`pos-proto`, additive), in `docs/snapshots/settings.txt` and `docs/configuration.md`. Nothing
+    changes until a store sets it: absent, `TAX_ROUNDING_UNSPECIFIED` and a token this release does
+    not know all read as half-up, and an edge older than 0.14.1 is not offered the setting and
+    ignores it. A bill is computed with the mode in force when it is computed, so change the mode
+    outside trading hours. A bill does not keep the mode it opened with, the way it keeps its fee
+    rules; that would need an event field and an ADR of its own. In `pos-core`,
+    `BillInput::rounding_mode` is now `tax_rounding` and no longer rounds the cash rounding, which
+    is always half-up (`billing::CASH_ROUNDING`). Every caller passed half-up, so no figure
+    changes. No event, migration, permission or protocol change.
 
 - **A kitchen station prints its tickets in its own language**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)

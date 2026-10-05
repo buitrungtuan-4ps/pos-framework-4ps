@@ -1,0 +1,34 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0082 — a till's own receipt printer and receipt languages
+-- ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+-- decision 4).
+--
+-- Every till printed its receipts at the store's one receipt printer, in the store's receipt
+-- languages. An operator now says, on a `terminal` row, where that till's receipts go and what they
+-- print in:
+--
+--   * `receipt_printer_id`      — another `device_proposals.id`: an approved printer of the same
+--                                 store that serves no station. Not a foreign key, as for
+--                                 `agent_device_id` (0056): `pos-cloud` checks it against the
+--                                 approved devices before it writes, and the publish leaves it out
+--                                 of the node whenever it names a printer the node does not list.
+--   * `receipt_language`        — the wire token, one of `RECEIPT_LANGUAGE_DISPLAY`, `_COUNTRY`,
+--                                 `_VI` or `_EN`.
+--   * `receipt_second_language` — the wire token, one of `RECEIPT_SECOND_LANGUAGE_NONE`, `_VI` or
+--                                 `_EN`.
+--
+-- No check constraint on either token, as for `paper_width` (0078): `pos-cloud` validates them
+-- before it writes, and widening a constraint for a language added later would need a destructive
+-- statement.
+--
+-- All nullable, and the nulls are the whole compatibility story. Null is "the store's", which is
+-- published as nothing at all, and the edge reads nothing as the store's receipt printer and
+-- languages, where every till's receipts have printed until now. A fleet takes this release, every
+-- row reads null, and every store's devices node and every receipt stay as they were.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS receipt_printer_id text;
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS receipt_language text;
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS receipt_second_language text;

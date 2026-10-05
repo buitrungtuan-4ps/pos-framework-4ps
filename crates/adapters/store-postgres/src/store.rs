@@ -7,6 +7,7 @@ use std::num::NonZeroU32;
 
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
 use tokio_postgres::NoTls;
+use tokio_postgres::error::SqlState;
 
 use pos_ports::event_store::{
     AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
@@ -317,6 +318,11 @@ const MIGRATION_0080: &str = include_str!("../migrations/0080_station_late_after
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 const MIGRATION_0081: &str = include_str!("../migrations/0081_station_ticket_language.sql");
+
+/// A till's own receipt printer and receipt languages, which the console sets per terminal
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 4).
+const MIGRATION_0082: &str = include_str!("../migrations/0082_terminal_receipts.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -700,6 +706,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0081)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0082)
             .await
             .map_err(unavailable)
     }
@@ -1332,6 +1342,23 @@ pub enum RowUpdate {
 /// Maps a database error to the port's unavailable status.
 pub(crate) fn unavailable(error: tokio_postgres::Error) -> PortError {
     PortError::unavailable(PortName::EventStore, "the cloud database failed").with_source(error)
+}
+
+/// Maps a failed insert whose one refusal is a unique index: a unique violation (SQLSTATE `23505`)
+/// is the row being there already, [`PortError::already_exists`] with `message`, and every other
+/// failure is the database's, as [`unavailable`] maps it.
+///
+/// A conflict is not an outage. Reported as `unavailable`, it told the console the service was down
+/// and invited a retry that can never succeed.
+pub(crate) fn already_exists_or_unavailable(
+    error: tokio_postgres::Error,
+    message: &'static str,
+) -> PortError {
+    if error.code() == Some(&SqlState::UNIQUE_VIOLATION) {
+        PortError::already_exists(PortName::EventStore, message).with_source(error)
+    } else {
+        unavailable(error)
+    }
 }
 
 /// Maps a pool checkout failure (no connection available) to the port's unavailable status.

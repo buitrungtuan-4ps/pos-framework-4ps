@@ -33,7 +33,7 @@ use crate::cloud_http::{
     CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, OtaHttpTransport,
     RelayHttpTransport,
 };
-use crate::config::{EdgeConfig, NatsConfig};
+use crate::config::{EdgeConfig, NatsConfig, ValueSource};
 use crate::config_client::{ConfigClient, restore_device_revocations, restore_session_from_store};
 use crate::device_revocations::DeviceRevocations;
 use crate::discovery::{Advertiser, NoopAdvertiser};
@@ -741,7 +741,7 @@ where
     // The last two are the fallback the sessions are built on.
     let fallback_idle_timeout = config.sign_in_idle_timeout();
     let idle_window = idle_window_source(&config, &edge.session().session_settings);
-    if let (IdleWindowSource::LocalFile, Some(minutes)) =
+    if let (ValueSource::LocalFile, Some(minutes)) =
         (idle_window, config.sign_in_idle_timeout_minutes)
     {
         tracing::warn!(
@@ -791,6 +791,9 @@ where
     // Loaded before the configuration is handed to the application state, and logged there:
     // an operator needs to know at start-up whether tonight's tickets can print (ADR-0102).
     let fonts = load_fonts(&config, &edge.session());
+    // This box's own font size, read before `config` moves into the state: the deprecated file key
+    // the store's `printing.font_size_dots` overrides (ADR-0160 decision 6).
+    let local_font_size = config.font_size_dots;
     let state = AppState::with_fanout(config, edge.fanout().clone())
         .with_pairing(Arc::clone(&pairing))
         // The same cell the commands refuse on, so the `pos-lease-standing` header on every
@@ -838,6 +841,7 @@ where
             Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
             None => crate::printing::Printers::tcp(),
         }
+        .with_local_font_size(local_font_size)
         // The lane a printer that names an agent is reached through (ADR-0112). It holds the *same*
         // three values the agent's routes hold, which is the whole point of the three `Arc::clone`s
         // above: the dispatch that writes the row and the route the agent claims it from are two
@@ -849,6 +853,9 @@ where
             Arc::clone(&wake),
         ))),
     );
+    // The size rasterised lines are drawn at, and where it comes from, once at start-up; the
+    // printers say it again whenever it changes.
+    printers.say_font_size(&edge.session());
     let mut app = crate::http::router(state)
         .merge(crate::http::domain_router(
             edge,
@@ -1110,7 +1117,7 @@ where
 async fn restore_auth_tables(
     pairing: &Pairing,
     sessions: &Sessions,
-    idle_window: IdleWindowSource,
+    idle_window: ValueSource,
 ) -> Result<(), EdgeError> {
     let restored_devices = pairing.load().await.map_err(EdgeError::DeviceRegistry)?;
     let restored_sessions = sessions
@@ -1127,39 +1134,15 @@ async fn restore_auth_tables(
     Ok(())
 }
 
-/// Where the sign-in idle window a box starts on comes from
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-/// decision 6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IdleWindowSource {
-    /// The store's `session` node sets it, and it wins.
-    Published,
-    /// The node sets none, and `config.toml` still carries the deprecated value.
-    LocalFile,
-    /// Neither does: thirty minutes.
-    Default,
-}
-
-impl IdleWindowSource {
-    /// The word the start-up log gives it.
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Published => "the store's configuration",
-            Self::LocalFile => "config.toml (deprecated)",
-            Self::Default => "the default",
-        }
-    }
-}
-
-/// Which window a box with this `config` and this restored `session` node starts on, in the order
-/// the edge chooses one: the node, the file, the default.
-fn idle_window_source(config: &EdgeConfig, settings: &PublishedSession) -> IdleWindowSource {
+/// Which sign-in idle window a box with this `config` and this restored `session` node starts on,
+/// in the order the edge chooses one: the node, the file, thirty minutes.
+fn idle_window_source(config: &EdgeConfig, settings: &PublishedSession) -> ValueSource {
     if settings.sign_in_idle_timeout_minutes().is_some() {
-        IdleWindowSource::Published
+        ValueSource::Published
     } else if config.sign_in_idle_timeout_minutes.is_some() {
-        IdleWindowSource::LocalFile
+        ValueSource::LocalFile
     } else {
-        IdleWindowSource::Default
+        ValueSource::Default
     }
 }
 
@@ -1274,32 +1257,47 @@ fn usable_env_key(value: &str) -> Option<String> {
     (!trimmed.is_empty() && !trimmed.starts_with('#')).then(|| trimmed.to_owned())
 }
 
-/// What this box archives, and how often
+/// What this box archives, and how often when the store's configuration does not say
 /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 ///
 /// `None` means this box archives nothing, which is exactly one configuration:
-/// `backup_interval_hours = 0`. It carries the *database path* rather than re-deriving one, because
-/// the file that must be snapshotted is the one `main.rs` opened — a second guess at where the store
-/// lives would archive an empty database and report success.
+/// `backup_interval_hours = 0` in its own file. No published value switches archiving off, and none
+/// switches it back on, because the loop that would read one never starts (ADR-0160 decision 6). It
+/// carries the *database path* rather than re-deriving one, because the file that must be
+/// snapshotted is the one `main.rs` opened — a second guess at where the store lives would archive
+/// an empty database and report success.
 #[derive(Debug, Clone)]
 struct BackupPlan {
     database: std::path::PathBuf,
+    /// This box's own interval, which the store's `backup.interval_hours` overrides: the file's
+    /// deprecated value, or a day.
     interval: Duration,
+    /// Where [`Self::interval`] comes from, for the log.
+    source: ValueSource,
 }
 
 impl BackupPlan {
     /// Reads the plan out of the bootstrap configuration, announcing a store that has switched
     /// archiving off.
     fn from_config(config: &EdgeConfig) -> Option<Self> {
-        if config.backup_interval_hours == 0 {
-            tracing::warn!(
-                "backup_interval_hours = 0: this store ships no off-box archive of its database,                  so a failed disk loses everything since the last one taken by hand"
-            );
-            return None;
-        }
+        let (hours, source) = match config.backup_interval_hours {
+            Some(0) => {
+                tracing::warn!(
+                    "backup_interval_hours = 0: this store ships no off-box archive of its \
+                     database, so a failed disk loses everything since the last one taken by hand"
+                );
+                return None;
+            }
+            Some(hours) => (hours, ValueSource::LocalFile),
+            None => (
+                u64::from(pos_proto::backup::DEFAULT_INTERVAL_HOURS),
+                ValueSource::Default,
+            ),
+        };
         Some(Self {
             database: config.store_path.clone(),
-            interval: Duration::from_secs(config.backup_interval_hours * 3600),
+            interval: Duration::from_secs(hours.saturating_mul(3600)),
+            source,
         })
     }
 }
@@ -1447,6 +1445,10 @@ where
     // Deliberately *not* gated on this box's lease standing (ADR-0123): a superseded box holds
     // exactly the events its replacement does not, so it is the box whose database most needs
     // saving. See `crate::backup_client` for the rest of that argument.
+    //
+    // It follows the store's `backup` node, whose interval wins from the next archive on; this box's
+    // own interval, from its file or the default, applies while the node sets none (ADR-0160
+    // decision 6). The loop says which at start-up and whenever it changes.
     if let Some(plan) = backup {
         let archiver = crate::backup_client::BackupClient::new(
             HttpCloudSync::new(
@@ -1457,12 +1459,10 @@ where
             store_id,
             plan.database,
             plan.interval,
-        );
+        )
+        .following(Arc::<Edge<S>>::clone(edge), plan.source);
         tokio::spawn(archiver.run(wait_for_shutdown(shutdown_rx.clone())));
-        tracing::info!(
-            hours = plan.interval.as_secs() / 3600,
-            "store archiving enabled"
-        );
+        tracing::info!("store archiving enabled");
     }
 
     tracing::info!(
@@ -1551,10 +1551,11 @@ fn load_fonts(config: &EdgeConfig, session: &EdgeSession) -> Option<pos_render::
         "printing fonts loaded"
     );
 
-    let size = NonZeroU16::new(config.font_size_dots).unwrap_or(
-        // A zero or absurd size would render nothing at all; 24 dots is the documented default.
-        NonZeroU16::new(24).unwrap_or(NonZeroU16::MIN),
-    );
+    // Built at the default. The size a line is drawn at is decided at each print: the store's
+    // `printing.font_size_dots`, then this box's deprecated `font_size_dots`, then this
+    // (`crate::printing::Printers`, ADR-0160 decision 6), so a change needs no reload of the faces.
+    let size =
+        NonZeroU16::new(pos_proto::printing::DEFAULT_FONT_SIZE_DOTS).unwrap_or(NonZeroU16::MIN);
     Some(pos_render::TextRenderer::new(library, size))
 }
 
@@ -1958,8 +1959,8 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{
-        IdleWindowSource, ServeOutcome, choose_sync_key, idle_window_source, system_device_id,
-        usable_env_key,
+        BackupPlan, ServeOutcome, ValueSource, choose_sync_key, idle_window_source,
+        system_device_id, usable_env_key,
     };
 
     fn holding(secrets: &[(SecretName, &str)]) -> FakeKeyVault {
@@ -1997,23 +1998,50 @@ mod tests {
 
         assert_eq!(
             idle_window_source(&with_file, &published),
-            IdleWindowSource::Published
+            ValueSource::Published
         );
         assert_eq!(
             idle_window_source(&plain, &published),
-            IdleWindowSource::Published
+            ValueSource::Published
         );
         assert_eq!(
             idle_window_source(&with_file, &unset),
-            IdleWindowSource::LocalFile
+            ValueSource::LocalFile
         );
         assert_eq!(
             idle_window_source(&with_file, &unreadable),
-            IdleWindowSource::LocalFile
+            ValueSource::LocalFile
         );
-        assert_eq!(
-            idle_window_source(&plain, &unset),
-            IdleWindowSource::Default
+        assert_eq!(idle_window_source(&plain, &unset), ValueSource::Default);
+    }
+
+    /// A box archives every `backup_interval_hours` its file still sets, and every day when it sets
+    /// none, until the store's configuration sets an interval; `0` is the one way to switch
+    /// archiving off, and it starts no loop, so no published value can switch it back on
+    /// (ADR-0160 decision 6).
+    #[test]
+    fn the_file_sets_the_boxs_own_interval_and_zero_starts_no_loop() {
+        use crate::config::EdgeConfig;
+        use core::time::Duration;
+
+        let store = "store_id = \"01J0000000000000000000000A\"";
+        let plan = |extra: &str| {
+            BackupPlan::from_config(
+                &EdgeConfig::from_toml_str(&format!("{store}\n{extra}")).expect("parses"),
+            )
+        };
+
+        let neither = plan("").expect("a box archives by default");
+        assert_eq!(neither.interval, Duration::from_secs(24 * 3600));
+        assert_eq!(neither.source, ValueSource::Default);
+
+        let from_file = plan("backup_interval_hours = 6").expect("a number keeps archiving on");
+        assert_eq!(from_file.interval, Duration::from_secs(6 * 3600));
+        assert_eq!(from_file.source, ValueSource::LocalFile);
+
+        assert!(
+            plan("backup_interval_hours = 0").is_none(),
+            "the file's zero is the one off-switch: no loop starts to read a published interval"
         );
     }
 

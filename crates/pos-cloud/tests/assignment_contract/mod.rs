@@ -10,12 +10,13 @@
 //! decision 3), so the contract is about reach as much as rows: a store's read lists every
 //! assignment that reaches it, a group's reach follows its membership as it changes, a tenant-wide
 //! one reaches a store nobody has named yet, a person holds one assignment per store, per group and
-//! tenant-wide, and nothing crosses a tenant. The group's membership is written through the
+//! tenant-wide — a second is refused as a duplicate and leaves the first as it was — and nothing
+//! crosses a tenant. The group's membership is written through the
 //! [`StoreGroupStore`] seam, the one the group routes write, because that is where it lives.
 
 use pos_cloud::people::{
-    Assignment, AssignmentId, AssignmentScope, AssignmentStore, EmployeeId, NewAssignment,
-    RoleTemplateId,
+    Assignment, AssignmentId, AssignmentScope, AssignmentStore, AssignmentStoreError, EmployeeId,
+    NewAssignment, RoleTemplateId,
 };
 use pos_cloud::registry::EntityStatus;
 use pos_cloud::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore};
@@ -206,18 +207,38 @@ where
     );
 
     // One per person and store, per person and group, and tenant-wide; the scopes do not exclude
-    // each other.
-    for (n, again) in [
-        (11, assign(11, alice, AssignmentScope::Store(north), lead)),
+    // each other. A second is refused as a duplicate, not as a failure of the store, and the first
+    // keeps the role it granted.
+    for (first, again) in [
         (
-            12,
+            &at_north,
+            assign(11, alice, AssignmentScope::Store(north), lead),
+        ),
+        (
+            &through_airport,
             assign(12, bao, AssignmentScope::StoreGroup(airport), lead),
         ),
-        (13, assign(13, cam, AssignmentScope::Tenant, cashier)),
+        (
+            &everywhere,
+            assign(13, cam, AssignmentScope::Tenant, cashier),
+        ),
     ] {
+        let refused = assignments.assign(&again).await;
         assert!(
-            assignments.assign(&again).await.is_err(),
-            "the same person at the same place twice is refused ({n})"
+            matches!(refused, Err(AssignmentStoreError::AlreadyAssigned(_))),
+            "the same person at the same place twice is a duplicate ({:?}): {refused:?}",
+            again.scope
+        );
+        let held = assignments
+            .list_for_employee(mine, again.employee_id)
+            .await
+            .expect("by employee");
+        assert_eq!(
+            held.iter()
+                .map(|row| (row.assignment_id, row.role_template_id))
+                .collect::<Vec<_>>(),
+            vec![(first.assignment_id, first.role_template_id)],
+            "the refused one wrote nothing, and the first is as it was"
         );
     }
     assignments

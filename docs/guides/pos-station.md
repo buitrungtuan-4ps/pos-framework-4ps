@@ -116,10 +116,15 @@ naming `edge_url` and `state_path` (rewritten at every start), the token in `POS
 It is restarted when it exits — after 1 s, doubling to 60 s, back to 1 s after a run of a minute —
 and killed on **Quit**; a job it was printing returns to the queue at its lease.
 
-The agent prints for a terminal only after a manager binds it at the till (`POST /api/print/agent`).
-Until then the edge answers `409` and the agent asks again every five seconds, which is the right
-state for a freshly paired terminal. If the app is killed rather than quit, the agent outlives it
-until the next start (see *What is left*).
+The agent prints for a terminal only after a manager, signed in on this computer's till, binds it
+under **Devices → This device** (`POST /api/print/agent`). The till window and the agent share the
+computer's pairing, so that binds the agent. Until then the edge answers `409` and the agent asks
+again every five seconds, which is the right state for a freshly paired terminal. The same binding
+makes the computer that till for its own receipt printer and receipt languages, where the console
+names them for the terminal
+([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md) decision 4).
+If the app is killed rather than quit, the agent outlives it until the next start (see *What is
+left*).
 
 ## Security
 

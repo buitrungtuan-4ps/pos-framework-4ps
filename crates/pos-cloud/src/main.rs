@@ -710,11 +710,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // the store groups its group, both say which stores a wider one reaches, and the config
         // trees take the `permissions` node that removing an assignment, archiving a person or role,
         // or assigning someone to a group or every store publishes at once (ADR-0158 decisions 3
-        // and 7).
+        // and 7). Setting a PIN reads the tenant's settings for the fewest digits a PIN may have
+        // (ADR-0160).
         .merge(http::people_router(
             store.people(),
             store.registry(),
             store.store_groups(),
+            store.settings(),
             store.config_trees(),
             store.admin(),
             SystemClock,

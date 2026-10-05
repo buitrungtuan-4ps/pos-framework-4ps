@@ -10,11 +10,27 @@
 //! document with no `printing` node, or a node without a field, prints exactly as it printed before.
 //! Kitchen tickets are not here: each station's language belongs to the `stations` node, as a
 //! [`ReceiptLanguage`] of its own ([`crate::floor::KitchenStation::ticket_language`]).
+//!
+//! The size a line is drawn at when the printer cannot draw it in its own characters is here too,
+//! for every piece of paper the store prints: it was the box's own `font_size_dots` in its
+//! `config.toml`, and ADR-0160 decision 6 makes it a setting.
+
+use core::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
 use crate::wire_enum;
 use crate::wire_enum::{Open, is_absent};
+
+/// The printer dots per em a line the printer cannot draw in its own characters may be drawn at,
+/// both bounds included. Sixteen at the least, below which a Vietnamese tone mark no longer reads on
+/// a 203 dpi head. Forty-eight at the most, twice the default, so a dish name still fits a 58 mm
+/// paper in a few words a line.
+pub const FONT_SIZE_DOTS: RangeInclusive<i64> = 16..=48;
+
+/// The size when nothing sets one: 24 dots per em, a comfortable receipt body at the 203 dpi every
+/// common thermal printer runs at, which the edge drew at before the setting existed.
+pub const DEFAULT_FONT_SIZE_DOTS: u16 = 24;
 
 wire_enum! {
     /// The language a receipt, its copy and a pre-bill print in, and a kitchen station's tickets:
@@ -96,6 +112,10 @@ pub struct PublishedPrinting {
     /// none. Left off the wire while absent, so a node that does not set it is written as before.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub receipt_second_language: Open<ReceiptSecondLanguage>,
+    /// How large a line the printer cannot draw in its own characters is drawn, in printer dots per
+    /// em. Read it through [`PublishedPrinting::font_size_dots`]. Left off the wire while absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_dots: Option<i64>,
 }
 
 impl PublishedPrinting {
@@ -140,11 +160,27 @@ impl PublishedPrinting {
             ReceiptSecondLanguage::English => ReceiptSecondLanguage::English,
         }
     }
+
+    /// The printer dots per em a line the printer cannot draw in its own characters is drawn at,
+    /// or `None` when the node sets no value within [`FONT_SIZE_DOTS`].
+    ///
+    /// `None` rather than the default, as for the sign-in idle timeout
+    /// ([`crate::session::PublishedSession::sign_in_idle_timeout_minutes`]), because a box may still
+    /// carry a size in its local file, deprecated by ADR-0160 decision 6. The edge falls back to
+    /// that, and to [`DEFAULT_FONT_SIZE_DOTS`] when the file sets none. A line the printer's own
+    /// character set covers prints in the printer's font, which this does not change, and
+    /// double-size text is drawn at twice it.
+    #[must_use]
+    pub fn font_size_dots(&self) -> Option<u16> {
+        self.font_size_dots
+            .filter(|dots| FONT_SIZE_DOTS.contains(dots))
+            .and_then(|dots| u16::try_from(dots).ok())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
+    use super::{FONT_SIZE_DOTS, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
     use crate::wire_enum::{Open, WireEnum};
 
     #[test]
@@ -153,7 +189,28 @@ mod tests {
         assert_eq!(node.receipt_language(), ReceiptLanguage::Display);
         assert!(node.receipt_printed_on_settle());
         assert_eq!(node.receipt_second_language(), ReceiptSecondLanguage::None);
+        assert_eq!(node.font_size_dots(), None, "the box's own size");
         assert_eq!(PublishedPrinting::default(), node);
+    }
+
+    #[test]
+    fn a_font_size_within_its_bounds_is_read_and_one_outside_them_is_none() {
+        for (published, read) in [
+            (16, Some(16)),
+            (24, Some(24)),
+            (32, Some(32)),
+            (48, Some(48)),
+            (15, None),
+            (49, None),
+            (0, None),
+            (-24, None),
+        ] {
+            let node: PublishedPrinting =
+                serde_json::from_str(&format!(r#"{{ "font_size_dots": {published} }}"#))
+                    .expect("the node parses");
+            assert_eq!(node.font_size_dots(), read, "{published}");
+        }
+        assert!(*FONT_SIZE_DOTS.start() > 0, "no size draws nothing");
     }
 
     #[test]
@@ -240,6 +297,7 @@ mod tests {
             receipt_language: Open::from_known(ReceiptLanguage::English),
             receipt_printed_on_settle: None,
             receipt_second_language: Open::default(),
+            font_size_dots: None,
         };
         let text = serde_json::to_string(&node).expect("serialise");
         assert_eq!(text, r#"{"receipt_language":"RECEIPT_LANGUAGE_EN"}"#);

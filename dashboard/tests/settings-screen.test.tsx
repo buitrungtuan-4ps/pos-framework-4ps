@@ -494,6 +494,37 @@ describe("shared settings", () => {
     ).toBeTruthy();
   });
 
+  // The archive interval (ADR-0160 decision 6) counts hours, a unit of its own, and starts at one:
+  // no value switches backups off.
+  it("names the backup interval in hours, in the console's words", async () => {
+    settingsCatalogue.mockResolvedValue([
+      {
+        setting_key: "backup.interval_hours",
+        node: "backup",
+        field: "interval_hours",
+        kind: "SETTING_KIND_INT",
+        min: 1,
+        max: 168,
+        unit: "SETTING_UNIT_HOURS",
+        default: 24,
+        scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+        since: "0.14.1",
+      },
+    ]);
+    await mount();
+    expect(await screen.findByText("Backup interval")).toBeTruthy();
+    expect(screen.getByText("Default: 24 hours · Honoured from release 0.14.1")).toBeTruthy();
+    expect(screen.getByText("From 1 hour to 168 hours.")).toBeTruthy();
+
+    cleanup();
+    setLocale("vi");
+    await mount();
+    expect(await screen.findByText("Khoảng cách giữa các lần sao lưu")).toBeTruthy();
+    expect(
+      screen.getByText("Mặc định: 24 giờ · Có hiệu lực từ phiên bản 0.14.1"),
+    ).toBeTruthy();
+  });
+
   it("shows a whole number written here in its field, and in Vietnamese in its unit", async () => {
     settingsCatalogue.mockResolvedValue([WAIT_SECONDS]);
     listSettingValues.mockResolvedValue([
