@@ -30,8 +30,6 @@ export function Keypad(props: {
   onChange: (next: string) => void;
   /** The step gate's handle, when a declared flow presses this. */
   "data-step"?: string;
-  /** Names the keypad for screen readers; a grid of single characters says nothing on its own. */
-  label?: string;
 }) {
   const press = (digit: string) => {
     // A leading zero is dropped rather than accumulated: `0` then `5` is five, not "05", which
@@ -47,11 +45,12 @@ export function Keypad(props: {
   // button steals focus, so that is where it is refused — `click` still fires and still types.
   const hold = (event: PointerEvent) => event.preventDefault();
 
+  // A grid of single characters says nothing on its own to a screen reader, so the group names it.
   return (
     <div
       class="mt-2 grid grid-cols-3 gap-2"
       role="group"
-      aria-label={props.label ?? t("keypad.aria_label")}
+      aria-label={t("keypad.aria_label")}
       data-step={props["data-step"]}
     >
       <For each={DIGITS}>
