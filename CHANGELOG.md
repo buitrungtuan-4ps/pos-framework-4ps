@@ -16,11 +16,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-### Added
-
-- **TextArea accessible hint text support.**
-  Added optional `hint?: string` prop to `TextArea` in `dashboard/src/components/ui.tsx` with proper `aria-describedby` association and unique ID generation.
-
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
@@ -131,6 +126,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `2001:1::/32` as `ForbiddenReason::Reserved`. Its anycast addresses reach a nearby network service, never a webhook receiver. **Upgrade note:** none.
 
 ### Changed
+
+- **A screen reader reads the hint under a multi-line field.** The store's address on Store settings
+  and the reason on the store hub's region acknowledgement carry their hint as the field's
+  description (`aria-describedby`), as a single-line field's hint already was: `TextArea` takes a
+  `hint`, drawn as `TextField` draws one. No upgrade note: nothing on the wire changes.
 
 - **The cloud and the edge read the `locale`, `qr` and `retention` nodes through one definition**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md),

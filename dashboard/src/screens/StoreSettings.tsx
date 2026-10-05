@@ -645,15 +645,13 @@ export function StoreSettings() {
               hint={t("storeSettings.tradingNameHint")}
             />
 
-            <div>
-              <TextArea
-                label={t("storeSettings.address")}
-                value={addressText()}
-                onInput={setAddressText}
-                rows={3}
-              />
-              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.linesHint")}</p>
-            </div>
+            <TextArea
+              label={t("storeSettings.address")}
+              value={addressText()}
+              onInput={setAddressText}
+              rows={3}
+              hint={t("storeSettings.linesHint")}
+            />
 
             <TextField
               label={t("storeSettings.registrationLabel")}
