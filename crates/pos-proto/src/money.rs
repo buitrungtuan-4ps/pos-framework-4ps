@@ -99,8 +99,7 @@ impl Serialize for CurrencyCode {
 
 impl<'de> Deserialize<'de> for CurrencyCode {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = <&str>::deserialize(deserializer)?;
-        Self::parse(text).map_err(serde::de::Error::custom)
+        crate::string_value::deserialize(deserializer, "an ISO 4217 currency code", Self::parse)
     }
 }
 

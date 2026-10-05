@@ -344,8 +344,10 @@ impl Serialize for EventTypeRef {
 
 impl<'de> Deserialize<'de> for EventTypeRef {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let token = <&str>::deserialize(deserializer)?;
-        Ok(Self::parse(token))
+        // Any string is a token: one this build does not know is an event from a newer sender.
+        crate::string_value::deserialize(deserializer, "an event type token", |token: &str| {
+            Ok::<_, core::convert::Infallible>(Self::parse(token))
+        })
     }
 }
 
@@ -485,10 +487,7 @@ mod chain_tests {
 
     #[test]
     fn an_envelope_written_before_the_chain_existed_still_loads() {
-        // Round-tripped through text rather than `serde_json::Value`, because the envelope
-        // borrows on the way in (`BusinessDate` deserializes from a borrowed string) and
-        // `from_value` cannot hand out borrows. That is a property of the existing type,
-        // not of this change.
+        // Through text, the form the edge's log keeps an envelope in.
         let older = serde_json::to_string(&envelope()).expect("serialise");
         assert!(
             !older.contains("\"chain\""),

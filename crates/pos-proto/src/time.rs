@@ -181,7 +181,9 @@ pub enum TimeError {
 }
 
 /// Serialises as a string and parses from one, for any type with `Display` and
-/// `FromStr`.
+/// `FromStr`. The parse reads a borrowed, a transient or an owned string alike, and
+/// `$expecting` names the value when what arrives is not a string
+/// ([ADR-0166](../../../docs/adr/0166-pos-proto-reads-a-string-value-from-an-owned-string.md)).
 macro_rules! string_serde {
     ($name:ty, $expecting:literal) => {
         impl Serialize for $name {
@@ -192,8 +194,7 @@ macro_rules! string_serde {
 
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let text = <&str>::deserialize(deserializer)?;
-                text.parse().map_err(serde::de::Error::custom)
+                crate::string_value::deserialize(deserializer, $expecting, <$name>::from_str)
             }
         }
     };

@@ -419,6 +419,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **pos-proto reads an instant, a date, a currency code and an event type from any JSON string**
+  ([ADR-0166](docs/adr/0166-pos-proto-reads-a-string-value-from-an-owned-string.md)).
+  `Timestamp`, `BusinessDate`, `CalendarDate`, `CurrencyCode` and `EventTypeRef` read their string
+  with `<&str>::deserialize`, which accepts only a string the deserializer can lend. So
+  `serde_json::from_value`, `from_reader` and a string with an escape in it refused a valid value
+  with "expected a borrowed string", and callers wrote a node out as text to read it. Noted at
+  #603.
+  - All five now read through one private visitor that takes a borrowed, a transient or an owned
+    string, through each type's own parser. A value the parser refuses is still refused.
+  - A value that is not a string is refused by name, for example "expected an RFC 3339 instant in
+    UTC", in place of "expected a borrowed string".
+
+  **Upgrade note:** nothing on the wire changes. `PROTOCOL_VERSION` stays 1.
+
 - **A device bound to a till the store does not list can release it from its Devices screen.** A
   device bound by hand, through the store server, to a terminal the published `devices` node does
   not list was stuck: the **This device** card said it was none of the store's tills, **Bind**
