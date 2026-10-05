@@ -108,7 +108,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
         aria-expanded={open()}
         aria-haspopup="true"
         onClick={() => setOpen((value) => !value)}
-        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface"
+        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <Show
           when={avatar()}
@@ -200,7 +200,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
                 <li>
                   <A
                     href={screenHref(screen, "", "")}
-                    class="flex min-h-touch items-center rounded-token px-2 text-sm text-ink transition-colors hover:bg-surface-raised"
+                    class="flex min-h-touch items-center rounded-token px-2 text-sm text-ink transition-colors hover:bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                   >
                     {t(SCREENS[screen].key)}
                   </A>
@@ -211,7 +211,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
               <button
                 type="button"
                 onClick={props.onSignOut}
-                class="flex min-h-touch w-full items-center rounded-token px-2 text-left text-sm text-danger transition-colors hover:bg-surface-raised"
+                class="flex min-h-touch w-full items-center rounded-token px-2 text-left text-sm text-danger transition-colors hover:bg-surface-raised focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               >
                 {t("action.logout")}
               </button>
