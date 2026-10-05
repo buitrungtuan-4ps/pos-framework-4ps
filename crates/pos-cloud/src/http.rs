@@ -23030,7 +23030,7 @@ where
         OtaNodeWrite {
             level: ConfigLevel::Store,
             key: "fleet_update",
-            node,
+            node: as_requested(node),
             action: "config.ota.publish",
             detail: audit_detail,
             companions: Vec::new(),
@@ -23047,6 +23047,17 @@ where
 /// The rollout is read from the tree's layers composed ([`ConfigTreeState::effective`]): a rollback
 /// restores a version onto the Tenant layer and empties the Store layer, and a halt that read the
 /// Store layer alone refused a store running the restored rollout.
+///
+/// It is read from the tree the halt writes over ([`halted_rollout`], composed inside the
+/// conditional write's retry), so a rollout published while the halt is in flight is the one it
+/// halts. The halt used to read the tree once, before the publish read it again to write, and wrote
+/// the rollout it had read first, halted, over the newer one: the kill switch's own write was a lost
+/// update.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and it is the halt's own refusal, which abandons the write"
+)]
 async fn admin_halt_rollout<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
@@ -23076,24 +23087,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let loaded = match load_tree_for_write(&state.config_trees, tenant_id, store_id).await {
-        Ok(loaded) => loaded,
-        Err(refusal) => return refusal,
-    };
-    let state_before = &loaded.state;
-    let Some(mut node) = state_before
-        .as_ref()
-        .map(ConfigTreeState::effective)
-        .and_then(|document| document.get("fleet_update").cloned())
-    else {
-        return api_error(
-            ErrorStatus::InvalidArgument,
-            "the store has no published rollout to halt",
-        );
-    };
-    if let serde_json::Value::Object(map) = &mut node {
-        map.insert("halted".to_owned(), serde_json::Value::Bool(request.halted));
-    }
+    let halted = request.halted;
     publish_ota_node(
         &state,
         &context,
@@ -23102,25 +23096,68 @@ where
         OtaNodeWrite {
             level: ConfigLevel::Store,
             key: "fleet_update",
-            node,
+            node: |tree: Option<&ConfigTreeState>| halted_rollout(tree, halted),
             action: "config.ota.halt",
-            detail: serde_json::json!({ "halted": request.halted }),
+            detail: serde_json::json!({ "halted": halted }),
             companions: Vec::new(),
         },
     )
     .await
 }
 
+/// The rollout `tree` runs, its layers composed, with the kill switch set to `halted` and the rest
+/// of it kept; or the `400` a store with no published rollout earns.
+///
+/// Called with the tree as each attempt of the write reads it, so the refusal is decided on the tree
+/// the halt would write over, and a refusal abandons the write before anything is audited.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
+)]
+fn halted_rollout(
+    tree: Option<&ConfigTreeState>,
+    halted: bool,
+) -> Result<serde_json::Value, Response> {
+    let Some(mut node) = tree
+        .map(ConfigTreeState::effective)
+        .and_then(|document| document.get("fleet_update").cloned())
+    else {
+        return Err(api_error(
+            ErrorStatus::InvalidArgument,
+            "the store has no published rollout to halt",
+        ));
+    };
+    if let serde_json::Value::Object(map) = &mut node {
+        map.insert("halted".to_owned(), serde_json::Value::Bool(halted));
+    }
+    Ok(node)
+}
+
+/// A node the request names in full — a rollout, a placement, a lease — for [`OtaNodeWrite::node`].
+/// Published as it is on every attempt, because nothing in it depends on what the store holds.
+#[expect(
+    clippy::result_large_err,
+    reason = "the closure's Err is an axum Response by design — the shape every node publish's \
+              closure carries — and this one never takes the Err branch at all"
+)]
+fn as_requested(
+    node: serde_json::Value,
+) -> impl FnMut(Option<&ConfigTreeState>) -> Result<serde_json::Value, Response> {
+    move |_| Ok(node.clone())
+}
+
 /// One OTA node write: where it lands and how the trail names it. Grouped because the five travel
 /// together and mean nothing apart — a `key` on the wrong `level` is exactly the mistake
 /// [`ConfigTreeState::layer`] exists to prevent, so they are chosen at one place.
-struct OtaNodeWrite<'a> {
+struct OtaNodeWrite<'a, F> {
     /// The config layer the node belongs on: Store for a rollout, Device for a placement.
     level: ConfigLevel,
     /// The node's key in that layer — `fleet_update` or `device_ota`.
     key: &'a str,
-    /// The value to set.
-    node: serde_json::Value,
+    /// The value to set, composed on the tree as each attempt of the write reads it: a node the
+    /// request names in full ignores the tree ([`as_requested`]), and one that changes what the store
+    /// already holds reads it there ([`halted_rollout`]). `Err` refuses the write.
+    node: F,
     /// The audit action id.
     action: &'a str,
     /// The audit detail, which carries no personal data — a rollout is fleet configuration.
@@ -23132,33 +23169,52 @@ struct OtaNodeWrite<'a> {
 }
 
 /// The shared load→set-node→publish→save→audit tail behind every OTA lever.
-async fn publish_ota_node<Cfg, A, C, L>(
+///
+/// The node is composed inside [`publish_config_nodes_with`]'s retry, on the tree each attempt reads,
+/// so a lever that changes what the store holds changes what it holds when the write lands. A
+/// refusal from the node abandons the write, and nothing is audited.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and it passes on the node's own refusal unchanged"
+)]
+async fn publish_ota_node<Cfg, A, C, L, F>(
     state: &OtaConfigState<Cfg, A, C, L>,
     context: &AdminContext,
     tenant_id: TenantId,
     store_id: StoreId,
-    write: OtaNodeWrite<'_>,
+    write: OtaNodeWrite<'_, F>,
 ) -> Response
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
+    F: FnMut(Option<&ConfigTreeState>) -> Result<serde_json::Value, Response>,
 {
-    let mut nodes = vec![(write.key.to_owned(), write.node)];
-    nodes.extend(
-        write
-            .companions
-            .into_iter()
-            .map(|(key, node)| (key.to_owned(), node)),
-    );
-    let id = match publish_config_nodes(
+    let OtaNodeWrite {
+        level,
+        key,
+        mut node,
+        action,
+        detail,
+        companions,
+    } = write;
+    let id = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
         store_id,
-        write.level,
-        nodes,
+        level,
+        |tree| {
+            let mut nodes = vec![(key.to_owned(), node(tree)?)];
+            nodes.extend(
+                companions
+                    .iter()
+                    .map(|(companion, value)| ((*companion).to_owned(), value.clone())),
+            );
+            Ok(nodes)
+        },
     )
     .await
     {
@@ -23170,11 +23226,11 @@ where
         &state.clock,
         context,
         Some(tenant_id),
-        write.action,
+        action,
         "store",
         &store_id.to_string(),
         None,
-        Some(write.detail),
+        Some(detail),
     )
     .await;
     (
@@ -23288,7 +23344,7 @@ where
         OtaNodeWrite {
             level: ConfigLevel::Device,
             key: "device_ota",
-            node: node.clone(),
+            node: as_requested(node.clone()),
             action: "config.ota.placement",
             detail: node,
             companions: Vec::new(),
@@ -23557,7 +23613,7 @@ where
         OtaNodeWrite {
             level: ConfigLevel::Store,
             key: "lease",
-            node,
+            node: as_requested(node),
             action: "config.lease.bump",
             // `edge_placement` is what the store now is; `edge_placement_moved` says whether this
             // bump chose it. Without the second flag the trail cannot tell a store that was moved

@@ -419,6 +419,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The kill switch halts the rollout the store runs when the halt is written.** A halt read the
+  store's tree, set `halted` on the `fleet_update` it found, then published that node through a
+  write that read the tree again. A rollout published in between was overwritten by the older one,
+  halted, so the store was left on a target nobody had asked for any more. The halt now reads the
+  rollout inside the publish's own conditional-write retry, as a device revocation does, and sets
+  `halted` on the rollout it writes over. Its audit entry (`config.ota.halt`), its answer, the `400`
+  for a store with no rollout and its reading of the layers composed are unchanged. No stored data
+  changes.
+
 - **Creating a person with a staff code already in use answers `409`, not `503`.** A staff code is
   unique within a tenant, and the database refused a second with its unique index. The cloud read
   that refusal as the database failing, so the console said the people service was unavailable and
