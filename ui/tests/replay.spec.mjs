@@ -3485,6 +3485,115 @@ test("a manager binds this device to a till, and releases it for another device"
   }
 });
 
+// A device bound by hand, through the store server, to a till the store does not list was stuck: the
+// card said it was none of the store's tills, Bind answered that it was already another, and nothing
+// offered to release it. The store server names that till to the device that holds it, and the card
+// says so and releases it, asking first as it does for one of the store's tills.
+test("a device bound to a till the store no longer has is told so, and releases it", async ({
+  page,
+}) => {
+  const edge = await startEdge("tills");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    // A till the `tills` store does not publish, claimed the way a call made by hand claims one.
+    const gone = "0000000000000000000000000Z";
+    const claimed = await page.evaluate(
+      (agent) =>
+        fetch("/api/print/agent", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ agent_device_id: agent }),
+        }).then((response) => response.json()),
+      gone,
+    );
+    expect(claimed).toEqual({ outcome: "BOUND" });
+
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    const status = card.locator('[data-outcome="till-status"]');
+    const outcome = card.locator('[data-outcome="till-outcome"]');
+    const till = (name) => card.locator("button[aria-pressed]").filter({ hasText: name });
+    await expect(status).toHaveText("This device is bound to a till the store no longer has.");
+    await expect(till("Counter till")).not.toContainText("This device");
+    await expect(till("Bar till")).not.toContainText("This device");
+
+    // Bind still refuses, and the card now shows what to release.
+    await till("Bar till").click();
+    await card.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(outcome).toHaveText("This device is already another till. Release that one first.");
+    await expect(status).toHaveText("This device is bound to a till the store no longer has.");
+
+    // Release asks first, and nothing is released until the answer.
+    const releases = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/print/agent/revoke") {
+        releases.push(request.postDataJSON());
+      }
+    });
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(
+      card.getByText(
+        "Release the till the store no longer has? This device stops being that till.",
+      ),
+    ).toBeVisible();
+    expect(releases).toHaveLength(0);
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(outcome).toHaveText("Released.");
+    await expect(status).toHaveText("This device is not one of the store's tills yet.");
+    expect(releases).toEqual([{ agent_device_id: gone }]);
+
+    await card.getByRole("button", { name: "Bind this device to Bar till" }).click();
+    await expect(outcome).toHaveText("Bound.");
+    await expect(status).toHaveText("This device is Bar till.");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that publishes no till lists nothing to release from, so the till the store no longer has
+// is said, and released, above the line that says where tills are created.
+test("a device bound to a till in a store that lists none releases it all the same", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const claimed = await page.evaluate(
+      (agent) =>
+        fetch("/api/print/agent", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ agent_device_id: agent }),
+        }).then((response) => response.json()),
+      "0000000000000000000000000Z",
+    );
+    expect(claimed).toEqual({ outcome: "BOUND" });
+
+    await navigateTo(page, "/devices");
+    const card = page.locator('[data-outcome="till"]');
+    const status = card.locator('[data-outcome="till-status"]');
+    await expect(status).toHaveText("This device is bound to a till the store no longer has.");
+    await expect(card.locator('[data-outcome="till-empty"]')).toBeVisible();
+
+    await card.getByRole("button", { name: "Release" }).click();
+    await card.getByRole("button", { name: "Release" }).click();
+    await expect(card.locator('[data-outcome="till-outcome"]')).toHaveText("Released.");
+    await expect(status).toHaveCount(0);
+    await expect(card.locator("button")).toHaveCount(0);
+    await expect(card.locator('[data-outcome="till-empty"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The card is drawn only for a person who may manage devices, as retiring one is (ADR-0158
 // decision 8). Where the store enforces each person's own permissions, somebody whose role does not
 // grant `admin.device.manage` is offered no Devices destination, and the screen reached by its

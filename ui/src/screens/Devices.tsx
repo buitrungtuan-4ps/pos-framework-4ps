@@ -6,7 +6,7 @@ import type {
   MintedCode,
   PairedDevice,
   PrinterEntry,
-  TerminalEntry,
+  TerminalsResponse,
 } from "../api/types";
 import { QrCode } from "../components/QrCode";
 import { PageHeader } from "../components/ui";
@@ -131,7 +131,7 @@ function heldKey(held: string): MessageKey | null {
 // store server too old for this read never serves a till that asks it. A page left open while its
 // store server rolls back is the version banner's case, and shows the failed read as any other.
 function ThisDevice() {
-  const [terminals, setTerminals] = createSignal<readonly TerminalEntry[] | null>(null);
+  const [read, setRead] = createSignal<TerminalsResponse | null>(null);
   const [refused, setRefused] = createSignal(false);
   const [chosen, setChosen] = createSignal<string | null>(null);
   const [outcome, setOutcome] = createSignal<MessageKey | null>(null);
@@ -141,7 +141,7 @@ function ThisDevice() {
 
   const load = async () => {
     try {
-      setTerminals((await api.terminals()).terminals);
+      setRead(await api.terminals());
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 403) {
         setRefused(true);
@@ -152,8 +152,30 @@ function ThisDevice() {
   };
   onMount(() => void load());
 
-  // The till this device is, if it is one of the store's.
-  const mine = () => terminals()?.find((terminal) => terminal.held === "THIS_DEVICE") ?? null;
+  const terminals = () => read()?.terminals ?? null;
+  // The till this device is, what the card says of it, and what Release asks first. One of the
+  // store's goes by its name. One the store does not list has none: a device bound by hand, through
+  // the store server, to a till the store no longer has. The store server names that one apart so
+  // it can be released; before it did, the card said this device was none of the store's tills,
+  // Bind answered that it was already another, and nothing here could release it.
+  const mine = () => {
+    const unlisted = read()?.unlisted_agent_device_id;
+    if (unlisted !== undefined) {
+      return {
+        agentDeviceId: unlisted,
+        status: t("devices.till_unlisted"),
+        confirm: t("devices.till_release_unlisted_confirm"),
+      };
+    }
+    const till = terminals()?.find((terminal) => terminal.held === "THIS_DEVICE");
+    return till === undefined
+      ? null
+      : {
+          agentDeviceId: till.agent_device_id,
+          status: t("devices.till_is", { name: till.name }),
+          confirm: t("devices.till_release_confirm", { name: till.name }),
+        };
+  };
 
   // A bind or a release, then the tills read again: the card says what the store server holds, not
   // what this screen expects it to.
@@ -185,26 +207,23 @@ function ThisDevice() {
         <p class="font-semibold text-ink">{t("devices.till_title")}</p>
         <Show when={terminals()}>
           {(listed) => (
-            <Show
-              when={listed().length > 0}
-              fallback={
-                <p class="mt-1 text-sm text-ink-muted" data-outcome="till-empty">
-                  {t("devices.till_empty")}
-                </p>
-              }
-            >
+            <>
+              {/* Apart from the list, because a store that lists no till can still have this
+                  device bound to one it no longer has, and Release is then all the card offers. */}
               <Show
                 when={mine()}
                 fallback={
-                  <p class="mt-1 text-ink" data-outcome="till-status">
-                    {t("devices.till_none")}
-                  </p>
+                  <Show when={listed().length > 0}>
+                    <p class="mt-1 text-ink" data-outcome="till-status">
+                      {t("devices.till_none")}
+                    </p>
+                  </Show>
                 }
               >
                 {(till) => (
                   <>
                     <p class="mt-1 font-semibold text-ink" data-outcome="till-status">
-                      {t("devices.till_is", { name: till().name })}
+                      {till().status}
                     </p>
                     <Show
                       when={releasing()}
@@ -220,14 +239,12 @@ function ThisDevice() {
                       }
                     >
                       <div class="mt-2 flex flex-wrap items-center gap-2">
-                        <span class="text-sm text-ink">
-                          {t("devices.till_release_confirm", { name: till().name })}
-                        </span>
+                        <span class="text-sm text-ink">{till().confirm}</span>
                         <button
                           type="button"
                           class="min-h-touch rounded-token bg-danger px-3 font-semibold text-danger-ink disabled:opacity-50"
                           disabled={busy()}
-                          onClick={() => void release(till().agent_device_id)}
+                          onClick={() => void release(till().agentDeviceId)}
                         >
                           {t("devices.till_release")}
                         </button>
@@ -243,47 +260,56 @@ function ThisDevice() {
                   </>
                 )}
               </Show>
-              <p class="mt-2 text-sm text-ink-muted">{t("devices.till_hint")}</p>
-              {/* Choosing first, then Bind under the choice, as the Today screen reprints: a tap on
-                  the wrong row of a list must not move where a till's paper prints. */}
-              <ul class="mt-2 flex flex-col gap-2">
-                <For each={listed()}>
-                  {(terminal) => (
-                    <li>
-                      <button
-                        type="button"
-                        class="flex min-h-touch w-full items-center gap-3 rounded-token border border-line bg-surface px-3 text-left"
-                        classList={{
-                          "border-2 border-accent font-semibold":
-                            chosen() === terminal.agent_device_id,
-                        }}
-                        aria-pressed={chosen() === terminal.agent_device_id}
-                        onClick={() => setChosen(terminal.agent_device_id)}
-                      >
-                        <span class="min-w-0 flex-1 text-ink">{terminal.name}</span>
-                        <Show when={heldKey(terminal.held)}>
-                          {(key) => <span class="text-sm text-ink-muted">{t(key())}</span>}
-                        </Show>
-                      </button>
-                      <Show
-                        when={
-                          chosen() === terminal.agent_device_id && terminal.held !== "THIS_DEVICE"
-                        }
-                      >
+              <Show
+                when={listed().length > 0}
+                fallback={
+                  <p class="mt-1 text-sm text-ink-muted" data-outcome="till-empty">
+                    {t("devices.till_empty")}
+                  </p>
+                }
+              >
+                <p class="mt-2 text-sm text-ink-muted">{t("devices.till_hint")}</p>
+                {/* Choosing first, then Bind under the choice, as the Today screen reprints: a tap
+                    on the wrong row of a list must not move where a till's paper prints. */}
+                <ul class="mt-2 flex flex-col gap-2">
+                  <For each={listed()}>
+                    {(terminal) => (
+                      <li>
                         <button
                           type="button"
-                          class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-                          disabled={busy()}
-                          onClick={() => void bind(terminal.agent_device_id)}
+                          class="flex min-h-touch w-full items-center gap-3 rounded-token border border-line bg-surface px-3 text-left"
+                          classList={{
+                            "border-2 border-accent font-semibold":
+                              chosen() === terminal.agent_device_id,
+                          }}
+                          aria-pressed={chosen() === terminal.agent_device_id}
+                          onClick={() => setChosen(terminal.agent_device_id)}
                         >
-                          {t("devices.till_bind", { name: terminal.name })}
+                          <span class="min-w-0 flex-1 text-ink">{terminal.name}</span>
+                          <Show when={heldKey(terminal.held)}>
+                            {(key) => <span class="text-sm text-ink-muted">{t(key())}</span>}
+                          </Show>
                         </button>
-                      </Show>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
+                        <Show
+                          when={
+                            chosen() === terminal.agent_device_id && terminal.held !== "THIS_DEVICE"
+                          }
+                        >
+                          <button
+                            type="button"
+                            class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                            disabled={busy()}
+                            onClick={() => void bind(terminal.agent_device_id)}
+                          >
+                            {t("devices.till_bind", { name: terminal.name })}
+                          </button>
+                        </Show>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+            </>
           )}
         </Show>
         <Show when={outcome()}>

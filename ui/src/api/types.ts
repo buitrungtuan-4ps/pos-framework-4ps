@@ -765,9 +765,14 @@ export interface TerminalEntry {
   held: string;
 }
 
-/** The store's tills, in the order the store published them. */
+/**
+ * The store's tills, in the order the store published them, and the till this device is when the
+ * store does not list it: absent where this device is one of the listed tills or none. Never another
+ * device's.
+ */
 export interface TerminalsResponse {
   terminals: TerminalEntry[];
+  unlisted_agent_device_id?: string;
 }
 
 /** What a bind came to: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`. */

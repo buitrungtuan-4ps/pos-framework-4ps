@@ -15,7 +15,8 @@
 //!
 //! The read the till's **This device** card is drawn from sits behind the same two gates, and says
 //! of each published terminal whether this device, another device or nobody holds it — never which
-//! other device.
+//! other device. A terminal this device holds that the node does not list is named apart, so the
+//! card can release it; another device's never is.
 
 use std::sync::Arc;
 
@@ -53,6 +54,10 @@ const TILL: &str = "0000000000000000000000000E";
 const BAR: &str = "0000000000000000000000000F";
 const SPARE: &str = "0000000000000000000000000G";
 const PRINTER: &str = "0000000000000000000000000H";
+
+/// A terminal no node here lists. A claim does not look its id up, so a call to the route binds a
+/// device to it all the same.
+const UNLISTED: &str = "0000000000000000000000000J";
 
 /// A paired device's bearer token and the id the pairing minted for it.
 type Paired = (String, DeviceId);
@@ -420,6 +425,102 @@ async fn the_read_follows_a_bind_and_a_release() {
     assert_eq!(
         held(&get_terminals(&app, &token).await.2),
         ["NONE", "NONE", "NONE"]
+    );
+}
+
+/// A device bound by hand to a terminal the node does not list reads that terminal's id apart from
+/// the list, and the device beside it does not: the read names this device's own binding and never
+/// another's. A binding the node does list, or none, adds nothing.
+#[tokio::test]
+async fn the_read_names_this_devices_binding_to_a_terminal_the_node_does_not_list() {
+    let (app, [(holder, holder_device), (other, other_device)]) =
+        paired_pair_publishing(three_tills()).await;
+    sign_in(&app, &holder, MANAGER_CODE).await;
+    sign_in(&app, &other, MANAGER_CODE).await;
+    let nobody_holds_a_listed_one = json!([
+        { "agent_device_id": TILL, "name": "Counter till", "held": "NONE" },
+        { "agent_device_id": BAR, "name": "Bar till", "held": "NONE" },
+        { "agent_device_id": SPARE, "name": "Spare till", "held": "NONE" },
+    ]);
+    assert_eq!(
+        get_terminals(&app, &holder).await.2,
+        json!({ "terminals": nobody_holds_a_listed_one }),
+        "a device that holds nothing reads the list alone"
+    );
+
+    let (status, body) = post_agent(&app, &holder, "/api/print/agent", UNLISTED).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("BOUND"),
+        "a claim does not look the id up: {body}"
+    );
+
+    let (status, _, body) = get_terminals(&app, &holder).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "terminals": nobody_holds_a_listed_one,
+            "unlisted_agent_device_id": UNLISTED,
+        }),
+        "the holder reads the terminal it holds, which a release names"
+    );
+    let (_, _, seen_by_other) = get_terminals(&app, &other).await;
+    assert_eq!(
+        seen_by_other,
+        json!({ "terminals": nobody_holds_a_listed_one }),
+        "another device's binding is never this device's to read"
+    );
+    for answer in [body.to_string(), seen_by_other.to_string()] {
+        for device in [holder_device, other_device] {
+            assert!(
+                !answer.contains(&device.to_string()),
+                "a paired device's id would enumerate the store's pairings: {answer}"
+            );
+        }
+    }
+
+    // Released, it is gone; bound to a listed terminal instead, the list says so and nothing else.
+    assert_eq!(
+        post_agent(&app, &holder, "/api/print/agent/revoke", UNLISTED)
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        get_terminals(&app, &holder).await.2,
+        json!({ "terminals": nobody_holds_a_listed_one })
+    );
+    assert_eq!(
+        post_agent(&app, &holder, "/api/print/agent", BAR).await.0,
+        StatusCode::OK
+    );
+    let (_, _, body) = get_terminals(&app, &holder).await;
+    assert_eq!(held(&body), ["NONE", "THIS_DEVICE", "NONE"]);
+    assert_eq!(
+        body.get("unlisted_agent_device_id"),
+        None,
+        "a listed terminal is the list's to say: {body}"
+    );
+}
+
+/// A store that publishes no terminal still names the one this device holds: the card has no list
+/// there to release it from.
+#[tokio::test]
+async fn a_store_that_publishes_no_terminal_still_names_the_one_this_device_holds() {
+    let (app, [(token, _), _]) = paired_pair_publishing(node(&[printer()])).await;
+    sign_in(&app, &token, MANAGER_CODE).await;
+    assert_eq!(
+        post_agent(&app, &token, "/api/print/agent", UNLISTED)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, _, body) = get_terminals(&app, &token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({ "terminals": [], "unlisted_agent_device_id": UNLISTED })
     );
 }
 
