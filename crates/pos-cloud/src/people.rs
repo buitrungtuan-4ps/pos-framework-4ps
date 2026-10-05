@@ -199,7 +199,8 @@ pub trait EmployeeStore {
     ///
     /// # Errors
     ///
-    /// [`EmployeeStoreError`] if the write fails (including a duplicate `code` within the tenant).
+    /// [`EmployeeStoreError::CodeInUse`] if the tenant already has an employee with that `code`,
+    /// which writes nothing; [`EmployeeStoreError`] of the other kind if the write fails.
     fn create(
         &self,
         employee: &NewEmployee,
@@ -306,17 +307,31 @@ pub trait EmployeeStore {
     ) -> impl Future<Output = Result<Option<String>, EmployeeStoreError>> + Send;
 }
 
-/// A failure of the employee store itself — the database is unreachable, or a write violated a
-/// constraint (e.g. a duplicate staff code within the tenant).
+/// A failure of the employee store: the staff code is already in use in the tenant, or the store
+/// itself failed.
+///
+/// The two are kept apart, as [`AssignmentStoreError`]'s are, because they ask different things of
+/// the caller. A code in use is a conflict the operator resolves by choosing another code, and a
+/// retry can never succeed; a failure of the store is an outage, and a retry may.
 #[derive(Debug, thiserror::Error)]
-#[error("the employee store failed: {0}")]
-pub struct EmployeeStoreError(String);
+pub enum EmployeeStoreError {
+    /// The tenant already has an employee with this staff code. Nothing was written.
+    ///
+    /// It carries no text, unlike [`AssignmentStoreError::AlreadyAssigned`]: a staff code identifies
+    /// a person, so its value has no place in an error that may reach a log, and the variant already
+    /// says everything there is to say.
+    #[error("the staff code is already in use in the tenant")]
+    CodeInUse,
+    /// The store could not read or write: the database is unreachable, or a row would not parse.
+    #[error("the employee store failed: {0}")]
+    Failed(String),
+}
 
 impl EmployeeStoreError {
-    /// Wraps a message (for the server's log).
+    /// A failure of the store, wrapping a message (for the server's log).
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self::Failed(message.into())
     }
 }
 

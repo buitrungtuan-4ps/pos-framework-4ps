@@ -419,6 +419,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Creating a person with a staff code already in use answers `409`, not `503`.** A staff code is
+  unique within a tenant, and the database refused a second with its unique index. The cloud read
+  that refusal as the database failing, so the console said the people service was unavailable and
+  a retry could never succeed. Noted at #635.
+  - The store says which: a unique violation (SQLSTATE `23505`) on the employee insert is
+    `already_exists`, naming the staff code and never its value, and every other failure stays
+    `unavailable`. A duplicate no longer carries the database's own error, which quotes the key.
+  - `POST /admin/employees` answers `409` `ALREADY_EXISTS` naming `code`, with a message that says
+    to choose another code. The refused request writes nothing, records nothing in the audit trail
+    and publishes nothing. A staff code cannot be changed once set, so no update meets this. The
+    People screen shows the message as it shows every refusal.
+
+  **Upgrade note:** a duplicate staff code answers `409` instead of `503`. No route, event,
+  migration, permission or setting changes, and the admin OpenAPI document does not list this route.
+
 - **Assigning a person where they already hold an assignment answers `409`, not `503`.** A person
   holds at most one assignment per store, one per group and one tenant-wide (ADR-0158 decision 3),
   and the database refused a second with its unique index. The cloud read that refusal as the

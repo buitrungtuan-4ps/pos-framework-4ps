@@ -1350,12 +1350,16 @@ pub(crate) fn unavailable(error: tokio_postgres::Error) -> PortError {
 ///
 /// A conflict is not an outage. Reported as `unavailable`, it told the console the service was down
 /// and invited a retry that can never succeed.
+///
+/// The duplicate carries `message` alone, not the database's error beneath it: that error quotes the
+/// key's values, a key can be what identifies a person — a staff code is one — and `message` already
+/// says everything the caller acts on.
 pub(crate) fn already_exists_or_unavailable(
     error: tokio_postgres::Error,
     message: &'static str,
 ) -> PortError {
     if error.code() == Some(&SqlState::UNIQUE_VIOLATION) {
-        PortError::already_exists(PortName::EventStore, message).with_source(error)
+        PortError::already_exists(PortName::EventStore, message)
     } else {
         unavailable(error)
     }

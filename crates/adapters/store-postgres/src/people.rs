@@ -142,8 +142,9 @@ impl PostgresPeople {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails (including a
-    /// duplicate `(tenant_id, code)`).
+    /// [`PortError::already_exists`] if the tenant already has an employee with that `code` (the
+    /// `employees_code_key` index), naming the staff code and never its value, and
+    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails otherwise.
     pub async fn insert(
         &self,
         id: &str,
@@ -159,7 +160,12 @@ impl PostgresPeople {
                 &[&id, &tenant_id, &code, &name],
             )
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| {
+                already_exists_or_unavailable(
+                    error,
+                    "the staff code is already in use in the tenant",
+                )
+            })?;
         Ok(row.get(0))
     }
 
