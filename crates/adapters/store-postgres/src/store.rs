@@ -324,6 +324,12 @@ const MIGRATION_0081: &str = include_str!("../migrations/0081_station_ticket_lan
 /// decision 4).
 const MIGRATION_0082: &str = include_str!("../migrations/0082_terminal_receipts.sql");
 
+/// The stores whose people the cloud publishes again by itself after a migration changes what
+/// their roles grant, and, once, every store whose people have been published
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). A later
+/// migration that changes what roles grant queues its stores here too: the file's header states how.
+const MIGRATION_0083: &str = include_str!("../migrations/0083_people_republishes.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -711,6 +717,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0082)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0083)
+            .await
             .map_err(unavailable)
     }
 
@@ -977,6 +987,16 @@ impl PostgresStore {
     #[must_use]
     pub fn data_migrations(&self) -> crate::data_migrations::PostgresDataMigrations {
         crate::data_migrations::PostgresDataMigrations::new(self.pool.clone())
+    }
+
+    /// The stores whose people the cloud publishes again by itself (`people_republishes`,
+    /// migration 0083).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `PeopleRepublishStore` seam
+    /// over it, and the people republisher drains it.
+    #[must_use]
+    pub fn people_republishes(&self) -> crate::people_republishes::PostgresPeopleRepublishes {
+        crate::people_republishes::PostgresPeopleRepublishes::new(self.pool.clone())
     }
 
     /// A tenant's fee rules over this pool

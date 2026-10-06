@@ -95,6 +95,7 @@ pub mod paging;
 pub mod people;
 pub mod people_compiler;
 pub mod people_readiness;
+pub mod people_republish;
 mod persistence;
 pub mod providers;
 pub mod qr;

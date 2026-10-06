@@ -143,7 +143,8 @@ impl EventStoreHarness for StoreHarness {
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
                  catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
                  employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
-                 integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
+                 integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
+                 people_republishes, reconcile_runs, \
                  reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
                  store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
@@ -208,7 +209,8 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
              catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
              employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
-             integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
+             integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
+             people_republishes, reconcile_runs, \
              reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
                  store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
@@ -6989,6 +6991,139 @@ mod role_templates_and_assignments {
             assert_eq!(
                 ids_of(at(east).await.expect("by store")),
                 vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The stores whose people the cloud publishes again by itself (migration 0083, ADR-0158).
+// ---------------------------------------------------------------------------
+
+mod people_republishes_queue {
+    use super::{block_on, prepared};
+    use pos_proto::{StoreId, TenantId, Ulid};
+
+    /// The migration's own name, which it queues every store under.
+    const REASON: &str = "0083_people_republishes";
+
+    /// A tree's state as the cloud stores it: four layers, no history.
+    fn tree(tenant_layer: &serde_json::Value, store_layer: &serde_json::Value) -> String {
+        serde_json::json!({
+            "layers": [tenant_layer, {}, store_layer, {}],
+            "history": [],
+            "k": 8,
+        })
+        .to_string()
+    }
+
+    /// Every store whose people have been published, which is a store whose configuration holds a
+    /// `permissions` roster (a `permissions` object with a `staff` key) on any layer, wherever a
+    /// rollback left it, is queued once for the cloud to publish its people again, and no other
+    /// store is. A later boot queues nothing.
+    ///
+    /// `prepared` truncates `data_migrations` and the queue, so the boot below is the migration's
+    /// first run, as it is on a database that has never seen the file.
+    #[test]
+    fn the_stores_whose_people_were_published_are_queued_once() {
+        let tenant = TenantId::new(Ulid::from_u128(0x0083_7E11));
+        let other_tenant = TenantId::new(Ulid::from_u128(0x0083_7E12));
+        let store = |n: u128| StoreId::new(Ulid::from_u128(0x0083_0000 + n));
+        let empty = serde_json::json!({});
+        let people = serde_json::json!({ "permissions": { "staff": [] }, "menu": {} });
+        let switch = serde_json::json!({ "permissions": { "enforced": true } });
+        let seeded = [
+            // People published: queued.
+            (tenant, store(1), tree(&empty, &people)),
+            // People published beside the switch the settings publish writes: queued.
+            (tenant, store(2), tree(&switch, &people)),
+            // The switch alone, on the Tenant layer: no people node, not queued.
+            (
+                tenant,
+                store(3),
+                tree(&switch, &serde_json::json!({ "menu": {} })),
+            ),
+            // No `permissions` node anywhere: not queued.
+            (tenant, store(4), tree(&empty, &empty)),
+            // A null where the node would be is no published roster: not queued.
+            (
+                tenant,
+                store(5),
+                tree(&empty, &serde_json::json!({ "permissions": null })),
+            ),
+            // Rolled back: the restored version whole on the Tenant layer, roster and switch
+            // together, and the Store layer empty. Queued.
+            (
+                tenant,
+                store(6),
+                tree(
+                    &serde_json::json!({
+                        "permissions": { "enforced": true, "staff": [] },
+                        "menu": {},
+                    }),
+                    &empty,
+                ),
+            ),
+            // The switch alone typed on the Store layer, with no `staff` key: not queued.
+            (tenant, store(7), tree(&empty, &switch)),
+            // People published in another tenant: queued.
+            (other_tenant, store(1), tree(&empty, &people)),
+        ];
+        block_on(async {
+            let (postgres, _admin) = prepared().await.expect("prepare the database");
+            let trees = postgres.config_trees();
+            for (tenant_id, store_id, state) in &seeded {
+                trees
+                    .save_state(*tenant_id, *store_id, state, None)
+                    .await
+                    .expect("seed a tree");
+            }
+
+            postgres
+                .migrate()
+                .await
+                .expect("the boot that runs 0083 first");
+            let queue = postgres.people_republishes();
+            let queued = queue.pending(None, 100).await.expect("read the queue");
+            let keys: Vec<(String, String, &str)> = queued
+                .iter()
+                .map(|row| {
+                    (
+                        row.tenant_id.clone(),
+                        row.store_id.clone(),
+                        row.reason.as_str(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                keys,
+                vec![
+                    (tenant.to_string(), store(1).to_string(), REASON),
+                    (tenant.to_string(), store(2).to_string(), REASON),
+                    (tenant.to_string(), store(6).to_string(), REASON),
+                    (other_tenant.to_string(), store(1).to_string(), REASON),
+                ],
+                "exactly the stores holding a roster on some layer, in tenant then store order"
+            );
+
+            // The drain clears each row with the time it read; the next boot queues none again.
+            for row in &queued {
+                assert!(
+                    queue
+                        .clear(&row.tenant_id, &row.store_id, row.enqueued_time_ms)
+                        .await
+                        .expect("clear a row"),
+                    "a row is cleared with the time read from it, to the millisecond"
+                );
+            }
+            postgres.migrate().await.expect("the next boot");
+            assert!(
+                queue
+                    .pending(None, 100)
+                    .await
+                    .expect("read the queue")
+                    .is_empty(),
+                "a later boot queues nothing"
             );
         });
     }

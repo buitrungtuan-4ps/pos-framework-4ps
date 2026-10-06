@@ -1097,6 +1097,33 @@ pub const IMPLICIT_OWNER_ID: &str = "00000000000000000000000000";
 /// replaced from the console.
 pub const IMPLICIT_OWNER_EMAIL: &str = "owner@super-admin.invalid";
 
+/// The id the audit trail records as the actor of a change the cloud makes by itself, with no admin
+/// behind it: a store's people published again after a migration changed what roles grant
+/// (`crate::people_republish`). It is no ULID, so it is never an admin's id, and no session
+/// carries it.
+pub const SYSTEM_ACTOR_ID: &str = "system";
+
+/// The synthetic, non-routable email [`system_actor`] carries, as [`IMPLICIT_OWNER_EMAIL`] is for
+/// the implicit owner.
+pub const SYSTEM_ACTOR_EMAIL: &str = "system@cloud.invalid";
+
+/// The actor a change the cloud makes by itself is recorded under: [`SYSTEM_ACTOR_ID`], with the
+/// least role that holds the permission such a change needs. Publishing configuration is Ops's
+/// (`console.config.publish`), so the trail never shows the cloud as an owner or an admin. It signs
+/// nobody in: no route resolves a session to it.
+#[must_use]
+pub fn system_actor() -> AdminContext {
+    AdminContext {
+        admin: AdminUser {
+            id: SYSTEM_ACTOR_ID.to_owned(),
+            email: SYSTEM_ACTOR_EMAIL.to_owned(),
+            name: "System".to_owned(),
+            role: AdminRole::Ops,
+            status: AdminStatus::Active,
+        },
+    }
+}
+
 /// Revokes the session named by the request's cookie, for logout.
 ///
 /// Idempotent: a request with no session cookie revokes nothing and still succeeds, so the caller
