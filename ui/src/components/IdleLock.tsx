@@ -252,7 +252,7 @@ export function IdleLock() {
             <button
               id="lock-submit"
               type="button"
-              class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+              class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               disabled={busy() || code().trim().length === 0 || pin().length === 0}
               onClick={() => void unlock()}
             >
@@ -261,7 +261,7 @@ export function IdleLock() {
             <button
               id="lock-someone-else"
               type="button"
-              class="mt-3 min-h-touch w-full rounded-token border border-line px-3 text-ink"
+              class="mt-3 min-h-touch w-full rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => window.location.replace("/signin")}
             >
               {t("lock.someone_else")}

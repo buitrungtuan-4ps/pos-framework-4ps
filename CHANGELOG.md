@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **CodePad and IdleLock buttons carry clear focus-visible outline indicators.**
+  Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` to CodePad key controls (`ui/src/components/CodePad.tsx`) and IdleLock action buttons (`ui/src/components/IdleLock.tsx`), ensuring keyboard focus states are clearly visible for assistive technology users.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
