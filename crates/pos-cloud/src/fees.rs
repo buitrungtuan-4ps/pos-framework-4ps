@@ -1538,6 +1538,36 @@ mod sampling {
         );
     }
 
+    /// A store whose prices include their tax is shown its default fee, on a base net of tax, as
+    /// its edge charges it: the lines' 220,000 hold 16,296 of tax at 8 %, so 5 % is taken of
+    /// 203,704. The fee is quoted as the store quotes everything, with its tax inside it.
+    #[test]
+    fn a_store_whose_prices_include_tax_is_shown_a_fee_on_a_base_net_of_tax() {
+        let locale = serde_json::json!({
+            "currency_code": "VND", "cash_rounding_increment": 0, "prices_include_tax": true,
+        });
+        let bill = sample_bill(
+            &facts_at(&locale),
+            SalesChannel::DineIn,
+            &[line(1, 2), line(3, 1)],
+            &five_percent(),
+        )
+        .expect("a bill");
+        let totals = bill.totals;
+        let [fee] = totals.fee_lines.as_slice() else {
+            panic!("one fee line: {:?}", totals.fee_lines);
+        };
+        assert_eq!(fee.amount, vnd(10_185), "5 % of the lines net of their tax");
+        assert_eq!(
+            totals.tax_total,
+            vnd(17_051),
+            "8 % inside the lines and the fee, which follows its lines"
+        );
+        assert_eq!(fee.tax, vnd(754));
+        assert_eq!(totals.service_charge, vnd(10_185));
+        assert_eq!(totals.total_due, vnd(230_185), "the prices and the fee");
+    }
+
     #[test]
     fn a_fee_for_another_channel_or_a_paused_fee_is_not_charged() {
         let mut fees = five_percent();

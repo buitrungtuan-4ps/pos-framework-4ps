@@ -419,6 +419,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store whose prices include tax charges its default service charge.** A percentage fee's base
+  is net of tax unless its rule says otherwise, and the core charged nothing for a percentage whose
+  base was in the other tax posture from the store's prices. So an inclusive-priced store (Japan's
+  税込, India's MRP) charged nothing for a service charge authored with the defaults, and a store
+  pricing net of tax could not charge one on the tax-inclusive price.
+  - Such a base is now taken of the bill moved to the rule's posture: the counted lines, the
+    subtotal and the reductions each have their tax extracted, or added, class by class at the
+    class's rate on the bill's channel, and rounded once per class by the store's tax rounding, as
+    the bill's own tax is (`docs/pos-spec.md` §5).
+  - Only the base moves. The fee is quoted and taxed in the store's posture, as every fee is, and a
+    rule in the store's own posture charges exactly what it charged before.
+  - The console's preview on a sample bill is the same computation, so it shows the same fee.
+
+  **Upgrade note:** a store whose prices include tax, or a rule in the other posture from the
+  store's prices, now charges a fee it did not charge before. No route, event, migration,
+  permission or default changes.
+
 - **pos-proto reads an instant, a date, a currency code and an event type from any JSON string**
   ([ADR-0166](docs/adr/0166-pos-proto-reads-a-string-value-from-an-owned-string.md)).
   `Timestamp`, `BusinessDate`, `CalendarDate`, `CurrencyCode` and `EventTypeRef` read their string
