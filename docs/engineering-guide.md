@@ -39,6 +39,7 @@ Two independent axes, as described in [naming-and-api.md](naming-and-api.md) §1
 1. The cloud **must** support at least the two most recent protocol versions; CI has a test that proves it.
 2. Protocol changes are additive. A breaking change bumps `PROTOCOL_VERSION` and runs both versions in parallel for at least two releases.
 3. Migrations within a release may only add tables and columns, so adjacent versions can read one database — this is what makes automatic rollback safe.
+4. A migration that changes what roles grant also queues the stores whose people have been published, a store whose configuration holds a `permissions` roster (a `staff` list) on any layer, wherever a rollback left it, in the same statement as the grant and behind the same `data_migrations` marker, into `people_republishes`, with its own file name as the reason; the cloud then publishes those stores' people again by itself. The statement's shape is in the header of `crates/adapters/store-postgres/migrations/0083_people_republishes.sql`. Without it, the grant reaches no till until somebody presses **Publish** on People for every store.
 
 ## 4. Continuous integration
 

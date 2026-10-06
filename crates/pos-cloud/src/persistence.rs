@@ -45,6 +45,7 @@ use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{FeeRuleRow, FeeRuleSlot as FeeRuleRowSlot, FeeRuleWrite, PostgresFeeRules};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
+use store_postgres::{PeopleRepublishRow, PostgresPeopleRepublishes};
 use store_postgres::{PostgresSettings, SettingSlot};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
@@ -143,6 +144,7 @@ use crate::people::{
     EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId,
     RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
 };
+use crate::people_republish::{PeopleRepublish, PeopleRepublishError, PeopleRepublishStore};
 use crate::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
@@ -2949,6 +2951,74 @@ impl crate::data_migrations::DataMigrations for PostgresDataMigrations {
         Self::record(self, name, at.as_milliseconds_since_epoch())
             .await
             .map_err(|error| crate::data_migrations::DataMigrationError::new(error.to_string()))
+    }
+}
+
+/// Rehydrates a queued store, failing loudly on an id or a time this cloud wrote that no longer
+/// parses — store corruption, not an absence — as a scheduled publish's row does.
+fn republish_from_row(row: PeopleRepublishRow) -> Result<PeopleRepublish, PeopleRepublishError> {
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_ignored| PeopleRepublishError::new("a queued store has a non-ULID tenant"))?;
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|_ignored| PeopleRepublishError::new("a queued store has a non-ULID id"))?;
+    let enqueued_time = Timestamp::from_milliseconds_since_epoch(row.enqueued_time_ms)
+        .map_err(|error| PeopleRepublishError::new(error.to_string()))?;
+    Ok(PeopleRepublish {
+        tenant_id,
+        store_id,
+        reason: row.reason,
+        enqueued_time,
+    })
+}
+
+impl PeopleRepublishStore for PostgresPeopleRepublishes {
+    async fn enqueue(&self, republish: &PeopleRepublish) -> Result<(), PeopleRepublishError> {
+        let row = PeopleRepublishRow {
+            tenant_id: republish.tenant_id.to_string(),
+            store_id: republish.store_id.to_string(),
+            reason: republish.reason.clone(),
+            enqueued_time_ms: republish.enqueued_time.as_milliseconds_since_epoch(),
+        };
+        Self::enqueue(self, &row)
+            .await
+            .map_err(|error| PeopleRepublishError::new(error.to_string()))
+    }
+
+    async fn pending(
+        &self,
+        after: Option<(TenantId, StoreId)>,
+        limit: usize,
+    ) -> Result<Vec<PeopleRepublish>, PeopleRepublishError> {
+        let after =
+            after.map(|(tenant_id, store_id)| (tenant_id.to_string(), store_id.to_string()));
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = Self::pending(
+            self,
+            after
+                .as_ref()
+                .map(|(tenant_id, store_id)| (tenant_id.as_str(), store_id.as_str())),
+            limit,
+        )
+        .await
+        .map_err(|error| PeopleRepublishError::new(error.to_string()))?;
+        rows.into_iter().map(republish_from_row).collect()
+    }
+
+    async fn clear(&self, republish: &PeopleRepublish) -> Result<bool, PeopleRepublishError> {
+        Self::clear(
+            self,
+            &republish.tenant_id.to_string(),
+            &republish.store_id.to_string(),
+            republish.enqueued_time.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| PeopleRepublishError::new(error.to_string()))
     }
 }
 

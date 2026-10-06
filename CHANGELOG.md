@@ -130,6 +130,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The cloud publishes a store's people again by itself after a migration changes what roles
+  grant** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). A store's
+  `permissions` node is compiled when its people are published, so a grant a migration made, as
+  `0073`, `0074`, `0076` and `0079` do, reached no till until somebody pressed **Publish** on
+  People for the store.
+  - Such a migration now queues the stores whose people have been published, a store whose
+    configuration holds a `permissions` roster (a `staff` list), wherever a rollback left it, in a
+    new table, `people_republishes`, and the cloud drains the queue at start-up and then every five
+    minutes (`pos_cloud::people_republish`). The drain reads what the store runs, its four layers
+    merged, so a rolled-back store, whose roster sits on its Tenant layer, is published again onto
+    its Store layer, and a `permissions` node with no `staff` key, which the edge reads as the
+    switch alone, counts as no roster. A store nobody published people for is not queued, and no
+    node is created for it.
+  - Each queued store is published the way **Publish** publishes it: the same compile, the same
+    validation, the same node, so an edit nobody has published yet goes with it. A store whose node
+    is already what its people compile to is given no new version. The trail records
+    `permissions.publish` under the system actor (`system@cloud.invalid`, role `ops`) with the
+    version, the staff count and the name of the migration that queued the store as `reason`:
+    never a name, a code or a PIN hash.
+  - A store that cannot be published keeps its row for the next drain, and the log names it by its
+    id and the refusal's HTTP status alone. The loop records its health as `people_republisher`.
+  - A later migration that changes what roles grant queues its stores in the same statement as its
+    grant: the convention is in `docs/engineering-guide.md` §3 and in the header of migration
+    `0083`.
+  - **Upgrade note:** after this release the cloud republishes each store's people once by itself,
+    and nobody needs to press Publish on People after a grant migration again. Migration
+    `0083_people_republishes.sql` adds `people_republishes` (tenant-scoped, under RLS, granted to
+    `app_tenant`) and, once, behind a `data_migrations` marker as `0073` does, queues every store
+    whose people have been published, which covers the grants of `0073`, `0074`, `0076` and `0079`.
+    The first boot publishes those stores' people, each a new version only where its node has
+    changed. People's own publish route and its answers are unchanged. Rolling back is safe: an
+    older cloud does not read the table, and what it leaves queued is drained by the next upgrade.
+    No route, event, permission or protocol version change.
+
 - **The till's number pad names itself to a screen reader and keeps focus where it was.** The keypad
   on the Pay, Takeaway and Shift screens is now a group named "Numeric keypad" (*Bàn phím số*), a key
   reached from a keyboard shows a focus ring, and pressing a key no longer pulls focus away from where
@@ -999,9 +1033,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     the supervisor, manager and owner, so existing and new tenants agree. A role that holds its
     PIN-flagged permissions only with approval, as 0074 left a cashier's, does not get it, nor does
     any other role: cashiers see takings only where an owner grants it. A later boot does not give
-    it back to a role an owner takes it from. Publish each store's People once after the migration,
-    as after 0076, so its till receives the permission: until then nobody at the store sees the
-    tile. Nothing else changes. No event or protocol change.
+    it back to a role an owner takes it from. A store's till receives the permission when its
+    People is next published, which the cloud does by itself after the migration (see "The cloud
+    publishes a store's people again by itself" under Changed): until then nobody at the store sees
+    the tile. Nothing else changes. No event or protocol change.
 
 - **A store sets its opening float and whether the count is blind**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)

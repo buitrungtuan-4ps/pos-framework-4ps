@@ -140,7 +140,7 @@ use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
     LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
     SessionSummary, authenticate_session, authenticated_admin, current_session_token_hash,
-    hash_recovery_code, hash_session_token, login, logout,
+    hash_recovery_code, hash_session_token, login, logout, system_actor,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, confine_to_store, require_scope, require_store};
@@ -222,6 +222,7 @@ use crate::people::{
     is_known_permission, is_pin_flagged_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
+use crate::people_republish::Republished;
 use crate::qr::{TableTokenSecret, mint_table_token};
 use crate::reason_codes::{ReasonCodeStore, ReasonCodeStoreError, to_node as reason_codes_to_node};
 use crate::reconcile::{ReconcileRun, ReconcileRunStore, ReconcileStore};
@@ -28787,6 +28788,119 @@ where
             nodes,
         )
         .await?;
+        self.record(context, tenant_id, store_id, id, staff_count, cause)
+            .await;
+        Ok(id)
+    }
+
+    /// Publishes a store's people again, as [`Self::publish`] does, where the node the store holds
+    /// is not what they compile to now: what the people republisher does for a store a migration
+    /// queued after changing what roles grant ([`crate::people_republish`]).
+    ///
+    /// The node is compared inside the write's retry, on the tree each attempt reads. A store whose
+    /// configuration holds no `permissions` roster, a node with a `staff` list, on whichever layer
+    /// a publish or a rollback left it, is one whose people were never published, and is given
+    /// none: the edge reads a node without `staff` as the switch alone. A store whose Store layer
+    /// already holds what its people compile to is given no new version. Either abandons the write,
+    /// as a refusal abandons it, and records nothing. Anything else, a rolled-back store whose
+    /// roster sits on its Tenant layer included, is written onto the Store layer, as **Publish**
+    /// writes it.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the composing closure's Err is an axum Response by design — the shape every node \
+                  publish's closure carries — and here it only abandons a write with nothing to \
+                  publish; what the tree held is the outcome"
+    )]
+    async fn republish(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        reason: &str,
+    ) -> Result<Republished, Response> {
+        /// What a store's tree held, as an attempt of the write read it.
+        enum Held {
+            /// No `permissions` roster in what the store runs: its people were never published.
+            Nothing,
+            /// On its Store layer, the node its people compile to now.
+            Same,
+            /// A roster, and not that node on the Store layer: a stale one, or one a rollback
+            /// moved onto the Tenant layer.
+            Stale,
+        }
+        const NODE: &str = pos_proto::people::PublishedPermissions::NODE;
+        let (nodes, staff_count) = permissions_nodes(self.people, tenant_id, store_id).await?;
+        let mut held = None;
+        let written = publish_config_nodes_with(
+            self.config_trees,
+            self.clock,
+            tenant_id,
+            store_id,
+            ConfigLevel::Store,
+            |tree| {
+                // Read from the four layers merged, the document the store runs, because a
+                // rollback moves the whole restored version onto the Tenant layer. A `permissions`
+                // node there is a roster only when it has a `staff` key, the edge's own test:
+                // without one it is the switch alone, and the store's people were never published.
+                let rostered = tree.is_some_and(|tree| {
+                    tree.effective()
+                        .get(NODE)
+                        .and_then(|node| node.get("staff"))
+                        .is_some()
+                });
+                let current = tree
+                    .and_then(|tree| tree.layer(ConfigLevel::Store).get(NODE))
+                    .is_some_and(|node| {
+                        nodes
+                            .iter()
+                            .any(|(key, compiled)| key == NODE && compiled == node)
+                    });
+                let found = match (rostered, current) {
+                    (false, _) => Held::Nothing,
+                    (true, true) => Held::Same,
+                    (true, false) => Held::Stale,
+                };
+                let write = matches!(found, Held::Stale);
+                held = Some(found);
+                if write {
+                    Ok(nodes.clone())
+                } else {
+                    Err(StatusCode::NO_CONTENT.into_response())
+                }
+            },
+        )
+        .await;
+        match (written, held) {
+            (Ok(id), _) => {
+                self.record(
+                    context,
+                    tenant_id,
+                    store_id,
+                    id,
+                    staff_count,
+                    Some(("reason", reason)),
+                )
+                .await;
+                Ok(Republished::Published(id))
+            }
+            (Err(_), Some(Held::Nothing)) => Ok(Republished::NeverPublished),
+            (Err(_), Some(Held::Same)) => Ok(Republished::Unchanged),
+            (Err(refusal), Some(Held::Stale) | None) => Err(refusal),
+        }
+    }
+
+    /// Records a `permissions` publish: the config version and how many staff the node carries —
+    /// never a name, a code or a PIN (ADR-0070, ADR-0158 decision 9) — and what caused it, under
+    /// its own key.
+    async fn record(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        id: ConfigVersionId,
+        staff_count: usize,
+        cause: Option<(&'static str, &str)>,
+    ) {
         let mut after = serde_json::json!({
             "config_version_id": id.to_string(),
             "staff_count": staff_count,
@@ -28806,7 +28920,6 @@ where
             Some(after),
         )
         .await;
-        Ok(id)
     }
 
     /// Publishes to every store a write reached, in turn, and answers with how each went: the `200`
@@ -28864,6 +28977,38 @@ where
         }
         results
     }
+}
+
+/// Publishes one queued store's people again for the people republisher
+/// ([`crate::people_republish`]): through the publish **Publish** on People goes through, recorded
+/// under the system actor ([`crate::auth::admin::system_actor`]) with the queue's `reason`.
+///
+/// # Errors
+///
+/// The refusal the publish would have answered with, when the store's people or its tree could
+/// not be read or the tree refused the write. The store stays queued.
+pub(crate) async fn republish_people<P, Cfg, C>(
+    people: &P,
+    config_trees: &Cfg,
+    clock: &C,
+    audit: &Arc<dyn AuditRecorder>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    reason: &str,
+) -> Result<Republished, Response>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    PermissionsPublisher {
+        people,
+        config_trees,
+        clock,
+        audit,
+    }
+    .republish(&system_actor(), tenant_id, store_id, reason)
+    .await
 }
 
 /// How one store's `permissions` publish went, as a write that publishes at once reports it.

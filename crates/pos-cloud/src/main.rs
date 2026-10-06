@@ -21,6 +21,7 @@ use pos_cloud::archive_retention;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
+use pos_cloud::people_republish;
 use pos_cloud::qr::TableTokenSecret;
 use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
@@ -323,6 +324,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         store.task_health(),
         SystemClock,
         scheduled_publish_interval,
+        shutdown_signal(),
+    ));
+
+    // The people republisher (ADR-0158): a migration that changes what roles grant queues the stores
+    // whose people have been published (`people_republishes`, migration 0083), and this drains the
+    // queue, at once and then every few minutes, publishing each store's people again exactly as
+    // **Publish** on People does, under the system actor. A store whose node is already current is
+    // given no new version; one that cannot be published keeps its row for the next drain.
+    tracing::info!(
+        interval_secs = people_republish::DRAIN_INTERVAL.as_secs(),
+        "people republisher started"
+    );
+    let people_republish_task = tokio::spawn(people_republish::run(
+        store.people_republishes(),
+        store.people(),
+        store.config_trees(),
+        Arc::clone(&audit),
+        store.task_health(),
+        SystemClock,
+        people_republish::DRAIN_INTERVAL,
         shutdown_signal(),
     ));
 
@@ -1201,6 +1222,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = alert_task.await;
     scheduled_publish_task.abort();
     let _ = scheduled_publish_task.await;
+    people_republish_task.abort();
+    let _ = people_republish_task.await;
     if let Some(task) = metrics_task {
         task.abort();
         let _ = task.await;
