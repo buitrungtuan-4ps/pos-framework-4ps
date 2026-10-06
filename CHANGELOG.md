@@ -139,7 +139,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **A console table sorted by a text column puts numbers in order, and sorts a long table faster.**
   Sorting compares text the way people read it: "Table 2" now comes before "Table 10", and case and
   accents no longer split names that read the same ("pho" sorts with "Phở"; rows that tie keep their
-  order). Each row's sort value is read once instead of on every comparison
+  order). Each row's sort value is read once instead of on every comparison, and the `Intl.Collator` instance is reused across sorts
   (`DataTable` in `dashboard/src/components/kit.tsx`). No upgrade note: nothing on the wire changes.
 
 - **A screen reader reads the hint under a multi-line field.** The store's address on Store settings

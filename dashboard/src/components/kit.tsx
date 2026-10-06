@@ -151,6 +151,9 @@ export const CLIENT_PAGE_SIZE = 25;
 /** The `md` breakpoint, in the one place the table needs to know about it. */
 const WIDE_QUERY = "(min-width: 768px)";
 
+/** Reusable Intl.Collator instance for client-side sorting (prevents per-sort allocation overhead). */
+const defaultCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 /**
  * Whether the viewport is at least `md` wide, as a signal.
  *
@@ -287,7 +290,6 @@ export function DataTable<T>(props: {
     // Each row's value is read once rather than on every comparison, and text compares the way it
     // is read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that
     // tie keep the order they came in, because the sort is stable.
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     const decorated = base.map((row) => ({ row, val: value(row) }));
     decorated.sort((a, b) => {
       const av = a.val;
@@ -295,7 +297,7 @@ export function DataTable<T>(props: {
       if (typeof av === "number" && typeof bv === "number") {
         return (av - bv) * direction;
       }
-      return collator.compare(String(av), String(bv)) * direction;
+      return defaultCollator.compare(String(av), String(bv)) * direction;
     });
     return decorated.map((entry) => entry.row);
   });
