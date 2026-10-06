@@ -1312,7 +1312,7 @@
           "fees"
         ],
         "summary": "`POST /admin/fees/publish` — republishes the fees of one store, or of every store of the tenant.",
-        "description": "A write republishes every store it reaches by itself. What it cannot see is a change elsewhere\nthat changes what a store is sent: a store given another brand, or an item added to or taken\nout of a category a rule names, which is compiled into items only when the fees are published,\nas a menu is compiled only when it is published.",
+        "description": "A write republishes every store it reaches by itself. What it cannot see is a change elsewhere\nthat changes what a store is sent: a store given another brand, or an item added to or taken\nout of a category a rule names, which is compiled into items when the fees are published. A\nmenu publish brings a store's fees along with it; this publishes them without one.",
         "operationId": "admin_publish_fees",
         "requestBody": {
           "description": "The tenant, and optionally one store. Without a store, every store of the tenant is republished",

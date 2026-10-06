@@ -419,6 +419,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A menu publish brings the store's fees along, so a fee naming a category charges on the items
+  it adds.** A fee rule's categories were compiled into each store's items only by a fee publish,
+  so after a menu publish added an item to a category a fee names, the store charged no fee on it
+  until someone pressed **Publish fees again**.
+  - Every menu publish, `POST /admin/catalog/publish` and a store group's `menu` batch, composes
+    the store's `fees` node on the tree it writes and publishes it in the menu's own version where
+    it changes. A store whose fees are unchanged gets no `fees` key, and the generic preview shows
+    what the publish would write.
+  - A store that cannot apply one of its rules still gets its menu and keeps the fees it has. The
+    menu publish answers a `fees` object with a fee publish's outcome and reason tokens, and a
+    batch member's `detail` says the same.
+  - The fee publish checks a store's rules against the tree it writes over. It decided from a first
+    read and then published through a write that read the tree again, the shape the kill switch
+    had until #643, so a `tax`, `locale` or `menu` publish landing in between left a `fees` node
+    checked against what the store no longer held.
+  - A release still carries no `fees` node: it snapshots the nodes it compiles.
+
+  **Upgrade note:** a menu publish may now also write the store's `fees` node, and
+  `POST /admin/catalog/publish` answers `fees` beside `config_version_id`. No route, event,
+  migration or permission changes.
+
 - **A store whose prices include tax charges its default service charge.** A percentage fee's base
   is net of tax unless its rule says otherwise, and the core charged nothing for a percentage whose
   base was in the other tax posture from the store's prices. So an inclusive-priced store (Japan's

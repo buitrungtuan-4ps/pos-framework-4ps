@@ -636,7 +636,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // `batch_nodes` takes the same seven authoring seams the single-store publish routers below
         // already hold, which is what makes the batch the same code path rather than a second one:
         // it calls each node's own compiler and the shared config-tree write, so a document a batch
-        // produces is byte-for-byte the document that route would have produced.
+        // produces is byte-for-byte the document that route would have produced. The fee rules and
+        // the registry are the menu's, whose publish brings each store's `fees` along.
         //
         // The people store is here because an assignment can name a group (ADR-0158): a store that
         // joins or leaves such a group gains or loses its people, and is published at once.
@@ -652,6 +653,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.reason_codes(),
                 store.people(),
                 store.floor(),
+                store.fee_rules(),
+                store.registry(),
             ),
             store.people(),
             store.admin(),
@@ -679,6 +682,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.reason_codes(),
                 store.people(),
                 store.floor(),
+                store.fee_rules(),
+                store.registry(),
             ),
             store.admin(),
             SystemClock,
@@ -699,6 +704,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.reason_codes(),
                 store.people(),
                 store.floor(),
+                store.fee_rules(),
+                store.registry(),
             ),
             store.admin(),
             SystemClock,
@@ -985,9 +992,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&audit),
         ))
         // Catalog publish (ADR-0066): compile a menu → write the MenuBook onto the store's `menu`
-        // config node, so it rides the config tree to the store like every other config change.
+        // config node, so it rides the config tree to the store like every other config change. The
+        // store's `fees` node goes in the same version (ADR-0159): a rule naming a category is
+        // compiled into the items it holds, so the fee rules and the registry come along.
         .merge(http::catalog_publish_router(
             store.catalog(),
+            store.fee_rules(),
+            store.registry(),
             store.config_trees(),
             store.admin(),
             SystemClock,

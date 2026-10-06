@@ -4953,9 +4953,27 @@ pub trait BatchNodePlan: Send + Sync {
         &self,
         store_id: StoreId,
     ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>>;
+
+    /// Adds to `nodes` what a member's write sets beside them, composed on the member's tree as
+    /// each attempt of the write reads it, and says what the member's report should say of it when
+    /// the write leaves some of it behind.
+    ///
+    /// Nothing for every node but `menu`, which brings the store's `fees` along in the same version
+    /// (ADR-0159). A release snapshots what [`Self::compile_for`] compiles and does not call this:
+    /// what a store's tree holds is read when a write lands, not when it is scheduled.
+    fn compose_on(
+        &self,
+        _store_id: StoreId,
+        _tree: Option<&ConfigTreeState>,
+        _nodes: &mut Vec<(String, serde_json::Value)>,
+    ) -> Option<String> {
+        None
+    }
 }
 
-/// A plan whose document is byte-identical at every member — the shape eleven of the thirteen have.
+/// A plan whose document is byte-identical at every member — the shape ten of the thirteen have.
+/// The menu's book is the same at every member too, beside the `fees` each member's write composes
+/// ([`MenuBatchPlan`]).
 struct SameEverywhere {
     nodes: Vec<(String, serde_json::Value)>,
     summary: serde_json::Value,
@@ -5359,8 +5377,52 @@ use crate::config_tree::prerequisites_for;
 /// `DomainError::TaxRateNotConfigured` at the payment screen, with nothing before that saying a
 /// word (ADR-0122 §7). `locale` is the same shape of trap one layer down: without it the store has
 /// no currency, timezone or business-date cutoff to price and close against.
-struct MenuBatchNode<Cat> {
+///
+/// Its write brings each member's `fees` node along, composed on the member's tree, as the
+/// single-store route does: the fee rules and the registry are what that is resolved from.
+struct MenuBatchNode<Cat, Fee, Reg> {
     catalog: Cat,
+    fee_rules: Fee,
+    registry: Reg,
+}
+
+/// [`MenuBatchNode`]'s plan: one book for every member, and the tenant's fee rules each member's
+/// `fees` node is composed from, on its own tree, when its write lands.
+struct MenuBatchPlan {
+    nodes: Vec<(String, serde_json::Value)>,
+    summary: serde_json::Value,
+    /// `None` when the rules, the registry or the catalog did not answer: the menu still goes out,
+    /// and each member's report says its fees did not.
+    fees: Option<TenantFeeRules>,
+}
+
+impl BatchNodePlan for MenuBatchPlan {
+    fn summary(&self) -> serde_json::Value {
+        self.summary.clone()
+    }
+
+    fn compile_for(
+        &self,
+        _store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(core::future::ready(Ok(self.nodes.clone())))
+    }
+
+    fn compose_on(
+        &self,
+        store_id: StoreId,
+        tree: Option<&ConfigTreeState>,
+        nodes: &mut Vec<(String, serde_json::Value)>,
+    ) -> Option<String> {
+        let Some(fees) = self.fees.as_ref().and_then(|fees| fees.for_store(store_id)) else {
+            return Some(fees_left_behind("FEE_PUBLISH_FAILED", &[]));
+        };
+        let on_tree = fees.on_tree(tree, nodes);
+        if let Some(node) = on_tree.node() {
+            nodes.push((PublishedFees::NODE.to_owned(), node.clone()));
+        }
+        on_tree.note()
+    }
 }
 
 /// A `menu` batch's arguments: which menu to compile.
@@ -5369,9 +5431,11 @@ struct MenuBatchArguments {
     menu_id: String,
 }
 
-impl<Cat> BatchNode for MenuBatchNode<Cat>
+impl<Cat, Fee, Reg> BatchNode for MenuBatchNode<Cat, Fee, Reg>
 where
     Cat: CatalogStore + Send + Sync + 'static,
+    Fee: FeeRuleStore + Send + Sync + 'static,
+    Reg: RegistryStore + Send + Sync + 'static,
 {
     fn key(&self) -> &'static str {
         "menu"
@@ -5397,11 +5461,14 @@ where
                 Err(refusal) => return Err(refusal),
             };
             let nodes = menu_nodes(&self.catalog, tenant_id, menu_id).await?;
-            Ok(SameEverywhere {
-                summary: serde_json::json!({ "menu_id": menu_id.to_string() }),
+            let fees =
+                TenantFeeRules::load(&self.fee_rules, &self.registry, &self.catalog, tenant_id)
+                    .await;
+            Ok(Box::new(MenuBatchPlan {
                 nodes,
-            }
-            .boxed())
+                summary: serde_json::json!({ "menu_id": menu_id.to_string() }),
+                fees,
+            }) as Box<dyn BatchNodePlan + 'a>)
         })
     }
 }
@@ -5524,7 +5591,16 @@ where
 /// single-store routers already hold, so a node cannot be wired into a batch without being wired
 /// into its own route first — and the three ADR-0122 §4 excludes (`locale`, `store_profile`, the
 /// generic level write) are absent by simply never appearing here.
-pub fn batch_nodes<Cat, Tax, Camp, Inv, R, P, F>(
+///
+/// The fee rules and the registry are the menu's: a menu publish brings each store's `fees` node
+/// along, as the single-store route does.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one authoring seam per node kind, plus the two a menu's fees are resolved from; \
+              bundling them would move the same list one line up and hide which store `main.rs` \
+              hands to which node"
+)]
+pub fn batch_nodes<Cat, Tax, Camp, Inv, R, P, F, Fee, Reg>(
     catalog: Cat,
     tax_rates: Tax,
     campaigns: Camp,
@@ -5532,6 +5608,8 @@ pub fn batch_nodes<Cat, Tax, Camp, Inv, R, P, F>(
     reason_codes: R,
     people: P,
     floor: F,
+    fee_rules: Fee,
+    registry: Reg,
 ) -> Vec<Arc<dyn BatchNode>>
 where
     Cat: CatalogStore + Send + Sync + 'static,
@@ -5541,9 +5619,15 @@ where
     R: ReasonCodeStore + Send + Sync + 'static,
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
     F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync + 'static,
+    Fee: FeeRuleStore + Send + Sync + 'static,
+    Reg: RegistryStore + Send + Sync + 'static,
 {
     vec![
-        Arc::new(MenuBatchNode { catalog }),
+        Arc::new(MenuBatchNode {
+            catalog,
+            fee_rules,
+            registry,
+        }),
         Arc::new(TaxBatchNode { tax_rates }),
         Arc::new(CampaignsBatchNode { campaigns }),
         Arc::new(InventoryBatchNode { inventory }),
@@ -5578,7 +5662,9 @@ struct BatchResultView {
     store_id: String,
     /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
     outcome: String,
-    /// The refusal's own message, for `skipped` and `failed`; absent when it applied.
+    /// The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the
+    /// write left something behind: a menu whose store's fees did not go with it says so, with the
+    /// fee publish's outcome and reason tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
     /// The config version the publish produced, for `applied`.
@@ -5663,6 +5749,11 @@ impl MemberOutcome {
 /// `skipped`, so a store that was never going to be written is never filed beside one that broke.
 /// Only once a member has passed them is anything compiled or written, and from there a refusal is
 /// `failed`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and this closure never takes the Err branch"
+)]
 async fn publish_batch_member<Cfg, C>(
     config_trees: &Cfg,
     clock: &C,
@@ -5705,19 +5796,25 @@ where
         Ok(nodes) => nodes,
         Err(refusal) => return MemberOutcome::failed(refusal_detail(refusal).await),
     };
-    match publish_config_nodes(
+    // What rides along — a menu's `fees` — is composed on the tree each attempt of the write reads.
+    let mut note = None;
+    match publish_config_nodes_with(
         config_trees,
         clock,
         tenant_id,
         store_id,
         ConfigLevel::Store,
-        nodes,
+        |tree| {
+            let mut writing = nodes.clone();
+            note = plan.compose_on(store_id, tree, &mut writing);
+            Ok(writing)
+        },
     )
     .await
     {
         Ok(version_id) => MemberOutcome {
             outcome: BatchOutcome::Applied,
-            detail: None,
+            detail: note,
             version_id: Some(version_id.to_string()),
         },
         Err(refusal) => MemberOutcome::failed(refusal_detail(refusal).await),
@@ -21406,8 +21503,8 @@ struct PublishFeesRequest {
 ///
 /// A write republishes every store it reaches by itself. What it cannot see is a change elsewhere
 /// that changes what a store is sent: a store given another brand, or an item added to or taken
-/// out of a category a rule names, which is compiled into items only when the fees are published,
-/// as a menu is compiled only when it is published.
+/// out of a category a rule names, which is compiled into items when the fees are published. A
+/// menu publish brings a store's fees along with it; this publishes them without one.
 async fn admin_publish_fees<F, Rg, Cat, Cfg, A, C>(
     State(state): State<FeesState<F, Rg, Cat, Cfg, A, C>>,
     headers: HeaderMap,
@@ -21546,15 +21643,12 @@ where
     for store_id in stores {
         results.push(match layout.placement(*store_id) {
             Some(placement) => {
-                publish_fees_to_store(
-                    state,
-                    layout.tenant_id,
-                    *store_id,
-                    &rules,
-                    &placement,
+                let fees = StoreFeeRules {
+                    rules: &rules,
+                    placement,
                     categories,
-                )
-                .await
+                };
+                publish_fees_to_store(state, layout.tenant_id, *store_id, &fees).await
             }
             None => FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"),
         });
@@ -21562,77 +21656,251 @@ where
     results
 }
 
+/// A tenant's fee rules and what they are resolved and compiled against, read once before any store
+/// is written, for a publish that brings a store's `fees` along with its `menu` (ADR-0159): a rule
+/// naming a category is compiled into the items the category holds, and a menu publish is what
+/// adds an item to a store.
+struct TenantFeeRules {
+    rules: Vec<FeeRule>,
+    layout: FeeLayout,
+    categories: CategoryItems,
+}
+
+impl TenantFeeRules {
+    /// Reads the rules, the registry and the catalog's categories, or `None`, logged, when one of
+    /// them does not answer. A menu publish goes out without the store's fees then, and the store
+    /// keeps the ones it has until they are published again.
+    async fn load<F, Rg, Cat>(
+        fees: &F,
+        registry: &Rg,
+        catalog: &Cat,
+        tenant_id: TenantId,
+    ) -> Option<Self>
+    where
+        F: FeeRuleStore,
+        Rg: RegistryStore,
+        Cat: CatalogStore,
+    {
+        let rules = match fees.list(tenant_id).await {
+            Ok(rules) => rules,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "the fee rules could not be read to publish them with a menu"
+                );
+                return None;
+            }
+        };
+        let layout = FeeLayout::load(registry, tenant_id).await.ok()?;
+        let items = match catalog.list_items(tenant_id).await {
+            Ok(items) => records(items),
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "the catalog could not be read to publish the fees with a menu"
+                );
+                return None;
+            }
+        };
+        Some(Self {
+            rules,
+            layout,
+            categories: CategoryItems::from_catalog(&items),
+        })
+    }
+
+    /// One store's rules, or `None` for a store the tenant's registry does not list, whose rules
+    /// cannot be resolved without knowing its brand.
+    fn for_store(&self, store_id: StoreId) -> Option<StoreFeeRules<'_>> {
+        Some(StoreFeeRules {
+            rules: &self.rules,
+            placement: self.layout.placement(store_id)?,
+            categories: &self.categories,
+        })
+    }
+}
+
+/// What a batch member's report says when its menu went out without the store's fees: the fee
+/// publish's own outcome token and, for a refusal, each rule the store cannot apply and why.
+fn fees_left_behind(outcome: &str, faults: &[FeeFaultView]) -> String {
+    let named: Vec<String> = faults
+        .iter()
+        .map(|fault| format!("{} {}", fault.fee_id, fault.reason))
+        .collect();
+    let why = if named.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", named.join(", "))
+    };
+    format!("the menu is published, but not the store's fees, which it keeps: {outcome}{why}")
+}
+
+/// One store's fee rules as a write composes its `fees` node: the tenant's rules, where the store
+/// sits, and what each category holds. All three are read before the store's tree is, so composing
+/// the node needs nothing but the tree each attempt of the write reads.
+struct StoreFeeRules<'a> {
+    rules: &'a [FeeRule],
+    placement: FeePlacement,
+    categories: &'a CategoryItems,
+}
+
+impl StoreFeeRules<'_> {
+    /// The store's `fees` node on `tree` as a write will leave it with `writing` set on its Store
+    /// layer: the rules are resolved, compiled and checked against what the store will hold once
+    /// the write lands, and compared with the node its Store layer holds now.
+    fn on_tree(
+        &self,
+        tree: Option<&ConfigTreeState>,
+        writing: &[(String, serde_json::Value)],
+    ) -> FeesOnTree {
+        let store_layer = layer_with_nodes(tree, ConfigLevel::Store, writing);
+        let empty = serde_json::Value::Object(serde_json::Map::new());
+        let layer = |level| tree.map_or(&empty, |tree| tree.layer(level));
+        let document = merge_layers(&[
+            layer(ConfigLevel::Tenant),
+            layer(ConfigLevel::Brand),
+            &store_layer,
+            layer(ConfigLevel::Device),
+        ]);
+        let sent = crate::fees::for_store(
+            self.rules,
+            &self.placement,
+            self.categories,
+            &StoreFacts::from_document(&document),
+        );
+        if !sent.faults.is_empty() {
+            return FeesOnTree::Refused(
+                sent.faults
+                    .iter()
+                    .map(|(fee_id, fault)| FeeFaultView {
+                        fee_id: fee_id.to_string(),
+                        reason: fault.as_wire(),
+                    })
+                    .collect(),
+            );
+        }
+        let Ok(node) = serde_json::to_value(&sent.node) else {
+            return FeesOnTree::Unwritable;
+        };
+        let held = tree.and_then(|tree| tree.layer(ConfigLevel::Store).get(PublishedFees::NODE));
+        // No node and no rule is the same answer at the edge, so it is not a change.
+        if held.map_or(sent.node.fees.is_empty(), |held| *held == node) {
+            FeesOnTree::Unchanged
+        } else {
+            FeesOnTree::Changed(node)
+        }
+    }
+}
+
+/// What a store's `fees` node comes to on the tree a write reads.
+enum FeesOnTree {
+    /// The node to write: the store resolves to something its Store layer does not hold.
+    Changed(serde_json::Value),
+    /// The Store layer holds it already, or holds no node where the store runs no rule.
+    Unchanged,
+    /// A rule the store cannot apply, and why. Nothing is written, and the store keeps the rules
+    /// it has: sending the others alone would stop charging a fee nobody removed, and sending them
+    /// all would fail every bill the faulted rule applies to.
+    Refused(Vec<FeeFaultView>),
+    /// The node would not serialise.
+    Unwritable,
+}
+
+impl FeesOnTree {
+    /// The node a write sets, which is there only when it changed.
+    fn node(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Changed(node) => Some(node),
+            Self::Unchanged | Self::Refused(_) | Self::Unwritable => None,
+        }
+    }
+
+    /// What a batch member's report says of the store's fees, when the write leaves them behind.
+    fn note(&self) -> Option<String> {
+        match self {
+            Self::Changed(_) | Self::Unchanged => None,
+            Self::Refused(faults) => Some(fees_left_behind("FEE_PUBLISH_REFUSED", faults)),
+            Self::Unwritable => Some(fees_left_behind("FEE_PUBLISH_FAILED", &[])),
+        }
+    }
+
+    /// The store's outcome, given the version the write produced, or `None` when it wrote nothing.
+    fn result(&self, store_id: StoreId, written: Option<ConfigVersionId>) -> FeePublishResult {
+        match (self, written) {
+            (Self::Changed(_), Some(version)) => FeePublishResult {
+                config_version_id: Some(version.to_string()),
+                ..FeePublishResult::of(store_id, "FEE_PUBLISH_APPLIED")
+            },
+            (Self::Unchanged, _) => FeePublishResult::of(store_id, "FEE_PUBLISH_UNCHANGED"),
+            (Self::Refused(faults), _) => {
+                tracing::warn!(
+                    %store_id,
+                    rules = faults.len(),
+                    "a store cannot apply some of its fee rules, so it keeps the ones it has"
+                );
+                FeePublishResult {
+                    faults: faults.clone(),
+                    ..FeePublishResult::of(store_id, "FEE_PUBLISH_REFUSED")
+                }
+            }
+            (Self::Unwritable, _) => {
+                tracing::error!("could not serialise a store's fees node");
+                FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
+            }
+            (Self::Changed(_), None) => FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+        }
+    }
+}
+
 /// Writes one store's resolved rules onto its Store layer, unless it already holds them or cannot
 /// apply one of them.
+///
+/// The node is composed inside [`publish_config_nodes_with`]'s retry, on the tree each attempt
+/// reads, so the rules are checked against the tree the write lands on: a `tax`, `locale` or
+/// `menu` publish landing between a read and its write is read again, not written over. An attempt
+/// that finds the store holds its rules already, or cannot apply one, abandons the write, as a
+/// refusal abandons it, and what it composed is the outcome.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and here it only abandons a write that would change \
+              nothing or that the store cannot take; the outcome is what the closure composed"
+)]
 async fn publish_fees_to_store<F, Rg, Cat, Cfg, A, C>(
     state: &FeesState<F, Rg, Cat, Cfg, A, C>,
     tenant_id: TenantId,
     store_id: StoreId,
-    rules: &[FeeRule],
-    placement: &FeePlacement,
-    categories: &CategoryItems,
+    fees: &StoreFeeRules<'_>,
 ) -> FeePublishResult
 where
     Cfg: ConfigTreeStore,
     C: ClockSource,
 {
-    let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
-        tracing::error!(%store_id, "a store's configuration could not be read for a fee publish");
-        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
-    };
-    let held = loaded.state.as_ref().and_then(|tree| {
-        tree.layer(ConfigLevel::Store)
-            .get(PublishedFees::NODE)
-            .cloned()
-    });
-    let facts = loaded.state.map_or_else(StoreFacts::default, |tree| {
-        StoreFacts::from_document(
-            &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
-        )
-    });
-    let sent = crate::fees::for_store(rules, placement, categories, &facts);
-    if !sent.faults.is_empty() {
-        tracing::warn!(
-            %store_id,
-            rules = sent.faults.len(),
-            "a store cannot apply some of its fee rules, so it keeps the ones it has"
-        );
-        return FeePublishResult {
-            faults: sent
-                .faults
-                .iter()
-                .map(|(fee_id, fault)| FeeFaultView {
-                    fee_id: fee_id.to_string(),
-                    reason: fault.as_wire(),
-                })
-                .collect(),
-            ..FeePublishResult::of(store_id, "FEE_PUBLISH_REFUSED")
-        };
-    }
-    let Ok(node) = serde_json::to_value(&sent.node) else {
-        tracing::error!("could not serialise a store's fees node");
-        return FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED");
-    };
-    // No node and no rule is the same answer at the edge, so it is not a change.
-    if held.map_or(sent.node.fees.is_empty(), |held| held == node) {
-        return FeePublishResult::of(store_id, "FEE_PUBLISH_UNCHANGED");
-    }
-    match publish_config_nodes(
+    let mut composed = None;
+    let written = publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
         store_id,
         ConfigLevel::Store,
-        vec![(PublishedFees::NODE.to_owned(), node)],
-    )
-    .await
-    {
-        Ok(version) => FeePublishResult {
-            config_version_id: Some(version.to_string()),
-            ..FeePublishResult::of(store_id, "FEE_PUBLISH_APPLIED")
+        |tree| {
+            let on_tree = fees.on_tree(tree, &[]);
+            let nodes = on_tree
+                .node()
+                .map(|node| vec![(PublishedFees::NODE.to_owned(), node.clone())]);
+            composed = Some(on_tree);
+            nodes.ok_or_else(|| StatusCode::NO_CONTENT.into_response())
         },
-        Err(_refused) => {
-            tracing::warn!(%store_id, "a store's configuration refused a fee publish");
+    )
+    .await;
+    match (composed, written) {
+        (Some(on_tree), Ok(version)) => on_tree.result(store_id, Some(version)),
+        (Some(on_tree), Err(_)) if on_tree.node().is_none() => on_tree.result(store_id, None),
+        _ => {
+            tracing::warn!(
+                %store_id,
+                "a store's configuration could not be read for a fee publish, or refused it"
+            );
             FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
         }
     }
@@ -22713,7 +22981,7 @@ where
         Ok(plan) => plan,
         Err(refusal) => return refusal,
     };
-    let compiled = match plan.compile_for(store_id).await {
+    let mut compiled = match plan.compile_for(store_id).await {
         Ok(compiled) => compiled,
         Err(refusal) => return refusal,
     };
@@ -22722,6 +22990,8 @@ where
         Ok(loaded) => loaded,
         Err(refusal) => return refusal,
     };
+    // And what rides along with it, as the publish composes it on this tree: a menu's `fees`.
+    let _left_behind = plan.compose_on(store_id, loaded.state.as_ref(), &mut compiled);
     match preview_config_nodes(loaded.state.as_ref(), &compiled) {
         Ok(preview) => (
             StatusCode::OK,
@@ -28007,11 +28277,14 @@ where
 
 // --- Catalog publish (`/admin/catalog/publish`, ADR-0066) ---------------------------------------
 
-/// The collaborators the publish route needs: the catalog to compile from, the config-tree store to
-/// publish into, plus the admin and clock the session guard and version-id minting use.
+/// The collaborators the publish route needs: the catalog to compile from, the fee rules and the
+/// registry the store's `fees` node is resolved from, the config-tree store to publish into, plus
+/// the admin and clock the session guard and version-id minting use.
 #[derive(Clone)]
-struct CatalogPublishState<Cat, Cfg, A, C> {
+struct CatalogPublishState<Cat, F, Rg, Cfg, A, C> {
     catalog: Cat,
+    fees: F,
+    registry: Rg,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -28025,8 +28298,15 @@ struct CatalogPublishState<Cat, Cfg, A, C> {
 /// config layer, so it rides the config tree to the store like every other configuration change
 /// ([ADR-0033](../../../docs/adr/0033-config-tree.md)) — no new channel. It is a separate sub-router
 /// because it needs the config-tree store the CRUD routes do not.
-pub fn catalog_publish_router<Cat, Cfg, A, C>(
+///
+/// The store's `fees` node goes in the same version
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)): a fee rule naming a category is
+/// compiled into the items the category holds, so the publish that adds an item to a store is the
+/// one that brings its fees along. That is what the fee rules and the registry are for.
+pub fn catalog_publish_router<Cat, F, Rg, Cfg, A, C>(
     catalog: Cat,
+    fees: F,
+    registry: Rg,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -28034,6 +28314,8 @@ pub fn catalog_publish_router<Cat, Cfg, A, C>(
 ) -> Router
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -28041,10 +28323,12 @@ where
     Router::new()
         .route(
             "/admin/catalog/publish",
-            post(admin_publish_menu::<Cat, Cfg, A, C>),
+            post(admin_publish_menu::<Cat, F, Rg, Cfg, A, C>),
         )
         .with_state(CatalogPublishState {
             catalog,
+            fees,
+            registry,
             config_trees,
             admin,
             clock,
@@ -28153,16 +28437,39 @@ where
     ])
 }
 
+/// What a menu publish answers: the version it produced, and how the store's fees went with it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PublishedMenu {
+    /// The new config version id (a ULID).
+    config_version_id: String,
+    /// The store's `fees` node, composed on the tree the menu was written onto, with a fee
+    /// publish's outcomes: applied in the same version, unchanged, refused with each rule the store
+    /// cannot apply and why, or failed. Only an applied one wrote anything.
+    fees: FeePublishResult,
+}
+
 /// A super-admin publishes a menu to a store: compile the price book and the presentation layout →
-/// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes → version it
-/// through the config tree.
-async fn admin_publish_menu<Cat, Cfg, A, C>(
-    State(state): State<CatalogPublishState<Cat, Cfg, A, C>>,
+/// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes, with the
+/// store's `fees` node beside them where it changes → version it through the config tree.
+///
+/// The fees are composed inside the write's retry, on the tree each attempt reads, with the menu
+/// being written: what the store is sent is checked against what it will hold. A store that cannot
+/// apply one of its rules still gets its menu; the answer says which rule and why, and the store
+/// keeps the fees it has, as a fee publish leaves it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and this closure never takes the Err branch"
+)]
+async fn admin_publish_menu<Cat, F, Rg, Cfg, A, C>(
+    State(state): State<CatalogPublishState<Cat, F, Rg, Cfg, A, C>>,
     headers: HeaderMap,
     Json(request): Json<PublishMenuRequest>,
 ) -> Response
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
+    F: FeeRuleStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -28198,20 +28505,40 @@ where
         Ok(nodes) => nodes,
         Err(refusal) => return refusal,
     };
+    let tenant_fees =
+        TenantFeeRules::load(&state.fees, &state.registry, &state.catalog, tenant_id).await;
+    let store_fees = tenant_fees
+        .as_ref()
+        .and_then(|fees| fees.for_store(store_id));
 
-    let id = match publish_config_nodes(
+    let mut composed = None;
+    let id = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
         store_id,
         ConfigLevel::Store,
-        nodes,
+        |tree| {
+            let mut writing = nodes.clone();
+            if let Some(fees) = &store_fees {
+                let on_tree = fees.on_tree(tree, &writing);
+                if let Some(node) = on_tree.node() {
+                    writing.push((PublishedFees::NODE.to_owned(), node.clone()));
+                }
+                composed = Some(on_tree);
+            }
+            Ok(writing)
+        },
     )
     .await
     {
         Ok(id) => id,
         Err(refusal) => return refusal,
     };
+    let fees = composed.map_or_else(
+        || FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+        |on_tree| on_tree.result(store_id, Some(id)),
+    );
     {
         // Records that a menu was compiled and published to a store — the menu compiled and the
         // config version it produced, keyed to the store. The compiled book itself rides the
@@ -28233,8 +28560,9 @@ where
         .await;
         (
             StatusCode::OK,
-            Json(PublishedConfig {
+            Json(PublishedMenu {
                 config_version_id: id.to_string(),
+                fees,
             }),
         )
             .into_response()
@@ -35272,7 +35600,9 @@ where
 
     // Compile each node once for the tenant, then once per store. A refusal here is the
     // instruction's own — a menu that will not compile — and refuses the release rather than being
-    // recorded at every shop.
+    // recorded at every shop. What a write composes on a store's tree when it lands — a menu's
+    // `fees` — is not snapshotted: it is read from the tree when the write lands, and a snapshot
+    // of it would publish over whatever fee rules are written before the moment arrives.
     let mut pairs: Vec<(StoreId, String, serde_json::Value)> = Vec::new();
     for (node, arguments) in &carried {
         let plan = match node.plan(tenant_id, arguments).await {
