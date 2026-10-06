@@ -34,7 +34,10 @@
 //! A fee is a published rule ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), and
 //! [`assemble`] charges every rule that applies to the bill as one [`FeeLine`]. A percentage is
 //! taken of the lines it counts, after their share of the bill's discount and comps, and never of
-//! another fee, so fees do not compound. Each fee rounds once, by the store's tax rounding
+//! another fee, so fees do not compound. Its base is net of tax or tax-inclusive, as its rule says,
+//! whichever way the store's prices are quoted: where they are quoted the other way, the bill is
+//! moved to the rule's posture class by class and rounded once per class, as the bill's own tax is
+//! (`base_in_other_posture`). Each fee rounds once, by the store's tax rounding
 //! ([`BillInput::tax_rounding`]). Its taxed parts join their classes' bases before each class's tax
 //! is rounded, so tax still rounds once per class (ADR-0028); each part then carries its share of
 //! that class's tax.
@@ -231,11 +234,12 @@ pub struct BillInput<'a> {
     /// decision 2), half-up unless it says otherwise.
     ///
     /// It rounds the tax of each class and of each charge taxed at a class no line is in, extracted
-    /// or added on top as [`Self::prices_include_tax`] says, and each fee's amount (ADR-0159
-    /// decision 2). A tax line's named parts and a fee's share of a class's tax are shares of that
-    /// rounded tax, so they follow it. It does not round the cash rounding of the grand total, which
-    /// is always [`CASH_ROUNDING`], nor anything the caller priced before the bill, such as a line's
-    /// net or a campaign's reduction.
+    /// or added on top as [`Self::prices_include_tax`] says, each fee's amount (ADR-0159
+    /// decision 2), and, once per class, the tax a percentage's base is moved by when its rule
+    /// quotes the base in the other posture. A tax line's named parts and a fee's share of a
+    /// class's tax are shares of that rounded tax, so they follow it. It does not round the cash
+    /// rounding of the grand total, which is always [`CASH_ROUNDING`], nor anything the caller
+    /// priced before the bill, such as a line's net or a campaign's reduction.
     pub tax_rounding: Rounding,
     /// Whether the class bases already contain their tax — the store's `locale.prices_include_tax`
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
@@ -252,8 +256,8 @@ pub struct BillInput<'a> {
     ///
     /// A rule applies to nothing when [`FrozenFee::violations`] faults it (a token from a newer
     /// release that this one does not know), when it counts no line, or when it charges in another
-    /// currency. So does a percentage whose base is in the other tax posture from
-    /// [`Self::prices_include_tax`]: this release does not convert between the two (ADR-0104).
+    /// currency. A percentage whose base is in the other tax posture from
+    /// [`Self::prices_include_tax`] is taken of its lines converted to that posture.
     pub fee_rules: &'a [FrozenFee],
     /// The fees waived on this bill (`billing.fee.waived`, ADR-0159 decision 5), by id. A rule
     /// listed here is left out: it charges nothing and taxes nothing, and every other figure is
@@ -306,6 +310,25 @@ fn allocate_across_classes(
         .map(|base| base.amount.amount_minor)
         .collect();
     Ok(amount.allocate(&weights)?)
+}
+
+/// The rate `tax_class_id` is taxed at on the bill's channel.
+///
+/// # Errors
+///
+/// [`DomainError::TaxRateNotConfigured`] when the table has none: charging no tax on a class
+/// nobody rated is an audit finding, so the bill is refused instead (ADR-0028).
+fn rate_on_channel(
+    input: &BillInput<'_>,
+    tax_class_id: TaxClassId,
+) -> Result<pos_proto::locale::TaxRate, DomainError> {
+    input
+        .rates
+        .rate_for(tax_class_id, input.sales_channel)
+        .ok_or_else(|| DomainError::TaxRateNotConfigured {
+            tax_class_id: tax_class_id.to_string(),
+            sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel).to_owned(),
+        })
 }
 
 /// The tax on one taxable amount, the base to print beside it, and its named breakdown.
@@ -378,14 +401,7 @@ fn extra_class_lines(
 
     let mut lines = Vec::with_capacity(charges.len());
     for charge in charges {
-        let rate = input
-            .rates
-            .rate_for(charge.tax_class_id, input.sales_channel)
-            .ok_or_else(|| DomainError::TaxRateNotConfigured {
-                tax_class_id: charge.tax_class_id.to_string(),
-                sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel)
-                    .to_owned(),
-            })?;
+        let rate = rate_on_channel(input, charge.tax_class_id)?;
         let (tax, taxable_base, components) = tax_for(
             charge.amount,
             rate,
@@ -472,20 +488,26 @@ fn fee_line(
     };
     let amount = match kind {
         FeeKind::Percent => {
-            // The base is taken in the posture the lines are priced in: this release does not
-            // convert a tax-inclusive price to a net one, or back.
             let Some(rate) = rule.rate else {
                 return Ok(None);
             };
-            if rule.base_tax_inclusive != input.prices_include_tax {
-                return Ok(None);
-            }
             let reductions = if rule.base_discounted {
                 reductions
             } else {
                 Money::zero(input.currency_code)
             };
-            let counted_net = sum_nets(&counted, input.currency_code)?;
+            // In the store's own posture the base is the bill's own figures; in the other, the
+            // bill moved to it.
+            let (counted_net, subtotal, reductions) =
+                if rule.base_tax_inclusive == input.prices_include_tax {
+                    (
+                        sum_nets(&counted, input.currency_code)?,
+                        subtotal,
+                        reductions,
+                    )
+                } else {
+                    base_in_other_posture(input, &counted, reductions)?
+                };
             percent_of(counted_net, subtotal, reductions, rate, input.tax_rounding)?
         }
         FeeKind::AmountPerBill | FeeKind::AmountPerUnit => {
@@ -527,6 +549,64 @@ fn fee_line(
         tax: Money::zero(amount.currency_code),
         waivable: rule.waivable,
     }))
+}
+
+/// What a percentage whose rule quotes its base in the other tax posture from the store's prices
+/// is taken of (ADR-0159 decision 1, ADR-0104): the counted lines, the bill's subtotal and the
+/// `reductions` that fall on them, each moved to that posture.
+///
+/// Each is moved class by class, at the class's rate on the bill's channel, and rounded once per
+/// class by the store's tax rounding, as the bill's own tax is ([`tax_for`]): a price's tax is
+/// extracted for a base net of tax, or added for a tax-inclusive one. The reductions are shared
+/// across the classes in proportion to their bases, as [`assemble`] shares the discount and the
+/// comps, but together, in one allocation: reductions that take the whole bill then take each
+/// class whole, and leave nothing in either posture. The three are moved alike, so the reductions
+/// still fall on the counted lines in proportion.
+///
+/// # Errors
+///
+/// [`DomainError::TaxRateNotConfigured`] for a class with no rate on the channel, as [`assemble`]
+/// refuses the bill for it, and [`DomainError::Money`] on overflow.
+fn base_in_other_posture(
+    input: &BillInput<'_>,
+    counted: &[&BillLine],
+    reductions: Money,
+) -> Result<(Money, Money, Money), DomainError> {
+    let zero = Money::zero(input.currency_code);
+    let reduction_shares = allocate_across_classes(reductions, input.class_bases)?;
+    let (mut counted_total, mut subtotal, mut reduced) = (zero, zero, zero);
+    for (base, reduction) in input.class_bases.iter().zip(reduction_shares) {
+        let rate = rate_on_channel(input, base.tax_class_id)?;
+        let in_class = counted
+            .iter()
+            .filter(|line| line.tax_class_id == base.tax_class_id)
+            .try_fold(zero, |sum, line| sum.checked_add(line.net))?;
+        counted_total = counted_total.checked_add(converted(in_class, rate, input)?)?;
+        subtotal = subtotal.checked_add(converted(base.amount, rate, input)?)?;
+        reduced = reduced.checked_add(converted(reduction, rate, input)?)?;
+    }
+    // Rounded class by class, reductions just short of the whole bill can come to a minor unit
+    // more than the bill once moved. They still take no more than all of it, so a percentage is
+    // never less than nothing.
+    if reduced.amount_minor > subtotal.amount_minor {
+        reduced = subtotal;
+    }
+    Ok((counted_total, subtotal, reduced))
+}
+
+/// `amount`, as the store's prices quote it, in the other tax posture at `rate`: with the tax
+/// inside it extracted where prices include tax, and with the tax on it added where they do not,
+/// rounded once by the store's tax rounding, exactly as [`tax_for`] taxes a class's base.
+fn converted(
+    amount: Money,
+    rate: pos_proto::locale::TaxRate,
+    input: &BillInput<'_>,
+) -> Result<Money, DomainError> {
+    Ok(if input.prices_include_tax {
+        amount.checked_sub(amount.tax_included(rate.as_ratio(), input.tax_rounding)?)?
+    } else {
+        amount.checked_add(amount.mul_ratio(rate.as_ratio(), input.tax_rounding)?)?
+    })
 }
 
 /// `rate` of the counted lines' net after their share of the bill's reductions, rounded once.
@@ -786,14 +866,7 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
             taxable = taxable.checked_add(share.amount)?;
         }
 
-        let rate = input
-            .rates
-            .rate_for(base.tax_class_id, input.sales_channel)
-            .ok_or_else(|| DomainError::TaxRateNotConfigured {
-                tax_class_id: base.tax_class_id.to_string(),
-                sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel)
-                    .to_owned(),
-            })?;
+        let rate = rate_on_channel(input, base.tax_class_id)?;
         let (tax, taxable_base, components) = tax_for(
             taxable,
             rate,
@@ -1271,7 +1344,7 @@ mod tests {
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
     use pos_proto::locale::{LocaleSettings, TaxComponent, TaxRate, TaxRateTable, TaxRounding};
-    use pos_proto::money::{Money, Ratio, Rounding};
+    use pos_proto::money::{Money, Ratio, Rounding, div_round};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
     use pos_proto::wire_enum::Open;
@@ -1325,7 +1398,7 @@ mod tests {
     /// property a VAT invoice depends on.
     fn assert_reconciles(totals: &BillTotals) {
         // tax lines sum to tax_total
-        let mut tax = vnd(0);
+        let mut tax = Money::zero(totals.total_due.currency_code);
         for line in &totals.tax_lines {
             tax = tax.checked_add(line.tax).expect("in range");
         }
@@ -1989,11 +2062,6 @@ mod tests {
                 altered(per_bill(), |f| {
                     f.amount = Some(Money::new(CurrencyCode::JPY, 500));
                 }),
-                // A percentage of a base in the other tax posture waits for a release that
-                // converts it.
-                altered(fee(2, FeeKind::Percent, 1_000), |f| {
-                    f.base_tax_inclusive = !inclusive;
-                }),
             ];
             let busy = |input: &mut BillInput<'_>| {
                 input.bill_discount = vnd(30_001);
@@ -2220,6 +2288,256 @@ mod tests {
             "1,210 holds 110, a tenth of it the fee's"
         );
         assert_reconciles(&totals);
+    }
+
+    // ---- A percentage's base in either tax posture ---------------------------------------------
+
+    fn jpy(amount: i64) -> Money {
+        Money::new(CurrencyCode::JPY, amount)
+    }
+
+    fn yen_line(n: u128, units: i64, net: i64, tax_class_id: TaxClassId) -> BillLine {
+        BillLine {
+            net: jpy(net),
+            ..line(n, units, 0, tax_class_id)
+        }
+    }
+
+    /// A fee's part taxed at a class, and that part's tax, in yen.
+    fn yen_share(tax_class_id: TaxClassId, amount: i64, tax: i64) -> FeeClassShare {
+        FeeClassShare {
+            tax_class_id,
+            amount: jpy(amount),
+            tax: jpy(tax),
+        }
+    }
+
+    /// A Japanese takeaway: two dishes at ¥540, and a ¥1,100 bottle of wine.
+    fn japanese_takeaway() -> Vec<BillLine> {
+        vec![
+            yen_line(0, 2, 1_080, food()),
+            yen_line(1, 1, 1_100, alcohol()),
+        ]
+    }
+
+    /// Japan's two rates on a takeaway: the reduced 8 % on food, and 10 % on alcohol, which the
+    /// reduced rate never covers.
+    fn japanese_rates() -> TaxRateTable {
+        TaxRateTable::new()
+            .with(food(), SalesChannel::Takeaway, TaxRate::from_percent(8))
+            .with(alcohol(), SalesChannel::Takeaway, TaxRate::from_percent(10))
+    }
+
+    /// A Japanese store's takeaway, in yen and quoted with its tax inside, with `discount` off and
+    /// `comps` comped.
+    fn in_japan(discount: i64, comps: i64) -> impl Fn(&mut BillInput<'_>) {
+        move |input| {
+            input.currency_code = CurrencyCode::JPY;
+            input.sales_channel = SalesChannel::Takeaway;
+            input.bill_discount = jpy(discount);
+            input.comps = jpy(comps);
+            input.service_charge = jpy(0);
+            input.prices_include_tax = true;
+        }
+    }
+
+    #[test]
+    fn an_inclusive_store_takes_a_base_net_of_tax_extracted_class_by_class() {
+        let rates = japanese_rates();
+        let order = japanese_takeaway();
+        // The default base, net of tax: ¥1,080 holds ¥80 at 8 % and ¥1,100 holds ¥100 at 10 %, so
+        // 10 % is taken of ¥2,000.
+        let ten_percent = [fee(1, FeeKind::Percent, 1_000)];
+        let totals =
+            assemble_with(&order, &ten_percent, &rates, in_japan(0, 0)).expect("assembles");
+        let charged = totals.fee_lines.first().expect("the fee applies");
+        assert_eq!(charged.amount, jpy(200));
+        // The fee is quoted as the store quotes everything, its tax inside it. It follows its
+        // lines 1,080:1,100, and each class's tax is extracted once from its whole base: ¥1,179
+        // holds ¥87 and ¥1,201 holds ¥109, of which the fee's parts take ¥7 and ¥9.
+        assert_eq!(
+            charged.class_shares,
+            vec![yen_share(food(), 99, 7), yen_share(alcohol(), 101, 9)]
+        );
+        assert_eq!(totals.tax_total, jpy(87 + 109));
+        assert_eq!(totals.total_due, jpy(2_180 + 200), "the prices and the fee");
+        assert_reconciles(&totals);
+
+        // ¥109 off and ¥55 comped fall 1,080:1,100, ¥81 and ¥83 on the classes, which hold ¥6 and
+        // ¥8 of tax: ¥150 off the ¥2,000 leaves 10 % of ¥1,850. Before them, 10 % of the ¥2,000.
+        let reduced = |discounted: bool| {
+            let rule = altered(fee(1, FeeKind::Percent, 1_000), |rule| {
+                rule.base_discounted = discounted;
+            });
+            assemble_with(&order, &[rule], &rates, in_japan(109, 55)).expect("assembles")
+        };
+        for (discounted, charged) in [(true, 185), (false, 200)] {
+            let totals = reduced(discounted);
+            assert_eq!(
+                totals.service_charge,
+                jpy(charged),
+                "discounted: {discounted}"
+            );
+            assert_reconciles(&totals);
+        }
+
+        // A base on the price as quoted is the store's own posture, and is taken as it was.
+        let quoted = [altered(fee(1, FeeKind::Percent, 1_000), |rule| {
+            rule.base_tax_inclusive = true;
+        })];
+        let totals = assemble_with(&order, &quoted, &rates, in_japan(0, 0)).expect("assembles");
+        assert_eq!(totals.service_charge, jpy(218));
+        assert_reconciles(&totals);
+
+        // Waived, it is the bill that never froze it.
+        let id = [FeeId::new(Ulid::from_u128(1))];
+        let waived = assemble_waiving(&order, &ten_percent, &id, &rates, in_japan(0, 0));
+        let without = assemble_with(&order, &[], &rates, in_japan(0, 0));
+        assert_eq!(waived, without);
+    }
+
+    #[test]
+    fn an_exclusive_store_takes_a_tax_inclusive_base_added_class_by_class() {
+        let rates = rates();
+        let pizzas = [line(0, 2, 200_000, food())];
+        let on_the_price = |discounted: bool| {
+            altered(fee(1, FeeKind::Percent, 500), |rule| {
+                rule.base_tax_inclusive = true;
+                rule.base_discounted = discounted;
+            })
+        };
+        // 5 % of the price with its 10 % added, 220,000, is 11,000, which is taxed on top as the
+        // store taxes everything.
+        let totals =
+            assemble_with(&pizzas, &[on_the_price(true)], &rates, |_| {}).expect("assembles");
+        let charged = totals.fee_lines.first().expect("the fee applies");
+        assert_eq!(charged.amount, vnd(11_000));
+        assert_eq!(charged.class_shares, vec![share(food(), 11_000, 1_100)]);
+        assert_eq!(totals.total_due, vnd(200_000 + 11_000 + 21_100));
+        assert_reconciles(&totals);
+
+        // 20,000 off and 10,000 comped are 33,000 with their tax: 5 % of 187,000, and of the
+        // whole 220,000 before them.
+        let reduced = |input: &mut BillInput<'_>| {
+            input.bill_discount = vnd(20_000);
+            input.comps = vnd(10_000);
+        };
+        for (discounted, charged) in [(true, 9_350), (false, 11_000)] {
+            let rules = [on_the_price(discounted)];
+            let totals = assemble_with(&pizzas, &rules, &rates, reduced).expect("assembles");
+            assert_eq!(
+                totals.service_charge,
+                vnd(charged),
+                "discounted: {discounted}"
+            );
+            assert_reconciles(&totals);
+        }
+    }
+
+    #[test]
+    fn a_converted_base_takes_each_class_at_its_own_rate() {
+        // Food at 10 % and wine at 15 %: 200,000 and 100,000 are 220,000 and 115,000 with their
+        // tax, and the 30,000 off falls 2:1, so 22,000 and 11,500 with theirs. 10 % is taken of
+        // the 301,500 left, or of the whole 335,000 before it.
+        let rates = rates();
+        let off = |input: &mut BillInput<'_>| input.bill_discount = vnd(30_000);
+        for (discounted, charged) in [(true, 30_150), (false, 33_500)] {
+            let rule = altered(fee(1, FeeKind::Percent, 1_000), |rule| {
+                rule.base_tax_inclusive = true;
+                rule.base_discounted = discounted;
+            });
+            let totals = assemble_with(&dinner(), &[rule], &rates, off).expect("assembles");
+            assert_eq!(
+                totals.service_charge,
+                vnd(charged),
+                "discounted: {discounted}"
+            );
+            assert_reconciles(&totals);
+        }
+    }
+
+    #[test]
+    fn a_converted_base_refuses_a_class_with_no_rate_as_the_bill_does() {
+        let only_food =
+            TaxRateTable::new().with(food(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let rule = [altered(fee(1, FeeKind::Percent, 1_000), |rule| {
+            rule.base_tax_inclusive = true;
+        })];
+        let without = assemble_with(&dinner(), &[], &only_food, |_| {});
+        assert!(matches!(
+            without,
+            Err(DomainError::TaxRateNotConfigured { .. })
+        ));
+        assert_eq!(assemble_with(&dinner(), &rule, &only_food, |_| {}), without);
+    }
+
+    #[test]
+    fn a_bill_reduced_to_nothing_leaves_a_converted_base_nothing() {
+        // ¥100 off and ¥1,950 comped take the whole ¥2,050. Shared across the classes apart, they
+        // would fall ¥999 and ¥1,051 on ¥1,000 and ¥1,050, and moved net of tax they would leave
+        // ¥1 of the bill standing, half of which rounds to a yen. Shared as one, they take each
+        // class whole.
+        let rates = japanese_rates();
+        let lines = [
+            yen_line(0, 1, 1_000, food()),
+            yen_line(1, 1, 1_050, alcohol()),
+        ];
+        let half = [fee(1, FeeKind::Percent, 5_000)];
+        let totals = assemble_with(&lines, &half, &rates, in_japan(100, 1_950)).expect("assembles");
+        let [charged] = totals.fee_lines.as_slice() else {
+            panic!("the rule applies: {:?}", totals.fee_lines);
+        };
+        assert_eq!(charged.amount, jpy(0));
+        assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn reductions_moved_to_the_other_posture_take_no_more_than_the_bill() {
+        // 3,007 off a bill of 3,008 in three classes, at 10 %, 15 % and 8 %, falls 1,006, 1,000
+        // and 1,001 on 1,007, 1,001 and 1,000. Net of their tax, the reductions are 915, 870 and
+        // 927, and the bill 915, 870 and 926: a đồng more than the bill. Half of the đồng left
+        // standing rounds to nothing, not to a đồng less than nothing.
+        let third = TaxClassId::new(Ulid::from_u128(4));
+        let rates = rates().with(third, SalesChannel::DineIn, TaxRate::from_percent(8));
+        let lines = [
+            line(0, 1, 1_007, food()),
+            line(1, 1, 1_001, alcohol()),
+            line(2, 1, 1_000, third),
+        ];
+        let half = [fee(1, FeeKind::Percent, 5_000)];
+        let totals = assemble_with(&lines, &half, &rates, |input| {
+            input.prices_include_tax = true;
+            input.bill_discount = vnd(3_007);
+        })
+        .expect("assembles");
+        let [charged] = totals.fee_lines.as_slice() else {
+            panic!("the rule applies: {:?}", totals.fee_lines);
+        };
+        assert_eq!(charged.amount, vnd(0));
+        assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn the_parts_of_a_split_take_a_converted_base_of_their_own_lines() {
+        let rates = japanese_rates();
+        let ten_percent = [fee(1, FeeKind::Percent, 1_000)];
+        let parts = [
+            vec![yen_line(0, 2, 1_080, food())],
+            vec![yen_line(1, 1, 1_100, alcohol())],
+        ];
+        let kept = split_fee_rules(&ten_percent, &parts).expect("splits");
+        let charged: Vec<Money> = parts
+            .iter()
+            .zip(&kept)
+            .map(|(lines, kept)| {
+                let totals =
+                    assemble_with(lines, kept, &rates, in_japan(0, 0)).expect("a part assembles");
+                assert_reconciles(&totals);
+                totals.service_charge
+            })
+            .collect();
+        // Each part takes 10 % of its own ¥1,000 net of tax, and together they take the whole's.
+        assert_eq!(charged, vec![jpy(100), jpy(100)]);
     }
 
     #[test]
@@ -2533,6 +2851,126 @@ mod tests {
             1 => only(FeeItems::Include, 0, fee),
             _ => only(FeeItems::Exclude, 0, fee),
         }
+    }
+
+    /// One of three classes a property test's line is sold in: food, alcohol, or a third class
+    /// (the service charge's, at 8 % where a test rates it).
+    fn three_classes(choice: u8) -> TaxClassId {
+        match choice {
+            0 => food(),
+            1 => alcohol(),
+            _ => service(),
+        }
+    }
+
+    /// `rule` with its base quoted with its tax inside or net of it, and taken after the reductions
+    /// or before them.
+    fn posed(rule: FrozenFee, inclusive_base: bool, discounted: bool) -> FrozenFee {
+        altered(rule, |rule| {
+            rule.base_tax_inclusive = inclusive_base;
+            rule.base_discounted = discounted;
+        })
+    }
+
+    /// A bill a percentage is worked on by hand: its lines, what is taken off them, how its prices
+    /// are quoted, and how it rounds.
+    struct HandBill<'a> {
+        lines: &'a [BillLine],
+        discount: i64,
+        comps: i64,
+        inclusive: bool,
+        mode: Rounding,
+    }
+
+    /// What the percentage `rule` charges on `bill`, worked from first principles in i128 rather
+    /// than through the code under test.
+    ///
+    /// Per class, as the bill groups its lines: what the counted lines come to, the class's base,
+    /// and its part of the discount and the comps together, shared across the classes by their
+    /// bases (`Money::allocate`, which `pos_proto` tests). Where the rule quotes its base in the
+    /// other posture from the bill's prices, each of the three moves to it at the class's rate,
+    /// rounded once by the bill's mode: `x − x·r/(1+r)` with the tax inside extracted, or
+    /// `x + x·r` with the tax added; moved, the reductions take no more than the whole bill. Then
+    /// the rate of what the counted lines come to after their share of the reductions, `counted ×
+    /// (subtotal − reductions) ÷ subtotal × rate`, rounded once. In the store's own posture nothing
+    /// moves, and this is the formula a percentage has always been charged by.
+    fn by_hand(bill: &HandBill<'_>, rule: &FrozenFee, rates: &TaxRateTable) -> i64 {
+        let bases = bases_of(bill.lines);
+        let weights: Vec<i64> = bases.iter().map(|base| base.amount.amount_minor).collect();
+        let taken = if rule.base_discounted {
+            bill.discount + bill.comps
+        } else {
+            0
+        };
+        let by_class: Vec<i128> = if taken == 0 {
+            vec![0; weights.len()]
+        } else {
+            vnd(taken)
+                .allocate(&weights)
+                .expect("allocates")
+                .iter()
+                .map(|share| i128::from(share.amount_minor))
+                .collect()
+        };
+        let other_posture = rule.base_tax_inclusive != bill.inclusive;
+        let round = |numerator: i128, denominator: i128| {
+            i128::from(div_round(numerator, denominator, bill.mode).expect("in range"))
+        };
+        let (mut counted, mut subtotal, mut reductions) = (0_i128, 0_i128, 0_i128);
+        for (base, reduction) in bases.iter().zip(by_class) {
+            let rate = rates
+                .rate_for(base.tax_class_id, SalesChannel::DineIn)
+                .expect("rated")
+                .as_ratio();
+            let (top, bottom) = (
+                i128::from(rate.numerator()),
+                i128::from(rate.denominator().get()),
+            );
+            let moved = |amount: i128| match (other_posture, bill.inclusive) {
+                (false, _) => amount,
+                (true, true) => amount - round(amount * top, bottom + top),
+                (true, false) => amount + round(amount * top, bottom),
+            };
+            let in_class: i128 = bill
+                .lines
+                .iter()
+                .filter(|line| line.tax_class_id == base.tax_class_id)
+                .filter(|line| rule.counts_item(line.menu_item_id))
+                .map(|line| i128::from(line.net.amount_minor))
+                .sum();
+            counted += moved(in_class);
+            subtotal += moved(i128::from(base.amount.amount_minor));
+            reductions += moved(reduction);
+        }
+        if other_posture {
+            reductions = reductions.min(subtotal);
+        }
+        let rate = rule.rate.expect("a percentage");
+        let (top, bottom) = (
+            i128::from(rate.numerator()),
+            i128::from(rate.denominator().get()),
+        );
+        let charged = if reductions == 0 {
+            round(counted * top, bottom)
+        } else {
+            round(counted * (subtotal - reductions) * top, subtotal * bottom)
+        };
+        i64::try_from(charged).expect("in range")
+    }
+
+    /// What one percentage `rule` charges on `bill` through [`assemble`], on a bill that
+    /// reconciles.
+    fn percentage_charged(bill: &HandBill<'_>, rule: &FrozenFee, rates: &TaxRateTable) -> i64 {
+        let rules = [rule.clone()];
+        let totals = assemble_with(bill.lines, &rules, rates, |input| {
+            input.bill_discount = vnd(bill.discount);
+            input.comps = vnd(bill.comps);
+            input.tax_rounding = bill.mode;
+            input.prices_include_tax = bill.inclusive;
+        })
+        .expect("assembles");
+        assert_reconciles(&totals);
+        charged_by_rule(&totals, &rules).iter().sum()
     }
 
     proptest! {
@@ -2887,6 +3325,252 @@ mod tests {
                 };
                 prop_assert_eq!(totals.total_due, rounded);
             }
+        }
+
+        /// The gap this closes: a percentage whose rule quotes its base in the other posture from
+        /// the store's prices is taken of its lines moved to that posture, class by class, and
+        /// charges what the hand computation does, before the reductions or after them. It is
+        /// never less than nothing, and nothing at all of a bill its reductions take whole.
+        #[test]
+        fn a_converted_base_is_the_hand_computation(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, 0_u8..3),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=100,
+            comps_percent in prop_oneof![3 => 0_i64..=100, 1 => Just(100_i64)],
+            rate in 0_i64..=10_000,
+            scope in 0_u8..3,
+            inclusive in any::<bool>(),
+            discounted in any::<bool>(),
+            mode in modes(),
+        ) {
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, class)| line(*n, *units, *net, three_classes(*class)))
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let bill = HandBill {
+                lines: &lines,
+                discount,
+                comps: (sold_total - discount) * comps_percent / 100,
+                inclusive,
+                mode,
+            };
+            let rule = posed(chosen(1, 0, 0, scope, rate), !inclusive, discounted);
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let counts_a_line = lines.iter().any(|line| rule.counts_item(line.menu_item_id));
+            let expected = if counts_a_line { by_hand(&bill, &rule, &rates) } else { 0 };
+            let charged = percentage_charged(&bill, &rule, &rates);
+            prop_assert_eq!(charged, expected);
+            prop_assert!(charged >= 0, "{} is less than nothing", charged);
+            if discounted && bill.discount + bill.comps == sold_total {
+                prop_assert_eq!(charged, 0, "a bill reduced to nothing");
+            }
+        }
+
+        /// A percentage whose rule quotes its base in the store's own posture is charged exactly
+        /// as it always was: the rate of the counted lines after their share of the reductions,
+        /// with nothing moved, which is the hand computation with no conversion in it.
+        #[test]
+        fn a_rule_in_the_stores_posture_is_charged_as_it_was(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, 0_u8..3),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=100,
+            comps_percent in prop_oneof![3 => 0_i64..=100, 1 => Just(100_i64)],
+            rate in 0_i64..=10_000,
+            scope in 0_u8..3,
+            inclusive in any::<bool>(),
+            discounted in any::<bool>(),
+            mode in modes(),
+        ) {
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, class)| line(*n, *units, *net, three_classes(*class)))
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let comps = (sold_total - discount) * comps_percent / 100;
+            let bill = HandBill { lines: &lines, discount, comps, inclusive, mode };
+            let rule = posed(chosen(1, 0, 0, scope, rate), inclusive, discounted);
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let counted: Vec<&BillLine> = lines
+                .iter()
+                .filter(|line| rule.counts_item(line.menu_item_id))
+                .collect();
+            // The formula as it stood: the counted nets, the subtotal and the reductions as the
+            // bill holds them.
+            let expected = if counted.is_empty() {
+                0
+            } else {
+                let counted: i128 = counted
+                    .iter()
+                    .map(|line| i128::from(line.net.amount_minor))
+                    .sum();
+                let (subtotal, reductions) = (
+                    i128::from(sold_total),
+                    if discounted { i128::from(discount + comps) } else { 0 },
+                );
+                let rate = rule.rate.expect("a percentage");
+                let (top, bottom) = (
+                    i128::from(rate.numerator()),
+                    i128::from(rate.denominator().get()),
+                );
+                if reductions == 0 {
+                    div_round(counted * top, bottom, mode).expect("in range")
+                } else {
+                    div_round(
+                        counted * (subtotal - reductions) * top,
+                        subtotal * bottom,
+                        mode,
+                    )
+                    .expect("in range")
+                }
+            };
+            prop_assert_eq!(percentage_charged(&bill, &rule, &rates), expected);
+            prop_assert_eq!(by_hand(&bill, &rule, &rates), expected);
+        }
+
+        /// The sum laws in either posture: whatever the store's posture and each rule's base, the
+        /// bill reconciles, the service charge carries every fee, a fee's taxed parts sum to it
+        /// and its tax to theirs, and every part is in its class's base, which under prices that
+        /// include tax holds its tax as well. A waived rule is the rule left off the bill.
+        #[test]
+        fn a_bill_in_either_posture_reconciles_and_waives_as_one_without_the_rule(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            comps_percent in 0_i64..=20,
+            service_charge in prop_oneof![Just(0_i64), 1_i64..=50_000],
+            choices in prop::collection::vec(
+                (0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000, any::<bool>(), any::<bool>()),
+                0..=3,
+            ),
+            inclusive in any::<bool>(),
+            mode in modes(),
+            waiving in prop::collection::vec(any::<bool>(), 3),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value, inclusive_base, discounted))| {
+                    posed(chosen(id, *kind, *tax, *scope, *value), *inclusive_base, *discounted)
+                })
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let comps = (sold_total - discount) * comps_percent / 100;
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let set = |input: &mut BillInput<'_>| {
+                input.bill_discount = vnd(discount);
+                input.comps = vnd(comps);
+                input.service_charge = vnd(service_charge);
+                input.tax_rounding = mode;
+                input.prices_include_tax = inclusive;
+            };
+            let totals = assemble_with(&lines, &rules, &rates, set).expect("assembles");
+
+            assert_reconciles(&totals);
+            let fees: i64 = totals.fee_lines.iter().map(|fee| fee.amount.amount_minor).sum();
+            prop_assert_eq!(totals.service_charge, vnd(service_charge + fees));
+            let mut taxed = 0;
+            for fee in &totals.fee_lines {
+                let parts: i64 = fee.class_shares.iter().map(|part| part.amount.amount_minor).sum();
+                prop_assert!(fee.class_shares.is_empty() || parts == fee.amount.amount_minor);
+                let taxes: i64 = fee.class_shares.iter().map(|part| part.tax.amount_minor).sum();
+                prop_assert_eq!(fee.tax, vnd(taxes), "a fee's tax is its parts' taxes");
+                taxed += parts;
+            }
+            let reported: i64 = totals
+                .tax_lines
+                .iter()
+                .map(|tax| tax.taxable_base.amount_minor)
+                .sum();
+            let inside = if inclusive { totals.tax_total.amount_minor } else { 0 };
+            prop_assert_eq!(
+                reported + inside,
+                sold_total - discount - comps + service_charge + taxed
+            );
+
+            let waived: Vec<FeeId> = rules
+                .iter()
+                .zip(&waiving)
+                .filter(|(_, waive)| **waive)
+                .map(|(rule, _)| rule.fee_id)
+                .collect();
+            let kept: Vec<FrozenFee> = rules
+                .iter()
+                .filter(|rule| !waived.contains(&rule.fee_id))
+                .cloned()
+                .collect();
+            prop_assert_eq!(
+                assemble_waiving(&lines, &rules, &waived, &rates, set),
+                assemble_with(&lines, &kept, &rates, set)
+            );
+        }
+
+        /// A split in either posture (ADR-0128): each part takes a converted base of its own
+        /// lines, so the parts of a percentage come to the whole within a minor unit per part for
+        /// the fee's own rounding, plus the rate of a minor unit per class per part for the
+        /// conversion's, which rounds once per class on each part. In the store's own posture the
+        /// parts keep the one minor unit per part they always had.
+        #[test]
+        fn the_parts_of_a_split_in_either_posture_charge_what_the_whole_would_have(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 0_i64..=5_000_000, any::<bool>(), 0_usize..3),
+                1..=8,
+            ),
+            rate in 0_i64..=10_000,
+            scope in 0_u8..3,
+            inclusive in any::<bool>(),
+            inclusive_base in any::<bool>(),
+            mode in modes(),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let mut lines = Vec::new();
+            let mut parts: Vec<Vec<BillLine>> = vec![Vec::new(); 3];
+            for (n, units, net, is_food, part) in &sold {
+                let sold_line = line(*n, *units, *net, class(*is_food));
+                lines.push(sold_line);
+                if let Some(part) = parts.get_mut(*part) {
+                    part.push(sold_line);
+                }
+            }
+            parts.retain(|part| !part.is_empty());
+            let rules = [posed(chosen(1, 0, 0, scope, rate), inclusive_base, true)];
+            let rates = rates();
+            let set = |input: &mut BillInput<'_>| {
+                input.tax_rounding = mode;
+                input.prices_include_tax = inclusive;
+            };
+
+            let whole = assemble_with(&lines, &rules, &rates, set).expect("assembles");
+            let whole: i64 = charged_by_rule(&whole, &rules).iter().sum();
+            let kept = split_fee_rules(&rules, &parts).expect("splits");
+            let mut together = 0_i64;
+            for (part, kept) in parts.iter().zip(&kept) {
+                let totals = assemble_with(part, kept, &rates, set).expect("a part assembles");
+                assert_reconciles(&totals);
+                together += charged_by_rule(&totals, &rules).iter().sum::<i64>();
+            }
+            let per_part = i64::try_from(parts.len()).expect("a few parts");
+            // Food and alcohol: two classes, each converted once on each part.
+            let classes = 2;
+            let bound = if inclusive_base == inclusive {
+                per_part
+            } else {
+                per_part + (rate * classes * per_part + 9_999) / 10_000
+            };
+            prop_assert!((together - whole).abs() <= bound, "{} for {}", together, whole);
         }
     }
 }
