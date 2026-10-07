@@ -49,7 +49,7 @@
 //! every part of a split and every merge the bill joins ([`MergedFees::waived_fee_ids`]).
 
 use pos_proto::fees::{FeeCode, FeeKind, FeeTax, FrozenFee};
-use pos_proto::locale::{TaxComponent, TaxRateTable};
+use pos_proto::locale::{TaxComponent, TaxComponentName, TaxRateTable};
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding, div_round};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
@@ -86,14 +86,18 @@ pub struct TaxLine {
     ///
     /// The parts are allocated out of `tax` after it is rounded, so they sum to it exactly. Rounding
     /// each part independently would let the breakdown miss the total it claims to explain.
+    ///
+    /// Empty too for a row that names a component with something other than a token
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+    /// decision 2): the row is charged at its rate, and only the breakdown is missing.
     pub components: Vec<TaxComponentLine>,
 }
 
-/// One named part of a tax line, with the money that part accounts for.
+/// One named part of a tax line, or of a fee's tax, with the money that part accounts for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaxComponentLine {
-    /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
-    pub name: String,
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST` — as the `tax` node names it.
+    pub name: TaxComponentName,
     /// This part's rate, captured so the invoice can print it beside the amount.
     pub rate_basis_points: u32,
     /// This part's share of the line's tax. The shares sum exactly to [`TaxLine::tax`].
@@ -107,12 +111,21 @@ pub struct TaxComponentLine {
 /// guarantees it (the residual lands on the last part, as it does for the bill-level discount).
 ///
 /// An empty component list yields no lines — "no breakdown", which is not the same as a breakdown of
-/// zero parts summing to the tax.
+/// zero parts summing to the tax. So does a list with a name that is not a [`TaxComponentName`]
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2):
+/// all of the row's parts or none of them, and the tax is the same either way.
 fn split_components(
     tax: Money,
     components: &[TaxComponent],
 ) -> Result<Vec<TaxComponentLine>, DomainError> {
-    if components.is_empty() {
+    let Ok(names) = components
+        .iter()
+        .map(|component| TaxComponentName::new(&component.name))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return Ok(Vec::new());
+    };
+    if names.is_empty() {
         return Ok(Vec::new());
     }
     let weights: Vec<i64> = components
@@ -126,11 +139,12 @@ fn split_components(
         return Ok(Vec::new());
     }
     let shares = tax.allocate(&weights)?;
-    Ok(components
-        .iter()
+    Ok(names
+        .into_iter()
+        .zip(components)
         .zip(shares)
-        .map(|(component, share)| TaxComponentLine {
-            name: component.name.clone(),
+        .map(|((name, component), share)| TaxComponentLine {
+            name,
             rate_basis_points: component.rate.basis_points(),
             tax: share,
         })
@@ -198,6 +212,12 @@ pub struct FeeLine {
     pub class_shares: Vec<FeeClassShare>,
     /// The tax on the fee: the sum of its parts' taxes. Zero for a fee that is not taxed.
     pub tax: Money,
+    /// That tax by component
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+    /// decision 3): each part's tax split as its class's tax line is, then summed by name and rate,
+    /// so they sum exactly to `tax`. Empty for a fee with no part to split, and for one with a
+    /// taxed part whose class has no breakdown, since a list short of that part would not add up.
+    pub tax_components: Vec<TaxComponentLine>,
     /// Whether the rule lets staff waive the fee on one bill, as the bill froze it (ADR-0159
     /// decision 5), so a till can offer the act only where it is allowed.
     pub waivable: bool,
@@ -547,6 +567,7 @@ fn fee_line(
         amount,
         class_shares,
         tax: Money::zero(amount.currency_code),
+        tax_components: Vec::new(),
         waivable: rule.waivable,
     }))
 }
@@ -772,8 +793,43 @@ fn tax_the_fees(
             .try_fold(Money::zero(fee.amount.currency_code), |sum, share| {
                 sum.checked_add(share.tax)
             })?;
+        fee.tax_components = fee_components(&fee.class_shares, input)?;
     }
     Ok(())
+}
+
+/// A fee's tax by component (ADR-0168 decision 3): each part's tax split across its class's
+/// components as the class's own tax line is ([`split_components`]), then summed by name and rate
+/// in the order they first appear.
+///
+/// None where a part that carries tax has no breakdown, its class printing one rate or naming a
+/// component that is not a token: the list would then fall short of the fee's tax. A part with no
+/// tax adds nothing either way.
+fn fee_components(
+    class_shares: &[FeeClassShare],
+    input: &BillInput<'_>,
+) -> Result<Vec<TaxComponentLine>, DomainError> {
+    let mut components: Vec<TaxComponentLine> = Vec::new();
+    for share in class_shares {
+        let split = split_components(
+            share.tax,
+            input
+                .rates
+                .components_for(share.tax_class_id, input.sales_channel),
+        )?;
+        if split.is_empty() && !share.tax.is_zero() {
+            return Ok(Vec::new());
+        }
+        for part in split {
+            match components.iter_mut().find(|summed| {
+                summed.name == part.name && summed.rate_basis_points == part.rate_basis_points
+            }) {
+                Some(summed) => summed.tax = summed.tax.checked_add(part.tax)?,
+                None => components.push(part),
+            }
+        }
+    }
+    Ok(components)
 }
 
 /// Splits a class's tax among the parts of its base, in proportion: each share floored, and the
@@ -1336,8 +1392,8 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 mod tests {
     use super::{
         BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, FeeWhole, MergedFees,
-        MergingBill, Payment, assemble, fee_wholes, merge_fee_rules, settle, split_by_weights,
-        split_evenly, split_fee_rules, waivable_fee,
+        MergingBill, Payment, TaxComponentLine, assemble, fee_wholes, merge_fee_rules, settle,
+        split_by_weights, split_evenly, split_fee_rules, waivable_fee,
     };
     use core::num::NonZeroI64;
 
@@ -1448,9 +1504,9 @@ mod tests {
         assert_eq!(line.components.len(), 2);
         let cgst = line.components.first().expect("CGST");
         let sgst = line.components.get(1).expect("SGST");
-        assert_eq!(cgst.name, "CGST");
+        assert_eq!(cgst.name.as_str(), "CGST");
         assert_eq!(cgst.tax, vnd(90));
-        assert_eq!(sgst.name, "SGST");
+        assert_eq!(sgst.name.as_str(), "SGST");
         assert_eq!(sgst.tax, vnd(90));
 
         let split: i64 = line
@@ -1944,6 +2000,7 @@ mod tests {
             amount: vnd(27_000),
             class_shares: vec![share(food(), 18_000, 1_800), share(alcohol(), 9_000, 1_350)],
             tax: vnd(1_800 + 1_350),
+            tax_components: Vec::new(),
             waivable: false,
         };
         assert_eq!(totals.fee_lines.first(), Some(&ten));
@@ -2177,6 +2234,123 @@ mod tests {
         };
         assert_eq!(parts(Rounding::HalfUp), [vnd(9), vnd(10)]);
         assert_eq!(parts(Rounding::TowardZero), [vnd(9), vnd(9)]);
+    }
+
+    /// India's 18 % with one half named in free text (ADR-0168 decision 2): the rate is charged in
+    /// full, and the line has no breakdown rather than one part of it.
+    #[test]
+    fn a_row_named_in_free_text_is_charged_at_its_rate_with_no_breakdown() {
+        let free_text = TaxRateTable::new().with_components(
+            food(),
+            SalesChannel::DineIn,
+            TaxRate::from_percent(18),
+            vec![
+                TaxComponent::new("Central GST", TaxRate::from_percent(9)),
+                TaxComponent::new("SGST", TaxRate::from_percent(9)),
+            ],
+        );
+        let bases = [ClassBase {
+            tax_class_id: food(),
+            amount: vnd(1_000),
+        }];
+        let totals = assemble(&base_input(&bases, &free_text)).expect("assembles");
+        assert_eq!(totals.tax_total, vnd(180));
+        assert!(
+            totals
+                .tax_lines
+                .iter()
+                .all(|line| line.components.is_empty())
+        );
+        assert_reconciles(&totals);
+    }
+
+    /// Food at 10 % in halves of 5 %, alcohol at 15 % in halves of 7.5 %, and a 10 % fee across
+    /// both (ADR-0168 decision 3). Each of the fee's parts splits its tax as its class does, and the
+    /// parts sum by name and rate: CGST at 5 % and CGST at 7.5 % are two components, not one.
+    fn halves() -> TaxRateTable {
+        let half = |name: &str, basis_points: u32| {
+            TaxComponent::new(name, TaxRate::from_basis_points(basis_points))
+        };
+        TaxRateTable::new()
+            .with_components(
+                food(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(10),
+                vec![half("CGST", 500), half("SGST", 500)],
+            )
+            .with_components(
+                alcohol(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(15),
+                vec![half("CGST", 750), half("SGST", 750)],
+            )
+    }
+
+    fn named(components: &[TaxComponentLine]) -> Vec<(&str, u32, i64)> {
+        components
+            .iter()
+            .map(|part| {
+                (
+                    part.name.as_str(),
+                    part.rate_basis_points,
+                    part.tax.amount_minor,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_fees_tax_splits_as_its_classes_do_and_sums_by_name_and_rate() {
+        let rules = [fee(1, FeeKind::Percent, 1_000)];
+        let totals = assemble_with(&dinner(), &rules, &halves(), |_| {}).expect("assembles");
+        let fee = totals.fee_lines.first().expect("the fee");
+        // 30,000 spread 2:1. Food's 220,000 is taxed 22,000, of which the fee's 20,000 carries
+        // 2,000; alcohol's 110,000 is taxed 16,500, of which the fee's 10,000 carries 1,500.
+        assert_eq!(fee.tax, vnd(3_500));
+        assert_eq!(
+            named(&fee.tax_components),
+            [
+                ("CGST", 500, 1_000),
+                ("SGST", 500, 1_000),
+                ("CGST", 750, 750),
+                ("SGST", 750, 750),
+            ]
+        );
+        let split: i64 = fee
+            .tax_components
+            .iter()
+            .map(|part| part.tax.amount_minor)
+            .sum();
+        assert_eq!(split, fee.tax.amount_minor, "the parts are the fee's tax");
+        assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn a_fee_with_a_taxed_part_its_class_does_not_split_has_no_breakdown() {
+        // Alcohol prints one rate now: the fee's 1,500 of tax there has no parts, so a list of the
+        // food parts alone would fall 1,500 short of the fee's tax. None, all or nothing.
+        let rates = TaxRateTable::new()
+            .with_components(
+                food(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(10),
+                vec![
+                    TaxComponent::new("CGST", TaxRate::from_percent(5)),
+                    TaxComponent::new("SGST", TaxRate::from_percent(5)),
+                ],
+            )
+            .with(alcohol(), SalesChannel::DineIn, TaxRate::from_percent(15));
+        let rules = [fee(1, FeeKind::Percent, 1_000)];
+        let totals = assemble_with(&dinner(), &rules, &rates, |_| {}).expect("assembles");
+        let fee = totals.fee_lines.first().expect("the fee");
+        assert_eq!(fee.tax, vnd(3_500));
+        assert!(fee.tax_components.is_empty());
+        let food_line = totals.tax_lines.first().expect("food's line");
+        assert_eq!(
+            named(&food_line.components),
+            [("CGST", 500, 11_000), ("SGST", 500, 11_000)],
+            "the class's own line still splits"
+        );
     }
 
     #[test]

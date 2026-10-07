@@ -380,6 +380,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<TaxRateTable>(&text).ok())
     {
+        // A row that names a component with something other than a token is charged at its rate
+        // and gives no breakdown (ADR-0168 decision 2): the money never depends on the components.
+        // Said once, where the table is applied, naming the class and nobody else.
+        for row in tax_rates.rows_with_untokened_components() {
+            tracing::warn!(
+                tax_class_id = %row.tax_class_id,
+                sales_channel = row.sales_channel.as_wire(),
+                "a tax row names a component that is not a token; it is charged at its rate with \
+                 no breakdown"
+            );
+        }
         session.tax_rates = tax_rates;
     }
     // The `campaigns` node the campaign publish writes (ADR-0077, Track M3): the store's authored
@@ -1926,6 +1937,77 @@ mod tests {
             !no_node.tax_rates.is_empty(),
             "an absent tax node leaves the table"
         );
+    }
+
+    /// A row that names a component in free text is applied, so its rate is charged, and the log
+    /// says once which class has no breakdown and why, naming the class and not the text
+    /// (ADR-0168 decision 2).
+    #[test]
+    fn a_tax_row_named_in_free_text_is_applied_and_logged_by_its_class() {
+        use std::io;
+        use std::sync::{Arc, Mutex, PoisonError};
+
+        use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
+
+        /// What the log was given.
+        #[derive(Clone, Default)]
+        struct Said(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for Said {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let class = TaxClassId::new(Ulid::from_u128(0x7B));
+        let applied = |first: &str| {
+            let table = TaxRateTable::new().with_components(
+                class,
+                SalesChannel::DineIn,
+                TaxRate::from_percent(5),
+                vec![
+                    TaxComponent::new(first, TaxRate::from_basis_points(250)),
+                    TaxComponent::new("SGST", TaxRate::from_basis_points(250)),
+                ],
+            );
+            let document = serde_json::json!({ "tax": serde_json::to_value(&table).expect("tax") });
+            let said = Said::default();
+            let writer = said.clone();
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(move || writer.clone())
+                .finish();
+            let session = tracing::subscriber::with_default(subscriber, || {
+                session_from_config(&EdgeSession::bootstrap(), &document)
+            });
+            let text =
+                String::from_utf8_lossy(&said.0.lock().unwrap_or_else(PoisonError::into_inner))
+                    .into_owned();
+            (session, text)
+        };
+
+        let (session, said) = applied("Central GST");
+        assert_eq!(
+            session.tax_rates.rate_for(class, SalesChannel::DineIn),
+            Some(TaxRate::from_percent(5)),
+            "the row is applied, and its rate is what the store charges"
+        );
+        assert!(
+            said.contains("not a token") && said.contains(&class.to_string()),
+            "{said}"
+        );
+        assert!(!said.contains("Central GST"), "{said}");
+
+        let (_, said) = applied("CGST");
+        assert!(!said.contains("not a token"), "{said}");
     }
 
     #[test]
