@@ -10,8 +10,8 @@
 //
 // The printers card also carries each printer's paper (ADR-0160), the cash drawer mark (ADR-0165)
 // and the publish. Nothing decided on this page reaches a store until its devices are published: not
-// an approval, not an agent, not a paper, not a drawer, not a till's receipts. So the page offers the
-// publish rather than leaving it to a route nobody can see.
+// an approval, not an agent, not a paper, not a drawer, not a till's receipts or float. So the page
+// offers the publish rather than leaving it to a route nobody can see.
 //
 // The terminals card carries each till's receipts (ADR-0160 decision 4): the printer its receipts,
 // receipt copies and pre-bills go to, and the languages they print in, each the store's until
@@ -20,21 +20,30 @@
 // fleet read says the store runs; a store whose release is unknown is shown them with a note. A
 // printer's paper follows the same rule on the printers card, where only the action is hidden: the
 // Paper column still shows what was saved, and the line says why it is not in force.
+//
+// A till's default float (ADR-0167 decision 4) follows the paper's rule on the terminals card. It is
+// typed as money, in the currency the store's published `locale` names, which the store's config
+// read supplies along with the store's own float, `shift.opening_float_minor`, that an empty field
+// leaves the till on. A store whose config cannot be read is offered no float, because a figure
+// typed without its currency's decimals could be a hundred times what was meant.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import { PAPER_WIDTHS } from "../api/types";
-import type { DeviceProposalSummary, PaperWidth, Station, Store } from "../api/types";
+import type { DeviceProposalSummary, Json, PaperWidth, Station, Store } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
+import { storeCurrency } from "../lib/fees";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { type ReleaseStanding, releaseStanding } from "../lib/semver";
+import { formatAmount } from "../state/money";
 import { storeId, storeName as chosenStoreName, tenantId } from "../state/session";
 import {
   Banner,
   Button,
   Card,
   CheckboxField,
+  MoneyField,
   PageHeader,
   SelectField,
   Skeleton,
@@ -72,6 +81,32 @@ const TILL_RECEIPTS_SINCE = "0.14.1";
 // to one with no cutter (ADR-0160 decision 2). An older edge prints 80 mm paper with a cutter
 // whatever the console says.
 const PAPER_SINCE = "0.14.1";
+
+// The first release whose edge opens a till's drawer on the till's own float (ADR-0167 decision 4).
+// An older edge ignores the field, which no published node refuses, and fills in the store's float.
+const TILL_FLOAT_SINCE = "0.14.1";
+
+// The bounds of a float, in minor units: `shift.opening_float_minor`'s, which pos-proto holds and the
+// cloud checks again, so a float beyond them is refused before it is sent.
+const FLOAT_MIN_MINOR = 0;
+const FLOAT_MAX_MINOR = 1_000_000_000;
+
+// The float a store's drawers open with, from its published `shift` node, read as the till reads it:
+// a whole number within the bounds, and `0`, which fills in nothing, for anything else.
+function publishedStoreFloat(config: Json): number {
+  const shift =
+    config !== null && typeof config === "object" && !Array.isArray(config) ? config.shift : null;
+  const minor =
+    shift !== null && shift !== undefined && typeof shift === "object" && !Array.isArray(shift)
+      ? shift.opening_float_minor
+      : null;
+  return typeof minor === "number" &&
+    Number.isInteger(minor) &&
+    minor >= FLOAT_MIN_MINOR &&
+    minor <= FLOAT_MAX_MINOR
+    ? minor
+    : FLOAT_MIN_MINOR;
+}
 
 // A till's receipt languages: the receipt language setting's own choices, and the second
 // language's, each beside "the store's", which is the empty choice.
@@ -137,6 +172,13 @@ export function Devices() {
   const [receiptPrinterChoice, setReceiptPrinterChoice] = createSignal("");
   const [receiptLanguageChoice, setReceiptLanguageChoice] = createSignal("");
   const [secondLanguageChoice, setSecondLanguageChoice] = createSignal("");
+  // The terminal whose default float is being said, under the same conditional write (ADR-0167
+  // decision 4). An empty field is the store's float.
+  const floatDraft = useEntityCrud<DeviceProposalSummary>();
+  const [floatChoice, setFloatChoice] = createSignal<number | null>(null);
+  // The chosen store's published config, for the currency a float is typed in and the store's own
+  // float: `undefined` while the read is out, `null` when it failed or nothing is published yet.
+  const [storeConfig, setStoreConfig] = createSignal<Json | null | undefined>(undefined);
   // The release the chosen store last reported (ADR-0078), from the fleet read: `undefined` while
   // the read is out, `null` when the store never said or the read failed.
   const [installed, setInstalled] = createSignal<string | null | undefined>(undefined);
@@ -188,12 +230,28 @@ export function Devices() {
     }
   };
 
+  // The store's published config. A read that fails costs the float and not the screen.
+  const loadStoreConfig = async () => {
+    const store = storeId();
+    setStoreConfig(undefined);
+    let config: Json | null = null;
+    try {
+      config = await api.effectiveConfig(tenantId(), store);
+    } catch {
+      config = null;
+    }
+    if (storeId() === store) {
+      setStoreConfig(config);
+    }
+  };
+
   // The two cards below follow the *store* in the top bar, not the tenant: an agent may only be a
   // terminal standing in the same shop, so a tenant-wide list would offer picks the publish gate
   // will refuse.
   onScopedContext("store", () => {
     void loadFleet();
     void loadRelease();
+    void loadStoreConfig();
   });
 
   /**
@@ -217,6 +275,22 @@ export function Devices() {
   const offersTillReceipts = () => offersDeviceField(TILL_RECEIPTS_SINCE);
   const paperStanding = () => deviceFieldStanding(PAPER_SINCE);
   const offersPaper = () => offersDeviceField(PAPER_SINCE);
+  const tillFloat = () => deviceFieldStanding(TILL_FLOAT_SINCE);
+  const offersTillFloat = () => offersDeviceField(TILL_FLOAT_SINCE);
+  const offersTillActions = () => offersTillReceipts() || offersTillFloat();
+  // The currency a float is typed in, once the store's config is read and names one.
+  const floatCurrency = () => {
+    const config = storeConfig();
+    return config === undefined ? null : storeCurrency(config);
+  };
+  // The store's own float, as money, where its config is read.
+  const storeFloat = () => {
+    const config = storeConfig();
+    const currency = floatCurrency();
+    return config === undefined || config === null || currency === null
+      ? null
+      : formatAmount({ amount_minor: publishedStoreFloat(config), currency_code: currency });
+  };
 
   // Binding a printer to an agent is a conditional write — it sends the version the row was read at
   // (ADR-0094) — so it owes the reader a reload and a sentence when somebody else got there first.
@@ -241,6 +315,18 @@ export function Devices() {
       return t("devices.agentNone");
     }
     return terminalMap().get(agentId) ?? agentId;
+  };
+
+  // A till's float as money, the store's when it has none. A float whose currency cannot be read is
+  // shown in minor units, which is what was saved, rather than with decimals guessed.
+  const floatLabel = (minor: number | null) => {
+    if (minor === null) {
+      return t("devices.floatStore");
+    }
+    const currency = floatCurrency();
+    return currency === null
+      ? t("settings.unit.minor_units", { count: minor })
+      : formatAmount({ amount_minor: minor, currency_code: currency });
   };
 
   // A till's receipt printer by name. One that no longer resolves shows its raw id, as an agent
@@ -355,6 +441,34 @@ export function Devices() {
       });
   };
 
+  const saveFloat = () => {
+    const terminal = floatDraft.subject();
+    const currency = floatCurrency();
+    if (!terminal || currency === null) {
+      return;
+    }
+    const minor = floatChoice();
+    if (minor !== null && (minor < FLOAT_MIN_MINOR || minor > FLOAT_MAX_MINOR)) {
+      const amount = (bound: number) => formatAmount({ amount_minor: bound, currency_code: currency });
+      floatDraft.refuse(
+        t("devices.floatOutOfRange", { min: amount(FLOAT_MIN_MINOR), max: amount(FLOAT_MAX_MINOR) }),
+      );
+      return;
+    }
+    void floatDraft
+      .run(() =>
+        conditionalFleet(() =>
+          api.setTerminalFloat(tenantId(), terminal.id, minor, terminal.version),
+        ),
+      )
+      .then((saved) => {
+        if (saved) {
+          toast.ok(t("devices.floatSaved"));
+          void loadFleet();
+        }
+      });
+  };
+
   const publish = async () => {
     setPublishing(true);
     try {
@@ -463,6 +577,16 @@ export function Devices() {
       sortValue: (row) => row.name,
     },
     ...(offersTillReceipts() ? receiptColumns() : []),
+    // Shown on every release, as a printer's paper is: what was saved, even where it is not in force.
+    {
+      key: "float",
+      header: t("devices.float"),
+      cell: (row) => (
+        <span class={row.opening_float_minor === null ? "text-ink-muted" : "text-ink"}>
+          {floatLabel(row.opening_float_minor)}
+        </span>
+      ),
+    },
     {
       key: "id",
       header: t("devices.id"),
@@ -617,26 +741,71 @@ export function Devices() {
                   })}
                 </p>
               </Show>
+              <Show when={tillFloat() === "older"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.floatHidden", {
+                    store: chosenStoreName() || storeId(),
+                    installed: installed() ?? "",
+                    since: TILL_FLOAT_SINCE,
+                  })}
+                </p>
+              </Show>
+              <Show when={tillFloat() === "unknown"}>
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.floatUnknown", {
+                    store: chosenStoreName() || storeId(),
+                    since: TILL_FLOAT_SINCE,
+                  })}
+                </p>
+              </Show>
+              <Show
+                when={
+                  offersTillFloat() &&
+                  terminals().length > 0 &&
+                  storeConfig() !== undefined &&
+                  floatCurrency() === null
+                }
+              >
+                <p class="mb-3 text-sm text-ink-muted">
+                  {t("devices.floatNoCurrency", { store: chosenStoreName() || storeId() })}
+                </p>
+              </Show>
               <DataTable
                 columns={terminalColumns()}
                 rows={terminals()}
                 pageSize={8}
                 empty={<EmptyState title={t("devices.terminalsEmpty")} />}
-                actionsHeader={offersTillReceipts() ? t("common.actions") : undefined}
+                actionsHeader={offersTillActions() ? t("common.actions") : undefined}
                 actions={
-                  offersTillReceipts()
+                  offersTillActions()
                     ? (row) => (
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setReceiptPrinterChoice(row.receipt_printer_id ?? "");
-                            setReceiptLanguageChoice(row.receipt_language ?? "");
-                            setSecondLanguageChoice(row.receipt_second_language ?? "");
-                            receiptDraft.edit(row);
-                          }}
-                        >
-                          {t("devices.chooseReceipt")}
-                        </Button>
+                        <div class="flex gap-2">
+                          <Show when={offersTillReceipts()}>
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                setReceiptPrinterChoice(row.receipt_printer_id ?? "");
+                                setReceiptLanguageChoice(row.receipt_language ?? "");
+                                setSecondLanguageChoice(row.receipt_second_language ?? "");
+                                receiptDraft.edit(row);
+                              }}
+                            >
+                              {t("devices.chooseReceipt")}
+                            </Button>
+                          </Show>
+                          <Show when={offersTillFloat()}>
+                            <Button
+                              variant="secondary"
+                              disabled={floatCurrency() === null}
+                              onClick={() => {
+                                setFloatChoice(row.opening_float_minor);
+                                floatDraft.edit(row);
+                              }}
+                            >
+                              {t("devices.chooseFloat")}
+                            </Button>
+                          </Show>
+                        </div>
                       )
                     : undefined
                 }
@@ -867,6 +1036,29 @@ export function Devices() {
             onChange={setSecondLanguageChoice}
             placeholder={t("devices.receiptLanguageStore")}
             hint={t("devices.receiptSecondLanguageHint")}
+          />
+        </FormPanel>
+
+        <FormPanel
+          crud={floatDraft}
+          createTitle={t("devices.floatTitle")}
+          editTitle={t("devices.floatTitle")}
+          submitLabel={t("action.save")}
+          onSubmit={saveFloat}
+          as="modal"
+        >
+          <p class="text-sm text-ink-muted">{t("devices.floatHint")}</p>
+          <Show when={storeFloat()}>
+            {(amount) => (
+              <p class="text-sm text-ink-muted">{t("devices.floatStoreNow", { amount: amount() })}</p>
+            )}
+          </Show>
+          <MoneyField
+            label={t("devices.float")}
+            currencyCode={floatCurrency() ?? ""}
+            value={floatChoice()}
+            onChange={setFloatChoice}
+            placeholder={t("devices.floatStore")}
           />
         </FormPanel>
 

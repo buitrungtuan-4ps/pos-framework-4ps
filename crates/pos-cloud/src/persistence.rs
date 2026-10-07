@@ -1564,6 +1564,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 receipt_printer_id: row.receipt_printer_id,
                 receipt_language: row.receipt_language,
                 receipt_second_language: row.receipt_second_language,
+                opening_float_minor: row.opening_float_minor,
                 status: row.status,
                 version: row.version,
             })
@@ -1689,6 +1690,22 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         )
         .await
         .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+
+    async fn set_float(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        opening_float_minor: Option<i64>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let changed =
+            PostgresDeviceProposals::set_float(self, &tenant, &id, opening_float_minor, expected)
+                .await
+                .map_err(|error| DeviceProposalError::new(error.to_string()))?;
         device_write_outcome(self, &tenant, &id, changed).await
     }
 }

@@ -38,6 +38,7 @@ const PRINTER: DeviceProposalSummary = {
   receipt_printer_id: null,
   receipt_language: null,
   receipt_second_language: null,
+  opening_float_minor: null,
   status: "approved",
   version: "7",
 };

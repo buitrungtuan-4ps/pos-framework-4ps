@@ -860,9 +860,24 @@ export const api = {
         receipt_second_language: receipt.secondLanguage,
       },
     ),
+  // Saying what a till's drawer opens with by default, in minor units, or `null` for the store's
+  // float, conditional on the version the terminal was read at, as its receipts are (ADR-0094,
+  // ADR-0167 decision 4). The store hears it on the next publish.
+  setTerminalFloat: (
+    tenantId: string,
+    id: string,
+    openingFloatMinor: number | null,
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/float`,
+      version,
+      { tenant_id: tenantId, opening_float_minor: openingFloatMinor },
+    ),
   // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
-  // pick, a drawer mark, a printer's paper and a till's receipts all wait on this before the store
-  // hears about them.
+  // pick, a drawer mark, a printer's paper and a till's receipts and float all wait on this before
+  // the store hears about them.
   publishDevices: (tenantId: string, storeId: string) =>
     requestJson<PublishDevicesResponse>("POST", "/admin/devices/publish", {
       tenant_id: tenantId,

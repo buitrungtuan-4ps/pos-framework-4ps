@@ -608,6 +608,107 @@
         }
       }
     },
+    "/admin/devices/proposals/{id}/float": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin says what a till's drawer opens with by default\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).",
+        "description": "The receipts' guards, for the receipts' reasons: `ManageDevices`, an `If-Match`, and an audit\nentry, since the float is the cash the Shift screen proposes a till's drawer start with. The\nbounds are `shift.opening_float_minor`'s, which pos-proto holds, so a till is never given a\nfloat the store could not be; the edge reads one outside them as the store's anyway.",
+        "operationId": "admin_set_terminal_float",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The terminal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the terminal was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`; and `opening_float_minor`, a whole amount in the store currency's minor unit from `0` to `1000000000`, the bounds of `shift.opening_float_minor`, or `null` or absent for that setting's float. It is the till's whole float state, so a float left out is the store's again",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Saved. It reaches the store on the next devices publish, `POST /admin/devices/publish`, and prefills the float the till's drawer is started on; an edge older than 0.14.1 ignores it and prefills the store's"
+          },
+          "400": {
+            "description": "The device is not a terminal (`id`, `WRONG_KIND`), the float is outside its bounds (`opening_float_minor`, `OUT_OF_RANGE`), an id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The terminal changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/devices/proposals/{id}/paper": {
       "post": {
         "tags": [
@@ -4351,7 +4452,7 @@
     },
     {
       "name": "printers",
-      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), and which printer a till's receipts go to and the languages they print in (decision 4). The rest of the device-onboarding surface is still coverage debt; these writes are documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints as the store does, and that nothing reaches a store until its devices are published."
+      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4). The rest of the device-onboarding surface is still coverage debt; these writes are documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
     },
     {
       "name": "reports",

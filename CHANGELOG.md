@@ -753,6 +753,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console sets each till's default float**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). Where a store keeps a
+  drawer for each till, a terminal on the Devices screen may name the float its drawer opens with,
+  which the Shift screen fills in and the cashier may change. Left empty, it is the store's float,
+  `shift.opening_float_minor`.
+  - **Float** on the Terminals card opens one money field, typed in whole units of the store's
+    currency, under a line that says what the store's float is now. The **Default float** column
+    shows each till's, or *The store's float*. In English and Vietnamese.
+  - A float is within `shift.opening_float_minor`'s bounds, `0` to `1000000000` in minor units.
+    The console refuses one beyond them before sending it, and so does the new
+    `POST /admin/devices/proposals/{id}/float` (`400`, `opening_float_minor`, `OUT_OF_RANGE`). The
+    route takes a float, or `null` for the store's, under `If-Match` as a till's receipts do,
+    refuses a device that is not a terminal (`id`, `WRONG_KIND`), and audits each save as
+    `device_proposal.set_float`.
+  - The devices publish puts it on the terminal's entry as `opening_float_minor`, and leaves the
+    key off where none is set, so a store nobody has set a float for publishes the node it did
+    before, byte for byte.
+  - It is offered to a store on 0.14.1 or later, which reads it. A store on an older release is
+    not offered it, and one line says its drawers open on the store's float until it updates; the
+    column still shows what was saved. An older edge ignores the field, as no published node
+    refuses one it does not know.
+  - The receipts' help on the same card no longer says the cash drawer stays the store's: where the
+    store keeps a drawer for each till, that till's drawer opens at its receipt printer.
+
+  **Upgrade note:** migration `0085_terminal_opening_float` adds a nullable `opening_float_minor`
+  to `device_proposals`. It is additive and rollback-safe: every existing row reads null, the
+  store's float, so no store's devices node changes until a float is set, and a cloud rolled back
+  past it reads and writes the table as before and publishes no till's float, so tills open on the
+  store's until it is upgraded again. `PROTOCOL_VERSION` is unchanged: the field has been on the
+  `TERMINAL` entry since 0.14.1. `docs/openapi-admin.json` gains the route; no permission, event or
+  setting is added.
+
 - **A store can keep a drawer for each till, `shift.drawer_model`**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1, 7 and 8), set at the
   tenant, a brand, a store group or a store, and honoured from 0.14.1.

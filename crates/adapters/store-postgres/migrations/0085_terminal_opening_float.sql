@@ -1,0 +1,22 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0085 — a till's own default float
+-- ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+--
+-- Every till's drawer opened on the store's float, `shift.opening_float_minor`. An operator now
+-- says, on a `terminal` row, what that till's drawer opens with by default:
+--
+--   * `opening_float_minor` — a whole amount in the store currency's minor unit, within the
+--                             setting's bounds, `0` to `1000000000`. `pos-cloud` checks the bounds
+--                             before it writes, as it checks the setting's, so the column carries
+--                             no check constraint, as `late_after_seconds` carries none (0080):
+--                             changing one later would need a destructive statement.
+--
+-- Nullable, and the null is the whole compatibility story, as for a till's receipts (0082). Null is
+-- "the store's", which is published as nothing at all, and the edge reads nothing as the store's
+-- float, which every till's drawer has opened on until now. A fleet takes this release, every row
+-- reads null, and every store's devices node stays as it was.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS opening_float_minor bigint;

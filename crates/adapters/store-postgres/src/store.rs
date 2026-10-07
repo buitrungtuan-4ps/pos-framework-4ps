@@ -337,6 +337,10 @@ const MIGRATION_0083: &str = include_str!("../migrations/0083_people_republishes
 const MIGRATION_0084: &str =
     include_str!("../migrations/0084_roles_can_manage_another_tills_drawer.sql");
 
+/// A till's own default float, which the console sets per terminal
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+const MIGRATION_0085: &str = include_str!("../migrations/0085_terminal_opening_float.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -731,6 +735,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0084)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0085)
             .await
             .map_err(unavailable)
     }
