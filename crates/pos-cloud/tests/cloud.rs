@@ -53,7 +53,7 @@ use pos_cloud::catalog::{
     LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, ModifierGroup, TaxClass,
 };
 use pos_cloud::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
-use pos_cloud::cloud::AdmittedDevice;
+use pos_cloud::cloud::{AdmittedDevice, CashTotals, DailyCash, STORE_DRAWER};
 use pos_cloud::config_tree::{
     CapabilityValidator, ConfigLevel, ConfigStoreError, ConfigTree, ConfigTreeState,
     ConfigTreeStore, PublishedVersion,
@@ -4727,20 +4727,26 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
 /// The propose+approve surface and the publish surface over one device store and one config tree —
 /// production's two `merge`s, in a test.
 fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
-    device_publish_app_audited(keys, trees, Arc::new(NoopAuditRecorder))
+    device_publish_app_with(
+        keys,
+        trees,
+        FakeRollups::default(),
+        Arc::new(NoopAuditRecorder),
+    )
 }
 
-/// [`device_publish_app`], recording to `audit`.
-fn device_publish_app_audited(
+/// [`device_publish_app`], reading its reports from `rollups` and recording to `audit`.
+fn device_publish_app_with(
     keys: &FakeKeys,
     trees: FakeConfigTrees,
+    rollups: FakeRollups,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
     let devices = FakeDevices::default();
     let admin = provisioned_admin();
     let app = app_all(
         Cloud::new(FakeStore::new()),
-        FakeRollups::default(),
+        rollups,
         keys.clone(),
         admin.clone(),
         trees.clone(),
@@ -5851,9 +5857,10 @@ async fn a_tills_float_is_refused_outside_the_settings_bounds_and_off_a_terminal
 async fn a_tills_float_is_published_as_set_cleared_to_the_stores_and_audited() {
     let keys = FakeKeys::default();
     let audit = FakeAudit::default();
-    let router = device_publish_app_audited(
+    let router = device_publish_app_with(
         &keys,
         FakeConfigTrees::default(),
+        FakeRollups::default(),
         Arc::new(AuditSink::new(audit.clone())),
     );
     let cookie = admin_cookie(&router).await;
@@ -5918,6 +5925,77 @@ async fn a_tills_float_is_published_as_set_cleared_to_the_stores_and_audited() {
             ),
         ],
         "each saved float is recorded with what the till now says, and the refused one is not"
+    );
+}
+
+/// The X/Z report names each till among the day's drawers from the store's published devices node
+/// as it is served (**ADR-0167** decision 13): a till the node lists by the name it gives there, and
+/// neither the store's drawer nor a till the node no longer lists, which the console labels itself.
+#[tokio::test]
+async fn the_xz_report_names_each_tills_drawer_from_the_published_devices_node() {
+    let keys = FakeKeys::default();
+    let rollups = FakeRollups::default();
+    let router = device_publish_app_with(
+        &keys,
+        FakeConfigTrees::default(),
+        rollups.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let bar = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Bar till").await;
+    published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+
+    let gone = DeviceId::new(Ulid::from_u128(0x60E)).to_string();
+    let paid_in = |paid_in| CashTotals {
+        paid_in,
+        ..CashTotals::default()
+    };
+    let mut state = StoredRollups::default();
+    state.cash.insert(
+        "2026-03-15".to_owned(),
+        DailyCash {
+            business_date: "2026-03-15".to_owned(),
+            currency_code: "VND".to_owned(),
+            paid_in: 60_000,
+            by_drawer: BTreeMap::from([
+                (bar.clone(), paid_in(10_000)),
+                (gone.clone(), paid_in(20_000)),
+                (STORE_DRAWER.to_owned(), paid_in(30_000)),
+            ]),
+            ..DailyCash::default()
+        },
+    );
+    rollups
+        .save(tenant(), store_id(), &state)
+        .await
+        .expect("seed the rollup");
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/stores/{store_ulid}/reports/xz?tenant_id={tenant_ulid}&business_date=2026-03-15"
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the report");
+    assert_eq!(response.status(), StatusCode::OK);
+    let report = json_body(response).await;
+    assert_eq!(
+        report["till_names"],
+        serde_json::json!({ bar.as_str(): "Bar till" }),
+        "{report}"
+    );
+    assert_eq!(
+        report["cash"]["by_drawer"][gone.as_str()]["paid_in"],
+        20_000,
+        "a till no longer listed is still reported, by its id"
+    );
+    assert_eq!(
+        report["cash"]["paid_in"], 60_000,
+        "the store's figures sit where they always did"
     );
 }
 

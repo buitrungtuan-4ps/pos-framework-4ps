@@ -753,6 +753,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console sees each drawer's cash in the X/Z report**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13). Where a
+  store keeps a drawer for each till, the X / Z card on the Reports screen lists each drawer under
+  the store's totals: its till by name, float, paid in, paid out, expected, counted and
+  over/short. In English and Vietnamese.
+  - The cloud's cash rollup splits each day's figures by drawer, `by_drawer`, keyed by the till's
+    `terminal_device_id`, or `store` for the store's one drawer. Each drawer's are the sums of its
+    own events, so they add up to the store's, which do not change.
+  - `GET /admin/stores/{store_id}/reports/xz` serves the split with `till_names`, each till's name
+    as the store's published `devices` node gives it when the report is served. A till no longer
+    listed has none, and the console shows its id.
+  - A drawer none of whose shifts has closed shows no expected amount, count or over/short: only a
+    close carries one.
+  - A day that kept only the store's drawer shows no table, as before. The figures are read under
+    `console.reports.revenue`, as the store's are; no permission is added.
+
+  **Upgrade note:** per-drawer figures accrue from the deploy forward. A day the rollup folded
+  before it has no drawers, and its report shows the store's figures alone. To backfill a store,
+  reset its rollup with `POST /admin/stores/{store_id}/rollups/reset` (ADR-0036): the projector
+  re-folds its whole log. No migration: the rollup is jsonb, and a day stored before the split
+  loads as it was. The store's figures do not change. `PROTOCOL_VERSION` is unchanged, and no
+  event, permission or setting is added.
+
 - **The console sets each till's default float**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). Where a store keeps a
   drawer for each till, a terminal on the Devices screen may name the float its drawer opens with,

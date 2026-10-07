@@ -306,6 +306,9 @@ where
             .get(&day)
             .cloned()
             .unwrap_or_else(|| empty_cash(&day)),
+        // Names are the published devices node's, which this rollup does not hold: the route reads
+        // them when it serves the report.
+        till_names: BTreeMap::new(),
         business_date: day,
     })
 }
