@@ -374,6 +374,37 @@ pub trait EventPayload: Serialize + serde::de::DeserializeOwned {
     const FIELD_NAMES: &'static [&'static str];
 }
 
+/// Implemented by every part of a payload: a struct a payload nests, declared outside the catalogue,
+/// such as a settled bill's tax line.
+///
+/// Supplied by [`payload_part!`] rather than by hand, so the names cannot drift from the struct.
+pub(crate) trait PayloadPart {
+    /// Every field name, for the personal-data name check and the snapshot.
+    const FIELD_NAMES: &'static [&'static str];
+}
+
+/// Declares a part of a payload to the personal-data barrier and to the snapshot, from one list of
+/// its fields.
+///
+/// The part is rebuilt from the list, so a field added to it fails to compile, as missing, until it
+/// is listed. Listing it asserts its type admissible ([`crate::pii::assert_field_no_pii`]) and puts
+/// its name in [`PayloadPart::FIELD_NAMES`], which `docs/snapshots/events.txt` lists under the field
+/// that holds the part ([`crate::snapshot`]).
+macro_rules! payload_part {
+    ($part:ident { $($field:ident),+ $(,)? }) => {
+        const _: fn($part) -> $part = |part| {
+            $( $crate::pii::assert_field_no_pii(&part.$field); )+
+            $part { $($field: part.$field),+ }
+        };
+
+        impl $crate::envelope::PayloadPart for $part {
+            const FIELD_NAMES: &'static [&'static str] = &[$(stringify!($field)),+];
+        }
+    };
+}
+
+pub(crate) use payload_part;
+
 #[cfg(test)]
 mod chain_tests {
     use super::{EventEnvelope, EventTypeRef, RawPayload};

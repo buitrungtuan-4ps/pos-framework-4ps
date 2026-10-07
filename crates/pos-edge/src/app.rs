@@ -2155,6 +2155,7 @@ pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
             display_name: line.display_name.clone(),
             amount: line.amount,
             tax: line.tax,
+            tax_components: Vec::new(),
         })
         .collect()
 }
@@ -2188,6 +2189,7 @@ fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
             taxable_base: line.taxable_base,
             rate_basis_points: line.rate_basis_points,
             tax: line.tax,
+            components: Vec::new(),
         })
         .collect()
 }
