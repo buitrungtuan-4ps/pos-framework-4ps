@@ -68,6 +68,15 @@ fn ticket(job_id: u128) -> PrintJob {
     }
 }
 
+/// A kick, as opening a drawer behind an agent queues one
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+fn kick(job_id: u128) -> PrintJob {
+    PrintJob {
+        document: PrintDocument::kick(),
+        ..ticket(job_id)
+    }
+}
+
 /// Everything a test needs to stand on both sides of the queue at once.
 struct Harness {
     router: Router,
@@ -188,6 +197,31 @@ impl Harness {
             .await
             .expect("the queue takes it");
         self.wake.queued(id(TERMINAL));
+    }
+
+    /// Puts `job` on the bound agent's queue for [`PRINTER`], deliverable for `ttl_ms`, and wakes
+    /// nobody: the test decides which request reads it.
+    async fn enqueue_quietly(&self, job: PrintJob, ttl_ms: i64) {
+        let now = SystemClock.now().as_milliseconds_since_epoch();
+        self.queue
+            .enqueue(id(TERMINAL), id(PRINTER), job, now, now + ttl_ms, 200)
+            .await
+            .expect("the queue takes it");
+    }
+
+    /// Takes the binding's one park with a request that reads an empty queue and waits, so the next
+    /// request on the binding reads once and answers rather than parking.
+    async fn hold_the_park(self: &Arc<Self>, token: &str) -> tokio::task::JoinHandle<()> {
+        let parked = tokio::spawn({
+            let harness = Arc::clone(self);
+            let token = token.to_owned();
+            async move {
+                harness.send("GET", "/api/print/jobs", Some(&token)).await;
+            }
+        });
+        // Long enough for the handler to have read the empty queue and parked.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        parked
     }
 
     async fn send(&self, method: &str, uri: &str, token: Option<&str>) -> (StatusCode, String) {
@@ -420,7 +454,7 @@ async fn a_leased_job_carries_the_address_the_connection_and_the_edge_s_capabili
     );
     assert_eq!(
         job["capabilities"]["kicks_drawer"], false,
-        "no drawer is opened from anywhere yet (ADR-0100, ADR-0112)"
+        "the printer is not marked as having a drawer, so its agent opens none (ADR-0167)"
     );
 }
 
@@ -441,5 +475,111 @@ async fn a_job_whose_printer_is_no_longer_published_is_not_handed_over() {
         job_ids(&body),
         vec![EventId::new(Ulid::from_u128(0x310)).to_string()],
         "only the job whose printer this store still publishes: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_claim_that_says_it_carries_a_kick_is_handed_one() {
+    // ADR-0167 decision 6: the kick rides the agent's own authenticated claim, inside a job.
+    let harness = Harness::new().await;
+    harness.enqueue_quietly(kick(0x311), 5_000).await;
+    let token = harness.agent_token.clone();
+
+    let (status, body) = harness
+        .send("GET", "/api/print/jobs?kicks_drawer=true", Some(&token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(
+        parsed["jobs"][0]["job"]["document"]["blocks"],
+        serde_json::json!(["OpenDrawer"]),
+        "the kick, and nothing to print: {body}"
+    );
+    let (status, _) = harness
+        .send(
+            "POST",
+            &format!(
+                "/api/print/jobs/{}/ack",
+                EventId::new(Ulid::from_u128(0x311))
+            ),
+            Some(&token),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "acknowledged like any job");
+}
+
+#[tokio::test]
+async fn a_kick_is_withheld_from_a_claim_that_does_not_say_it_carries_one() {
+    // An agent built before kicks cannot read one: its whole claim would fail to parse, and every
+    // ticket with it. So its claim is answered without the kick, which holds its printer only until
+    // its short TTL, after which the printer's next job goes as before.
+    let harness = Arc::new(Harness::new().await);
+    let token = harness.agent_token.clone();
+    let parked = harness.hold_the_park(&token).await;
+    harness.enqueue_quietly(kick(0x312), 200).await;
+
+    let (status, body) = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.send("GET", "/api/print/jobs", Some(&token)),
+    )
+    .await
+    .expect("answered rather than parked");
+    assert_eq!(status, StatusCode::OK);
+    assert!(job_ids(&body).is_empty(), "the kick is withheld: {body}");
+
+    harness.enqueue_quietly(ticket(0x313), 600_000).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (status, body) = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.send("GET", "/api/print/jobs", Some(&token)),
+    )
+    .await
+    .expect("answered rather than parked");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        job_ids(&body),
+        vec![EventId::new(Ulid::from_u128(0x313)).to_string()],
+        "the ticket behind the expired kick: {body}"
+    );
+    parked.abort();
+}
+
+#[tokio::test]
+async fn a_kick_for_one_terminal_s_printer_is_never_handed_to_another_terminal_s_agent() {
+    // The binding scopes a kick as it scopes a ticket: a paired device answering for another
+    // terminal is never handed a drawer it does not own, whatever its claim says it carries.
+    let harness = Arc::new(Harness::new().await);
+    let now = SystemClock.now().as_milliseconds_since_epoch();
+    harness
+        .agents
+        .claim(id(OTHER_TERMINAL), harness.stranger_device, now)
+        .await
+        .expect("the second device is a legitimate agent for its own terminal");
+    let stranger = harness.stranger_token.clone();
+    let parked = harness.hold_the_park(&stranger).await;
+    harness.enqueue_quietly(kick(0x314), 5_000).await;
+
+    let (status, body) = tokio::time::timeout(
+        Duration::from_secs(5),
+        harness.send("GET", "/api/print/jobs?kicks_drawer=true", Some(&stranger)),
+    )
+    .await
+    .expect("answered rather than parked");
+    assert_eq!(status, StatusCode::OK);
+    assert!(job_ids(&body).is_empty(), "not its drawer: {body}");
+    parked.abort();
+
+    let (status, body) = harness
+        .send(
+            "GET",
+            "/api/print/jobs?kicks_drawer=true",
+            Some(&harness.agent_token.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        job_ids(&body),
+        vec![EventId::new(Ulid::from_u128(0x314)).to_string()],
+        "the kick waits for the agent that owns its printer: {body}"
     );
 }

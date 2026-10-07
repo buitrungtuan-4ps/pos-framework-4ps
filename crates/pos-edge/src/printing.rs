@@ -26,7 +26,10 @@
 //! [`PrinterConnection::may_open_a_drawer`](pos_ports::printer::PrinterConnection::may_open_a_drawer)
 //! is false for anything but USB, because port 9100 has no authentication and the drawer-kick rides
 //! the same channel as everything else (`docs/architecture.md` §5). A published node marking a network
-//! printer's drawer is accepted here and the drawer command is still not sent.
+//! printer's drawer is accepted here and the drawer command is still not sent. Behind a print agent
+//! the kick is a job of its own, sent only to an agent whose claim says it carries one, and `OPENED`
+//! waits on the agent's acknowledgement
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 //!
 //! # A printer may name another device as the one that writes the bytes
 //!
@@ -49,7 +52,7 @@
 //! else does. A store whose terminals name nothing prints exactly as before.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroU16;
 use std::pin::Pin;
@@ -77,6 +80,7 @@ use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 
 use pos_proto::ClockSource;
+use tokio::sync::oneshot;
 
 use crate::app::{
     BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptCopy, ReceiptLine, ShiftReport,
@@ -84,7 +88,7 @@ use crate::app::{
 use crate::config::{ValueSource, log_in_force};
 use crate::line_notes::NoteText;
 use crate::paper_labels::PaperLabels;
-use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
+use crate::print_agent::{AGENT_SILENCE, JOB_TTL, KICK_WAIT, MAX_QUEUED_PER_PRINTER};
 use pos_core::business_date::local_time;
 
 /// The store's receipt printer: the printer bound to no station.
@@ -248,20 +252,26 @@ fn is_printer(device: &PublishedDevice) -> bool {
 }
 
 /// The printer a cash drawer opens through, if this edge may open one
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
+/// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 ///
 /// The first printer that serves the bill rather than a station, that the console marked
-/// `drawer_attached`, whose bytes this edge writes itself, and whose connection may open a drawer,
-/// which is USB and nothing else. Each condition is a way the kick would go wrong: a station
-/// printer's drawer is not the till's, a print agent carries print jobs and not a kick (ADR-0112), and
-/// port 9100 has no authentication (`docs/architecture.md` §5).
+/// `drawer_attached`, whose connection may open a drawer, which is USB and nothing else, and whose
+/// bytes this edge writes itself or a print agent writes that `carries_kick` says carries the kick.
+/// Each condition is a way the kick would go wrong: a station printer's drawer is not the till's,
+/// port 9100 has no authentication (`docs/architecture.md` §5), and an agent built before kicks
+/// cannot read one. The one place the choice is made, so the drawer per till (ADR-0167) changes it
+/// here.
 #[must_use]
-pub fn drawer_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
+pub fn drawer_printer(
+    devices: &PublishedDevices,
+    carries_kick: impl Fn(DeviceId) -> bool,
+) -> Option<&PublishedDevice> {
     devices.devices().iter().find(|device| {
         device.station_id.is_none()
             && is_printer(device)
             && device.drawer_attached
-            && device.agent_device_id.is_none()
+            && device.agent_device_id.is_none_or(&carries_kick)
             && connection_of(device).may_open_a_drawer()
     })
 }
@@ -1503,13 +1513,16 @@ impl PrintOutcome {
 /// drawer that did not spring is opened with its key; what the till needs is which of these happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerOutcome {
-    /// The kick went down the drawer printer's cable. Whether the drawer sprang is the hardware's
+    /// The kick went down the drawer printer's cable, or, behind a print agent, the agent
+    /// acknowledged writing it within [`KICK_WAIT`]. Whether the drawer sprang is the hardware's
     /// part (gate P8), which the edge cannot see.
     Opened,
     /// No printer this edge may open a drawer through: none is marked, or the marked one is not on
-    /// USB, serves a station, or prints through an agent. The ordinary state of a store with no drawer.
+    /// USB, serves a station, or prints through an agent that does not carry a kick, one built
+    /// before kicks. The ordinary state of a store with no drawer.
     NoDrawer,
-    /// The drawer printer was chosen and did not take the kick: unplugged, or switched off.
+    /// The drawer printer was chosen and did not take the kick: unplugged or switched off, or its
+    /// agent silent, its queue full, or no acknowledgement within [`KICK_WAIT`].
     Unavailable,
 }
 
@@ -1549,6 +1562,21 @@ pub trait AgentDispatch: Send + Sync {
         printer: DeviceId,
         job: PrintJob,
     ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>>;
+
+    /// Offers a kick, a job that is [`PrintDocument::kick`] alone, to `agent` for `printer`, under
+    /// the same rules as [`Self::enqueue`] but deliverable only for [`KICK_WAIT`]
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    ///
+    /// A dispatch that cannot carry one refuses it, which is what the default does.
+    fn kick<'a>(
+        &'a self,
+        agent: DeviceId,
+        printer: DeviceId,
+        job: PrintJob,
+    ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
+        let _ = (agent, printer, job);
+        Box::pin(async { PrintOutcome::AgentUnavailable })
+    }
 
     /// The terminal paired `device` answers for, if any: the till it is.
     ///
@@ -1592,17 +1620,20 @@ impl<A, Q, W> AgentLane<A, Q, W> {
     }
 }
 
-impl<A, Q, W> AgentDispatch for AgentLane<A, Q, W>
+impl<A, Q, W> AgentLane<A, Q, W>
 where
     A: crate::print_agent::PrintAgents,
     Q: crate::print_queue::PrintQueue,
     W: crate::print_wake::PrintWake,
 {
-    fn enqueue<'a>(
+    /// Offers `job` to `agent` for `printer`, deliverable for `ttl`: a print job's [`JOB_TTL`], a
+    /// kick's [`KICK_WAIT`].
+    fn offer<'a>(
         &'a self,
         agent: DeviceId,
         printer: DeviceId,
         job: PrintJob,
+        ttl: std::time::Duration,
     ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
         Box::pin(async move {
             let now_ms = crate::clock::SystemClock
@@ -1636,7 +1667,7 @@ where
             // 2. The cap. The instants are computed here rather than in the adapter, because the TTL
             //    is a constant in one edge module and a store that held it would be a second place
             //    to change it.
-            let ttl_ms = i64::try_from(JOB_TTL.as_millis()).unwrap_or(i64::MAX);
+            let ttl_ms = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
             let job_id = job.job_id;
             let queued = self
                 .queue
@@ -1682,12 +1713,63 @@ where
             }
         })
     }
+}
+
+impl<A, Q, W> AgentDispatch for AgentLane<A, Q, W>
+where
+    A: crate::print_agent::PrintAgents,
+    Q: crate::print_queue::PrintQueue,
+    W: crate::print_wake::PrintWake,
+{
+    fn enqueue<'a>(
+        &'a self,
+        agent: DeviceId,
+        printer: DeviceId,
+        job: PrintJob,
+    ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
+        self.offer(agent, printer, job, JOB_TTL)
+    }
+
+    fn kick<'a>(
+        &'a self,
+        agent: DeviceId,
+        printer: DeviceId,
+        job: PrintJob,
+    ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
+        self.offer(agent, printer, job, KICK_WAIT)
+    }
 
     fn terminal_of<'a>(
         &'a self,
         device: DeviceId,
     ) -> Pin<Box<dyn Future<Output = Result<Option<DeviceId>, PortError>> + Send + 'a>> {
         Box::pin(self.agents.agent_for(device))
+    }
+}
+
+/// A kick a till is waiting on, which nobody waits on once this is dropped.
+struct AwaitedKick<'a> {
+    awaited: &'a Mutex<HashMap<EventId, oneshot::Sender<()>>>,
+    job: EventId,
+    receiver: oneshot::Receiver<()>,
+}
+
+impl AwaitedKick<'_> {
+    /// Whether the agent acknowledged the kick within `wait`.
+    async fn within(mut self, wait: std::time::Duration) -> bool {
+        matches!(
+            tokio::time::timeout(wait, &mut self.receiver).await,
+            Ok(Ok(()))
+        )
+    }
+}
+
+impl Drop for AwaitedKick<'_> {
+    fn drop(&mut self) {
+        self.awaited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.job);
     }
 }
 
@@ -1806,7 +1888,22 @@ pub struct Printers {
     /// reports [`PrintOutcome::AgentUnavailable`], which is the truth for that composition rather
     /// than a silent no-op.
     agents: Option<Arc<dyn AgentDispatch>>,
+    /// The agents whose last claim said they carry a kick
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), at most
+    /// [`KICKING_AGENTS`]. In-process, like a claim's parking: every claim says it again, so a
+    /// restart that forgets it is told again within one claim.
+    kicking: Mutex<HashSet<DeviceId>>,
+    /// The kicks a till is waiting on an agent to acknowledge, at most [`KICKS_AWAITED`].
+    awaited: Mutex<HashMap<EventId, oneshot::Sender<()>>>,
 }
+
+/// How many agents [`Printers`] remembers as carrying a kick: far more terminals than a store has.
+/// A full record forgets one, which says so again at its next claim.
+const KICKING_AGENTS: usize = 64;
+
+/// How many kicks may wait on a print agent's acknowledgement at once. A till waits on one at a
+/// time, so this is a store with dozens of tills kicking together; past it a kick is refused.
+const KICKS_AWAITED: usize = 32;
 
 /// One printer held open for the life of the process.
 type HeldPrinter = Arc<EscPosPrinter<Box<dyn Transport>>>;
@@ -1842,6 +1939,14 @@ impl fmt::Debug for Printers {
             // Whether an agent lane is composed, not what is on it: a queue holds rendered
             // documents.
             .field("has_agent_lane", &self.agents.is_some())
+            .field(
+                "kicking",
+                &self.kicking.lock().map_or(0, |kicking| kicking.len()),
+            )
+            .field(
+                "awaited",
+                &self.awaited.lock().map_or(0, |awaited| awaited.len()),
+            )
             .finish()
     }
 }
@@ -1863,6 +1968,8 @@ impl Printers {
             local_font_size: None,
             font_size_said: Mutex::new(None),
             agents: None,
+            kicking: Mutex::new(HashSet::new()),
+            awaited: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2036,8 +2143,19 @@ impl Printers {
     /// or out, a no-sale opening. Never an error, for the reason a receipt is never one: the money is
     /// already recorded, and a drawer that did not spring is opened with its key. The outcome says
     /// which, and the till tells the cashier.
-    pub async fn open_drawer(&self, session: &EdgeSession) -> DrawerOutcome {
-        let Some(device) = drawer_printer(&session.devices) else {
+    ///
+    /// Behind a print agent that carries the kick, the kick is a job on its queue under `kick_id`,
+    /// and the till waits up to [`KICK_WAIT`] for the agent to say it wrote it
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A fresh
+    /// id, as a test page's is: a cash payment's receipt already prints under the payment's.
+    pub async fn open_drawer(
+        &self,
+        session: &EdgeSession,
+        store_id: StoreId,
+        kick_id: EventId,
+    ) -> DrawerOutcome {
+        let Some(device) = drawer_printer(&session.devices, |agent| self.carries_kick(agent))
+        else {
             if session
                 .devices
                 .devices()
@@ -2046,11 +2164,17 @@ impl Printers {
             {
                 tracing::warn!(
                     "a printer is marked as having a cash drawer, but not one this edge may open: it \
-                     must serve the bill, be on USB, and print without an agent"
+                     must serve the bill, be on USB, and print without an agent or through one that \
+                     carries the kick"
                 );
             }
             return DrawerOutcome::NoDrawer;
         };
+        if let Some(agent) = device.agent_device_id {
+            return self
+                .kick_through(agent, device.device_id, store_id, kick_id)
+                .await;
+        }
         let capabilities = assumed_capabilities(device, self.can_rasterise());
         let printer = match self.printer_for(device, capabilities) {
             Ok(printer) => printer,
@@ -2074,6 +2198,102 @@ impl Printers {
                 DrawerOutcome::Unavailable
             }
         }
+    }
+
+    /// Opens the drawer through the print agent that owns its printer: a kick on the agent's
+    /// queue, answered `Opened` once the agent acknowledges it within [`KICK_WAIT`].
+    async fn kick_through(
+        &self,
+        agent: DeviceId,
+        printer: DeviceId,
+        store_id: StoreId,
+        job_id: EventId,
+    ) -> DrawerOutcome {
+        let Some(lane) = self.agents.as_ref() else {
+            tracing::warn!(%printer, %agent, "the drawer's printer names an agent but no print queue is composed");
+            return DrawerOutcome::Unavailable;
+        };
+        // Waited on before it is offered, so an acknowledgement that beats the offer is heard.
+        let Some(acknowledged) = self.await_kick(job_id) else {
+            tracing::warn!(%printer, %agent, "too many kicks are waiting on print agents; this one is not sent");
+            return DrawerOutcome::Unavailable;
+        };
+        let kick = PrintJob {
+            job_id,
+            store_id,
+            station_id: None,
+            document: PrintDocument::kick(),
+        };
+        if lane.kick(agent, printer, kick).await != PrintOutcome::QueuedToAgent {
+            return DrawerOutcome::Unavailable;
+        }
+        if acknowledged.within(KICK_WAIT).await {
+            tracing::info!(%job_id, %printer, %agent, "cash drawer kicked through its print agent");
+            DrawerOutcome::Opened
+        } else {
+            tracing::warn!(%job_id, %printer, %agent, "the print agent did not acknowledge the kick in time");
+            DrawerOutcome::Unavailable
+        }
+    }
+
+    /// Records what a print agent's claim said about it: whether it carries a kick. The claim
+    /// route calls this once the binding has said which terminal the caller is.
+    pub(crate) fn heard_from_agent(&self, agent: DeviceId, carries_kick: bool) {
+        let mut kicking = self
+            .kicking
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !carries_kick {
+            kicking.remove(&agent);
+            return;
+        }
+        if !kicking.contains(&agent)
+            && kicking.len() >= KICKING_AGENTS
+            && let Some(forgotten) = kicking.iter().next().copied()
+        {
+            kicking.remove(&forgotten);
+        }
+        kicking.insert(agent);
+    }
+
+    /// Whether `agent`'s last claim said it carries a kick.
+    fn carries_kick(&self, agent: DeviceId) -> bool {
+        self.kicking
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&agent)
+    }
+
+    /// An agent acknowledged `job`: a till waiting on it as a kick hears so. The acknowledgement
+    /// route calls this for a job it deleted from the queue.
+    pub(crate) fn acknowledged(&self, job: EventId) {
+        let waiting = self
+            .awaited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&job);
+        if let Some(waiting) = waiting {
+            // The till may have stopped waiting a moment ago, and nothing else is listening.
+            let _ = waiting.send(());
+        }
+    }
+
+    /// Starts waiting on `job`'s acknowledgement, or `None` when [`KICKS_AWAITED`] are already.
+    fn await_kick(&self, job: EventId) -> Option<AwaitedKick<'_>> {
+        let mut awaited = self
+            .awaited
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if awaited.len() >= KICKS_AWAITED {
+            return None;
+        }
+        let (sender, receiver) = oneshot::channel();
+        awaited.insert(job, sender);
+        Some(AwaitedKick {
+            awaited: &self.awaited,
+            job,
+            receiver,
+        })
     }
 
     /// Prints the guest's receipt for a settled bill, on `till`'s receipt printer: the store's,
@@ -2527,12 +2747,12 @@ impl Printers {
 mod tests {
     use super::TcpTransports;
     use super::{
-        AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers, SecondLanguage, SecondNames,
-        TicketLine, TicketNote, TillPrinting, TransportFactory, assumed_capabilities,
-        connection_of, drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
-        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
-        shift_report_document, short_reference, station_printer, ticket_at, ticket_document,
-        ticket_language, ticket_line,
+        AgentLane, DrawerOutcome, KICKING_AGENTS, KICKS_AWAITED, MoneyStyle, PrintOutcome,
+        Printers, SecondLanguage, SecondNames, TicketLine, TicketNote, TillPrinting,
+        TransportFactory, assumed_capabilities, connection_of, drawer_printer, pre_bill_document,
+        receipt_copy_document, receipt_document, receipt_language, receipt_lines_in,
+        receipt_printer, receipt_totals_in, shift_report_document, short_reference,
+        station_printer, ticket_at, ticket_document, ticket_language, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::config::ValueSource;
@@ -5014,10 +5234,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_marked_usb_counter_printer_the_edge_writes_to_is_a_drawer_printer() {
+    fn only_a_marked_usb_counter_printer_written_here_or_by_a_kicking_agent_is_a_drawer_printer() {
         let marked = drawer_device(1);
         let devices = PublishedDevices::new(vec![marked.clone()]);
-        assert_eq!(drawer_printer(&devices), Some(&marked));
+        assert_eq!(drawer_printer(&devices, |_| false), Some(&marked));
         assert!(
             assumed_capabilities(&marked, false).may_open_a_drawer(),
             "the mark is what the adapter's own check reads"
@@ -5047,7 +5267,7 @@ mod tests {
                 },
             ),
             (
-                "written through a print agent, which carries jobs and not a kick",
+                "written through a print agent that does not carry the kick",
                 PublishedDevice {
                     agent_device_id: Some(DeviceId::new(Ulid::from_u128(5))),
                     ..drawer_device(6)
@@ -5055,18 +5275,34 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                drawer_printer(&PublishedDevices::new(vec![device])),
+                drawer_printer(&PublishedDevices::new(vec![device]), |_| false),
                 None,
                 "{why}"
             );
         }
+
+        // Behind an agent that carries the kick, the same printer is the drawer's (ADR-0167).
+        let agent = DeviceId::new(Ulid::from_u128(5));
+        let behind = PublishedDevice {
+            agent_device_id: Some(agent),
+            ..drawer_device(7)
+        };
+        let devices = PublishedDevices::new(vec![behind.clone()]);
+        assert_eq!(
+            drawer_printer(&devices, |kicking| kicking == agent),
+            Some(&behind)
+        );
     }
 
     #[tokio::test]
     async fn a_drawer_is_kicked_through_its_printer_and_nothing_else_is_written() {
         let (printers, written) = recorder(true);
         let outcome = printers
-            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .open_drawer(
+                &session_with(PublishedDevices::new(vec![drawer_device(2)])),
+                store_id(),
+                event_id(0xD0),
+            )
             .await;
         assert_eq!(outcome, DrawerOutcome::Opened);
         assert_eq!(
@@ -5081,7 +5317,11 @@ mod tests {
             ..drawer_device(2)
         };
         let outcome = printers
-            .open_drawer(&session_with(PublishedDevices::new(vec![unmarked])))
+            .open_drawer(
+                &session_with(PublishedDevices::new(vec![unmarked])),
+                store_id(),
+                event_id(0xD0),
+            )
             .await;
         assert_eq!(outcome, DrawerOutcome::NoDrawer);
         assert!(
@@ -5094,7 +5334,11 @@ mod tests {
     async fn a_drawer_printer_that_does_not_answer_is_unavailable() {
         let (printers, _written) = recorder(false);
         let outcome = printers
-            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .open_drawer(
+                &session_with(PublishedDevices::new(vec![drawer_device(2)])),
+                store_id(),
+                event_id(0xD0),
+            )
             .await;
         assert_eq!(outcome, DrawerOutcome::Unavailable);
     }
@@ -5123,7 +5367,11 @@ mod tests {
         assert_eq!(receipt, PrintOutcome::Printed);
 
         let outcome = printers
-            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .open_drawer(
+                &session_with(PublishedDevices::new(vec![drawer_device(2)])),
+                store_id(),
+                event_id(0xD0),
+            )
             .await;
         assert_eq!(outcome, DrawerOutcome::Opened);
         assert_eq!(
@@ -5183,6 +5431,153 @@ mod tests {
             .claim(lane.agent, now, now + 30_000)
             .await
             .expect("the queue answers")
+    }
+
+    /// A drawer printer behind `agent`: marked, on USB, serving the bill.
+    fn drawer_via_agent(agent: DeviceId) -> PublishedDevice {
+        PublishedDevice {
+            agent_device_id: Some(agent),
+            ..drawer_device(2)
+        }
+    }
+
+    /// An agent that takes the first kick it finds on its queue within [`KICK_WAIT`], writes it
+    /// and acknowledges it, as `pos_print_agent` does through the routes, and hands it back.
+    async fn an_agent_kicks(
+        printers: &Printers,
+        lane: &Lane,
+    ) -> Option<crate::print_queue::ClaimedJob> {
+        use crate::print_queue::PrintQueue as _;
+        let found = tokio::time::timeout(super::KICK_WAIT, async {
+            loop {
+                if let Some(kick) = claimable(lane)
+                    .await
+                    .into_iter()
+                    .find(|claimed| claimed.job.document.is_kick())
+                {
+                    return kick;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .ok()?;
+        let job = found.job.job_id;
+        assert!(lane.queue.acknowledge(job, lane.agent).await.expect("ack"));
+        printers.acknowledged(job);
+        Some(found)
+    }
+
+    #[tokio::test]
+    async fn a_drawer_behind_an_agent_that_carries_the_kick_opens_once_it_acknowledges() {
+        // ADR-0167 decision 6: the kick travels inside a job, to the agent that owns the printer,
+        // and the till hears `OPENED` when the agent says it wrote it.
+        let (printers, recorder, lane) = with_agent_lane(Some(0)).await;
+        printers.heard_from_agent(lane.agent, true);
+        let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
+
+        let (outcome, kick) = tokio::join!(
+            printers.open_drawer(&session, store_id(), event_id(0xD0)),
+            an_agent_kicks(&printers, &lane)
+        );
+        assert_eq!(outcome, DrawerOutcome::Opened);
+        let kick = kick.expect("the agent was sent a kick");
+        assert_eq!(kick.printer, drawer_via_agent(lane.agent).device_id);
+        assert_eq!(kick.job.job_id, event_id(0xD0), "under the id it was given");
+        assert!(kick.job.document.is_kick());
+        assert!(
+            recorder.written.lock().expect("the recorder").is_empty(),
+            "the edge never dials a printer an agent owns"
+        );
+        assert!(
+            claimable(&lane).await.is_empty(),
+            "one kick, and it is acknowledged"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_does_not_carry_the_kick_is_sent_none_and_the_till_uses_the_key() {
+        // An agent built before kicks claims without saying it carries one: ADR-0165's answer for a
+        // printer the edge may not open a drawer through, and nothing on its queue.
+        let (printers, _recorder, lane) = with_agent_lane(Some(0)).await;
+        printers.heard_from_agent(lane.agent, false);
+        let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
+        assert_eq!(
+            printers
+                .open_drawer(&session, store_id(), event_id(0xD0))
+                .await,
+            DrawerOutcome::NoDrawer
+        );
+        assert!(claimable(&lane).await.is_empty());
+
+        // One that said so and then said otherwise, an agent rolled back, is the same.
+        printers.heard_from_agent(lane.agent, true);
+        printers.heard_from_agent(lane.agent, false);
+        assert_eq!(
+            printers
+                .open_drawer(&session, store_id(), event_id(0xD0))
+                .await,
+            DrawerOutcome::NoDrawer
+        );
+        assert!(claimable(&lane).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_kicking_agent_that_is_silent_or_unbound_leaves_the_drawer_unavailable() {
+        // The drawer printer was chosen and its agent cannot take the kick: queue nothing, and say
+        // so at once rather than after a wait.
+        let (printers, _recorder, lane) = with_agent_lane(None).await;
+        printers.heard_from_agent(lane.agent, true);
+        let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
+        assert_eq!(
+            printers
+                .open_drawer(&session, store_id(), event_id(0xD0))
+                .await,
+            DrawerOutcome::Unavailable
+        );
+        assert!(
+            claimable(&lane).await.is_empty(),
+            "nothing builds behind a box that is not there"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kick_is_heard_only_while_the_till_waits_and_the_waiters_are_bounded() {
+        let (printers, _recorder, _lane) = with_agent_lane(Some(0)).await;
+        let first = event_id(0x0001);
+        let waiting = printers.await_kick(first).expect("room to wait");
+        printers.acknowledged(first);
+        assert!(waiting.within(std::time::Duration::from_secs(1)).await);
+
+        let unheard = printers.await_kick(event_id(0x0002)).expect("room to wait");
+        assert!(!unheard.within(std::time::Duration::from_millis(10)).await);
+        assert!(
+            printers.awaited.lock().expect("lock").is_empty(),
+            "a till that stopped waiting leaves nothing behind"
+        );
+
+        let held: Vec<_> = (0..KICKS_AWAITED)
+            .map(|n| printers.await_kick(event_id(0x1000 + n as u128)))
+            .collect();
+        assert!(held.iter().all(Option::is_some));
+        assert!(
+            printers.await_kick(event_id(0x2000)).is_none(),
+            "past the bound a kick is refused"
+        );
+    }
+
+    #[test]
+    fn the_agents_said_to_carry_a_kick_are_bounded() {
+        let (printers, _recorder) = recorder(true);
+        for n in 0..=KICKING_AGENTS {
+            printers.heard_from_agent(DeviceId::new(Ulid::from_u128(0x5000 + n as u128)), true);
+        }
+        let last = DeviceId::new(Ulid::from_u128(0x5000 + KICKING_AGENTS as u128));
+        assert_eq!(printers.kicking.lock().expect("lock").len(), KICKING_AGENTS);
+        assert!(
+            printers.carries_kick(last),
+            "the newest is remembered, and one older forgotten"
+        );
     }
 
     #[tokio::test]

@@ -35,7 +35,7 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use pos_proto::ids::EventId;
 
-use crate::{AgentError, EdgeTransport, LeasedJob, LeasedJobs, VERSION};
+use crate::{AgentError, CLAIM_PATH, EdgeTransport, LeasedJob, LeasedJobs, VERSION};
 
 /// How long a single call may take.
 ///
@@ -214,7 +214,7 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin> Stream for 
 
 impl EdgeTransport for HttpEdge {
     async fn claim(&self) -> Result<Vec<LeasedJob>, AgentError> {
-        let (status, body) = self.call("GET", "/api/print/jobs").await?;
+        let (status, body) = self.call("GET", CLAIM_PATH).await?;
         match status {
             200 => serde_json::from_slice::<LeasedJobs>(&body)
                 .map(|leased| leased.jobs)

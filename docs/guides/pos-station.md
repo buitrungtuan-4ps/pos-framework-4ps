@@ -126,6 +126,15 @@ names them for the terminal
 If the app is killed rather than quit, the agent outlives it until the next start (see *What is
 left*).
 
+The agent also opens the cash drawer wired to a printer it writes
+([ADR-0167](../adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). Its claim says it carries
+the kick (`GET /api/print/jobs?kicks_drawer=true`), so the edge sends it the kick for a cash
+payment, a paid in, a paid out or a no-sale opening as a job of its own. The agent writes the drawer
+pulse and acknowledges the job, and the till's `OPENED` waits up to five seconds for that. It does
+so only for a printer it reaches over USB that the console marks **Cash drawer attached**, and
+refuses any other kick unwritten. An agent from before this release says nothing and is sent no
+kick, and its till says to open the drawer with its key.
+
 ## Security
 
 - **Remote pages get no commands.** `capabilities/local-pages.json` grants the four commands
@@ -343,8 +352,9 @@ scrolling smooth.
 
 ## What is left
 
-- **Hardware for 3.3, out of scope per ADR-0147**: the customer display, the scale, the cash drawer
-  and card-terminal SDKs. Each needs hardware to prove against, and some need a port and an adapter.
+- **Hardware for 3.3, out of scope per ADR-0147**: the customer display, the scale, a cash drawer
+  on anything but a USB printer the agent writes, and card-terminal SDKs. Each needs hardware to
+  prove against, and some need a port and an adapter.
   A keyboard-wedge scanner already works in the webview.
 - **Printer online/offline** in the tray: needs an additive edge route.
 - **A persistent Linux credential store**: the Secret Service would survive a reboot but needs a

@@ -67,6 +67,15 @@ pub const JOB_TTL: Duration = Duration::from_secs(600);
 /// An agent that dies holding a job does not hold it forever.
 pub const CLAIM_LEASE: Duration = Duration::from_secs(30);
 
+/// How long the till waits for a print agent to acknowledge a kick, and how long the kick stays
+/// deliverable ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+///
+/// One number for both, so a kick the till has stopped waiting for is never leased: a drawer that
+/// springs after the cashier was told to use its key is a drawer standing open behind them. Five
+/// seconds covers a parked claim, a receipt ahead of the kick on the same printer, the pulse and
+/// the acknowledgement over a slow link.
+pub const KICK_WAIT: Duration = Duration::from_secs(5);
+
 /// How long an agent may go without asking for work before the enqueue treats it as gone.
 ///
 /// Read *before* the queue is touched: a queue must not start building behind a box that is not

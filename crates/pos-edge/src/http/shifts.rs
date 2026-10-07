@@ -267,7 +267,11 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     match printers {
-        Some(printers) => printers.open_drawer(&edge.session()).await,
+        Some(printers) => {
+            printers
+                .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id())
+                .await
+        }
         None => DrawerOutcome::NoDrawer,
     }
 }
