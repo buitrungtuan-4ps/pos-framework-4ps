@@ -485,6 +485,7 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
         receipt_printer_id: None,
         receipt_language: Open::default(),
         receipt_second_language: Open::default(),
+        opening_float_minor: None,
     };
     let (app, token) = app_with(Some((
         printers,
@@ -1394,6 +1395,7 @@ fn counter_printer() -> PublishedDevice {
         receipt_printer_id: None,
         receipt_language: Open::default(),
         receipt_second_language: Open::default(),
+        opening_float_minor: None,
     }
 }
 

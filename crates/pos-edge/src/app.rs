@@ -7155,6 +7155,8 @@ impl<S: EventStore> Edge<S> {
         let payload = CashShiftOpened {
             opened_shift_id: shift_id,
             opening_float,
+            // The store's drawer, every till's, until each till has its own (ADR-0167).
+            terminal_device_id: None,
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
@@ -7299,6 +7301,7 @@ impl<S: EventStore> Edge<S> {
             expected_amount,
             counted_amount,
             variance,
+            terminal_device_id: None,
         };
         self.commit_and_publish(&ctx, &payload).await?;
         self.anchor_chain(&ctx).await?;
@@ -7376,6 +7379,7 @@ impl<S: EventStore> Edge<S> {
                 &CashDrawerPaidIn {
                     amount,
                     reason_code_id,
+                    terminal_device_id: None,
                 },
             )?,
             CashMovement::PaidOut => self.prepare(
@@ -7383,6 +7387,7 @@ impl<S: EventStore> Edge<S> {
                 &CashDrawerPaidOut {
                     amount,
                     reason_code_id,
+                    terminal_device_id: None,
                 },
             )?,
         };
@@ -7439,6 +7444,7 @@ impl<S: EventStore> Edge<S> {
         let opened = CashDrawerOpened {
             standalone: true,
             reason_code_id: Some(reason_code_id),
+            terminal_device_id: None,
         };
         let (envelope, message) = self.prepare(&ctx, &opened)?;
         let mut envelopes = vec![envelope];

@@ -753,6 +753,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The wire can say which till's drawer a cash event belongs to, and the configuration can say
+  how many drawers a store keeps** ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+  decisions 1, 4, 5, 10 and 11). Additive types for the drawer per till; nothing writes or reads
+  them yet, so every store behaves as before.
+  - `cash.shift.opened`, `cash.shift.closed`, `cash.drawer.paid_in`, `cash.drawer.paid_out` and
+    `cash.drawer.opened` gain an optional `terminal_device_id`, the `TERMINAL` entry's `device_id`,
+    never the envelope's `device_id`. Absent is the store's drawer and is left out, so the edge
+    writes the same bytes as before, which a test holds against the bytes it wrote.
+  - The `shift` node (`pos_proto::shift::PublishedShift`) gains `drawer_model`
+    (`DRAWER_MODEL_PER_STORE`, `DRAWER_MODEL_PER_TERMINAL`), `close_report`
+    (`CLOSE_REPORT_PER_DRAWER`, `CLOSE_REPORT_COMBINED`, `CLOSE_REPORT_NONE`) and `drawer_day_end`
+    (`DRAWER_DAY_END_FLAG`, `DRAWER_DAY_END_REQUIRE_CLOSE`), each with its `*_UNSPECIFIED` zero
+    value. An absent, unspecified or unknown value reads as today: one drawer, a report where it
+    closes, and a flag that refuses nothing. They are not in the configuration register, so the
+    console cannot set them; each joins it with the release whose edge honours it.
+  - A `TERMINAL` entry on the `devices` node (`PublishedDevice`) gains `opening_float_minor`, the
+    till's default float within `shift.opening_float_minor`'s bounds; absent, or out of bounds,
+    is the store's. The cloud publishes none until the console can set one, so it adds no column.
+
+  **Upgrade note:** additive wire fields with no behaviour yet. `PROTOCOL_VERSION` is unchanged,
+  and so is every schema version. `docs/snapshots/events.txt` gains the five
+  `terminal_device_id` lines; no setting, permission, route or migration changes. An older edge
+  or cloud ignores the new fields. A crate that builds one of these payloads, or a
+  `PublishedDevice`, field by field adds the new field as `None`.
+
 - **A manager makes a device one of the store's tills on the till's Devices screen**
   ([ADR-0112](docs/adr/0112-print-agents.md)). A paired device is a till through the print-agent
   binding, `POST /api/print/agent`, and nothing on a screen called it, so a till's own receipt

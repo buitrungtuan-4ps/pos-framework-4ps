@@ -650,6 +650,13 @@ event_catalogue! {
         opened_shift_id: ShiftId,
         /// Cash in the drawer at the start.
         opening_float: Money,
+        /// The till whose drawer this is: the `TERMINAL` entry's `device_id` on the `devices` node
+        /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 5), never
+        /// the envelope's `device_id`, which is the device that recorded the event. Absent is the
+        /// store's drawer and is left off the wire, so a store with one drawer writes the bytes it
+        /// wrote before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_device_id: Option<DeviceId>,
     },
     /// The cashier entered a counted amount.
     ///
@@ -675,6 +682,9 @@ event_catalogue! {
         counted_amount: Money,
         /// Counted minus expected. Negative means short.
         variance: Money,
+        /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_device_id: Option<DeviceId>,
     },
     /// The drawer opened.
     CashDrawerOpened => "cash.drawer.opened", version = 1 {
@@ -682,6 +692,9 @@ event_catalogue! {
         standalone: bool,
         /// Why, for a standalone opening.
         reason_code_id: Option<ReasonCodeId>,
+        /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_device_id: Option<DeviceId>,
     },
     /// Cash was added to the drawer.
     CashDrawerPaidIn => "cash.drawer.paid_in", version = 1 {
@@ -689,6 +702,9 @@ event_catalogue! {
         amount: Money,
         /// Why.
         reason_code_id: ReasonCodeId,
+        /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_device_id: Option<DeviceId>,
     },
     /// Cash was removed from the drawer.
     CashDrawerPaidOut => "cash.drawer.paid_out", version = 1 {
@@ -696,6 +712,9 @@ event_catalogue! {
         amount: Money,
         /// Why.
         reason_code_id: ReasonCodeId,
+        /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_device_id: Option<DeviceId>,
     },
 
     // ------------------------------------------------------------ inventory
@@ -1547,5 +1566,139 @@ mod tests {
                 assert_eq!(check_field_name(&key), Ok(()), "{key}");
             }
         }
+    }
+
+    /// Writes `payload` as a store with one drawer does and `named` as a till with its own will,
+    /// and reads both back: the first is `before` exactly, and the till only adds its own field.
+    fn names_its_till_only_when_it_has_one<P>(payload: &P, named: &P, till: DeviceId, before: &str)
+    where
+        P: serde::Serialize + serde::de::DeserializeOwned + PartialEq + core::fmt::Debug,
+    {
+        let written = RawPayload::encode(payload).expect("encodes");
+        assert_eq!(
+            written.as_json(),
+            before,
+            "the store's drawer writes today's bytes"
+        );
+        assert_eq!(
+            &written.decode::<P>().expect("today's bytes decode"),
+            payload
+        );
+
+        let written = RawPayload::encode(named).expect("encodes");
+        let object = before.strip_suffix('}').expect("a payload is an object");
+        assert_eq!(
+            written.as_json(),
+            format!(r#"{object},"terminal_device_id":"{till}"}}"#)
+        );
+        assert_eq!(&written.decode::<P>().expect("decodes"), named);
+    }
+
+    #[test]
+    fn a_cash_event_that_names_no_till_writes_the_bytes_it_always_did() {
+        // ADR-0167 decision 5. Each literal is what this crate wrote before the field existed,
+        // captured from the release before it, so a store with one drawer keeps writing the same
+        // log, the same chain and the same checksums.
+        use super::{
+            CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftOpened,
+        };
+        use crate::ids::{ReasonCodeId, ShiftId};
+        use crate::money::{CurrencyCode, Money};
+
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let shift = ShiftId::new(Ulid::from_u128(7));
+        let reason = ReasonCodeId::new(Ulid::from_u128(9));
+        let till = DeviceId::new(Ulid::from_u128(0x7111));
+
+        let opened = CashShiftOpened {
+            opened_shift_id: shift,
+            opening_float: vnd(500_000),
+            terminal_device_id: None,
+        };
+        names_its_till_only_when_it_has_one(
+            &opened,
+            &CashShiftOpened {
+                terminal_device_id: Some(till),
+                ..opened.clone()
+            },
+            till,
+            r#"{"opened_shift_id":"00000000000000000000000007","opening_float":{"currency_code":"VND","amount_minor":500000}}"#,
+        );
+
+        let closed = CashShiftClosed {
+            closed_shift_id: shift,
+            expected_amount: vnd(1_650_000),
+            counted_amount: vnd(1_600_000),
+            variance: vnd(-50_000),
+            terminal_device_id: None,
+        };
+        names_its_till_only_when_it_has_one(
+            &closed,
+            &CashShiftClosed {
+                terminal_device_id: Some(till),
+                ..closed.clone()
+            },
+            till,
+            r#"{"closed_shift_id":"00000000000000000000000007","expected_amount":{"currency_code":"VND","amount_minor":1650000},"counted_amount":{"currency_code":"VND","amount_minor":1600000},"variance":{"currency_code":"VND","amount_minor":-50000}}"#,
+        );
+
+        for (opening, before) in [
+            (
+                CashDrawerOpened {
+                    standalone: true,
+                    reason_code_id: Some(reason),
+                    terminal_device_id: None,
+                },
+                r#"{"standalone":true,"reason_code_id":"00000000000000000000000009"}"#,
+            ),
+            (
+                CashDrawerOpened {
+                    standalone: false,
+                    reason_code_id: None,
+                    terminal_device_id: None,
+                },
+                r#"{"standalone":false,"reason_code_id":null}"#,
+            ),
+        ] {
+            names_its_till_only_when_it_has_one(
+                &opening,
+                &CashDrawerOpened {
+                    terminal_device_id: Some(till),
+                    ..opening.clone()
+                },
+                till,
+                before,
+            );
+        }
+
+        let paid_in = CashDrawerPaidIn {
+            amount: vnd(200_000),
+            reason_code_id: reason,
+            terminal_device_id: None,
+        };
+        names_its_till_only_when_it_has_one(
+            &paid_in,
+            &CashDrawerPaidIn {
+                terminal_device_id: Some(till),
+                ..paid_in.clone()
+            },
+            till,
+            r#"{"amount":{"currency_code":"VND","amount_minor":200000},"reason_code_id":"00000000000000000000000009"}"#,
+        );
+
+        let paid_out = CashDrawerPaidOut {
+            amount: vnd(50_000),
+            reason_code_id: reason,
+            terminal_device_id: None,
+        };
+        names_its_till_only_when_it_has_one(
+            &paid_out,
+            &CashDrawerPaidOut {
+                terminal_device_id: Some(till),
+                ..paid_out.clone()
+            },
+            till,
+            r#"{"amount":{"currency_code":"VND","amount_minor":50000},"reason_code_id":"00000000000000000000000009"}"#,
+        );
     }
 }

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{DeviceId, StationId};
 use crate::printing::{ReceiptLanguage, ReceiptSecondLanguage};
+use crate::shift::OPENING_FLOAT_MINOR;
 use crate::text::DisplayName;
 use crate::wire_enum;
 use crate::wire_enum::{Open, is_absent};
@@ -222,6 +223,15 @@ pub struct PublishedDevice {
     /// through [`PublishedDevice::receipt_second_language`]. Left off the wire while absent.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub receipt_second_language: Open<ReceiptSecondLanguage>,
+    /// On a [`DeviceKind::Terminal`], the float this till's drawer opens with by default, in the
+    /// store currency's minor unit
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4), within
+    /// `shift.opening_float_minor`'s bounds. Read it through
+    /// [`PublishedDevice::opening_float_minor`]. **Absent means the store's**
+    /// `shift.opening_float_minor`, and is left off the wire, so a node that sets none is written
+    /// as before and an edge that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening_float_minor: Option<i64>,
 }
 
 impl PublishedDevice {
@@ -262,6 +272,14 @@ impl PublishedDevice {
     pub fn receipt_second_language(&self) -> Option<ReceiptSecondLanguage> {
         Some(self.receipt_second_language.known())
             .filter(|known| *known != ReceiptSecondLanguage::Unspecified)
+    }
+
+    /// The float this till's drawer opens with by default, or `None` for the store's: absent, and a
+    /// number outside [`OPENING_FLOAT_MINOR`], are the store's.
+    #[must_use]
+    pub fn opening_float_minor(&self) -> Option<i64> {
+        self.opening_float_minor
+            .filter(|minor| OPENING_FLOAT_MINOR.contains(minor))
     }
 }
 
@@ -318,6 +336,7 @@ mod tests {
             receipt_printer_id: None,
             receipt_language: Open::default(),
             receipt_second_language: Open::default(),
+            opening_float_minor: None,
         }
     }
 
@@ -606,5 +625,36 @@ mod tests {
         assert!(absent.is_empty());
         let empty: PublishedDevices = serde_json::from_str(r#"{"devices":[]}"#).expect("empty");
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn a_till_may_name_its_own_float_and_one_that_names_none_is_written_as_before() {
+        // ADR-0167 decision 4: within the store's bounds, and the store's float without it.
+        let json = serde_json::to_string(&PublishedDevices::new(vec![device(None)])).expect("json");
+        assert!(
+            !json.contains("opening_float_minor"),
+            "a till that names no float is written as before: {json}"
+        );
+        for (published, read) in [
+            ("500000", Some(500_000)),
+            ("0", Some(0)),
+            ("1000000000", Some(1_000_000_000)),
+            ("1000000001", None),
+            ("-1", None),
+        ] {
+            let raw = format!(
+                r#"{{"devices":[{{"device_id":"00000000000000000000000007",
+                    "kind":"DEVICE_KIND_TERMINAL","connection":"DEVICE_CONNECTION_UNSPECIFIED",
+                    "address":"","name":"Bar till","opening_float_minor":{published}}}]}}"#
+            );
+            let node: PublishedDevices = serde_json::from_str(&raw).expect("the node parses");
+            let till = node.devices().first().expect("the terminal");
+            assert_eq!(till.opening_float_minor(), read, "{published}");
+            let json = serde_json::to_string(&node).expect("json");
+            assert!(
+                json.ends_with(&format!(r#""opening_float_minor":{published}}}]}}"#)),
+                "a float goes back out as it came: {json}"
+            );
+        }
     }
 }
