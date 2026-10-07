@@ -84,6 +84,27 @@ const NO_SHIFT_SELLING = {
   since: "0.14.1",
 };
 
+/**
+ * How many drawers a store keeps (ADR-0167): a store on an older release ignores it and keeps its one
+ * drawer, so the console marks it as it marks every setting newer than a store (decision 7).
+ */
+const DRAWER_MODEL = {
+  setting_key: "shift.drawer_model",
+  node: "shift",
+  field: "drawer_model",
+  kind: "SETTING_KIND_CHOICE",
+  values: ["DRAWER_MODEL_PER_STORE", "DRAWER_MODEL_PER_TERMINAL"],
+  default: "DRAWER_MODEL_PER_STORE",
+  preset: "DRAWER_MODEL_PER_TERMINAL",
+  scopes: [
+    "SETTING_SCOPE_TENANT",
+    "SETTING_SCOPE_BRAND",
+    "SETTING_SCOPE_STORE_GROUP",
+    "SETTING_SCOPE_STORE",
+  ],
+  since: "0.14.1",
+};
+
 /** A setting from a newer cloud, which this console ships no translation for. */
 const UNTRANSLATED = {
   setting_key: "printing.receipt_on_settle",
@@ -291,6 +312,46 @@ describe("shared settings", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("1 of 3 stores here has not reported which release it runs.")).toBeTruthy();
+  });
+
+  it("offers a drawer per till in its own words, and counts the stores that would keep one drawer", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_MODEL]);
+    effectiveSettings.mockResolvedValue([
+      { setting_key: DRAWER_MODEL.setting_key, value: "DRAWER_MODEL_PER_STORE" },
+    ]);
+    await mount();
+    expect(await screen.findByText("Cash drawers")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Default: One drawer for the store · New stores: A drawer for each till · Honoured from release 0.14.1",
+      ),
+    ).toBeTruthy();
+    expect(optionLabels(control("Value for every store"))).toEqual([
+      "Not set here",
+      "One drawer for the store",
+      "A drawer for each till",
+    ]);
+    // The store on 0.14.0 ignores the value and keeps its one drawer until it updates.
+    expect(
+      screen.getByText(
+        "1 of 3 stores here runs a release older than 0.14.1 and ignores this until it updates.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("hides a drawer per till from a store too old to keep one, and says why", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_MODEL]);
+    effectiveSettings.mockResolvedValue([
+      { setting_key: DRAWER_MODEL.setting_key, value: "DRAWER_MODEL_PER_STORE" },
+    ]);
+    selectStore(BEHIND.store_id, BEHIND.name);
+    await mount();
+    expect(
+      await screen.findByText(
+        "Cash drawers is hidden for Xuân Thủy: it runs release 0.14.0, and this setting is honoured from 0.14.1.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Cash drawers" })).toBeNull();
   });
 
   it("hides nothing when the fleet cannot be read, and says the releases are unknown", async () => {

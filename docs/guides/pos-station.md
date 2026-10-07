@@ -135,6 +135,12 @@ so only for a printer it reaches over USB that the console marks **Cash drawer a
 refuses any other kick unwritten. An agent from before this release says nothing and is sent no
 kick, and its till says to open the drawer with its key.
 
+Where the store keeps a drawer per till (`shift.drawer_model`, which a store the console creates is
+given), the binding also decides whose drawer the cash goes into: the computer's cash goes into its
+till's drawer, which springs at the receipt printer the console names for that terminal, and a
+computer bound to no till takes cards but no cash. So bind each till before the store opens, and
+mark the drawer on its receipt printer.
+
 ## Security
 
 - **Remote pages get no commands.** `capabilities/local-pages.json` grants the four commands

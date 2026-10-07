@@ -32854,6 +32854,7 @@ async fn a_new_store_is_given_the_owners_values_once() {
         json_body(applied).await["applied"],
         serde_json::json!([
             NO_SHIFT_SELLING,
+            "shift.drawer_model",
             "session.idle_lock_seconds",
             "permissions.enforced",
             "printing.receipt_language",
@@ -32864,6 +32865,14 @@ async fn a_new_store_is_given_the_owners_values_once() {
         tenant_layer_shift(&config_trees, third).await.as_deref(),
         Some("NO_SHIFT_SELLING_REFUSE"),
         "a new store refuses to sell with no shift open (the owner, 2026-09-30)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "shift").await,
+        Some(serde_json::json!({
+            "no_shift_selling": "NO_SHIFT_SELLING_REFUSE",
+            "drawer_model": "DRAWER_MODEL_PER_TERMINAL",
+        })),
+        "a new store keeps a drawer for each till (the owner, 2026-10-01; ADR-0167 decision 1)"
     );
     assert_eq!(
         tenant_layer_session(&config_trees, third).await,
@@ -33139,6 +33148,69 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     assert_eq!(
         tenant_layer_node(&config_trees, first, "printing").await,
         Some(serde_json::json!({ "receipt_printed_on_settle": false, "font_size_dots": 32 }))
+    );
+}
+
+/// `shift.drawer_model` (ADR-0167 decisions 1 and 7) is offered from the release that ships the
+/// till's screens for a drawer per till, with a drawer per till for a new store, and a store's value
+/// reaches its `shift` node.
+#[tokio::test]
+async fn the_drawer_model_is_offered_from_its_release_with_a_drawer_per_till_for_a_new_store() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    let catalogue = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let model = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "shift.drawer_model")
+        .cloned()
+        .expect("the setting is listed");
+    assert_eq!(model["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(
+        model["default"], "DRAWER_MODEL_PER_STORE",
+        "a store that sets nothing keeps its one drawer"
+    );
+    assert_eq!(
+        model["preset"], "DRAWER_MODEL_PER_TERMINAL",
+        "a new store keeps a drawer for each till"
+    );
+    assert_eq!(
+        model["values"],
+        serde_json::json!(["DRAWER_MODEL_PER_STORE", "DRAWER_MODEL_PER_TERMINAL"])
+    );
+    assert_eq!(
+        model["since"], "0.14.1",
+        "a store on an older release is not offered it, and keeps one drawer"
+    );
+
+    let written = router
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "shift.drawer_model",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "DRAWER_MODEL_PER_TERMINAL",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert_eq!(
+        tenant_layer_node(&config_trees, first, "shift").await,
+        Some(serde_json::json!({ "drawer_model": "DRAWER_MODEL_PER_TERMINAL" }))
     );
 }
 

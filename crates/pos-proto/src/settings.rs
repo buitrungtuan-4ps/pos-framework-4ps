@@ -29,7 +29,7 @@ use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
-use crate::shift::{self, CloseReport, DrawerDayEnd, NoShiftSelling, PublishedShift};
+use crate::shift::{self, CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
 use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
@@ -319,6 +319,24 @@ pub fn register() -> Vec<Setting> {
                       cashier counts first. Off, the Shift screen shows the cash the drawer \
                       should hold beside the count, and the variance still appears only at the \
                       close.",
+        },
+        Setting {
+            node: PublishedShift::NODE,
+            field: "drawer_model",
+            shape: SettingShape::Choice {
+                values: choices::<DrawerModel>(),
+                default: PublishedShift::default().drawer_model().as_wire(),
+                // Chosen by the owner on 2026-10-01 (ADR-0167 decision 1): a new store keeps a
+                // drawer for each till, and an existing one keeps its one drawer until it is set.
+                preset: Some(DrawerModel::PerTerminal.as_wire()),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "How many cash drawers the store keeps. `DRAWER_MODEL_PER_STORE` keeps one, \
+                      every till's, as before. `DRAWER_MODEL_PER_TERMINAL` keeps a drawer for each \
+                      till, each started, counted and closed on its own: cash is taken only at a \
+                      device bound to a till, and each till's drawer springs at the receipt \
+                      printer its terminal names. A change waits until no drawer is open.",
         },
         Setting {
             node: PublishedShift::NODE,
@@ -1196,6 +1214,7 @@ mod tests {
                     "no_shift_selling" => Some(json!(shift.no_shift_selling().as_wire())),
                     "opening_float_minor" => Some(json!(shift.opening_float_minor())),
                     "blind_close" => Some(json!(shift.blind_close())),
+                    "drawer_model" => Some(json!(shift.drawer_model().as_wire())),
                     "close_report" => Some(json!(shift.close_report().as_wire())),
                     "drawer_day_end" => Some(json!(shift.drawer_day_end().as_wire())),
                     _ => None,

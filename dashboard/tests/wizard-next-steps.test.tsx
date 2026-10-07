@@ -22,13 +22,20 @@ const STORE = "01M2219QK4T3W6Z0Y8FBQ2X5MV";
 /** The store in context *before* the wizard ran — the one the links must not point at. */
 const OTHER_STORE = "01M221A7XN6R4H9V2C0KDPJ8ZE";
 
-function mountNextSteps(store = STORE) {
+function mountNextSteps(store = STORE, applied?: readonly string[]) {
   render(() => (
     <MemoryRouter>
-      <Route path="/" component={() => <NextSteps tenant={TENANT} store={store} />} />
+      <Route
+        path="/"
+        component={() => <NextSteps tenant={TENANT} store={store} applied={applied} />}
+      />
     </MemoryRouter>
   ));
 }
+
+/** What a store given a drawer for each till needs before it takes cash (ADR-0167). */
+const DRAWERS =
+  "This store keeps a drawer for each till. Before it takes cash, give each terminal its receipt printer with its cash drawer marked, under Devices, and bind each till to its terminal on the till's Devices screen.";
 
 afterEach(cleanup);
 
@@ -63,6 +70,21 @@ describe("the wizard's closing step", () => {
     ]) {
       expect(screen.getByRole("link", { name }).getAttribute("href")).toContain(OTHER_STORE);
     }
+  });
+
+  // A device bound to no till takes no cash, and a drawer at a printer nobody marked does not open,
+  // so a store the new-store values give a drawer for each till is told what it needs, and only it.
+  it("says what a drawer for each till needs where the new-store values gave the store one", () => {
+    mountNextSteps(STORE, ["shift.no_shift_selling", "shift.drawer_model"]);
+    expect(screen.getByText(DRAWERS)).toBeTruthy();
+  });
+
+  it("says nothing about drawers where the new-store values gave none", () => {
+    mountNextSteps(STORE, ["shift.no_shift_selling"]);
+    expect(screen.queryByText(DRAWERS)).toBeNull();
+    cleanup();
+    mountNextSteps();
+    expect(screen.queryByText(DRAWERS)).toBeNull();
   });
 
   it("offers both steps and nothing else, so neither is the one an operator misses", () => {
