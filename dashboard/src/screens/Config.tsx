@@ -18,7 +18,7 @@
 // A preset that turns on none of the offered switches, as Retail names only barcode entry, is not
 // offered either: it would only turn every switch off.
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
@@ -166,13 +166,18 @@ export function Config() {
       (flag) => flag.key !== QR_ORDERING_SWITCH && flag.offered !== false,
     );
   /**
-   * Whether the form offers `preset`: it turns on at least one switch the form offers. A preset that
+   * The presets the form offers: those that turn on at least one switch the form offers. A preset that
    * names none, as Retail names only barcode entry, would only turn every switch off.
+   *
+   * Memoized using createMemo to avoid allocating a new Set and re-filtering flags for every preset
+   * on every render / evaluation cycle.
    */
-  const presetOffered = (preset: CapabilityPreset): boolean => {
+  const offeredPresets = createMemo(() => {
     const offered = new Set(formFlags().map((flag) => flag.key));
-    return preset.keys.some((key) => offered.has(key));
-  };
+    return (catalogue()?.presets ?? []).filter((preset) =>
+      preset.keys.some((key) => offered.has(key)),
+    );
+  });
   /**
    * Whether a publish now also turns the store's stored pay-first off.
    *
@@ -437,14 +442,14 @@ export function Config() {
       <PageHeader title={t("config.title")} description={t("config.description")} />
       <RequireContext need="store">
         <Show when={catalogue()}>
-          {(cat) => (
+          {(_cat) => (
             <div class="mb-6">
               <Card
                 title={t("config.capabilities.title")}
                 actions={
                   <div class="flex flex-wrap items-center gap-2">
                     <span class="text-sm text-ink-muted">{t("config.capabilities.presets")}</span>
-                    <For each={cat().presets.filter(presetOffered)}>
+                    <For each={offeredPresets()}>
                       {(preset) => {
                         const key = PRESET_KEY[preset.id];
                         return (

@@ -1,3 +1,9 @@
+## 2026-10-03 - Memoizing Offered Presets Calculation in Config Screen
+
+**Learning:** Filtering arrays directly in SolidJS JSX props (e.g. `<For each={cat().presets.filter(presetOffered)}>`) where the filter predicate function instantiates data structures like `new Set(...)` internally causes repeated $O(P \times F)$ set allocations and array transformations on every render evaluation pass. Pre-building the filtered array using `createMemo` hoists the `Set` creation and filtering logic to run only when the underlying resource changes.
+
+**Action:** Avoid passing functions that create temporary collections or perform nested array mapping directly into array filter predicates in SolidJS JSX props; extract the computation into `createMemo`.
+
 ## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
 
 **Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.
