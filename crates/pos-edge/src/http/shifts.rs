@@ -32,6 +32,7 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::business_date::StoreTimeZone;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
@@ -44,6 +45,7 @@ use pos_proto::time::Timestamp;
 use crate::app::{
     AppError, Approval, CashMovement, DrawersView, Edge, EdgeSession, ShiftView, TillScope,
 };
+use crate::http::counter::wall_clock;
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers, TillPrinting, published_terminals};
 
@@ -241,7 +243,11 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     match till_scope(&edge, printers.as_deref(), actor, None).await {
-        Ok(scope) => Json(DrawersResponse::from(edge.drawers(actor, scope))).into_response(),
+        Ok(scope) => Json(DrawersResponse::of(
+            edge.drawers(actor, scope),
+            &edge.session().timezone,
+        ))
+        .into_response(),
         Err(error) => error_response(&error),
     }
 }
@@ -271,12 +277,17 @@ struct DrawerResponse {
     default_float: Money,
     #[serde(skip_serializing_if = "Option::is_none")]
     opened_time: Option<Timestamp>,
+    /// The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, for the till to
+    /// show as it is: a till's own clock may keep another zone. Absent while the drawer is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened_clock: Option<String>,
     /// Its shift, `null` while the drawer is closed.
     shift: Option<ShiftResponse>,
 }
 
-impl From<DrawersView> for DrawersResponse {
-    fn from(view: DrawersView) -> Self {
+impl DrawersResponse {
+    /// What `GET /api/shifts` answers for `view`, each opening on the wall clock of `zone`.
+    fn of(view: DrawersView, zone: &StoreTimeZone) -> Self {
         Self {
             drawer_model: view.model.as_wire(),
             waiting_drawer_model: view.waiting.map(DrawerModel::as_wire),
@@ -289,6 +300,9 @@ impl From<DrawersView> for DrawersResponse {
                     name: drawer.name,
                     default_float: drawer.default_float,
                     opened_time: drawer.opened_time,
+                    opened_clock: drawer
+                        .opened_time
+                        .and_then(|opened| wall_clock(opened, zone)),
                     shift: drawer.shift.map(ShiftResponse::from),
                 })
                 .collect(),

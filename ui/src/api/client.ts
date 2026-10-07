@@ -11,6 +11,9 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
+  ApproverRequest,
+  BatchCloseRequest,
+  BatchCloseResponse,
   BindResponse,
   ClaimStatus,
   BillResponse,
@@ -436,8 +439,13 @@ export const api = {
     request<void>("POST", "/api/print/agent/revoke", { agent_device_id: agentDeviceId }),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
-  closeShift: (shiftId: string) =>
-    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`),
+  // No body unless an approver is sent, as every close sent before another till's drawer could be
+  // closed.
+  closeShift: (shiftId: string, approval?: ApproverRequest) =>
+    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`, approval),
+  // Several counted drawers in one act, every one or none (ADR-0167 decision 10).
+  batchCloseShifts: (close: BatchCloseRequest) =>
+    request<BatchCloseResponse>("POST", "/api/shifts:batch_close", close),
   // Cash paid in or out of the drawer outside a sale, and the drawer opened without one (ADR-0165).
   paidIn: (shiftId: string, movement: CashMovementRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/paid-in`, movement),

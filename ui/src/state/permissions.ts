@@ -36,6 +36,7 @@ export type PermissionId =
   | "cash.drawer.open_no_sale"
   | "cash.movement.record"
   | "cash.shift.close"
+  | "cash.shift.manage_other_till"
   | "cash.shift.open"
   | "reports.takings.view"
   | "sales.item.mark_unavailable"
@@ -48,15 +49,17 @@ export type PermissionId =
   | "sales.ticket.bump";
 
 // The acts that take another person's approval today: voiding a fired line or a bill, a discount
-// above the ceiling, waiving a fee, and opening the drawer without a sale (`docs/pos-spec.md` §9).
-// Any other permission the edge accepts only when held directly, so holding one of those with
-// approval lets the person do nothing at this till.
+// above the ceiling, waiving a fee, opening the drawer without a sale, and starting, counting or
+// closing another till's drawer (`docs/pos-spec.md` §9, ADR-0167 decision 3). Any other permission
+// the edge accepts only when held directly, so holding one of those with approval lets the person
+// do nothing at this till.
 const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
   "sales.line.void_fired",
   "billing.bill.void",
   "billing.discount.override_ceiling",
   "billing.fee.waive",
   "cash.drawer.open_no_sale",
+  "cash.shift.manage_other_till",
 ]);
 
 interface Held {

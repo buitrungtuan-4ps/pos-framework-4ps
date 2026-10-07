@@ -27,6 +27,12 @@
 //   example, naming why. The harness asserts the set it skips is exactly this set, so coverage
 //   cannot quietly shrink.
 
+// Why the browser gate's walk skips the drawer-per-till flows: it boots the example's one-drawer
+// store, and these need the `drawers` store, a device a manager has bound to a till on the Devices
+// screen, and a manager's code and PIN typed between the taps. Dedicated replays run each there.
+const DRAWERS_REPLAYED_APART =
+  "the walk boots a store with one drawer, and these need the `drawers` store, a device bound to a till, and a manager's badge and PIN typed between the taps; dedicated replays below run them";
+
 export const TASKS = [
   {
     task: "Seat a table and start its order",
@@ -429,6 +435,54 @@ export const TASKS = [
     budget: 3,
     steps: [{ route: "/shift", action: "closeShift" }],
     outcome: { route: "/shift", mark: "shift-closed" },
+  },
+  // Every till's drawer, where the store keeps one per till (ADR-0167 decision 3). Rare, a manager's
+  // acts at either end of the day, so three taps each.
+  {
+    task: "Start another till's drawer",
+    budget: 3,
+    note: "Pick the bar's drawer in the list of every till's drawer, then **Start**: its float is filled in with that till's own, which may be changed first. A manager's code and PIN are typed between the two taps where the person holds `cash.shift.manage_other_till` only with approval, as the no-sale asks for one; the PIN is the control, not a step to remove.",
+    steps: [
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "startDrawers" },
+    ],
+    outcome: { route: "/shift", mark: "drawers-started" },
+    unreplayable: DRAWERS_REPLAYED_APART,
+  },
+  {
+    task: "Start two tills' drawers at once",
+    budget: 3,
+    note: "A pick for each drawer, then **Start**: three for two, at the ceiling, and a pick more for each further till. Each starts on its own till's float, one request each so the edge records each start, and the first refusal stops the rest.",
+    steps: [
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "startDrawers" },
+    ],
+    outcome: { route: "/shift", mark: "drawers-started" },
+    unreplayable: DRAWERS_REPLAYED_APART,
+  },
+  {
+    task: "Count another till's drawer, blind",
+    budget: 3,
+    note: "Pick the open drawer, type what it holds, **Enter count**: one drawer at a time, and as blind as a till's own count, so nothing it should hold is on screen unless the store has turned the blind close off.",
+    steps: [
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "countDrawer" },
+    ],
+    outcome: { route: "/shift", mark: "drawer-counted" },
+    unreplayable: DRAWERS_REPLAYED_APART,
+  },
+  {
+    task: "Close two counted drawers together",
+    budget: 3,
+    note: "A pick for each counted drawer, then **Close**: one act, every drawer or none, under one approver, and each drawer's figures shown after (ADR-0167 decision 10). Three for two, at the ceiling. One drawer is the same with one pick, and closes on its own, as a till's own close does.",
+    steps: [
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "closeDrawers" },
+    ],
+    outcome: { route: "/shift", mark: "drawers-closed" },
+    unreplayable: DRAWERS_REPLAYED_APART,
   },
   {
     task: "Sign in on a paired device",

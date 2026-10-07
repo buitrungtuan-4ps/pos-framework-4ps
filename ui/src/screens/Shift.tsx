@@ -3,11 +3,13 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
-import type { DrawerOutcome } from "../api/types";
+import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { money, type Money } from "../lib/money";
 import {
+  closeDrawerShifts,
   closeShift,
+  countDrawerShift,
   countShift,
   currencyExponent,
   drawerPerTill,
@@ -15,6 +17,7 @@ import {
   loadDrawers,
   loadShift,
   openDrawerNoSale,
+  openDrawerShift,
   openShift,
   ownTill,
   parseAmount,
@@ -51,6 +54,36 @@ function drawerKey(outcome: DrawerOutcome): MessageKey {
 // cash reads as it always did.
 const nonZero = (amount: Money | undefined) => amount !== undefined && amount.amount_minor !== 0;
 
+// The refusals an act on a drawer in the list words for itself (ADR-0167): the till's one sentence
+// for each speaks of a table or of this device, where it is the drawer picked that changed.
+const DRAWER_REASONS: Readonly<Record<string, MessageKey>> = {
+  TRANSITION_REFUSED: "error.drawer_changed",
+  SHIFT_ALREADY_OPEN: "error.drawer_already_open",
+  NOT_A_TILL: "error.drawer_not_a_till",
+};
+
+// Where a drawer in the list stands: closed, its shift open, or counted and waiting to close.
+type DrawerPhase = "closed" | "open" | "counted";
+
+function drawerPhase(drawer: DrawerEntry): DrawerPhase {
+  if (drawer.shift === null) {
+    return "closed";
+  }
+  return drawer.shift.state === "SHIFT_STATE_COUNTED" ? "counted" : "open";
+}
+
+// A drawer's handle in the list: its till. The store's one drawer has none, and is never listed.
+const tillKey = (drawer: DrawerEntry) => drawer.terminal_device_id ?? "";
+
+// A drawer's till by name, or one the store no longer lists, whose shift is still open.
+const drawerName = (drawer: DrawerEntry) => drawer.name ?? t("shift.drawer_unlisted");
+
+// What a drawer closed from the list came to, by its till's name.
+interface ClosedDrawer {
+  name: string;
+  shift: ShiftResponse;
+}
+
 // The cash shift: open with a float, pay cash in and out, enter the blind count (the screen shows
 // nothing about what is expected), then close to reveal the variance. The blindness is the control
 // — counting before the expectation is shown (§11.1) — so the count field never sits beside an
@@ -61,9 +94,12 @@ const nonZero = (amount: Money | undefined) => amount !== undefined && amount.am
 // in the float, which the cashier may change before opening. `shift.blind_close` off has the edge
 // send what the drawer should hold, and then, and only then, the count field shows it.
 //
-// Where the store keeps a drawer per till (ADR-0167), all of that is this till's own drawer, on its
-// till's own float. A device that is no till says so and offers no drawer of its own. What the
-// store waits to change to, and a drawer open past its business day, are said wherever they apply.
+// Where the store keeps a drawer per till (ADR-0167), all of that is this till's own drawer, which
+// comes first, on its till's own float. A device that is no till says so and offers no drawer of
+// its own. Below it, for a person who may act on another till's drawer, every till's drawer: start
+// one or several, count one, and close one or several together, each with a manager's code and PIN
+// where the person needs one. What the store waits to change to, and a drawer open past its
+// business day, are said wherever they apply.
 export function Shift() {
   const [amount, setAmount] = createSignal("");
   // The float field holds the store's float until the cashier types, and what they typed from then
@@ -97,6 +133,9 @@ export function Shift() {
   };
   // A device that is no till has no drawer of its own (decision 6).
   const noTill = () => drawerPerTill() && ownTill() === undefined;
+  // Every till's drawer, for a person who may act on another till's, directly or with a manager's
+  // approval (decision 3; ADR-0158 decision 6, the till hides what a person cannot do).
+  const listShown = () => drawerPerTill() && can("cash.shift.manage_other_till");
   // The model the store has published while a drawer still open keeps the other (decision 8).
   const waiting = () => state.drawers?.waiting_drawer_model;
 
@@ -211,8 +250,199 @@ export function Shift() {
   };
   const drawerReason = (reasonCodeId: string) => void openDrawer(reasonCodeId);
 
+  // ---- every till's drawer (ADR-0167 decision 3) ----
+  //
+  // Which drawers are picked, the float or count typed for one, the approver for another till's,
+  // and what the last act on them came to.
+  const [picked, setPicked] = createSignal<readonly string[]>([]);
+  const [listAmount, setListAmount] = createSignal("");
+  const [listFloatTyped, setListFloatTyped] = createSignal(false);
+  const [listCode, setListCode] = createSignal("");
+  const [listPin, setListPin] = createSignal("");
+  const [listBusy, setListBusy] = createSignal(false);
+  const [listError, setListError] = createSignal<string | null>(null);
+  const [startedDrawers, setStartedDrawers] = createSignal<{
+    started: string[];
+    missed: string[];
+    refusal: string | null;
+  } | null>(null);
+  const [countedDrawer, setCountedDrawer] = createSignal<string | null>(null);
+  const [closedDrawers, setClosedDrawers] = createSignal<{
+    drawers: ClosedDrawer[];
+    slip?: string;
+  } | null>(null);
+
+  // The drawers picked, as the list reads now, all in one state: what the list offers is what that
+  // state allows. A drawer the list no longer has, or one that moved on, drops out.
+  const pickedDrawers = () => {
+    const chosen = drawers().filter((drawer) => picked().includes(tillKey(drawer)));
+    const [first] = chosen;
+    return first === undefined
+      ? []
+      : chosen.filter((drawer) => drawerPhase(drawer) === drawerPhase(first));
+  };
+  const pickedPhase = (): DrawerPhase | null => {
+    const [first] = pickedDrawers();
+    return first === undefined ? null : drawerPhase(first);
+  };
+
+  // Another till's drawer also takes `cash.shift.manage_other_till`, which a person may hold only
+  // with a manager's approval: their code and PIN, for this one act, dropped after it.
+  const listAsks = () =>
+    pickedDrawers().some((drawer) => drawer.terminal_device_id !== ownTill()) &&
+    asksApprover("cash.shift.manage_other_till");
+  const listApproval = (): ApproverRequest | undefined =>
+    listAsks() ? { approver_code: listCode(), approver_pin: listPin() } : undefined;
+  const listReady = () =>
+    !listBusy() && (!listAsks() || (listCode().trim() !== "" && listPin().trim() !== ""));
+
+  // One drawer picked to start fills in its own float, which the person may change; several start
+  // each on its own.
+  const listFloatText = () => {
+    const [only] = pickedDrawers();
+    return listFloatTyped() || only === undefined
+      ? listAmount()
+      : wholeUnits(only.default_float.amount_minor);
+  };
+  const typeListFloat = (text: string) => {
+    setListFloatTyped(true);
+    setListAmount(text);
+  };
+  const startReady = () =>
+    listReady() && (pickedDrawers().length > 1 || parseAmount(listFloatText()) !== null);
+
+  // A figure a close answered, or nothing where it answered none.
+  const amountOf = (amount: Money | undefined) =>
+    formatAmount(amount ?? money(storeCurrency(), 0));
+  const drawerState = (drawer: DrawerEntry) => {
+    switch (drawerPhase(drawer)) {
+      case "closed":
+        return t("shift.drawer_closed");
+      case "counted":
+        return t("shift.drawer_counted");
+      default:
+        return drawer.opened_clock === undefined
+          ? t("shift.drawer_open")
+          : t("shift.drawer_open_since", { time: drawer.opened_clock });
+    }
+  };
+
+  // A tap picks a drawer, or puts it back. Drawers in one state go together, since they start or
+  // close together; one in another state, or an open one, which is counted alone, picks afresh.
+  const pickDrawer = (drawer: DrawerEntry) => {
+    const key = tillKey(drawer);
+    const current = pickedDrawers();
+    setListError(null);
+    setStartedDrawers(null);
+    setCountedDrawer(null);
+    setClosedDrawers(null);
+    setListAmount("");
+    setListFloatTyped(false);
+    if (current.some((chosen) => tillKey(chosen) === key)) {
+      setPicked(current.filter((chosen) => tillKey(chosen) !== key).map(tillKey));
+      return;
+    }
+    const [first] = current;
+    const together =
+      drawerPhase(drawer) !== "open" &&
+      first !== undefined &&
+      drawerPhase(first) === drawerPhase(drawer);
+    setPicked(together ? [...current.map(tillKey), key] : [key]);
+  };
+
+  // Runs one act on the list, and drops the approver after it whatever came of it.
+  const onList = async (act: () => Promise<void>) => {
+    setListBusy(true);
+    setListError(null);
+    try {
+      await act();
+    } catch (caught) {
+      setListError(errorMessage(caught, DRAWER_REASONS));
+    } finally {
+      setListCode("");
+      setListPin("");
+      setListBusy(false);
+    }
+  };
+
+  // Starts each drawer picked, one request each, so the edge records each start, the approver's
+  // code and PIN going with each other till's. The first refusal stops it — a wrong PIN is not tried
+  // again against the lockout — and the screen says which started and which did not.
+  const startDrawers = () =>
+    onList(async () => {
+      const chosen = pickedDrawers();
+      const approval = listApproval();
+      const typed = chosen.length === 1 ? parseAmount(listFloatText()) : null;
+      const started: string[] = [];
+      let missed: DrawerEntry[] = [];
+      let refusal: string | null = null;
+      for (const [index, drawer] of chosen.entries()) {
+        const till = tillKey(drawer);
+        try {
+          await openDrawerShift(
+            till,
+            typed ?? drawer.default_float.amount_minor,
+            till === ownTill() ? undefined : approval,
+          );
+          started.push(drawerName(drawer));
+        } catch (caught) {
+          refusal = errorMessage(caught, DRAWER_REASONS);
+          missed = chosen.slice(index);
+          break;
+        }
+      }
+      setPicked(missed.map(tillKey));
+      setListAmount("");
+      setListFloatTyped(false);
+      setStartedDrawers({ started, missed: missed.map(drawerName), refusal });
+    });
+
+  // The blind count of the one open drawer picked: what it should hold is on screen only where the
+  // read carries it, never worked out here.
+  const countDrawer = () =>
+    onList(async () => {
+      const [drawer] = pickedDrawers();
+      const value = parseAmount(listAmount());
+      if (drawer === undefined || drawer.shift === null || value === null) {
+        return;
+      }
+      await countDrawerShift(drawer.shift.shift_id, value, listApproval());
+      setCountedDrawer(drawerName(drawer));
+      setPicked([]);
+      setListAmount("");
+    });
+
+  // Closes the counted drawers picked: one on its own, or several in one act, every one or none,
+  // under one approver (decision 10). Each drawer's figures come back, with what printed.
+  const closeDrawers = () =>
+    onList(async () => {
+      const names = new Map<string, string>();
+      for (const drawer of pickedDrawers()) {
+        if (drawer.shift !== null) {
+          names.set(drawer.shift.shift_id, drawerName(drawer));
+        }
+      }
+      const closed = await closeDrawerShifts([...names.keys()], listApproval());
+      setClosedDrawers({
+        drawers: closed.shifts.map((closedShift) => ({
+          name: names.get(closedShift.shift_id) ?? "",
+          shift: closedShift,
+        })),
+        slip: closed.slip,
+      });
+      setPicked([]);
+    });
+
   return (
-    <section class="mx-auto max-w-md p-4">
+    <section
+      class="mx-auto max-w-md p-4"
+      classList={{
+        "tablet:grid tablet:max-w-5xl tablet:grid-cols-2 tablet:items-start tablet:gap-6":
+          listShown(),
+      }}
+    >
+      {/* This device's own drawer, and beside it on a tablet every till's (ADR-0167). */}
+      <div>
       <PageHeader title={t("shift.title")} />
 
       <Show when={error()}>
@@ -593,6 +823,208 @@ export function Shift() {
           )}
         </Show>
       </div>
+      </div>
+
+      <Show when={listShown()}>
+        <div class="mt-6 tablet:mt-0" data-outcome="drawers">
+          <h2 class="font-semibold">{t("shift.drawers_title")}</h2>
+          <p class="mt-1 text-sm text-ink-muted">{t("shift.drawers_hint")}</p>
+          <div class="mt-2 grid grid-cols-1 gap-2">
+            <For each={drawers()}>
+              {(drawer) => (
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface p-3 text-left"
+                  classList={{ "border-primary": picked().includes(tillKey(drawer)) }}
+                  aria-pressed={picked().includes(tillKey(drawer))}
+                  data-step="pickDrawer"
+                  onClick={() => pickDrawer(drawer)}
+                >
+                  <span class="flex items-baseline justify-between gap-2">
+                    <span class="font-semibold">{drawerName(drawer)}</span>
+                    <Show when={drawer.terminal_device_id === ownTill()}>
+                      <span class="text-sm text-ink-muted">{t("shift.drawer_this_till")}</span>
+                    </Show>
+                  </span>
+                  <span class="block text-sm text-ink-muted">{drawerState(drawer)}</span>
+                  <span class="block text-sm text-ink-muted tabular-nums">
+                    {t("shift.drawer_float", { amount: formatAmount(drawer.default_float) })}
+                  </span>
+                  {/* Only where the read carries it: never worked out here. */}
+                  <Show when={drawer.shift?.expected_amount}>
+                    {(expected) => (
+                      <span class="block text-sm tabular-nums">
+                        {t("shift.expected_now", { amount: formatAmount(expected()) })}
+                      </span>
+                    )}
+                  </Show>
+                  <Show when={drawer.shift?.day_ended === true}>
+                    <span class="mt-1 block text-sm font-semibold text-danger" data-outcome="drawer-day-ended">
+                      {t("shift.drawer_day_ended")}
+                    </span>
+                  </Show>
+                </button>
+              )}
+            </For>
+          </div>
+
+          <Show when={pickedPhase()}>
+            {(picking) => (
+              <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                <Show when={picking() === "closed" && pickedDrawers().length === 1}>
+                  <label class="block text-sm text-ink-muted" for="drawer-float">
+                    {t("shift.float_label", { currency: storeCurrency() })}
+                  </label>
+                  <input
+                    id="drawer-float"
+                    inputmode="numeric"
+                    class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
+                    value={listFloatText()}
+                    onInput={(event) => typeListFloat(event.currentTarget.value)}
+                  />
+                  <Keypad value={listFloatText()} onChange={typeListFloat} />
+                </Show>
+                <Show when={picking() === "closed" && pickedDrawers().length > 1}>
+                  <p class="text-sm text-ink-muted">{t("shift.drawers_own_floats")}</p>
+                </Show>
+                <Show when={picking() === "open"}>
+                  <label class="block text-sm text-ink-muted" for="drawer-count">
+                    {t("shift.count_label", { currency: storeCurrency() })}
+                  </label>
+                  <input
+                    id="drawer-count"
+                    inputmode="numeric"
+                    class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
+                    value={listAmount()}
+                    onInput={(event) => setListAmount(event.currentTarget.value)}
+                  />
+                  <Keypad value={listAmount()} onChange={setListAmount} />
+                </Show>
+                <Show when={listAsks()}>
+                  <p class="mt-3 text-sm text-ink-muted">{t("shift.other_till_manager")}</p>
+                  <ApproverFields
+                    id="drawer-approver"
+                    code={listCode()}
+                    pin={listPin()}
+                    onCode={setListCode}
+                    onPin={setListPin}
+                    codeLabel={t("shift.approver_code")}
+                    pinLabel={t("shift.approver_pin")}
+                  />
+                </Show>
+                <Show when={picking() === "closed"}>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                    disabled={!startReady()}
+                    data-step="startDrawers"
+                    onClick={() => void startDrawers()}
+                  >
+                    {t("shift.start_drawers", { count: pickedDrawers().length })}
+                  </button>
+                </Show>
+                <Show when={picking() === "open"}>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                    disabled={!listReady() || parseAmount(listAmount()) === null}
+                    data-step="countDrawer"
+                    onClick={() => void countDrawer()}
+                  >
+                    {t("shift.enter_count")}
+                  </button>
+                </Show>
+                <Show when={picking() === "counted"}>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                    disabled={!listReady()}
+                    data-step="closeDrawers"
+                    onClick={() => void closeDrawers()}
+                  >
+                    {t("shift.close_drawers", { count: pickedDrawers().length })}
+                  </button>
+                </Show>
+              </div>
+            )}
+          </Show>
+
+          <Show when={listError()}>
+            {(message) => (
+              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+          <Show when={startedDrawers()}>
+            {(done) => (
+              <div class="mt-3 text-sm" role="status">
+                <Show when={done().started.length > 0}>
+                  <p data-outcome="drawers-started">
+                    {t("shift.drawers_started", { names: done().started.join(", ") })}
+                  </p>
+                </Show>
+                <Show when={done().missed.length > 0}>
+                  <p class="text-danger" data-outcome="drawers-not-started">
+                    {t("shift.drawers_not_started", { names: done().missed.join(", ") })}
+                  </p>
+                </Show>
+                <Show when={done().refusal}>{(refusal) => <p class="text-danger">{refusal()}</p>}</Show>
+              </div>
+            )}
+          </Show>
+          <Show when={countedDrawer()}>
+            {(name) => (
+              <p class="mt-3 text-sm" role="status" data-outcome="drawer-counted">
+                {t("shift.drawer_counted_done", { name: name() })}
+              </p>
+            )}
+          </Show>
+          <Show when={closedDrawers()}>
+            {(done) => (
+              <div class="mt-3 rounded-token border border-line bg-surface p-4" data-outcome="drawers-closed">
+                <p class="font-semibold">{t("shift.drawers_closed", { count: done().drawers.length })}</p>
+                <For each={done().drawers}>
+                  {(closed) => (
+                    <div class="mt-3 tabular-nums" data-outcome="drawer-closed">
+                      <p class="font-semibold">{closed.name}</p>
+                      <p class="text-ink-muted">
+                        {t("shift.drawer_figures", {
+                          expected: amountOf(closed.shift.expected_amount),
+                          counted: amountOf(closed.shift.counted_amount),
+                        })}
+                      </p>
+                      <p
+                        classList={{
+                          "text-danger": (closed.shift.variance?.amount_minor ?? 0) !== 0,
+                          "text-ok": (closed.shift.variance?.amount_minor ?? 0) === 0,
+                        }}
+                      >
+                        {t("shift.variance")} {amountOf(closed.shift.variance)}
+                      </p>
+                      <Show when={closed.shift.shift_report_print}>
+                        {(outcome) => (
+                          <p class="text-sm text-ink-muted" role="status">
+                            {t(printOutcomeKey(outcome(), "shift.report_printed"))}
+                          </p>
+                        )}
+                      </Show>
+                    </div>
+                  )}
+                </For>
+                {/* One slip for them all, where the store's close report combines them. */}
+                <Show when={done().slip}>
+                  {(slip) => (
+                    <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-slip">
+                      {t(printOutcomeKey(slip(), "shift.combined_printed"))}
+                    </p>
+                  )}
+                </Show>
+              </div>
+            )}
+          </Show>
+        </div>
+      </Show>
     </section>
   );
 }

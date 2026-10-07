@@ -132,7 +132,7 @@ struct SettledBillResponse {
 }
 
 /// The wall clock an instant reads in the store's timezone, `HH:MM`.
-fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<String> {
+pub(super) fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<String> {
     let local = local_time(instant, zone).ok()?.to_string();
     local.split_once(' ').map(|(_date, clock)| clock.to_owned())
 }
