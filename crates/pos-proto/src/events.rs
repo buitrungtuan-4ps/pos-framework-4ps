@@ -658,6 +658,12 @@ event_catalogue! {
         /// wrote before the field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal_device_id: Option<DeviceId>,
+        /// The person the drawer is, for this session, assigned to, where the store assigns drawers
+        /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9): an id,
+        /// never a name. Absent where drawers are shared, and left off the wire, so a store that
+        /// shares them writes the bytes it wrote before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assigned_employee_id: Option<EmployeeId>,
     },
     /// The cashier entered a counted amount.
     ///
@@ -1824,6 +1830,7 @@ mod tests {
             opened_shift_id: shift,
             opening_float: vnd(500_000),
             terminal_device_id: None,
+            assigned_employee_id: None,
         };
         names_its_till_only_when_it_has_one(
             &opened,
@@ -1956,5 +1963,34 @@ mod tests {
                 closed
             );
         }
+    }
+
+    #[test]
+    fn a_shift_opened_names_its_person_only_where_its_drawer_is_assigned() {
+        // ADR-0167 decision 9: an id, never a name, and nothing at all where drawers are shared, so
+        // the bytes above stay what a store sharing its drawers writes.
+        use super::CashShiftOpened;
+        use crate::ids::{EmployeeId, ShiftId};
+        use crate::money::{CurrencyCode, Money};
+
+        let person = EmployeeId::new(Ulid::from_u128(0xE1));
+        let assigned = CashShiftOpened {
+            opened_shift_id: ShiftId::new(Ulid::from_u128(7)),
+            opening_float: Money::new(CurrencyCode::VND, 500_000),
+            terminal_device_id: None,
+            assigned_employee_id: Some(person),
+        };
+        let written = RawPayload::encode(&assigned).expect("encodes");
+        assert_eq!(
+            written.as_json(),
+            format!(
+                r#"{{"opened_shift_id":"00000000000000000000000007","opening_float":{{"currency_code":"VND","amount_minor":500000}},"assigned_employee_id":"{person}"}}"#
+            )
+        );
+        assert_eq!(
+            written.decode::<CashShiftOpened>().expect("decodes"),
+            assigned
+        );
+        assert_eq!(check_field_name("assigned_employee_id"), Ok(()));
     }
 }

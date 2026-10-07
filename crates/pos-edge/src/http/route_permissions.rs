@@ -79,7 +79,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     ),
     (
         "POST /api/bills/{id}/settle",
-        RouteGate::Person(&[Permission::TakePayment]),
+        RouteGate::Person(&[
+            Permission::TakePayment,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/bills/{id}/split",
@@ -91,7 +94,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     ),
     (
         "POST /api/drawer/open",
-        RouteGate::Person(&[Permission::OpenDrawerNoSale]),
+        RouteGate::Person(&[
+            Permission::OpenDrawerNoSale,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/kds/bump",
@@ -191,23 +197,41 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     ),
     (
         "POST /api/shifts/{id}/close",
-        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
+        RouteGate::Person(&[
+            Permission::CloseShift,
+            Permission::ManageOtherTill,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/shifts/{id}/count",
-        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
+        RouteGate::Person(&[
+            Permission::CloseShift,
+            Permission::ManageOtherTill,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/shifts/{id}/paid-in",
-        RouteGate::Person(&[Permission::RecordCashMovement]),
+        RouteGate::Person(&[
+            Permission::RecordCashMovement,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/shifts/{id}/paid-out",
-        RouteGate::Person(&[Permission::RecordCashMovement]),
+        RouteGate::Person(&[
+            Permission::RecordCashMovement,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/shifts:batch_close",
-        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
+        RouteGate::Person(&[
+            Permission::CloseShift,
+            Permission::ManageOtherTill,
+            Permission::OverrideDrawerAssignment,
+        ]),
     ),
     (
         "POST /api/tables/{id}/bill",
@@ -260,10 +284,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::IssueRefund,
         "refunds are not built yet (ADR-0028)",
-    ),
-    (
-        Permission::OverrideDrawerAssignment,
-        "no drawer belongs to one person yet, so nothing asks for it (ADR-0167 decision 9)",
     ),
     (
         Permission::PerformStocktake,

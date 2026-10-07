@@ -72,7 +72,9 @@ use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
-use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{
+    CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
+};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
@@ -1217,6 +1219,16 @@ pub enum AppError {
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11).
     #[error("this drawer's shift opened on an earlier business day; count and close it first")]
     DrawerDayEnded,
+    /// An act on a drawer assigned, for its session, to somebody other than the person acting, who
+    /// neither holds `cash.drawer.override_assignment` directly nor brought an approver who does
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). Names no
+    /// person.
+    #[error("this drawer is assigned to someone else; a manager can approve this one act")]
+    DrawerAssignedToAnother,
+    /// Another till's drawer started where the store assigns drawers, naming nobody on the store's
+    /// roster to assign it to (ADR-0167 decision 9).
+    #[error("name the person on the store's staff this drawer is for")]
+    AssigneeRequired,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
     /// attaches ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
@@ -1930,6 +1942,9 @@ pub struct ShiftView {
     /// The till whose drawer it counts, or `None` for the store's one drawer
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
     pub till: Option<DeviceId>,
+    /// The person the drawer is assigned to for this session, where the store assigns drawers
+    /// (decision 9): an id, never a name. `None` where drawers are shared.
+    pub owner: Option<EmployeeId>,
     /// Its state after the command.
     pub state: ShiftState,
     /// What the system expected in the drawer: revealed at close, and before it only where the
@@ -2319,6 +2334,9 @@ struct ShiftRecord {
     /// The till whose drawer the shift counts, the `TERMINAL` entry's id, or `None` for the store's
     /// one drawer ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
     till: Option<DeviceId>,
+    /// The person the drawer is assigned to for this session, as its `cash.shift.opened` records,
+    /// where the store assigns drawers (decision 9); `None` where they are shared.
+    owner: Option<EmployeeId>,
     /// When it opened, which the drawers read reports.
     opened_time: Timestamp,
     /// The business date it opened on: once today's is later, its day has ended (ADR-0167
@@ -2340,18 +2358,19 @@ struct ShiftRecord {
 }
 
 impl ShiftRecord {
-    /// A shift as it opens on `till`'s drawer at `opened_time`, on `business_date`: its float, and
-    /// nothing taken, paid in or out, or counted yet, in `currency`.
+    /// A shift as it opens on `till`'s drawer, assigned to `owner`, at `opened_time`, on
+    /// `business_date`: its float, and nothing taken, paid in or out, or counted yet, in `currency`.
     fn opened(
         opening_float: Money,
         currency: CurrencyCode,
-        till: Option<DeviceId>,
+        (till, owner): (Option<DeviceId>, Option<EmployeeId>),
         opened_time: Timestamp,
         business_date: BusinessDate,
     ) -> Self {
         let zero = Money::zero(currency);
         Self {
             till,
+            owner,
             opened_time,
             business_date,
             day_end_warned: None,
@@ -2384,11 +2403,12 @@ fn by_name_and_rate(components: &mut [TaxComponentLine]) {
     });
 }
 
-/// A closed drawer, every figure revealed, with its report and whether to print it.
-fn closed_view(till: Option<DeviceId>, report: ShiftReport, print_shift_report: bool) -> ShiftView {
+/// `record`'s drawer closed, every figure revealed, with its report and whether to print it.
+fn closed_view(record: &ShiftRecord, report: ShiftReport, print_shift_report: bool) -> ShiftView {
     ShiftView {
         shift_id: report.shift_id,
-        till,
+        till: record.till,
+        owner: record.owner,
         state: ShiftState::Closed,
         expected_amount: Some(report.expected_amount),
         counted_amount: Some(report.counted_amount),
@@ -2400,6 +2420,10 @@ fn closed_view(till: Option<DeviceId>, report: ShiftReport, print_shift_report: 
         day_ended: false,
     }
 }
+
+/// Where a settle's cash goes: the drawer, the shift its payments are stamped with, and the approver
+/// of the override cash into a drawer assigned to somebody else took (ADR-0167 decisions 6 and 9).
+type SettleDrawer = (Option<DeviceId>, Option<ShiftId>, Option<EmployeeId>);
 
 /// Whether `device` is a till, a `TERMINAL` entry on the store's `devices` node.
 fn is_till(device: &pos_proto::devices::PublishedDevice) -> bool {
@@ -7089,7 +7113,7 @@ impl<S: EventStore> Edge<S> {
     where
         S: SubjectStore,
     {
-        self.settle_bill_at(actor, TillScope::default(), bill_id, payments, buyer)
+        self.settle_bill_at(actor, TillScope::default(), bill_id, payments, buyer, None)
             .await
     }
 
@@ -7125,16 +7149,26 @@ impl<S: EventStore> Edge<S> {
     /// the cash goes into the drawer of the till `scope` says the device is, and the payments are
     /// stamped with that drawer's shift, which is how a replay puts them back
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). A
-    /// device that is no till takes any other tender, and no cash.
+    /// device that is no till takes any other tender, and no cash. Cash into a drawer assigned to
+    /// somebody else takes the override, held directly or approved for this settle (decision 9);
+    /// any other tender is the sale's, not the drawer's, and takes none.
     ///
     /// # Errors
     ///
     /// [`AppError::NotATill`] for cash at a device that is no till where the store keeps a drawer per
     /// till; [`AppError::OpenShiftRequired`] at a store that refuses selling without a shift, for
     /// cash while the drawer it goes into has none open and for anything else while no drawer has;
+    /// [`AppError::DrawerAssignedToAnother`] and the approval refusals of [`Self::open_shift_at`]
+    /// for cash into somebody else's drawer;
     /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the
     /// bill is not open, the table is not awaiting payment, the payments do not sum to the total, or
     /// a line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one settle: its refusals, totals, receipt number and events, committed in one \
+                  transaction with the buyer's record (ADR-0107); each step is a call already, and \
+                  the override somebody else's drawer takes is one more event in that transaction"
+    )]
     pub async fn settle_bill_at(
         &self,
         actor: Actor,
@@ -7142,14 +7176,16 @@ impl<S: EventStore> Edge<S> {
         bill_id: BillId,
         payments: Vec<Payment>,
         buyer: Option<&BuyerDetails>,
+        approval: Option<&Approval>,
     ) -> Result<BillView, AppError>
     where
         S: SubjectStore,
     {
-        // Before anything is read: a store that refuses selling without a shift takes no money
+        let mut ctx = self.decision_ctx(actor)?;
+        // Before the bill is read: a store that refuses selling without a shift takes no money
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
-        let (drawer, shift) = self.settle_drawer(scope, &payments)?;
-        let ctx = self.decision_ctx(actor)?;
+        let (drawer, shift, overrider) =
+            self.settle_drawer(&mut ctx, scope, &payments, approval)?;
         let bill = self
             .lock_projection()
             .bill(bill_id)
@@ -7237,6 +7273,13 @@ impl<S: EventStore> Edge<S> {
         let (settled_envelope, settled_message) = self.prepare_on(&ctx, &settled, shift)?;
         envelopes.push(settled_envelope);
         messages.push(settled_message);
+        if let Some(approver) = overrider {
+            let overridden =
+                Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
+            let (envelope, message) = self.prepare_on(&ctx, &overridden, shift)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
 
         // The events AND the buyer's record commit in ONE transaction (ADR-0107), which is why this
         // settle drives the transaction itself instead of calling `append_and_publish`.
@@ -7525,7 +7568,7 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         opening_float: Money,
     ) -> Result<ShiftView, AppError> {
-        self.open_shift_at(actor, TillScope::default(), opening_float, None)
+        self.open_shift_at(actor, TillScope::default(), opening_float, None, None)
             .await
     }
 
@@ -7538,19 +7581,29 @@ impl<S: EventStore> Edge<S> {
     /// held directly or approved with a holder's PIN. Subsequent events carry the store's shift's
     /// id until it closes.
     ///
+    /// Where the store assigns drawers (decision 9), the session is the starter's at the drawer's
+    /// own till, and the store's one drawer is too; another till's is `assignee`'s, who must be on
+    /// the store's roster. A manager starting a drawer for somebody else names them, rather than
+    /// answering for cash they will not handle and locking the person who will out of it, so one
+    /// naming nobody is refused. Elsewhere, and where drawers are shared, `assignee` is ignored,
+    /// as a named till is under one drawer.
+    ///
     /// # Errors
     ///
     /// [`AppError::NotATill`] where the store keeps a drawer per till and neither the device nor the
     /// request names one of its tills, [`AppError::ShiftAlreadyOpen`] if that drawer's shift is open,
-    /// [`AppError::Domain`] without `cash.shift.open`, or without `cash.shift.manage_other_till` for
-    /// another till's drawer, [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
-    /// [`AppError::ApproverLockedOut`] for its PIN, or [`AppError`] if the store cannot be written.
+    /// [`AppError::AssigneeRequired`] for another till's drawer under assigned drawers naming nobody
+    /// on the roster, [`AppError::Domain`] without `cash.shift.open`, or without
+    /// `cash.shift.manage_other_till` for another till's drawer, [`AppError::ApprovalRequired`],
+    /// [`AppError::ApprovalRefused`] or [`AppError::ApproverLockedOut`] for its PIN, or
+    /// [`AppError`] if the store cannot be written.
     pub async fn open_shift_at(
         &self,
         actor: Actor,
         scope: TillScope,
         opening_float: Money,
         approval: Option<&Approval>,
+        assignee: Option<EmployeeId>,
     ) -> Result<ShiftView, AppError> {
         // A replaced machine does not open a new trading day (ADR-0123). Before the
         // already-open check, so a box that is superseded says so rather than reporting whichever
@@ -7560,6 +7613,7 @@ impl<S: EventStore> Edge<S> {
         if self.lock_projection().open_shift_of(till).is_some() {
             return Err(AppError::ShiftAlreadyOpen);
         }
+        let owner = self.owner_of_start(actor, another, assignee)?;
         let mut ctx = self.decision_ctx(actor)?;
         let approver = self.manage_other_till(&mut ctx, another, approval)?;
         ctx.require(Permission::OpenShift)?;
@@ -7570,12 +7624,21 @@ impl<S: EventStore> Edge<S> {
             opening_float,
             // Absent for the store's one drawer, which writes today's bytes (decision 5).
             terminal_device_id: till,
+            // Absent where drawers are shared, which writes today's bytes too (decision 9).
+            assigned_employee_id: owner,
         };
-        self.commit_approved(&ctx, &payload, self.current_shift_id(), approver)
+        let step_ups = [(Permission::ManageOtherTill, approver)];
+        self.commit_approved(&ctx, &payload, self.current_shift_id(), &step_ups)
             .await?;
 
         let currency = self.session().currency;
-        let record = ShiftRecord::opened(opening_float, currency, till, ctx.now, ctx.business_date);
+        let record = ShiftRecord::opened(
+            opening_float,
+            currency,
+            (till, owner),
+            ctx.now,
+            ctx.business_date,
+        );
         let view = self.shift_view(shift_id, &record);
         self.lock_projection().open_shift_record(shift_id, record);
         Ok(view)
@@ -7647,6 +7710,7 @@ impl<S: EventStore> Edge<S> {
         ShiftView {
             shift_id,
             till: record.till,
+            owner: record.owner,
             state: record.state,
             expected_amount: self.expectation_shown(record),
             counted_amount: record.counted,
@@ -7809,19 +7873,70 @@ impl<S: EventStore> Edge<S> {
         Ok(approver)
     }
 
-    /// Commits `payload` stamped with `shift`, and beside it the override an approver of another
-    /// till's drawer owes the log, in one append.
+    /// Whose a drawer starting now is, where the store assigns drawers (ADR-0167 decision 9): the
+    /// starter's, or for `another` till's drawer `assignee`'s, who must be on the store's roster.
+    /// `None` where drawers are shared.
+    fn owner_of_start(
+        &self,
+        actor: Actor,
+        another: bool,
+        assignee: Option<EmployeeId>,
+    ) -> Result<Option<EmployeeId>, AppError> {
+        let session = self.session();
+        if session.shift.drawer_access() != DrawerAccess::Assigned {
+            return Ok(None);
+        }
+        if !another {
+            return Ok(Some(actor.employee_id));
+        }
+        match assignee {
+            Some(person) if session.staff.permissions_for(person).is_some() => Ok(Some(person)),
+            _ => Err(AppError::AssigneeRequired),
+        }
+    }
+
+    /// What acting on `record`'s drawer takes where it is assigned to somebody other than the person
+    /// acting ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9):
+    /// `cash.drawer.override_assignment`, PIN-flagged, so held directly or approved for this one act
+    /// (ADR-0158 decisions 4 and 5). The approver, where one approved. Nothing for a drawer with no
+    /// owner, which is every drawer where drawers are shared, nor for the owner's own act.
+    ///
+    /// Asked without an approver of a person who does not hold it directly, the refusal is
+    /// [`AppError::DrawerAssignedToAnother`], which names nobody, so the till asks for one.
+    fn override_assignment(
+        &self,
+        ctx: &mut DecisionCtx,
+        record: Option<&ShiftRecord>,
+        approval: Option<&Approval>,
+    ) -> Result<Option<EmployeeId>, AppError> {
+        let permission = Permission::OverrideDrawerAssignment;
+        match record.and_then(|record| record.owner) {
+            Some(owner) if owner != ctx.actor.employee_id => {}
+            _ => return Ok(None),
+        }
+        if approval.is_none() && !ctx.granted_directly.contains(permission) {
+            return Err(AppError::DrawerAssignedToAnother);
+        }
+        let approver = self.resolve_step_up(ctx, permission, approval)?;
+        ctx.require(permission)?;
+        Ok(approver)
+    }
+
+    /// Commits `payload` stamped with `shift`, and beside it the override each approver owes the
+    /// log for the permission they approved, in one append.
     async fn commit_approved<P: EventPayload + serde::Serialize>(
         &self,
         ctx: &DecisionCtx,
         payload: &P,
         shift: Option<ShiftId>,
-        approver: Option<EmployeeId>,
+        step_ups: &[(Permission, Option<EmployeeId>)],
     ) -> Result<(), AppError> {
         let mut prepared = vec![self.prepare_on(ctx, payload, shift)?];
-        if let Some(approver) = approver {
-            let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
-            prepared.push(self.prepare_on(ctx, &overridden, shift)?);
+        for (permission, approver) in step_ups {
+            if let Some(approver) = approver {
+                let overridden = Self::override_record(*permission, *approver, None);
+                prepared.push(self.prepare_on(ctx, &overridden, shift)?);
+            }
         }
         let (envelopes, messages) = prepared.into_iter().unzip();
         self.append_and_publish(envelopes, messages).await
@@ -7870,6 +7985,7 @@ impl<S: EventStore> Edge<S> {
             .shift(shift_id)
             .ok_or(AppError::UnknownShift)?;
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
+        let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Count { counted_minor }, &ctx)?;
 
         let counted_amount = Money::new(self.session().currency, counted_minor);
@@ -7878,7 +7994,11 @@ impl<S: EventStore> Edge<S> {
             counted_amount,
             count_time: ctx.now,
         };
-        self.commit_approved(&ctx, &payload, Some(shift_id), approver)
+        let step_ups = [
+            (Permission::ManageOtherTill, approver),
+            (Permission::OverrideDrawerAssignment, overrider),
+        ];
+        self.commit_approved(&ctx, &payload, Some(shift_id), &step_ups)
             .await?;
 
         self.lock_projection()
@@ -7951,6 +8071,7 @@ impl<S: EventStore> Edge<S> {
             .shift(shift_id)
             .ok_or(AppError::UnknownShift)?;
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
+        let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
         let (mut payload, report) = self.closing(shift_id, &record)?;
         if self.owes_variance_reason(report.variance) {
@@ -7960,7 +8081,11 @@ impl<S: EventStore> Edge<S> {
             };
             payload.reason_code_id = Some(self.variance_reason(reason)?);
         }
-        self.commit_approved(&ctx, &payload, Some(shift_id), approver)
+        let step_ups = [
+            (Permission::ManageOtherTill, approver),
+            (Permission::OverrideDrawerAssignment, overrider),
+        ];
+        self.commit_approved(&ctx, &payload, Some(shift_id), &step_ups)
             .await?;
         self.anchor_chain(&ctx).await?;
 
@@ -7969,7 +8094,7 @@ impl<S: EventStore> Edge<S> {
         // close, whether or not it combines several closed at once (ADR-0167 decision 10).
         let print = decision.effects.contains(&Effect::PrintShiftReport)
             && self.session().shift.close_report() != CloseReport::None;
-        Ok(closed_view(record.till, report, print))
+        Ok(closed_view(&record, report, print))
     }
 
     /// Closes several counted drawers in one act: a `cash.shift.closed` for each, all in one
@@ -8017,6 +8142,15 @@ impl<S: EventStore> Edge<S> {
         }
         let another = named.iter().any(|(_, record)| another_till(scope, record));
         let approver = self.manage_other_till(&mut ctx, another, approval)?;
+        // One override for every drawer named that is somebody else's, as one approver covers
+        // every other till's (ADR-0167 decision 9).
+        let someone_elses =
+            |record: &ShiftRecord| record.owner.is_some_and(|owner| owner != actor.employee_id);
+        let assigned = named
+            .iter()
+            .map(|(_, record)| record)
+            .find(|record| someone_elses(record));
+        let overrider = self.override_assignment(&mut ctx, assigned, approval)?;
         let mode = self.session().shift.close_report();
         let mut prepared = Vec::with_capacity(named.len());
         let mut closed = Vec::with_capacity(named.len());
@@ -8036,9 +8170,14 @@ impl<S: EventStore> Edge<S> {
                 let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
                 prepared.push(self.prepare_on(&ctx, &overridden, Some(*shift_id))?);
             }
+            if let Some(approver) = overrider.filter(|_| someone_elses(record)) {
+                let overridden =
+                    Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
+                prepared.push(self.prepare_on(&ctx, &overridden, Some(*shift_id))?);
+            }
             let print = decision.effects.contains(&Effect::PrintShiftReport)
                 && mode == CloseReport::PerDrawer;
-            closed.push(closed_view(record.till, report, print));
+            closed.push(closed_view(record, report, print));
         }
         // Every drawer or none: one still owed a reason closes none, and the refusal names each.
         if !owing.is_empty() {
@@ -8214,6 +8353,7 @@ impl<S: EventStore> Edge<S> {
             movement,
             amount,
             reason_code_id,
+            None,
         )
         .await
     }
@@ -8221,7 +8361,8 @@ impl<S: EventStore> Edge<S> {
     /// [`Self::record_cash_movement`] at the till `scope` says the device is. Where the store keeps
     /// a drawer per till, a paid in or out is made at the till whose drawer it springs, on that
     /// drawer's shift ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
-    /// decision 3).
+    /// decision 3). A drawer assigned to somebody else also takes the override, held directly or
+    /// approved for this act (decision 9).
     ///
     /// # Errors
     ///
@@ -8229,7 +8370,9 @@ impl<S: EventStore> Edge<S> {
     /// reason the store does not hold for this act, [`AppError::NotATill`] at a device that is no
     /// till where the store keeps a drawer per till, [`AppError::UnknownShift`] for a shift the edge
     /// does not know, [`AppError::ShiftNotOpen`] for one that is not trading, has been counted or is
-    /// another till's drawer's, or [`AppError`] if the store cannot be written.
+    /// another till's drawer's, [`AppError::DrawerAssignedToAnother`] and the approval refusals of
+    /// [`Self::open_shift_at`] for somebody else's drawer, or [`AppError`] if the store cannot be
+    /// written.
     pub async fn record_cash_movement_at(
         &self,
         actor: Actor,
@@ -8238,8 +8381,9 @@ impl<S: EventStore> Edge<S> {
         movement: CashMovement,
         amount: Money,
         reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
     ) -> Result<ShiftView, AppError> {
-        let ctx = self.decision_ctx(actor)?;
+        let mut ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::RecordCashMovement)?;
         if !self
             .session()
@@ -8264,30 +8408,29 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::ShiftNotOpen);
         }
         self.refuse_after_day_end(shift_id, &record)?;
+        let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
+        let step_ups = [(Permission::OverrideDrawerAssignment, overrider)];
         // On the shift's own drawer, and stamped with it, whichever drawer that is (ADR-0167).
         let shift = Some(shift_id);
-        let (envelope, message) = match movement {
-            CashMovement::PaidIn => self.prepare_on(
-                &ctx,
-                &CashDrawerPaidIn {
+        let till = record.till;
+        match movement {
+            CashMovement::PaidIn => {
+                let paid = CashDrawerPaidIn {
                     amount,
                     reason_code_id,
-                    terminal_device_id: record.till,
-                },
-                shift,
-            )?,
-            CashMovement::PaidOut => self.prepare_on(
-                &ctx,
-                &CashDrawerPaidOut {
+                    terminal_device_id: till,
+                };
+                self.commit_approved(&ctx, &paid, shift, &step_ups).await?;
+            }
+            CashMovement::PaidOut => {
+                let paid = CashDrawerPaidOut {
                     amount,
                     reason_code_id,
-                    terminal_device_id: record.till,
-                },
-                shift,
-            )?,
-        };
-        self.append_and_publish(vec![envelope], vec![message])
-            .await?;
+                    terminal_device_id: till,
+                };
+                self.commit_approved(&ctx, &paid, shift, &step_ups).await?;
+            }
+        }
         let record = {
             let mut projection = self.lock_projection();
             projection.record_movement(shift_id, movement, amount)?;
@@ -8328,8 +8471,10 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::CashReasonNotValid`] for a reason the store does not hold for opening the drawer,
     /// [`AppError::NotATill`] at a device that is no till where the store keeps a drawer per till,
     /// [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
-    /// [`AppError::ApproverLockedOut`] for the PIN, [`AppError::Domain`] without the permission, or
-    /// [`AppError`] if the store cannot be written.
+    /// [`AppError::ApproverLockedOut`] for the PIN, [`AppError::Domain`] without the permission,
+    /// [`AppError::DrawerAssignedToAnother`] for a drawer assigned to somebody else, whose override
+    /// the same approver may give (ADR-0167 decision 9), or [`AppError`] if the store cannot be
+    /// written.
     pub async fn open_drawer_no_sale_at(
         &self,
         actor: Actor,
@@ -8348,23 +8493,24 @@ impl<S: EventStore> Edge<S> {
         let drawer = self.cash_drawer(scope)?;
         let approver = self.resolve_step_up(&mut ctx, Permission::OpenDrawerNoSale, approval)?;
         ctx.require(Permission::OpenDrawerNoSale)?;
+        let (shift, record) = {
+            let projection = self.lock_projection();
+            let shift = projection.open_shift_of(drawer);
+            (shift, shift.and_then(|shift_id| projection.shift(shift_id)))
+        };
+        // Somebody else's drawer is theirs to open too, where the store assigns drawers.
+        let overrider = self.override_assignment(&mut ctx, record.as_ref(), approval)?;
         let opened = CashDrawerOpened {
             standalone: true,
             reason_code_id: Some(reason_code_id),
             terminal_device_id: drawer,
         };
-        let shift = self.lock_projection().open_shift_of(drawer);
-        let (envelope, message) = self.prepare_on(&ctx, &opened, shift)?;
-        let mut envelopes = vec![envelope];
-        let mut messages = vec![message];
-        if let Some(approver) = approver {
-            let override_record =
-                Self::override_record(Permission::OpenDrawerNoSale, approver, None);
-            let (envelope, message) = self.prepare_on(&ctx, &override_record, shift)?;
-            envelopes.push(envelope);
-            messages.push(message);
-        }
-        self.append_and_publish(envelopes, messages).await?;
+        let step_ups = [
+            (Permission::OpenDrawerNoSale, approver),
+            (Permission::OverrideDrawerAssignment, overrider),
+        ];
+        self.commit_approved(&ctx, &opened, shift, &step_ups)
+            .await?;
         Ok(drawer)
     }
 
@@ -8740,7 +8886,7 @@ impl<S: EventStore> Edge<S> {
                     ShiftRecord::opened(
                         event.opening_float,
                         event.opening_float.currency_code,
-                        event.terminal_device_id,
+                        (event.terminal_device_id, event.assigned_employee_id),
                         envelope.event_time,
                         envelope.business_date,
                     ),
@@ -9221,18 +9367,23 @@ impl<S: EventStore> Edge<S> {
 
     /// The drawer a settle's cash goes into, the till's where the store keeps one per till
     /// (ADR-0167 decision 6), and `None` for the store's one drawer or a settle that takes none;
-    /// and the shift its payments are stamped with, [`Self::drawer_shift`]'s.
+    /// the shift its payments are stamped with, [`Self::drawer_shift`]'s; and the approver of the
+    /// override cash into a drawer assigned to somebody else takes (decision 9), where one approved.
     ///
     /// # Errors
     ///
     /// [`AppError::NotATill`] for cash at a device that is no till where the store keeps a drawer
-    /// per till, and [`AppError::OpenShiftRequired`] where the store refuses selling without a
-    /// shift and that drawer, or for any other tender every drawer, has none open.
+    /// per till, [`AppError::OpenShiftRequired`] where the store refuses selling without a shift
+    /// and that drawer, or for any other tender every drawer, has none open, and
+    /// [`Self::override_assignment`]'s refusals for cash into somebody else's drawer.
     fn settle_drawer(
         &self,
+        ctx: &mut DecisionCtx,
         scope: TillScope,
         payments: &[Payment],
-    ) -> Result<(Option<DeviceId>, Option<ShiftId>), AppError> {
+        approval: Option<&Approval>,
+    ) -> Result<SettleDrawer, AppError> {
+        let mut overrider = None;
         let drawer = if payments
             .iter()
             .any(|payment| payment.method == PaymentMethod::Cash)
@@ -9247,13 +9398,14 @@ impl<S: EventStore> Edge<S> {
             };
             if let Some((shift_id, record)) = open {
                 self.refuse_after_day_end(shift_id, &record)?;
+                overrider = self.override_assignment(ctx, Some(&record), approval)?;
             }
             drawer
         } else {
             self.refuse_without_open_shift()?;
             None
         };
-        Ok((drawer, self.drawer_shift(scope)))
+        Ok((drawer, self.drawer_shift(scope), overrider))
     }
 
     /// [`Self::refuse_without_open_shift`] for cash, which goes into one drawer, `drawer`, whose own
@@ -11758,7 +11910,7 @@ mod tests {
         let float = Money::zero(CurrencyCode::VND);
         projection.open_shift_record(
             shift_id,
-            super::ShiftRecord::opened(float, CurrencyCode::VND, None, opened, day(6)),
+            super::ShiftRecord::opened(float, CurrencyCode::VND, (None, None), opened, day(6)),
         );
         assert!(
             projection.warn_day_ended(shift_id, day(7)),

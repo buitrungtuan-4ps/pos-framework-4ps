@@ -73,6 +73,17 @@ wire_enum! {
 }
 
 wire_enum! {
+    /// Who may act on a drawer (ADR-0167 decision 9).
+    DrawerAccess, prefix = "DRAWER_ACCESS";
+    /// Anyone permitted takes cash into a till's drawer, counts and closes it: the behaviour before
+    /// the field.
+    Shared = "SHARED",
+    /// A drawer is, for its session, the person's who starts it at its till, or the one a manager
+    /// names when starting it elsewhere, and anyone else acts on it only with an override.
+    Assigned = "ASSIGNED",
+}
+
+wire_enum! {
     /// What a drawer still open past its business day's cutoff does (ADR-0167 decision 11).
     DrawerDayEnd, prefix = "DRAWER_DAY_END";
     /// It is flagged on the till and in the console, and keeps working.
@@ -116,6 +127,9 @@ pub struct PublishedShift {
     /// Read it through [`PublishedShift::variance_reason_minor`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variance_reason_minor: Option<i64>,
+    /// Who may act on a drawer. Read it through [`PublishedShift::drawer_access`].
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub drawer_access: Open<DrawerAccess>,
 }
 
 impl PublishedShift {
@@ -199,11 +213,23 @@ impl PublishedShift {
             .filter(|minor| VARIANCE_REASON_MINOR.contains(minor))
             .unwrap_or(DEFAULT_VARIANCE_REASON_MINOR)
     }
+
+    /// Who may act on a drawer: [`DrawerAccess::Shared`], anyone permitted, as every store has,
+    /// unless the node says otherwise.
+    #[must_use]
+    pub fn drawer_access(&self) -> DrawerAccess {
+        match self.drawer_access.known() {
+            DrawerAccess::Unspecified | DrawerAccess::Shared => DrawerAccess::Shared,
+            DrawerAccess::Assigned => DrawerAccess::Assigned,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
+    use super::{
+        CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
+    };
     use crate::wire_enum::{Open, WireEnum};
 
     #[test]
@@ -343,46 +369,57 @@ mod tests {
         assert_eq!(node.drawer_model(), DrawerModel::PerStore);
         assert_eq!(node.close_report(), CloseReport::PerDrawer);
         assert_eq!(node.drawer_day_end(), DrawerDayEnd::Flag);
+        assert_eq!(node.drawer_access(), DrawerAccess::Shared);
 
         let later: PublishedShift = serde_json::from_str(
             r#"{ "drawer_model": "DRAWER_MODEL_LATER", "close_report": "CLOSE_REPORT_LATER",
-                 "drawer_day_end": "DRAWER_DAY_END_LATER" }"#,
+                 "drawer_day_end": "DRAWER_DAY_END_LATER", "drawer_access": "DRAWER_ACCESS_LATER" }"#,
         )
         .expect("unknown tokens still parse");
         assert_eq!(later.drawer_model(), DrawerModel::PerStore);
         assert_eq!(later.close_report(), CloseReport::PerDrawer);
         assert_eq!(later.drawer_day_end(), DrawerDayEnd::Flag);
+        assert_eq!(later.drawer_access(), DrawerAccess::Shared);
     }
 
     #[test]
     fn every_drawer_value_is_read_and_round_trips() {
-        for (model, report, day_end) in [
+        for (model, report, day_end, access) in [
             (
                 DrawerModel::PerTerminal,
                 CloseReport::Combined,
                 DrawerDayEnd::RequireClose,
+                DrawerAccess::Assigned,
             ),
-            (DrawerModel::PerStore, CloseReport::None, DrawerDayEnd::Flag),
+            (
+                DrawerModel::PerStore,
+                CloseReport::None,
+                DrawerDayEnd::Flag,
+                DrawerAccess::Assigned,
+            ),
             (
                 DrawerModel::PerStore,
                 CloseReport::PerDrawer,
                 DrawerDayEnd::Flag,
+                DrawerAccess::Shared,
             ),
         ] {
             let text = format!(
-                r#"{{"drawer_model":"{}","close_report":"{}","drawer_day_end":"{}"}}"#,
+                r#"{{"drawer_model":"{}","close_report":"{}","drawer_day_end":"{}","drawer_access":"{}"}}"#,
                 model.as_wire(),
                 report.as_wire(),
-                day_end.as_wire()
+                day_end.as_wire(),
+                access.as_wire()
             );
             let node: PublishedShift = serde_json::from_str(&text).expect("the node parses");
             assert_eq!(
                 (
                     node.drawer_model(),
                     node.close_report(),
-                    node.drawer_day_end()
+                    node.drawer_day_end(),
+                    node.drawer_access()
                 ),
-                (model, report, day_end)
+                (model, report, day_end, access)
             );
             let fields = text.strip_prefix('{').expect("an object");
             assert_eq!(
@@ -391,6 +428,7 @@ mod tests {
                 "each set value is written, after the fields before it"
             );
         }
+        assert_eq!(DrawerAccess::Assigned.as_wire(), "DRAWER_ACCESS_ASSIGNED");
         assert_eq!(
             DrawerModel::PerTerminal.as_wire(),
             "DRAWER_MODEL_PER_TERMINAL"

@@ -2,8 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A drawer per till
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2, 3, 5, 6
-//! and 8).
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2, 3, 5, 6, 8
+//! and 9).
 //!
 //! Where a store keeps a drawer per till, each till's drawer runs a shift of its own: started,
 //! counted and closed on its own, with its own float, cash, movements, expectation and over/short.
@@ -13,6 +13,12 @@
 //! only somebody holding it alone reads what that drawer should hold. A change of model waits until
 //! no drawer is open, and the log rebuilds the same drawers. Where a store keeps one drawer nothing
 //! changes, and its events name no till.
+//!
+//! Where a store assigns drawers, a drawer is one person's for its session: its starter's at its own
+//! till, or the person a manager names starting it anywhere else. Anybody else's cash, paid in or
+//! out, no-sale opening, count or close on it takes `cash.drawer.override_assignment`, held directly
+//! or approved for one act, and is otherwise refused naming nobody; a card is the sale's, not the
+//! drawer's. The log rebuilds whose each drawer is, and where drawers are shared nothing names one.
 //!
 //! Drawers closed together are each asked the reason a close over or short by more than the store's
 //! `shift.variance_reason_minor` gives (decision 12), and close every one or none.
@@ -35,9 +41,9 @@ use pos_edge::pairing::Minter;
 use pos_edge::print_agent::PrintAgents;
 use pos_edge::printing::{AgentDispatch, AgentLane, PrintOutcome, Printers, TransportFactory};
 use pos_edge::{
-    AppError, Approval, CashMovement, DrawerFigures, Edge, EdgeSession, InMemoryQueueNumbers,
-    InMemoryReceipts, LineDraft, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity,
-    SystemClock, TillScope,
+    AppError, Approval, BillView, CashMovement, DrawerFigures, Edge, EdgeSession,
+    InMemoryQueueNumbers, InMemoryReceipts, LineDraft, Pairing, Sessions, ShiftView, StaffAuth,
+    StaffRoster, StoreIdentity, SystemClock, TillScope,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -47,7 +53,9 @@ use pos_ports::{PortError, PortName};
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{CashDrawerOpened, CashShiftClosed};
-use pos_proto::ids::{BillId, DeviceId, EmployeeId, MenuItemId, ReasonCodeId, StoreId, TableId};
+use pos_proto::ids::{
+    BillId, DeviceId, EmployeeId, MenuItemId, ReasonCodeId, ShiftId, StoreId, TableId,
+};
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
@@ -56,7 +64,9 @@ use pos_proto::quantity::Quantity;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
-use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{
+    CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
+};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -82,8 +92,10 @@ const STORE_DRAWER: &str = "/dev/usb/lp0";
 const BAR_DRAWER: &str = "/dev/usb/lp1";
 const COUNTER_PAPER: &str = "/dev/usb/lp2";
 
-/// Who works here: a cashier who keeps to their own till's drawer, one who may manage another's
-/// with somebody's approval, a supervisor who may alone, and the manager who approves.
+/// Who works here: a cashier who keeps to their own till's drawer; one who may manage another's, or
+/// act on a drawer assigned to somebody else, with somebody's approval; a supervisor who may manage
+/// another's and open a drawer without a sale alone, but not act on somebody else's; and the manager
+/// who approves, and may do all of it alone.
 const CASHIER: u128 = 21;
 const ASKING: u128 = 22;
 const SUPERVISOR: u128 = 23;
@@ -181,10 +193,13 @@ fn staff() -> StaffRoster {
         .with(Permission::AddLine)
         .with(Permission::OpenBill)
         .with(Permission::TakePayment);
-    let manage = PermissionSet::EMPTY.with(Permission::ManageOtherTill);
+    let manage = PermissionSet::EMPTY
+        .with(Permission::ManageOtherTill)
+        .with(Permission::OverrideDrawerAssignment);
     let managing = shifts
         .with(Permission::ManageOtherTill)
         .with(Permission::OpenDrawerNoSale);
+    let overriding = managing.with(Permission::OverrideDrawerAssignment);
     let mut staff = StaffRoster::new();
     for (code, seed, direct, approved, pin) in [
         ("CSH-1", CASHIER, shifts, PermissionSet::EMPTY, None),
@@ -193,7 +208,7 @@ fn staff() -> StaffRoster {
         (
             MANAGER_CODE,
             MANAGER,
-            managing,
+            overriding,
             PermissionSet::EMPTY,
             Some(hash_of(MANAGER_PIN)),
         ),
@@ -328,6 +343,19 @@ fn paid(method: PaymentMethod, due: Money) -> Vec<Payment> {
     }]
 }
 
+/// Rings a pizza on table `table` as `by` and settles it at `scope`, in one tender of `method`.
+async fn settle(
+    edge: &Edge<FakeStore>,
+    by: Actor,
+    scope: TillScope,
+    table: u128,
+    method: PaymentMethod,
+) -> Result<BillView, AppError> {
+    let (bill, due) = a_bill(edge, by, table).await;
+    edge.settle_bill_at(by, scope, bill, paid(method, due), None, None)
+        .await
+}
+
 async fn logged(store: &FakeStore) -> Vec<EventEnvelope<RawPayload>> {
     let query = EventQuery::first(
         StoreId::new(Ulid::from_u128(1)),
@@ -342,11 +370,11 @@ fn two_tills_each_count_and_close_their_own_drawer() {
         let store = FakeStore::new();
         let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's drawer opens");
         let counter = edge
-            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's opens beside it");
         assert_eq!(
@@ -354,7 +382,7 @@ fn two_tills_each_count_and_close_their_own_drawer() {
             (Some(till(BAR)), Some(till(COUNTER)))
         );
         let again = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(1), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(1), None, None)
             .await;
         assert!(
             matches!(again, Err(AppError::ShiftAlreadyOpen)),
@@ -368,6 +396,7 @@ fn two_tills_each_count_and_close_their_own_drawer() {
             CashMovement::PaidIn,
             vnd(100_000),
             making_change(),
+            None,
         )
         .await
         .expect("paid in at the bar");
@@ -378,6 +407,7 @@ fn two_tills_each_count_and_close_their_own_drawer() {
             CashMovement::PaidOut,
             vnd(50_000),
             making_change(),
+            None,
         )
         .await
         .expect("paid out at the counter");
@@ -392,6 +422,7 @@ fn two_tills_each_count_and_close_their_own_drawer() {
                 bill,
                 paid(PaymentMethod::Cash, due),
                 None,
+                None,
             )
             .await
             .expect("cash at the bar");
@@ -399,17 +430,15 @@ fn two_tills_each_count_and_close_their_own_drawer() {
             (settled.open_drawer, settled.drawer_till),
             (true, Some(till(BAR)))
         );
-        let (bill, due) = a_bill(&edge, person(CASHIER, 0xC1), 42).await;
-        let settled = edge
-            .settle_bill_at(
-                person(CASHIER, 0xC1),
-                at(COUNTER),
-                bill,
-                paid(PaymentMethod::Card, due),
-                None,
-            )
-            .await
-            .expect("a card at the counter");
+        let settled = settle(
+            &edge,
+            person(CASHIER, 0xC1),
+            at(COUNTER),
+            42,
+            PaymentMethod::Card,
+        )
+        .await
+        .expect("a card at the counter");
         assert!(!settled.open_drawer, "a card opens no drawer");
 
         for (device, own, shift, counted, expected) in [
@@ -449,18 +478,36 @@ fn a_device_that_is_no_till_opens_only_the_drawer_it_names() {
     run_ready(async {
         let edge = edge_over(FakeStore::new(), session(DrawerModel::PerTerminal, true));
         let refused = edge
-            .open_shift_at(person(SUPERVISOR, 0xD1), TillScope::default(), vnd(1), None)
+            .open_shift_at(
+                person(SUPERVISOR, 0xD1),
+                TillScope::default(),
+                vnd(1),
+                None,
+                None,
+            )
             .await;
         assert!(matches!(refused, Err(AppError::NotATill)), "{refused:?}");
         let unknown = edge
-            .open_shift_at(person(SUPERVISOR, 0xD1), naming(None, 0x9999), vnd(1), None)
+            .open_shift_at(
+                person(SUPERVISOR, 0xD1),
+                naming(None, 0x9999),
+                vnd(1),
+                None,
+                None,
+            )
             .await;
         assert!(
             matches!(unknown, Err(AppError::NotATill)),
             "a till the store does not list: {unknown:?}"
         );
         let opened = edge
-            .open_shift_at(person(SUPERVISOR, 0xD1), naming(None, BAR), vnd(1), None)
+            .open_shift_at(
+                person(SUPERVISOR, 0xD1),
+                naming(None, BAR),
+                vnd(1),
+                None,
+                None,
+            )
             .await
             .expect("a supervisor opens the bar's drawer from a device that is no till");
         assert_eq!(opened.till, Some(till(BAR)));
@@ -479,6 +526,7 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
                 naming(Some(BAR), COUNTER),
                 vnd(300_000),
                 None,
+                None,
             )
             .await;
         assert!(
@@ -496,6 +544,7 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
                 naming(Some(BAR), COUNTER),
                 vnd(300_000),
                 None,
+                None,
             )
             .await;
         assert!(
@@ -508,6 +557,7 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
                 naming(Some(BAR), COUNTER),
                 vnd(300_000),
                 Some(&manager()),
+                None,
             )
             .await
             .expect("a manager approves opening the counter's drawer");
@@ -520,7 +570,7 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
         );
 
         // Their own till's drawer needs only the shift's own permission.
-        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the cashier opens the bar's own");
 
@@ -577,7 +627,7 @@ fn a_change_of_model_waits_for_the_open_drawer_to_close() {
         assert_eq!(waiting.waiting, Some(DrawerModel::PerTerminal));
         assert_eq!(waiting.drawers.len(), 1, "still the store's one drawer");
         let refused = edge
-            .open_shift_at(person(MANAGER, 0xB1), at(BAR), vnd(1), None)
+            .open_shift_at(person(MANAGER, 0xB1), at(BAR), vnd(1), None, None)
             .await;
         assert!(
             matches!(refused, Err(AppError::ShiftAlreadyOpen)),
@@ -620,12 +670,12 @@ fn a_restart_rebuilds_every_tills_drawer_with_its_own_cash() {
         let (bar, counter) = {
             let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
             let bar = edge
-                .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+                .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
                 .await
                 .expect("the bar's")
                 .shift_id;
             let counter = edge
-                .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+                .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
                 .await
                 .expect("the counter's")
                 .shift_id;
@@ -636,6 +686,7 @@ fn a_restart_rebuilds_every_tills_drawer_with_its_own_cash() {
                 CashMovement::PaidIn,
                 vnd(100_000),
                 making_change(),
+                None,
             )
             .await
             .expect("paid in");
@@ -645,6 +696,7 @@ fn a_restart_rebuilds_every_tills_drawer_with_its_own_cash() {
                 at(BAR),
                 bill,
                 paid(PaymentMethod::Cash, due),
+                None,
                 None,
             )
             .await
@@ -751,7 +803,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
     run_ready(async {
         let edge = edge_over(FakeStore::new(), session(DrawerModel::PerTerminal, true));
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's drawer opens")
             .shift_id;
@@ -766,6 +818,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
                 bill,
                 paid(PaymentMethod::Cash, due),
                 None,
+                None,
             )
             .await;
         assert!(matches!(cash, Err(AppError::NotATill)), "{cash:?}");
@@ -775,6 +828,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
                 TillScope::default(),
                 bill,
                 paid(PaymentMethod::Card, due),
+                None,
                 None,
             )
             .await
@@ -788,6 +842,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
                 CashMovement::PaidIn,
                 vnd(1_000),
                 making_change(),
+                None,
             )
             .await;
         assert!(matches!(paid_in, Err(AppError::NotATill)), "{paid_in:?}");
@@ -797,7 +852,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
         assert!(matches!(no_sale, Err(AppError::NotATill)), "{no_sale:?}");
 
         // A till moves cash in its own drawer, never another till's.
-        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's drawer opens");
         let crossed = edge
@@ -808,6 +863,7 @@ fn a_device_that_is_no_till_takes_any_tender_but_cash_and_a_till_moves_only_its_
                 CashMovement::PaidIn,
                 vnd(1_000),
                 making_change(),
+                None,
             )
             .await;
         assert!(
@@ -823,12 +879,12 @@ fn a_tills_payment_and_no_sale_opening_name_its_drawers_shift() {
         let store = FakeStore::new();
         let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's drawer opens")
             .shift_id;
         let counter = edge
-            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's drawer opens")
             .shift_id;
@@ -838,6 +894,7 @@ fn a_tills_payment_and_no_sale_opening_name_its_drawers_shift() {
             TillScope::default(),
             bill,
             paid(PaymentMethod::Card, due),
+            None,
             None,
         )
         .await
@@ -853,6 +910,7 @@ fn a_tills_payment_and_no_sale_opening_name_its_drawers_shift() {
             at(COUNTER),
             bill,
             paid(PaymentMethod::Cash, due),
+            None,
             None,
         )
         .await
@@ -898,7 +956,7 @@ fn a_store_that_sells_only_in_a_shift_takes_cash_only_into_an_open_drawer() {
             "no drawer is open: {closed:?}"
         );
 
-        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's drawer opens");
         // Some drawer is open, so a sale starts and a card is taken at the counter too.
@@ -909,6 +967,7 @@ fn a_store_that_sells_only_in_a_shift_takes_cash_only_into_an_open_drawer() {
                 at(COUNTER),
                 bill,
                 paid(PaymentMethod::Cash, due),
+                None,
                 None,
             )
             .await;
@@ -922,6 +981,7 @@ fn a_store_that_sells_only_in_a_shift_takes_cash_only_into_an_open_drawer() {
             bill,
             paid(PaymentMethod::Card, due),
             None,
+            None,
         )
         .await
         .expect("a card needs some drawer open");
@@ -931,6 +991,7 @@ fn a_store_that_sells_only_in_a_shift_takes_cash_only_into_an_open_drawer() {
             at(BAR),
             bill,
             paid(PaymentMethod::Cash, due),
+            None,
             None,
         )
         .await
@@ -944,10 +1005,10 @@ fn another_tills_expectation_shows_only_to_whoever_may_count_it_alone() {
         let mut counted_open = session(DrawerModel::PerTerminal, true);
         counted_open.shift.blind_close = Some(false);
         let edge = edge_over(FakeStore::new(), counted_open);
-        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's");
-        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's");
         let expected = |viewer: Actor, scope: TillScope| -> Vec<Option<Money>> {
@@ -1037,12 +1098,12 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
             reporting(DrawerModel::PerTerminal, true, CloseReport::Combined),
         );
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's")
             .shift_id;
         let counter = edge
-            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's")
             .shift_id;
@@ -1052,6 +1113,7 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
             at(BAR),
             bill,
             paid(PaymentMethod::Cash, due),
+            None,
             None,
         )
         .await
@@ -1067,6 +1129,7 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
                 movement,
                 vnd(amount),
                 making_change(),
+                None,
             )
             .await
             .expect("moved at its own till");
@@ -1126,12 +1189,12 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
         let store = FakeStore::new();
         let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's")
             .shift_id;
         let counter = edge
-            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's")
             .shift_id;
@@ -1235,7 +1298,7 @@ fn a_drawer_left_open_past_its_day_is_flagged_and_by_default_refused_nothing() {
     run_ready(async {
         let edge = edge_over(FakeStore::new(), zoned(BEHIND, DrawerDayEnd::Flag, true));
         let bar = edge
-            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
             .await
             .expect("the bar's")
             .shift_id;
@@ -1243,7 +1306,7 @@ fn a_drawer_left_open_past_its_day_is_flagged_and_by_default_refused_nothing() {
         assert!(!opened_today.day_ended, "a drawer opened today");
 
         edge.apply_session(zoned(AHEAD, DrawerDayEnd::Flag, true));
-        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's opens today");
         let ended = |own| {
@@ -1267,6 +1330,7 @@ fn a_drawer_left_open_past_its_day_is_flagged_and_by_default_refused_nothing() {
             bill,
             paid(PaymentMethod::Cash, due),
             None,
+            None,
         )
         .await
         .expect("flagged, it still takes cash");
@@ -1277,6 +1341,7 @@ fn a_drawer_left_open_past_its_day_is_flagged_and_by_default_refused_nothing() {
             CashMovement::PaidIn,
             vnd(1_000),
             making_change(),
+            None,
         )
         .await
         .expect("and a paid in");
@@ -1291,7 +1356,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
             store.clone(),
             zoned(BEHIND, DrawerDayEnd::RequireClose, true),
         )
-        .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+        .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
         .await
         .expect("the bar's")
         .shift_id;
@@ -1301,7 +1366,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
             zoned(AHEAD, DrawerDayEnd::RequireClose, true),
         );
         edge.rebuild().await.expect("replays the log");
-        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None, None)
             .await
             .expect("the counter's opens today");
 
@@ -1312,6 +1377,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
                 at(BAR),
                 bill,
                 paid(PaymentMethod::Cash, due),
+                None,
                 None,
             )
             .await;
@@ -1325,6 +1391,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
                     movement,
                     vnd(1_000),
                     making_change(),
+                    None,
                 )
                 .await;
             assert!(matches!(moved, Err(AppError::DrawerDayEnded)), "{moved:?}");
@@ -1334,6 +1401,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
             at(BAR),
             bill,
             paid(PaymentMethod::Card, due),
+            None,
             None,
         )
         .await
@@ -1347,6 +1415,7 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
             at(COUNTER),
             bill,
             paid(PaymentMethod::Cash, due),
+            None,
             None,
         )
         .await
@@ -1400,7 +1469,7 @@ fn drawers_closed_together_close_with_a_reason_for_each_one_owed_or_not_at_all()
             (0xC1, COUNTER, 300_000, 310_000),
         ] {
             let shift = edge
-                .open_shift_at(person(CASHIER, device), at(own), vnd(float), None)
+                .open_shift_at(person(CASHIER, device), at(own), vnd(float), None, None)
                 .await
                 .expect("starts")
                 .shift_id;
@@ -1462,6 +1531,558 @@ fn drawers_closed_together_close_with_a_reason_for_each_one_owed_or_not_at_all()
             reasons,
             [(bar, Some(miscounted())), (counter, None)],
             "the counter's is within the limit and records none"
+        );
+    });
+}
+
+// --- Assigned drawers (decision 9) ------------------------------------------------------------
+
+/// The store of [`session`], where each drawer is one person's for its session.
+fn assigned(model: DrawerModel, enforced: bool) -> EdgeSession {
+    let mut session = session(model, enforced);
+    session.shift.drawer_access = Open::from_known(DrawerAccess::Assigned);
+    session
+}
+
+fn employee(seed: u128) -> EmployeeId {
+    EmployeeId::new(Ulid::from_u128(seed))
+}
+
+const ASSIGNMENT: &str = "cash.drawer.override_assignment";
+
+/// Whether `outcome` is the refusal of an act on a drawer assigned to somebody else.
+fn assigned_to_another<T>(outcome: &Result<T, AppError>) -> bool {
+    matches!(outcome, Err(AppError::DrawerAssignedToAnother))
+}
+
+/// 10,000 moved `movement` for making change, by `by` at `scope` on `shift`, approved by `approval`.
+async fn moved(
+    edge: &Edge<FakeStore>,
+    by: Actor,
+    scope: TillScope,
+    shift: ShiftId,
+    movement: CashMovement,
+    approval: Option<&Approval>,
+) -> Result<ShiftView, AppError> {
+    let reason = making_change();
+    edge.record_cash_movement_at(by, scope, shift, movement, vnd(10_000), reason, approval)
+        .await
+}
+
+/// Each `security.permission.overridden` in `log`: the shift it is on, what was approved, and who
+/// approved it.
+fn overrides(log: &[EventEnvelope<RawPayload>]) -> Vec<(Option<ShiftId>, String, String)> {
+    log.iter()
+        .filter(|envelope| envelope.event_type.as_str() == "security.permission.overridden")
+        .map(|envelope| {
+            let data: Value = serde_json::from_str(envelope.data.as_json()).unwrap_or_default();
+            let text = |field: &str| data[field].as_str().unwrap_or_default().to_owned();
+            (
+                envelope.shift_id,
+                text("permission_key"),
+                text("approver_employee_id"),
+            )
+        })
+        .collect()
+}
+
+/// Whom each `cash.shift.opened` in `log` assigns its drawer to, `Null` for nobody.
+fn assignees(log: &[EventEnvelope<RawPayload>]) -> Vec<Value> {
+    log.iter()
+        .filter(|envelope| envelope.event_type.as_str() == "cash.shift.opened")
+        .map(|envelope| {
+            let data: Value = serde_json::from_str(envelope.data.as_json()).unwrap_or_default();
+            data["assigned_employee_id"].clone()
+        })
+        .collect()
+}
+
+#[test]
+fn an_assigned_drawer_takes_cash_only_from_its_owner_and_any_other_tender_from_anybody() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true));
+        let (cashier, other) = (person(CASHIER, 0xB1), person(ASKING, 0xB1));
+        let bar = edge
+            .open_shift_at(cashier, at(BAR), vnd(500_000), None, Some(employee(ASKING)))
+            .await
+            .expect("the cashier starts the bar's drawer");
+        assert_eq!(
+            bar.owner,
+            Some(employee(CASHIER)),
+            "at its own till a drawer is its starter's, whoever they name"
+        );
+        assert_eq!(
+            assignees(&logged(&store).await),
+            [json!(employee(CASHIER))],
+            "its start records the person by id"
+        );
+
+        settle(&edge, cashier, at(BAR), 41, PaymentMethod::Cash)
+            .await
+            .expect("the owner takes cash");
+        let (bill, due) = a_bill(&edge, other, 42).await;
+        let refused = edge
+            .settle_bill_at(
+                other,
+                at(BAR),
+                bill,
+                paid(PaymentMethod::Cash, due),
+                None,
+                None,
+            )
+            .await;
+        assert!(assigned_to_another(&refused), "{refused:?}");
+        let card = edge
+            .settle_bill_at(
+                other,
+                at(BAR),
+                bill,
+                paid(PaymentMethod::Card, due),
+                None,
+                None,
+            )
+            .await
+            .expect("a card is the sale's, not the drawer's");
+        assert!(!card.open_drawer);
+        let said = AppError::DrawerAssignedToAnother.to_string();
+        for seed in [CASHIER, ASKING] {
+            assert!(!said.contains(&employee(seed).to_string()), "{said}");
+        }
+    });
+}
+
+#[test]
+fn nobody_else_pays_in_or_out_opens_counts_or_closes_an_assigned_drawer() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true));
+        let (cashier, other) = (person(CASHIER, 0xB1), person(ASKING, 0xB1));
+        let bar = edge
+            .open_shift_at(cashier, at(BAR), vnd(500_000), None, None)
+            .await
+            .expect("the cashier's")
+            .shift_id;
+        for movement in [CashMovement::PaidIn, CashMovement::PaidOut] {
+            let refused = moved(&edge, other, at(BAR), bar, movement, None).await;
+            assert!(assigned_to_another(&refused), "{movement:?}: {refused:?}");
+        }
+        let counted = edge
+            .count_shift_at(other, at(BAR), bar, 510_000, None)
+            .await;
+        assert!(assigned_to_another(&counted), "{counted:?}");
+        let closed = edge.close_shift_at(other, at(BAR), bar, None, None).await;
+        assert!(assigned_to_another(&closed), "{closed:?}");
+        // Opening a drawer without a sale alone is not opening somebody else's.
+        let opened = edge
+            .open_drawer_no_sale_at(person(SUPERVISOR, 0xB1), at(BAR), making_change(), None)
+            .await;
+        assert!(assigned_to_another(&opened), "{opened:?}");
+
+        moved(&edge, cashier, at(BAR), bar, CashMovement::PaidIn, None)
+            .await
+            .expect("the owner pays in");
+        edge.count_shift_at(cashier, at(BAR), bar, 510_000, None)
+            .await
+            .expect("the owner counts");
+        let closed = edge
+            .close_shift_at(cashier, at(BAR), bar, None, None)
+            .await
+            .expect("the owner closes");
+        assert_eq!(
+            (closed.variance, closed.owner),
+            (Some(vnd(0)), Some(employee(CASHIER)))
+        );
+        assert!(overrides(&logged(&store).await).is_empty());
+    });
+}
+
+#[test]
+fn somebody_elses_drawer_takes_the_override_held_directly_or_approved_for_one_act() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true));
+        let bar = edge
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
+            .await
+            .expect("the cashier's")
+            .shift_id;
+
+        moved(
+            &edge,
+            person(MANAGER, 0xB1),
+            at(BAR),
+            bar,
+            CashMovement::PaidIn,
+            None,
+        )
+        .await
+        .expect("the manager holds the override directly");
+        assert!(
+            overrides(&logged(&store).await).is_empty(),
+            "nobody approved anything"
+        );
+
+        let asking = person(ASKING, 0xB1);
+        let (bill, due) = a_bill(&edge, asking, 41).await;
+        let unapproved = edge
+            .settle_bill_at(
+                asking,
+                at(BAR),
+                bill,
+                paid(PaymentMethod::Cash, due),
+                None,
+                None,
+            )
+            .await;
+        assert!(assigned_to_another(&unapproved), "{unapproved:?}");
+        let settled = edge
+            .settle_bill_at(
+                asking,
+                at(BAR),
+                bill,
+                paid(PaymentMethod::Cash, due),
+                None,
+                Some(&manager()),
+            )
+            .await
+            .expect("a manager approves this one settle");
+        assert_eq!(
+            (settled.open_drawer, settled.drawer_till),
+            (true, Some(till(BAR)))
+        );
+        let approved = [(
+            Some(bar),
+            ASSIGNMENT.to_owned(),
+            employee(MANAGER).to_string(),
+        )];
+        assert_eq!(overrides(&logged(&store).await), approved);
+
+        let again = moved(&edge, asking, at(BAR), bar, CashMovement::PaidOut, None).await;
+        assert!(
+            assigned_to_another(&again),
+            "an approval covers one act: {again:?}"
+        );
+        let supervisor = person(SUPERVISOR, 0xB1);
+        let denied = moved(
+            &edge,
+            supervisor,
+            at(BAR),
+            bar,
+            CashMovement::PaidOut,
+            Some(&manager()),
+        )
+        .await;
+        assert!(
+            matches!(
+                denied,
+                Err(AppError::Domain(DomainError::PermissionDenied { permission }))
+                    if permission == ASSIGNMENT
+            ),
+            "nobody approves what a role grants in neither way: {denied:?}"
+        );
+        assert_eq!(overrides(&logged(&store).await), approved);
+    });
+}
+
+#[test]
+fn one_approver_covers_a_no_sale_opening_and_the_override_beside_it() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, false));
+        let bar = edge
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
+            .await
+            .expect("the cashier's")
+            .shift_id;
+        let manager_at_bar = person(MANAGER, 0xB1);
+        let unapproved = edge
+            .open_drawer_no_sale_at(manager_at_bar, at(BAR), making_change(), None)
+            .await;
+        assert!(
+            matches!(unapproved, Err(AppError::ApprovalRequired)),
+            "{unapproved:?}"
+        );
+        edge.open_drawer_no_sale_at(manager_at_bar, at(BAR), making_change(), Some(&manager()))
+            .await
+            .expect("where the store does not enforce, a manager approves their own");
+        let approver = employee(MANAGER).to_string();
+        assert_eq!(
+            overrides(&logged(&store).await),
+            [
+                (
+                    Some(bar),
+                    "cash.drawer.open_no_sale".to_owned(),
+                    approver.clone()
+                ),
+                (Some(bar), ASSIGNMENT.to_owned(), approver),
+            ]
+        );
+    });
+}
+
+#[test]
+fn a_drawer_started_for_another_till_is_the_person_named_from_the_roster() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true));
+        let starter = person(SUPERVISOR, 0xB1);
+        for nobody in [None, Some(employee(99))] {
+            let refused = edge
+                .open_shift_at(
+                    starter,
+                    naming(Some(BAR), COUNTER),
+                    vnd(300_000),
+                    None,
+                    nobody,
+                )
+                .await;
+            assert!(
+                matches!(refused, Err(AppError::AssigneeRequired)),
+                "{nobody:?}: {refused:?}"
+            );
+        }
+        let counter = edge
+            .open_shift_at(
+                starter,
+                naming(Some(BAR), COUNTER),
+                vnd(300_000),
+                None,
+                Some(employee(CASHIER)),
+            )
+            .await
+            .expect("the supervisor starts the counter's drawer for the cashier");
+        assert_eq!(counter.owner, Some(employee(CASHIER)));
+        assert_eq!(assignees(&logged(&store).await), [json!(employee(CASHIER))]);
+
+        let at_counter = |seed| person(seed, 0xC1);
+        let shift = counter.shift_id;
+        let refused = moved(
+            &edge,
+            at_counter(SUPERVISOR),
+            at(COUNTER),
+            shift,
+            CashMovement::PaidIn,
+            None,
+        )
+        .await;
+        assert!(
+            assigned_to_another(&refused),
+            "the starter is not its owner: {refused:?}"
+        );
+        moved(
+            &edge,
+            at_counter(CASHIER),
+            at(COUNTER),
+            shift,
+            CashMovement::PaidIn,
+            None,
+        )
+        .await
+        .expect("the person named takes it over");
+    });
+}
+
+#[test]
+fn a_batch_close_takes_the_override_for_each_drawer_that_is_somebody_elses() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true));
+        let mut shifts = Vec::new();
+        for (owner, device, own, float) in [
+            (CASHIER, 0xB1, BAR, 500_000),
+            (MANAGER, 0xC1, COUNTER, 300_000),
+        ] {
+            let shift = edge
+                .open_shift_at(person(owner, device), at(own), vnd(float), None, None)
+                .await
+                .expect("its owner starts it")
+                .shift_id;
+            edge.count_shift_at(person(owner, device), at(own), shift, float, None)
+                .await
+                .expect("its owner counts it");
+            shifts.push(shift);
+        }
+        let (bar, counter) = (shifts[0], shifts[1]);
+
+        let refused = edge
+            .close_shifts_at(person(SUPERVISOR, 0xB1), at(BAR), &shifts, None, &[])
+            .await;
+        assert!(assigned_to_another(&refused), "{refused:?}");
+        assert!(
+            edge.current_shift_at(at(BAR)).is_some()
+                && edge.current_shift_at(at(COUNTER)).is_some(),
+            "every drawer or none"
+        );
+
+        let closed = edge
+            .close_shifts_at(
+                person(ASKING, 0xB1),
+                at(BAR),
+                &shifts,
+                Some(&manager()),
+                &[],
+            )
+            .await
+            .expect("one approver covers the batch");
+        assert_eq!(closed.shifts.len(), 2);
+        let approver = employee(MANAGER).to_string();
+        assert_eq!(
+            overrides(&logged(&store).await),
+            [
+                (Some(bar), ASSIGNMENT.to_owned(), approver.clone()),
+                (
+                    Some(counter),
+                    "cash.shift.manage_other_till".to_owned(),
+                    approver.clone()
+                ),
+                (Some(counter), ASSIGNMENT.to_owned(), approver),
+            ],
+            "each drawer somebody else's carries its own override, under the one approver"
+        );
+    });
+}
+
+#[test]
+fn a_restart_keeps_whose_each_drawer_is_until_it_closes() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let bar = edge_over(store.clone(), assigned(DrawerModel::PerTerminal, true))
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
+            .await
+            .expect("the cashier's")
+            .shift_id;
+
+        // A store moved back to shared drawers meanwhile shares from each drawer's next start.
+        for shared in [false, true] {
+            let session = if shared {
+                session(DrawerModel::PerTerminal, true)
+            } else {
+                assigned(DrawerModel::PerTerminal, true)
+            };
+            let restarted = edge_over(store.clone(), session);
+            restarted.rebuild().await.expect("replays the log");
+            let view = restarted
+                .current_shift_at(at(BAR))
+                .expect("the bar's is open");
+            assert_eq!((view.shift_id, view.owner), (bar, Some(employee(CASHIER))));
+            let refused = restarted
+                .count_shift_at(person(ASKING, 0xB1), at(BAR), bar, 500_000, None)
+                .await;
+            assert!(assigned_to_another(&refused), "{refused:?}");
+            if shared {
+                restarted
+                    .count_shift_at(person(CASHIER, 0xB1), at(BAR), bar, 500_000, None)
+                    .await
+                    .expect("its owner counts it");
+                restarted
+                    .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None, None)
+                    .await
+                    .expect("and closes it");
+                let next = restarted
+                    .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
+                    .await
+                    .expect("the next start");
+                assert_eq!(next.owner, None);
+            }
+        }
+    });
+}
+
+#[test]
+fn shared_drawers_name_nobody_and_take_anybodys_cash() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
+        let bar = edge
+            .open_shift_at(
+                person(CASHIER, 0xB1),
+                at(BAR),
+                vnd(500_000),
+                None,
+                Some(employee(ASKING)),
+            )
+            .await
+            .expect("the bar's");
+        let counter = edge
+            .open_shift_at(
+                person(SUPERVISOR, 0xB1),
+                naming(Some(BAR), COUNTER),
+                vnd(300_000),
+                None,
+                None,
+            )
+            .await
+            .expect("another till's, naming nobody");
+        assert_eq!((bar.owner, counter.owner), (None, None));
+
+        let other = person(ASKING, 0xB1);
+        let shift = bar.shift_id;
+        settle(&edge, other, at(BAR), 41, PaymentMethod::Cash)
+            .await
+            .expect("anybody's cash");
+        moved(&edge, other, at(BAR), shift, CashMovement::PaidIn, None)
+            .await
+            .expect("anybody's paid in");
+        edge.count_shift_at(other, at(BAR), shift, 675_000, None)
+            .await
+            .expect("counted by anybody at its till");
+        edge.close_shift_at(other, at(BAR), shift, None, None)
+            .await
+            .expect("and closed");
+        let log = logged(&store).await;
+        assert!(
+            log.iter()
+                .all(|envelope| !envelope.data.as_json().contains("assigned_employee_id")),
+            "shared drawers' events name nobody"
+        );
+        assert!(overrides(&log).is_empty());
+    });
+}
+
+#[test]
+fn the_stores_one_drawer_is_assigned_as_a_tills_is() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), assigned(DrawerModel::PerStore, true));
+        let open = edge
+            .open_shift(person(CASHIER, 0xB1), vnd(500_000))
+            .await
+            .expect("the cashier starts the store's drawer");
+        assert_eq!((open.till, open.owner), (None, Some(employee(CASHIER))));
+
+        let other = person(ASKING, 0xC1);
+        let (bill, due) = a_bill(&edge, other, 41).await;
+        let refused = edge
+            .settle_bill(other, bill, paid(PaymentMethod::Cash, due), None)
+            .await;
+        assert!(assigned_to_another(&refused), "{refused:?}");
+        let settled = edge
+            .settle_bill_at(
+                other,
+                TillScope::default(),
+                bill,
+                paid(PaymentMethod::Cash, due),
+                None,
+                Some(&manager()),
+            )
+            .await
+            .expect("approved for this settle");
+        assert_eq!((settled.open_drawer, settled.drawer_till), (true, None));
+        let log = logged(&store).await;
+        assert_eq!(
+            overrides(&log),
+            [(
+                Some(open.shift_id),
+                ASSIGNMENT.to_owned(),
+                employee(MANAGER).to_string()
+            )]
+        );
+        assert_eq!(assignees(&log), [json!(employee(CASHIER))]);
+        assert!(
+            log.iter()
+                .all(|envelope| !envelope.data.as_json().contains("terminal_device_id")),
+            "the person, and still no till"
         );
     });
 }
@@ -2168,6 +2789,76 @@ async fn post(
     body: Value,
 ) -> (StatusCode, Option<String>, Value) {
     send(tills.app.clone(), token, "POST", uri, Some(body)).await
+}
+
+/// What `uri` reads from the device holding `token`.
+async fn get(tills: &Tills, token: &str, uri: &str) -> Value {
+    send(tills.app.clone(), token, "GET", uri, None).await.2
+}
+
+#[tokio::test]
+async fn an_assigned_drawer_says_whose_it_is_by_id_and_refuses_anybody_else_by_reason() {
+    let tills = drawers_app(false).await;
+    tills
+        .edge
+        .apply_session(assigned(DrawerModel::PerTerminal, false));
+    let cashier = employee(CASHIER).to_string();
+    let refused = |reason| (StatusCode::CONFLICT, Some(reason));
+
+    // The manager, at a device that is no till, starts the bar's drawer for the cashier.
+    let mut start = approver();
+    start["opening_float"] = json!(vnd(500_000));
+    start["terminal_device_id"] = json!(till(BAR));
+    let (status, reason, _) = post(&tills, &tills.stranger, "/api/shifts", start.clone()).await;
+    assert_eq!((status, reason.as_deref()), refused("ASSIGNEE_REQUIRED"));
+    start["assigned_employee_id"] = json!(cashier);
+    let (status, _, opened) = post(&tills, &tills.stranger, "/api/shifts", start).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["assigned_employee_id"], cashier.as_str());
+    let current = get(&tills, &tills.bar, "/api/shifts/current").await;
+    assert_eq!(
+        current["assigned_employee_id"],
+        cashier.as_str(),
+        "{current}"
+    );
+    let listed = get(&tills, &tills.bar, "/api/shifts").await;
+    let drawer = &listed["drawers"][0]["shift"];
+    assert_eq!(drawer["assigned_employee_id"], cashier.as_str(), "{listed}");
+
+    // The manager signed in at the bar is not the cashier.
+    let shift = opened["shift_id"].as_str().unwrap_or_default();
+    let paid_in = format!("/api/shifts/{shift}/paid-in");
+    let mut movement = json!({ "amount_minor": 10_000, "reason_code_id": making_change() });
+    let (status, reason, _) = post(&tills, &tills.bar, &paid_in, movement.clone()).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        refused("DRAWER_ASSIGNED_TO_ANOTHER")
+    );
+    movement["approver_code"] = json!(MANAGER_CODE);
+    movement["approver_pin"] = json!(MANAGER_PIN);
+    let (status, _, moved) = post(&tills, &tills.bar, &paid_in, movement).await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+
+    let (status, reason, _) = settle_over(&tills, &tills.bar, 41, "PAYMENT_METHOD_CASH").await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        refused("DRAWER_ASSIGNED_TO_ANOTHER")
+    );
+    let (status, _, settled) = settle_over(&tills, &tills.bar, 42, "PAYMENT_METHOD_CARD").await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    let (bill, due) = a_bill(&tills.edge, person(MANAGER, 0xB1), 43).await;
+    let mut cash = approver();
+    cash["payments"] =
+        json!([{ "method": "PAYMENT_METHOD_CASH", "tendered": due, "applied_to_bill": due }]);
+    let uri = format!("/api/bills/{bill}/settle");
+    let (status, _, settled) = post(&tills, &tills.bar, &uri, cash).await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+
+    // One approver covers a no-sale opening and the override beside it.
+    let mut no_sale = approver();
+    no_sale["reason_code_id"] = json!(making_change());
+    let (status, _, sprang) = post(&tills, &tills.bar, "/api/drawer/open", no_sale).await;
+    assert_eq!(status, StatusCode::OK, "{sprang}");
 }
 
 /// Counts `shift` at `counted` over the route from the device holding `token`.

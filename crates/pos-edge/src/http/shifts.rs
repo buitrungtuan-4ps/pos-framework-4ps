@@ -31,6 +31,11 @@
 //! close would show it, so the till can show the variance beside the reasons and send the close
 //! again. The count is final by then, so this reveals what the close reveals, to the person
 //! closing, and a blind close stays blind.
+//!
+//! A store that assigns drawers (`shift.drawer_access`, ADR-0167 decision 9) gives each drawer's
+//! session to one person, and every response names them by `assigned_employee_id`, never by name.
+//! Anybody else's act on that drawer takes `cash.drawer.override_assignment`, held directly or
+//! approved by the same approver fields, and is otherwise refused `DRAWER_ASSIGNED_TO_ANOTHER`.
 
 use std::sync::Arc;
 
@@ -45,7 +50,7 @@ use pos_core::business_date::StoreTimeZone;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{DeviceId, EventId, ReasonCodeId, ShiftId};
+use pos_proto::ids::{DeviceId, EmployeeId, EventId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::shift::DrawerModel;
 use pos_proto::text::DisplayName;
@@ -77,6 +82,10 @@ pub(crate) struct OpenRequest {
     /// own, and where the store keeps one drawer it is ignored.
     #[serde(default)]
     terminal_device_id: Option<DeviceId>,
+    /// The person another till's drawer is for, where the store assigns drawers: somebody on its
+    /// roster. A drawer started at its own till is the starter's, and this is ignored there.
+    #[serde(default)]
+    assigned_employee_id: Option<EmployeeId>,
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
@@ -158,11 +167,16 @@ struct BatchCloseResponse {
     shift_report_print: Option<String>,
 }
 
-/// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1).
+/// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the
+/// approver for a drawer assigned to somebody else.
 #[derive(Debug, Deserialize)]
 pub(crate) struct MovementRequest {
     amount_minor: i64,
     reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).
@@ -195,6 +209,10 @@ pub(crate) struct ShiftResponse {
     /// The till whose drawer it is, absent for the store's one drawer (ADR-0167).
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_device_id: Option<String>,
+    /// The person the drawer is assigned to for this session, where the store assigns drawers:
+    /// an id, never a name. Absent where drawers are shared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assigned_employee_id: Option<String>,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
     /// Revealed at close (§11.1), and before it only where the store's count is not blind.
@@ -229,6 +247,7 @@ impl From<ShiftView> for ShiftResponse {
         Self {
             shift_id: view.shift_id.to_string(),
             terminal_device_id: view.till.map(|till| till.to_string()),
+            assigned_employee_id: view.owner.map(|owner| owner.to_string()),
             state: view.state.as_wire().to_owned(),
             expected_amount: view.expected_amount,
             counted_amount: view.counted_amount,
@@ -270,8 +289,14 @@ where
         request.approver_pin.as_ref(),
     );
     respond(
-        edge.open_shift_at(actor, scope, request.opening_float, approval.as_ref())
-            .await,
+        edge.open_shift_at(
+            actor,
+            scope,
+            request.opening_float,
+            approval.as_ref(),
+            request.assigned_employee_id,
+        )
+        .await,
     )
 }
 
@@ -499,6 +524,10 @@ where
         Ok(scope) => scope,
         Err(error) => return error_response(&error),
     };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
     let view = match edge
         .record_cash_movement_at(
             actor,
@@ -507,6 +536,7 @@ where
             movement,
             amount,
             request.reason_code_id,
+            approval.as_ref(),
         )
         .await
     {

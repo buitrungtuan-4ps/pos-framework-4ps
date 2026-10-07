@@ -84,6 +84,12 @@ pub(crate) struct SettleRequest {
     /// exactly as it did.
     #[serde(default)]
     buyer: Option<BuyerRequest>,
+    /// The approver for cash into a drawer assigned to somebody else (ADR-0167 decision 9): a code
+    /// and PIN, both or neither.
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// The buyer a till captured for a corporate invoice.
@@ -265,8 +271,19 @@ where
             TillScope::default()
         }
     };
+    let approval = request
+        .approver_code
+        .zip(request.approver_pin)
+        .map(|(code, pin)| Approval { code, pin });
     let outcome = edge
-        .settle_bill_at(actor, scope, bill_id, payments, buyer.as_ref())
+        .settle_bill_at(
+            actor,
+            scope,
+            bill_id,
+            payments,
+            buyer.as_ref(),
+            approval.as_ref(),
+        )
         .await;
     let Ok(view) = outcome else {
         return respond(outcome);
