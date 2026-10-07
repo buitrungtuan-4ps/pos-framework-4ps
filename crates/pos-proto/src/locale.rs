@@ -219,13 +219,15 @@ impl fmt::Debug for TaxRate {
 /// sum is not a terser rendering of the same fact — it is not a valid invoice
 /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
 ///
-/// The name is free text carried straight to the invoice, not an enum: the framework cannot know
-/// every jurisdiction's label, and a closed set would make each new country a code change, which is
-/// the thing country packs exist to avoid.
+/// The name is the `tax` node's data, not an enum: the framework cannot know every jurisdiction's
+/// label, and a closed set would make each new country a code change, which is the thing country
+/// packs exist to avoid. It is text on the wire, and a sound table names each component with a
+/// [`TaxComponentName`] token, which [`TaxRateTable::rows_with_untokened_components`] checks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TaxComponent {
-    /// What the invoice calls it — `CGST`, `SGST`, `IGST`, `TVA`.
+    /// What the invoice calls it — `CGST`, `SGST`, `IGST`, `TVA`: a [`TaxComponentName`] in a
+    /// sound table.
     pub name: String,
     /// This part's share of the row's rate. The parts must sum to the row's `rate`.
     pub rate: TaxRate,
@@ -239,6 +241,78 @@ impl TaxComponent {
             name: name.into(),
             rate,
         }
+    }
+}
+
+/// A tax component's name as a bill records it: two to eight upper-case ASCII letters and digits,
+/// starting with a letter, such as `CGST`, `SGST`, `UTGST`, `IGST` or `CESS`
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 1).
+///
+/// Built only through [`Self::new`], and refused on deserialise when it fails the check. A settled
+/// bill's line reads such a name as *not split* rather than refusing the bill
+/// ([`crate::events::BillTaxLine::components`]). A country that prints other words maps the token
+/// to them in its pack.
+///
+/// The personal-data barrier admits it to an event payload ([`crate::pii`]): it names a tax, and
+/// eight characters with no space, `@` or lower case cannot carry a person's name, an e-mail or a
+/// phone number. It comes from the `tax` node an operator authors, never from a till's input.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize)]
+#[serde(transparent)]
+pub struct TaxComponentName(Box<str>);
+
+/// Why a tax component's name is not a [`TaxComponentName`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaxComponentNameError;
+
+impl fmt::Display for TaxComponentNameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "a tax component's name is two to eight upper-case letters and digits, starting with \
+             a letter",
+        )
+    }
+}
+
+impl core::error::Error for TaxComponentNameError {}
+
+impl TaxComponentName {
+    /// Checks and wraps a name. Nothing is trimmed or upper-cased, so a name is recorded as the
+    /// table spells it or not at all.
+    ///
+    /// # Errors
+    ///
+    /// [`TaxComponentNameError`] unless `name` is two to eight upper-case ASCII letters and digits,
+    /// starting with a letter.
+    pub fn new(name: &str) -> Result<Self, TaxComponentNameError> {
+        let bytes = name.as_bytes();
+        let token = (2..=8).contains(&bytes.len())
+            && bytes.first().is_some_and(u8::is_ascii_uppercase)
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit());
+        if token {
+            Ok(Self(name.into()))
+        } else {
+            Err(TaxComponentNameError)
+        }
+    }
+
+    /// The name as text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TaxComponentName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for TaxComponentName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::string_value::deserialize(deserializer, "a tax component's name", Self::new)
     }
 }
 
@@ -312,9 +386,10 @@ impl TaxRateTable {
     /// Adds a row whose rate prints as named components.
     ///
     /// The components are not validated here — a builder that refused would have to return a
-    /// `Result` and every existing call site is infallible. [`Self::unbalanced_rows`] is the check,
-    /// run where a table is authored or applied, so a bad table is refused with a message naming the
-    /// row rather than rejected one call at a time.
+    /// `Result` and every existing call site is infallible. [`Self::unbalanced_rows`] and
+    /// [`Self::rows_with_untokened_components`] are the checks, run where a table is authored or
+    /// applied, so a bad table is refused with a message naming the row rather than rejected one
+    /// call at a time.
     #[must_use]
     pub fn with_components(
         mut self,
@@ -402,6 +477,27 @@ impl TaxRateTable {
                         .map(|component| u64::from(component.rate.basis_points()))
                         .sum::<u64>()
                         != u64::from(row.rate.basis_points())
+            })
+            .collect()
+    }
+
+    /// Rows with a component whose name is not a [`TaxComponentName`]
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
+    ///
+    /// A settled bill records a component only under a token, so such a row's tax cannot be
+    /// recorded by component. The check for where a table is authored or applied, beside
+    /// [`Self::unbalanced_rows`], so [`TaxComponent::new`] stays infallible. A row with no
+    /// components passes: it names nothing.
+    ///
+    /// Returns the offending rows so a refusal can name them; empty means every name is a token.
+    #[must_use]
+    pub fn rows_with_untokened_components(&self) -> Vec<&TaxRateRow> {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.components
+                    .iter()
+                    .any(|component| TaxComponentName::new(&component.name).is_err())
             })
             .collect()
     }
@@ -714,7 +810,8 @@ impl LocaleSettings {
 mod tests {
     use super::{
         CountryCode, CountryCodeError, LocalePack, LocaleSettings, NumberFormat, PublishedLocale,
-        PublishedNumberFormat, TaxComponent, TaxRate, TaxRateTable, TaxRounding,
+        PublishedNumberFormat, TaxComponent, TaxComponentName, TaxComponentNameError, TaxRate,
+        TaxRateTable, TaxRounding,
     };
     use crate::enums::SalesChannel;
     use crate::ids::TaxClassId;
@@ -838,6 +935,112 @@ mod tests {
         assert!(
             table
                 .components_for(TaxClassId::new(Ulid::from_u128(1)), SalesChannel::DineIn)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_component_name_is_a_short_upper_case_token() {
+        // ADR-0168 decision 1. `ST` and `COMPCESS` are the bounds: two characters and eight.
+        for name in [
+            "CGST", "SGST", "UTGST", "IGST", "CESS", "GST1", "ST", "COMPCESS",
+        ] {
+            let token = TaxComponentName::new(name).expect("a token");
+            assert_eq!(token.as_str(), name);
+            assert_eq!(token.to_string(), name);
+        }
+        for refused in [
+            "",
+            "C",
+            "cgst",
+            "Cgst",
+            "1GST",
+            "CGST-X",
+            "COMPCESS1",
+            "C GST",
+            " CGST",
+            "Central GST",
+            "GST@1",
+            "ÇGST",
+            "ＣＧＳＴ",
+        ] {
+            assert_eq!(
+                TaxComponentName::new(refused),
+                Err(TaxComponentNameError),
+                "{refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_component_name_is_a_string_on_the_wire_and_reads_only_as_a_token() {
+        let token = TaxComponentName::new("UTGST").expect("a token");
+        let json = serde_json::to_string(&token).expect("serialise");
+        assert_eq!(json, r#""UTGST""#);
+        let back: TaxComponentName = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, token);
+        let owned: TaxComponentName =
+            serde_json::from_value(serde_json::json!("SGST")).expect("an owned string reads too");
+        assert_eq!(owned.as_str(), "SGST");
+        for refused in [
+            r#""cgst""#,
+            r#""Central GST""#,
+            r#""""#,
+            r#""C""#,
+            "9",
+            "null",
+        ] {
+            assert!(
+                serde_json::from_str::<TaxComponentName>(refused).is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_whose_component_is_named_in_free_text_is_reported() {
+        // ADR-0168 decision 2. The row still balances and is still charged at its rate; the name is
+        // what a bill could not record, so the check names the row.
+        let table = TaxRateTable::new()
+            .with_components(
+                food(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(18),
+                vec![
+                    TaxComponent::new("Central GST", TaxRate::from_percent(9)),
+                    TaxComponent::new("SGST", TaxRate::from_percent(9)),
+                ],
+            )
+            .with_components(
+                alcohol(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(18),
+                vec![
+                    TaxComponent::new("CGST", TaxRate::from_percent(9)),
+                    TaxComponent::new("SGST", TaxRate::from_percent(9)),
+                ],
+            );
+        let reported = table.rows_with_untokened_components();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported.first().map(|row| row.tax_class_id), Some(food()));
+        assert!(table.unbalanced_rows().is_empty(), "a separate check");
+        assert_eq!(
+            table.rate_for(food(), SalesChannel::DineIn),
+            Some(TaxRate::from_percent(18))
+        );
+    }
+
+    #[test]
+    fn rows_without_components_have_no_names_to_report() {
+        // Vietnam and Japan publish no components, so every table they have today passes.
+        let table = TaxRateTable::new()
+            .with(food(), SalesChannel::DineIn, TaxRate::from_percent(10))
+            .with(food(), SalesChannel::Takeaway, TaxRate::from_percent(8))
+            .with(alcohol(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        assert!(table.rows_with_untokened_components().is_empty());
+        assert!(
+            TaxRateTable::new()
+                .rows_with_untokened_components()
                 .is_empty()
         );
     }

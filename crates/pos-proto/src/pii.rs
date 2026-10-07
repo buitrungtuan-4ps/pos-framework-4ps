@@ -42,6 +42,7 @@ use crate::enums;
 use crate::events;
 use crate::fees;
 use crate::ids;
+use crate::locale;
 use crate::money::{CurrencyCode, Money, Ratio};
 use crate::quantity::Quantity;
 use crate::text::{DisplayName, PermissionKey, ReleaseTag, TranslationKey};
@@ -94,6 +95,11 @@ no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
 // and 4), beside the fee's own name. Its translations stay in the `fees` node; no event carries
 // them.
 no_pii!(fees::FeeCode);
+
+// A tax component's name, which a settled bill records on each tax line and fee
+// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 1). A
+// token built only through its check, never free text: its own documentation gives the argument.
+no_pii!(locale::TaxComponentName);
 
 // The chain hash (ADR-0131), and the argument is worth stating because "a hash" is not
 // by itself an answer: a hash of personal data is still personal data under PDPD and
@@ -170,10 +176,16 @@ no_pii!(
 );
 
 // Parts of a payload declared outside the catalogue: a bill's frozen fee rules, its fee lines and
-// its tax lines (ADR-0159). Each is proven field by field where it is declared, with
-// `assert_field_no_pii` over a destructuring that names every field, so the marker here cannot
-// outlive the truth of it.
-no_pii!(fees::FrozenFee, events::BillFeeLine, events::BillTaxLine);
+// its tax lines (ADR-0159), and their tax components (ADR-0168). Each is proven field by field
+// where it is declared, with `assert_field_no_pii` over a list that must name every field
+// (`crate::envelope::payload_part!`), so the marker here cannot outlive the truth of it, and each
+// is placed in the snapshot (`crate::snapshot`), so its field names reach a reviewer.
+no_pii!(
+    fees::FrozenFee,
+    events::BillFeeLine,
+    events::BillTaxLine,
+    events::BillTaxComponent,
+);
 
 impl<T: NoPii> sealed::Sealed for Option<T> {}
 impl<T: NoPii> NoPii for Option<T> {}
@@ -188,8 +200,9 @@ impl<E: WireEnum> sealed::Sealed for Open<E> {}
 impl<E: WireEnum> NoPii for Open<E> {}
 
 /// [`assert_no_pii`] for the type of a field, for a part of a payload declared outside the
-/// catalogue. Called with every field of a destructuring that names them all, it makes a field
-/// added to such a part fail to compile until its type is admitted too.
+/// catalogue. Called with every field of a list that must name them all
+/// (`crate::envelope::payload_part!`), it makes a field added to such a part fail to compile until
+/// its type is admitted too.
 pub const fn assert_field_no_pii<T: NoPii>(_field: &T) {}
 
 /// Compile-time assertion that `T` may appear in an event payload.
@@ -314,6 +327,13 @@ mod tests {
         assert_no_pii::<Vec<crate::events::BillTaxLine>>();
         assert_no_pii::<crate::fees::FeeCode>();
         assert_no_pii::<crate::ids::FeeId>();
+    }
+
+    #[test]
+    fn a_bills_tax_components_are_admissible() {
+        // ADR-0168 decisions 1 and 3: the token, and the record a tax line and a fee line carry.
+        assert_no_pii::<crate::locale::TaxComponentName>();
+        assert_no_pii::<Vec<crate::events::BillTaxComponent>>();
     }
 
     #[test]

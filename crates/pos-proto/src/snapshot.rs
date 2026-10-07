@@ -18,14 +18,57 @@
 //! So the snapshot is one line per fact. Adding a field adds a line, and nothing else
 //! moves. Removing one removes a line, and that is exactly what must be refused.
 //!
+//! # A payload's parts
+//!
+//! A field may hold a part: a struct the payload nests, declared outside the catalogue, such as a
+//! settled bill's tax lines. Each of a part's fields is a line of its own under the path to it, a
+//! list written `[]`: `field=tax_lines[].components[].name` on `billing.bill.settled` is the name
+//! of each component of each tax line. A field added inside a part then adds a line as a payload's
+//! own does. A value type such as `Money` is not a part: it has one wire form wherever it appears.
+//!
 //! Created while the catalogue is still young, so the file grows by reviewable diffs
 //! from here rather than arriving fully formed with no history.
 
-use crate::envelope::EventPayload;
-use crate::events::EventType;
+use crate::envelope::{EventPayload, PayloadPart};
+use crate::events::{BillFeeLine, BillTaxComponent, BillTaxLine, EventType};
+use crate::fees::FrozenFee;
 
 /// Where the rendered snapshot is committed, relative to the repository root.
 pub const SNAPSHOT_PATH: &str = "docs/snapshots/events.txt";
+
+/// Each part of a payload: the event it is in, its path there, and its fields.
+///
+/// Placed by hand, because the catalogue knows its fields' names and not their types; a part's own
+/// field names come from its declaration ([`PayloadPart`]). A part admitted to the personal-data
+/// barrier ([`crate::pii`]) is placed here too, and a test checks that each path runs through
+/// fields of the payload.
+const PARTS: &[(EventType, &str, &[&str])] = &[
+    (
+        EventType::BillingBillOpened,
+        "fee_rules[]",
+        FrozenFee::FIELD_NAMES,
+    ),
+    (
+        EventType::BillingBillSettled,
+        "fee_lines[]",
+        BillFeeLine::FIELD_NAMES,
+    ),
+    (
+        EventType::BillingBillSettled,
+        "fee_lines[].tax_components[]",
+        BillTaxComponent::FIELD_NAMES,
+    ),
+    (
+        EventType::BillingBillSettled,
+        "tax_lines[]",
+        BillTaxLine::FIELD_NAMES,
+    ),
+    (
+        EventType::BillingBillSettled,
+        "tax_lines[].components[]",
+        BillTaxComponent::FIELD_NAMES,
+    ),
+];
 
 /// Renders the catalogue in the committed format.
 ///
@@ -44,6 +87,12 @@ pub fn render() -> String {
         fields.sort_unstable();
         for field in fields {
             lines.push(format!("{token}\tfield={field}"));
+        }
+    }
+    for (event_type, path, fields) in PARTS {
+        let token = event_type.as_str();
+        for field in *fields {
+            lines.push(format!("{token}\tfield={path}.{field}"));
         }
     }
     lines.sort();
@@ -90,7 +139,8 @@ pub fn assert_registered<P: EventPayload>() {
 
 #[cfg(test)]
 mod tests {
-    use super::{SNAPSHOT_PATH, render};
+    use super::{PARTS, SNAPSHOT_PATH, render};
+    use crate::pii::check_field_name;
 
     fn snapshot_file() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -163,6 +213,53 @@ mod tests {
                 assert!(
                     rendered.contains(&format!("{token}\tfield={field}")),
                     "{token}.{field} is missing from the snapshot"
+                );
+            }
+        }
+        for (event_type, path, fields) in PARTS {
+            for field in *fields {
+                assert!(
+                    rendered.contains(&format!("{event_type}\tfield={path}.{field}\n")),
+                    "{event_type} {path}.{field} is missing from the snapshot"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_part_sits_in_a_field_of_what_holds_it() {
+        // `tax_lines[].components[]` is a field of the tax line, which is a field of the payload:
+        // a path that names no field would list a part the wire never carries there.
+        for (event_type, path, _) in PARTS {
+            let place = path.strip_suffix("[]").unwrap_or(*path);
+            let (fields, field) = match place.rsplit_once('.') {
+                None => (event_type.field_names(), place),
+                Some((holder, field)) => (
+                    PARTS
+                        .iter()
+                        .find(|(other, held, _)| other == event_type && *held == holder)
+                        .map(|(_, _, fields)| *fields)
+                        .unwrap_or_default(),
+                    field,
+                ),
+            };
+            assert!(fields.contains(&field), "{event_type} has no {path}");
+        }
+    }
+
+    #[test]
+    fn no_field_of_a_part_suggests_personal_data() {
+        // The name net over the parts, which the payloads' own field lists cannot see.
+        for (event_type, path, fields) in PARTS {
+            for field in *fields {
+                assert_eq!(
+                    check_field_name(field),
+                    Ok(()),
+                    "{event_type} {path}.{field}"
+                );
+                assert!(
+                    field.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                    "{event_type} {path}.{field} is not snake_case"
                 );
             }
         }

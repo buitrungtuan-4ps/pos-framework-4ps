@@ -474,38 +474,24 @@ pub struct FrozenFee {
     pub waivable: bool,
 }
 
-// The personal-data barrier for a part of a payload, field by field. The destructuring names every
-// field, so a field added to `FrozenFee` fails to compile until it is admitted too (`crate::pii`).
-const _: fn(&FrozenFee) = |rule| {
-    let FrozenFee {
-        fee_id,
-        code,
-        display_name,
-        kind,
-        rate,
-        amount,
-        item_scope,
-        menu_item_ids,
-        base_discounted,
-        base_tax_inclusive,
-        tax,
-        tax_class_id,
-        waivable,
-    } = rule;
-    crate::pii::assert_field_no_pii(fee_id);
-    crate::pii::assert_field_no_pii(code);
-    crate::pii::assert_field_no_pii(display_name);
-    crate::pii::assert_field_no_pii(kind);
-    crate::pii::assert_field_no_pii(rate);
-    crate::pii::assert_field_no_pii(amount);
-    crate::pii::assert_field_no_pii(item_scope);
-    crate::pii::assert_field_no_pii(menu_item_ids);
-    crate::pii::assert_field_no_pii(base_discounted);
-    crate::pii::assert_field_no_pii(base_tax_inclusive);
-    crate::pii::assert_field_no_pii(tax);
-    crate::pii::assert_field_no_pii(tax_class_id);
-    crate::pii::assert_field_no_pii(waivable);
-};
+// The personal-data barrier for a part of a payload, field by field, and its fields in the snapshot.
+// Every field is named, so a field added to `FrozenFee` fails to compile until it is admitted too
+// (`crate::pii`).
+crate::envelope::payload_part!(FrozenFee {
+    fee_id,
+    code,
+    display_name,
+    kind,
+    rate,
+    amount,
+    item_scope,
+    menu_item_ids,
+    base_discounted,
+    base_tax_inclusive,
+    tax,
+    tax_class_id,
+    waivable,
+});
 
 impl FrozenFee {
     /// As [`PublishedFee::kind()`]: `None` for an absent or unknown kind, which applies to nothing.

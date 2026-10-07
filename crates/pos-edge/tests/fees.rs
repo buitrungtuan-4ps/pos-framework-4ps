@@ -572,6 +572,7 @@ fn a_settled_bill_records_each_fee_and_its_tax_per_class() {
                 display_name: DisplayName::new("Service charge"),
                 amount: vnd(5_000),
                 tax: vnd(500),
+                tax_components: Vec::new(),
             }]
         );
         assert_eq!(settled.service_charge, vnd(5_000), "the sum of every fee");
@@ -582,6 +583,7 @@ fn a_settled_bill_records_each_fee_and_its_tax_per_class() {
                 taxable_base: vnd(105_000),
                 rate_basis_points: 1_000,
                 tax: vnd(10_500),
+                components: Vec::new(),
             }]
         );
         assert_eq!(settled.tax_total, vnd(10_500));
@@ -617,6 +619,7 @@ fn a_bill_without_fees_records_its_tax_per_class_and_no_fee_line() {
                 taxable_base: vnd(50_000),
                 rate_basis_points: 1_000,
                 tax: vnd(5_000),
+                components: Vec::new(),
             }]
         );
         assert!(frozen_on_open(&store).await.iter().all(Vec::is_empty));

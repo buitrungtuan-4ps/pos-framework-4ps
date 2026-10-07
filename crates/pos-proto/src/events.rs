@@ -35,6 +35,7 @@ use crate::ids::{
     MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId,
     StationId, StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
 };
+use crate::locale::TaxComponentName;
 use crate::money::{Money, Ratio};
 use crate::quantity::Quantity;
 use crate::text::{DisplayName, PermissionKey, ReleaseTag};
@@ -990,29 +991,36 @@ pub struct BillFeeLine {
     /// The tax on it: its part of the tax of every class it is taxed at. Zero for a fee that is
     /// not taxed.
     pub tax: Money,
+    /// That tax by component
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):
+    /// the tax on each of its class shares split as that class's tax line is, then summed by name
+    /// and rate, so they sum to `tax`.
+    ///
+    /// Left out when empty, and absent is not zero: it reads as *not split*, which is every fee
+    /// charged before this field existed and every fee taxed at rates with no components. A
+    /// reader that meets a name it cannot read takes the fee as not split too, and still reads the
+    /// bill.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "read_components"
+    )]
+    pub tax_components: Vec<BillTaxComponent>,
 }
 
-// The personal-data barrier for a part of a payload, field by field (`crate::pii`).
-const _: fn(&BillFeeLine) = |line| {
-    let BillFeeLine {
-        fee_id,
-        code,
-        display_name,
-        amount,
-        tax,
-    } = line;
-    crate::pii::assert_field_no_pii(fee_id);
-    crate::pii::assert_field_no_pii(code);
-    crate::pii::assert_field_no_pii(display_name);
-    crate::pii::assert_field_no_pii(amount);
-    crate::pii::assert_field_no_pii(tax);
-};
+// The personal-data barrier for a part of a payload, field by field, and its fields in the snapshot.
+crate::envelope::payload_part!(BillFeeLine {
+    fee_id,
+    code,
+    display_name,
+    amount,
+    tax,
+    tax_components,
+});
 
 /// One class's tax as a settled bill records it (ADR-0159 decision 4, roadmap-v3 B4.1): the base,
-/// the rate and the tax, which rounded once on that whole base (ADR-0028).
-///
-/// Without the breakdown by component that ADR-0104 prints for India: a component's name is text
-/// with no type the personal-data barrier admits ([`crate::pii`]).
+/// the rate and the tax, which rounded once on that whole base (ADR-0028), and that tax by component
+/// where the rate has components (ADR-0104, ADR-0168).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BillTaxLine {
@@ -1025,21 +1033,85 @@ pub struct BillTaxLine {
     pub rate_basis_points: u32,
     /// The class's tax.
     pub tax: Money,
+    /// That tax by component, in the order the `tax` node lists them
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):
+    /// allocated by their rates and summing exactly to `tax`, with the residual on the last, as
+    /// ADR-0104 splits it.
+    ///
+    /// Left out when empty, and absent is not zero: it reads as *not split*, which is every bill
+    /// settled before this field existed and every rate with no components, as in Vietnam and Japan.
+    /// A reader that meets a name it cannot read takes the line as not split too, and still reads
+    /// the bill.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "read_components"
+    )]
+    pub components: Vec<BillTaxComponent>,
 }
 
-// The personal-data barrier for a part of a payload, field by field (`crate::pii`).
-const _: fn(&BillTaxLine) = |line| {
-    let BillTaxLine {
-        tax_class_id,
-        taxable_base,
-        rate_basis_points,
-        tax,
-    } = line;
-    crate::pii::assert_field_no_pii(tax_class_id);
-    crate::pii::assert_field_no_pii(taxable_base);
-    crate::pii::assert_field_no_pii(rate_basis_points);
-    crate::pii::assert_field_no_pii(tax);
-};
+// The personal-data barrier for a part of a payload, field by field, and its fields in the snapshot.
+crate::envelope::payload_part!(BillTaxLine {
+    tax_class_id,
+    taxable_base,
+    rate_basis_points,
+    tax,
+    components,
+});
+
+/// One named part of a settled tax line's tax, or of a fee's
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):
+/// `CGST` at 9 % and the tax it accounts for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BillTaxComponent {
+    /// The component, as the `tax` node names it.
+    pub name: TaxComponentName,
+    /// Its part of the rate, in basis points.
+    pub rate_basis_points: u32,
+    /// Its part of the tax.
+    pub tax: Money,
+}
+
+// The personal-data barrier for a part of a payload, field by field, and its fields in the snapshot.
+crate::envelope::payload_part!(BillTaxComponent {
+    name,
+    rate_basis_points,
+    tax,
+});
+
+/// Reads a line's components, all of them or none: a list with a name that is not a
+/// [`TaxComponentName`] reads as empty, *not split*, and never as part of a split.
+///
+/// Lenient where [`TaxComponentName`] alone is strict, so a token a later release widens costs an
+/// older reader the breakdown and not the bill: a settle it could not decode would leave the
+/// cloud's rollup without the bill's revenue. Every other field reads as strictly as before.
+fn read_components<'de, D>(deserializer: D) -> Result<Vec<BillTaxComponent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    /// A component as the wire carries it. Its name is text only until it is checked, and a name
+    /// that fails the check is dropped with the list.
+    #[derive(Deserialize)]
+    struct Unchecked {
+        name: String,
+        rate_basis_points: u32,
+        tax: Money,
+    }
+
+    let unchecked = Vec::<Unchecked>::deserialize(deserializer)?;
+    Ok(unchecked
+        .into_iter()
+        .map(|component| {
+            TaxComponentName::new(&component.name).map(|name| BillTaxComponent {
+                name,
+                rate_basis_points: component.rate_basis_points,
+                tax: component.tax,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default())
+}
 
 #[cfg(test)]
 mod tests {
@@ -1499,14 +1571,26 @@ mod tests {
             display_name: crate::text::DisplayName::new("Service charge"),
             amount: vnd(5_000),
             tax: vnd(500),
+            tax_components: Vec::new(),
         };
         let tax = super::BillTaxLine {
             tax_class_id: crate::ids::TaxClassId::new(Ulid::from_parts(1, 4)),
             taxable_base: vnd(105_000),
             rate_basis_points: 1_000,
             tax: vnd(10_500),
+            components: Vec::new(),
         };
         (vec![fee], vec![tax])
+    }
+
+    /// Two components at 5 % each, splitting `cgst + sgst`.
+    fn halves(cgst: i64, sgst: i64) -> Vec<super::BillTaxComponent> {
+        let part = |name: &str, tax: i64| super::BillTaxComponent {
+            name: crate::locale::TaxComponentName::new(name).expect("a token"),
+            rate_basis_points: 500,
+            tax: vnd(tax),
+        };
+        vec![part("CGST", cgst), part("SGST", sgst)]
     }
 
     #[test]
@@ -1539,6 +1623,125 @@ mod tests {
         assert!(
             !settled.contains("fee_lines") && !settled.contains("tax_lines"),
             "{settled}"
+        );
+    }
+
+    #[test]
+    fn a_bill_without_components_writes_the_bytes_it_wrote_before_them() {
+        // ADR-0168: every Vietnamese and Japanese bill. A settle with a fee line and a tax line
+        // wrote exactly these bytes before either line had components, so its chain hash is the
+        // same too.
+        let (fee_lines, tax_lines) = records();
+        let written = RawPayload::encode(&settled(fee_lines, tax_lines)).expect("encodes");
+        assert_eq!(
+            written.as_json(),
+            concat!(
+                r#"{"bill_id":"00000000010000000000000001","receipt_number":7,"#,
+                r#""subtotal":{"currency_code":"VND","amount_minor":100000},"#,
+                r#""reduction_total":{"currency_code":"VND","amount_minor":0},"#,
+                r#""service_charge":{"currency_code":"VND","amount_minor":5000},"#,
+                r#""tax_total":{"currency_code":"VND","amount_minor":10500},"#,
+                r#""rounding_adjustment":{"currency_code":"VND","amount_minor":0},"#,
+                r#""total_due":{"currency_code":"VND","amount_minor":115500},"#,
+                r#""buyer_subject_id":null,"#,
+                r#""fee_lines":[{"fee_id":"00000000010000000000000003","code":"SERVICE","#,
+                r#""display_name":"Service charge","amount":{"currency_code":"VND","#,
+                r#""amount_minor":5000},"tax":{"currency_code":"VND","amount_minor":500}}],"#,
+                r#""tax_lines":[{"tax_class_id":"00000000010000000000000004","#,
+                r#""taxable_base":{"currency_code":"VND","amount_minor":105000},"#,
+                r#""rate_basis_points":1000,"tax":{"currency_code":"VND","#,
+                r#""amount_minor":10500}}]}"#,
+            )
+        );
+    }
+
+    /// [`records`], split: the tax line's 10,500 and the fee's 500, each in two halves at 5 %.
+    fn split_bill() -> super::BillingBillSettled {
+        let (mut fee_lines, mut tax_lines) = records();
+        for line in &mut fee_lines {
+            line.tax_components = halves(250, 250);
+        }
+        for line in &mut tax_lines {
+            line.components = halves(5_250, 5_250);
+        }
+        settled(fee_lines, tax_lines)
+    }
+
+    /// `bill` as JSON, with the component name at `pointer` replaced by one that is not a token.
+    fn with_a_name_it_cannot_read(
+        bill: &super::BillingBillSettled,
+        pointer: &str,
+    ) -> serde_json::Value {
+        let mut json = serde_json::to_value(bill).expect("serialise");
+        let name = json.pointer_mut(pointer).expect("a component's name");
+        *name = serde_json::Value::from("Central GST");
+        json
+    }
+
+    #[test]
+    fn a_bill_records_its_tax_components_and_reads_them_back() {
+        // ADR-0168 decision 3: the class's tax and the fee's, each split under a token.
+        let settled_bill = split_bill();
+        let text = serde_json::to_string(&settled_bill).expect("serialise");
+        assert!(
+            text.contains(concat!(
+                r#""tax_components":[{"name":"CGST","rate_basis_points":500,"#,
+                r#""tax":{"currency_code":"VND","amount_minor":250}},"#,
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(concat!(
+                r#""components":[{"name":"CGST","rate_basis_points":500,"#,
+                r#""tax":{"currency_code":"VND","amount_minor":5250}},"#,
+            )),
+            "{text}"
+        );
+        let back: super::BillingBillSettled = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back, settled_bill);
+    }
+
+    #[test]
+    fn a_tax_line_with_a_name_it_cannot_read_is_not_split_and_keeps_its_tax() {
+        // A later release may widen the token. An older reader still decodes the bill, as the
+        // cloud's rollup does, and the line keeps its tax: its components read as none, never as
+        // the half it could read.
+        let bill = split_bill();
+        let json = with_a_name_it_cannot_read(&bill, "/tax_lines/0/components/1/name");
+        let read: super::BillingBillSettled = RawPayload::encode(&json)
+            .expect("encodes")
+            .decode()
+            .expect("the bill still reads");
+        let line = read.tax_lines.first().expect("its tax line");
+        assert_eq!(line.tax, vnd(10_500));
+        assert!(line.components.is_empty(), "{:?}", line.components);
+        assert_eq!(
+            read.fee_lines, bill.fee_lines,
+            "the fee's own list still reads"
+        );
+        assert_eq!(read.tax_total, bill.tax_total);
+
+        // Only the list is lenient: a component read on its own still refuses the name.
+        let component = concat!(
+            r#"{"name":"Central GST","rate_basis_points":500,"#,
+            r#""tax":{"currency_code":"VND","amount_minor":5250}}"#,
+        );
+        assert!(serde_json::from_str::<super::BillTaxComponent>(component).is_err());
+    }
+
+    #[test]
+    fn a_fee_line_with_a_name_it_cannot_read_is_not_split_and_keeps_its_tax() {
+        // As the tax line, read here from a value, which owns its strings.
+        let bill = split_bill();
+        let json = with_a_name_it_cannot_read(&bill, "/fee_lines/0/tax_components/0/name");
+        let read: super::BillingBillSettled =
+            serde_json::from_value(json).expect("the bill still reads");
+        let fee = read.fee_lines.first().expect("its fee line");
+        assert_eq!(fee.tax, vnd(500));
+        assert!(fee.tax_components.is_empty(), "{:?}", fee.tax_components);
+        assert_eq!(
+            read.tax_lines, bill.tax_lines,
+            "the tax line's own list still reads"
         );
     }
 

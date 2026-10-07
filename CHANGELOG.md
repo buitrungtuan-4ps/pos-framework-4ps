@@ -753,6 +753,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A settled bill can carry its tax components**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 1 to 3).
+  `billing.bill.settled`'s tax lines gain `components`, and its fee lines `tax_components`: each a
+  list of `name`, `rate_basis_points` and `tax`, summing to the line's tax. A component's `name` is
+  a token of two to eight upper-case letters and digits, starting with a letter (`CGST`, `SGST`,
+  `UTGST`), which the personal-data barrier admits to the log. `pos-proto` gains the token,
+  `TaxComponentName`, and `TaxRateTable::rows_with_untokened_components`, which lists the rows of a
+  tax table whose component names are not tokens. A reader that meets a name it cannot read takes
+  that line as not split, and still reads the bill.
+
+  **Upgrade note:** additive wire fields, with no behaviour yet: no edge writes them and nothing
+  reads them. Both are left out when empty, so every bill writes the same bytes as before.
+  `PROTOCOL_VERSION` is unchanged. `docs/snapshots/events.txt` now lists a payload's parts: each
+  field of a struct a payload nests, under the path to it, such as
+  `field=tax_lines[].components[].name` on `billing.bill.settled`. That adds 22 lines for the
+  parts already published (`fee_rules[]`, `fee_lines[]` and `tax_lines[]`) and 8 for these fields,
+  and removing any of them fails CI as removing a payload's own field does. No route, permission,
+  setting or migration changes.
+
 - **A store sets the over or short a drawer closes with before it asks a reason, and the till
   asks it** ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). The setting
   `shift.variance_reason_minor` joins the register: an amount in the store currency's minor unit,
