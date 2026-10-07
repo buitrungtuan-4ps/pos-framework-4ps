@@ -24,6 +24,7 @@ GET /api/printers
 GET /api/reason-codes
 GET /api/reports/takings
 GET /api/session
+GET /api/shifts
 GET /api/shifts/current
 GET /api/sync
 GET /api/tables/{id}

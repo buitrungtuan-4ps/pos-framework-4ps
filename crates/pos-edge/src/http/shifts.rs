@@ -14,10 +14,16 @@
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2) is sent `expected_amount` in every response, so the Shift screen can show it beside
 //! the count. `variance` is still the close's alone.
+//!
+//! A store that keeps a drawer per till ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
+//! on each. The till a device is comes from its print-agent binding, read only then; a request may
+//! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
+//! /api/shifts` lists every drawer.
 
 use std::sync::Arc;
 
 use axum::Json;
+use axum::body::Bytes;
 use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
@@ -25,23 +31,58 @@ use serde::{Deserialize, Serialize};
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{EventId, ReasonCodeId, ShiftId};
+use pos_proto::ids::{DeviceId, EventId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
+use pos_proto::shift::DrawerModel;
+use pos_proto::text::DisplayName;
+use pos_proto::time::Timestamp;
 
-use crate::app::{Approval, CashMovement, Edge, ShiftView};
+use crate::app::{AppError, Approval, CashMovement, DrawersView, Edge, ShiftView, TillScope};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
 
-/// Opening a shift with a starting float.
+/// The code and PIN of somebody approving an act the person acting holds only with approval: both
+/// halves, or no approval at all.
+fn approval(code: Option<&String>, pin: Option<&String>) -> Option<Approval> {
+    Some(Approval {
+        code: code?.clone(),
+        pin: pin?.clone(),
+    })
+}
+
+/// Opening a shift with a starting float, on the device's own till's drawer or the one it names.
+/// Another till's also takes an approver where the person holds that only with approval
+/// (ADR-0167 decision 3).
 #[derive(Debug, Deserialize)]
 pub(crate) struct OpenRequest {
     opening_float: Money,
+    /// Another till's drawer to open, where the store keeps one per till. Absent is the device's
+    /// own, and where the store keeps one drawer it is ignored.
+    #[serde(default)]
+    terminal_device_id: Option<DeviceId>,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// The blind count: the physical cash counted, in minor units. Nothing about what was expected.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CountRequest {
     counted_minor: i64,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+/// A close's optional body: the approver for another till's drawer.
+#[derive(Debug, Default, Deserialize)]
+struct CloseRequest {
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1).
@@ -63,9 +104,7 @@ pub(crate) struct OpenDrawerRequest {
 
 impl OpenDrawerRequest {
     fn approval(&self) -> Option<Approval> {
-        let code = self.approver_code.clone()?;
-        let pin = self.approver_pin.clone()?;
-        Some(Approval { code, pin })
+        approval(self.approver_code.as_ref(), self.approver_pin.as_ref())
     }
 }
 
@@ -80,6 +119,9 @@ struct OpenDrawerResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct ShiftResponse {
     shift_id: String,
+    /// The till whose drawer it is, absent for the store's one drawer (ADR-0167).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_device_id: Option<String>,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
     /// Revealed at close (§11.1), and before it only where the store's count is not blind.
@@ -109,6 +151,7 @@ impl From<ShiftView> for ShiftResponse {
     fn from(view: ShiftView) -> Self {
         Self {
             shift_id: view.shift_id.to_string(),
+            terminal_device_id: view.till.map(|till| till.to_string()),
             state: view.state.as_wire().to_owned(),
             expected_amount: view.expected_amount,
             counted_amount: view.counted_amount,
@@ -122,16 +165,122 @@ impl From<ShiftView> for ShiftResponse {
     }
 }
 
-/// `POST /api/shifts` — open a shift with a starting float.
+/// `POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or
+/// the one the request names.
 pub(crate) async fn open<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
     Json(request): Json<OpenRequest>,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
-    respond(edge.open_shift(actor, request.opening_float).await)
+    let scope = match till_scope(
+        &edge,
+        printers.as_deref(),
+        actor,
+        request.terminal_device_id,
+    )
+    .await
+    {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
+    respond(
+        edge.open_shift_at(actor, scope, request.opening_float, approval.as_ref())
+            .await,
+    )
+}
+
+/// `GET /api/shifts` — every drawer the store keeps: its till, its default float, and its shift
+/// while one is open, as blind as the shift's own read; and the model, with the one the store has
+/// published while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8).
+pub(crate) async fn drawers<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    Json(DrawersResponse::from(edge.drawers())).into_response()
+}
+
+/// What `GET /api/shifts` answers.
+#[derive(Debug, Serialize)]
+struct DrawersResponse {
+    /// The model the edge runs: `DRAWER_MODEL_PER_STORE` or `DRAWER_MODEL_PER_TERMINAL`.
+    drawer_model: &'static str,
+    /// The model the store has published, while open shifts keep the edge on the other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waiting_drawer_model: Option<&'static str>,
+    drawers: Vec<DrawerResponse>,
+}
+
+/// One drawer: absent `terminal_device_id` and `name` for the store's one drawer.
+#[derive(Debug, Serialize)]
+struct DrawerResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_device_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<DisplayName>,
+    default_float: Money,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened_time: Option<Timestamp>,
+    /// Its shift, `null` while the drawer is closed.
+    shift: Option<ShiftResponse>,
+}
+
+impl From<DrawersView> for DrawersResponse {
+    fn from(view: DrawersView) -> Self {
+        Self {
+            drawer_model: view.model.as_wire(),
+            waiting_drawer_model: view.waiting.map(DrawerModel::as_wire),
+            drawers: view
+                .drawers
+                .into_iter()
+                .map(|drawer| DrawerResponse {
+                    terminal_device_id: drawer.till.map(|till| till.to_string()),
+                    name: drawer.name,
+                    default_float: drawer.default_float,
+                    opened_time: drawer.opened_time,
+                    shift: drawer.shift.map(ShiftResponse::from),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The till the device is, by its print-agent binding to a `TERMINAL` entry the store's `devices`
+/// node lists, and the till the request names (ADR-0167 decisions 2 and 6). The binding is read
+/// only where the edge keeps a drawer per till; where it keeps one, every device's drawer is the
+/// store's. One that cannot be read refuses the act, `503`, rather than guess, as a till's paper is
+/// refused.
+async fn till_scope<S>(
+    edge: &Edge<S>,
+    printers: Option<&Arc<Printers>>,
+    actor: Actor,
+    named: Option<DeviceId>,
+) -> Result<TillScope, AppError>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    if edge.drawer_model() != DrawerModel::PerTerminal {
+        return Ok(TillScope { own: None, named });
+    }
+    let bound = match printers {
+        Some(printers) => printers
+            .terminal_of(actor.device_id)
+            .await
+            .map_err(AppError::Port)?,
+        None => None,
+    };
+    let own = bound.filter(|terminal| {
+        crate::printing::published_terminals(&edge.session().devices)
+            .any(|entry| entry.device_id == *terminal)
+    });
+    Ok(TillScope { own, named })
 }
 
 /// `GET /api/shifts/current` — the shift trading now, or `null` when none is open.
@@ -143,17 +292,28 @@ where
 ///
 /// Blind like the count: the expectation and the variance are never in this answer, only in the
 /// close's — except the expectation, where the store has turned the blind close off.
-pub(crate) async fn current<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+///
+/// Where the store keeps a drawer per till, the drawer is the device's own till's, and a device that
+/// is no till has none.
+pub(crate) async fn current<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
-    Json(edge.current_shift().map(ShiftResponse::from)).into_response()
+    match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => Json(edge.current_shift_at(scope).map(ShiftResponse::from)).into_response(),
+        Err(error) => error_response(&error),
+    }
 }
 
 /// `POST /api/shifts/{id}/count` — enter the blind count.
 pub(crate) async fn count<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
     Path(id): Path<String>,
     Json(request): Json<CountRequest>,
 ) -> Response
@@ -163,9 +323,23 @@ where
     let Some(shift_id) = parse_ulid(&id).map(ShiftId::new) else {
         return bad_request("a shift id is a ULID");
     };
+    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
     respond(
-        edge.count_shift(actor, shift_id, request.counted_minor)
-            .await,
+        edge.count_shift_at(
+            actor,
+            scope,
+            shift_id,
+            request.counted_minor,
+            approval.as_ref(),
+        )
+        .await,
     )
 }
 
@@ -286,6 +460,7 @@ pub(crate) async fn close<S>(
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
     Path(id): Path<String>,
+    body: Bytes,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
@@ -293,7 +468,27 @@ where
     let Some(shift_id) = parse_ulid(&id).map(ShiftId::new) else {
         return bad_request("a shift id is a ULID");
     };
-    let view = match edge.close_shift(actor, shift_id).await {
+    // No body, as every close sent before another till's drawer could be closed, is no approver.
+    let request: CloseRequest = if body.is_empty() {
+        CloseRequest::default()
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(request) => request,
+            Err(_) => return bad_request("a close's body is an approver's code and PIN"),
+        }
+    };
+    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
+    let view = match edge
+        .close_shift_at(actor, scope, shift_id, approval.as_ref())
+        .await
+    {
         Ok(view) => view,
         Err(error) => return error_response(&error),
     };
@@ -321,7 +516,7 @@ where
 }
 
 /// Maps a shift command outcome to a response.
-fn respond(outcome: Result<ShiftView, crate::app::AppError>) -> Response {
+fn respond(outcome: Result<ShiftView, AppError>) -> Response {
     match outcome {
         Ok(view) => Json(ShiftResponse::from(view)).into_response(),
         Err(error) => error_response(&error),

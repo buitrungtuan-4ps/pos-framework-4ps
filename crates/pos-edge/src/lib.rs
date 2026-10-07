@@ -86,10 +86,10 @@ pub mod version;
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
-    AppError, Approval, BillCheckView, BillView, CashMovement, CounterOrderOpened, EVENT_LOG_DAYS,
-    Edge, EdgeSession, FiredLine, InboundOrderOpened, LineDraft, LineView, MAX_SETTLED_LISTED,
-    OrderLineChoice, ReceiptCopy, ReceiptLine, SettledBillView, ShiftView, StaffAuth, StaffRoster,
-    StoreIdentity, TableView, TransferView,
+    AppError, Approval, BillCheckView, BillView, CashMovement, CounterOrderOpened, DrawerView,
+    DrawersView, EVENT_LOG_DAYS, Edge, EdgeSession, FiredLine, InboundOrderOpened, LineDraft,
+    LineView, MAX_SETTLED_LISTED, OrderLineChoice, ReceiptCopy, ReceiptLine, SettledBillView,
+    ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView, TillScope, TransferView,
 };
 pub use auth::{
     DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, LockoutPolicy, SessionSettingsSource, Sessions, SignIn,

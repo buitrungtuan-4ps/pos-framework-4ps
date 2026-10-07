@@ -510,7 +510,11 @@ where
         // The cash shift: open, blind count, close — and the one that is open, so a device that
         // reloads mid-shift can still count and close it rather than offering to open another.
         .route("/api/shifts/current", get(shifts::current::<S>))
-        .route("/api/shifts", post(shifts::open::<S>))
+        // Every drawer the store keeps, one per till where it keeps one per till (ADR-0167).
+        .route(
+            "/api/shifts",
+            get(shifts::drawers::<S>).post(shifts::open::<S>),
+        )
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
         .route("/api/shifts/{id}/paid-in", post(shifts::paid_in::<S>))
@@ -661,6 +665,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::BillsOnDifferentOrders => "BILLS_ON_DIFFERENT_ORDERS",
         AppError::UnknownShift => "UNKNOWN_SHIFT",
         AppError::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
+        AppError::NotATill => "NOT_A_TILL",
         AppError::OpenShiftRequired => "OPEN_SHIFT_REQUIRED",
         AppError::AwaitingStaffConfirmation => "AWAITING_STAFF_CONFIRMATION",
         AppError::OrderRejected => "ORDER_REJECTED",
@@ -712,6 +717,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::BillsOnDifferentOrders
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen
+        | AppError::NotATill
         | AppError::OpenShiftRequired
         | AppError::AwaitingStaffConfirmation
         | AppError::OrderRejected
