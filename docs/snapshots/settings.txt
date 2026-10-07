@@ -92,6 +92,16 @@ printing.receipt_second_language	since=0.14.1
 printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_EN
 printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_NONE
 printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_VI
+printing.receipt_tax_components
+printing.receipt_tax_components	default=true
+printing.receipt_tax_components	kind=SETTING_KIND_BOOL
+printing.receipt_tax_components	scope=SETTING_SCOPE_BRAND
+printing.receipt_tax_components	scope=SETTING_SCOPE_STORE
+printing.receipt_tax_components	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_tax_components	scope=SETTING_SCOPE_TENANT
+printing.receipt_tax_components	since=0.14.1
+printing.receipt_tax_components	value=false
+printing.receipt_tax_components	value=true
 qr.table_order
 qr.table_order	default=TABLE_ORDER_SEPARATE
 qr.table_order	kind=SETTING_KIND_CHOICE

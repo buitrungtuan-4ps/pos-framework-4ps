@@ -554,6 +554,24 @@ pub fn register() -> Vec<Setting> {
         },
         Setting {
             node: PublishedPrinting::NODE,
+            field: "receipt_tax_components",
+            shape: SettingShape::Bool {
+                default: PublishedPrinting::default().receipt_tax_components(),
+                // The owner, 2026-10-07: every receipt prints them, so a new store is given what
+                // the default already prints.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "Whether a receipt, its copy and a pre-bill print each tax line's named \
+                      components under its rate, such as CGST and SGST under India's GST, \
+                      wherever the store's `tax` node names them. A copy prints the components \
+                      its settle recorded. Off, each prints the tax line alone, and the settle \
+                      still records the components. A store whose `tax` node names none prints \
+                      the same either way.",
+        },
+        Setting {
+            node: PublishedPrinting::NODE,
             field: "font_size_dots",
             shape: SettingShape::Int {
                 min: *printing::FONT_SIZE_DOTS.start(),
@@ -1274,6 +1292,7 @@ mod tests {
                     "receipt_printed_on_settle" => {
                         Some(json!(printing.receipt_printed_on_settle()))
                     }
+                    "receipt_tax_components" => Some(json!(printing.receipt_tax_components())),
                     // A node that sets no size leaves the edge on its deprecated local file and
                     // then on this default, so the default is what a store with neither runs.
                     "font_size_dots" => Some(json!(

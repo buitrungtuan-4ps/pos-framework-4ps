@@ -34,6 +34,7 @@ use pos_proto::ids::{
 use pos_proto::locale::{NumberFormat, TaxComponent, TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
+use pos_proto::printing::PublishedPrinting;
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::time::{BusinessDate, Timestamp};
@@ -510,14 +511,35 @@ fn check(country: &str, sale: &Sale, before: &Before) {
     );
 }
 
-/// **Vietnam and Japan write and print what they did before.** Neither publishes components, so
-/// the settle records none, and every byte of the event and the paper is main's.
+/// `session`, with its `printing.receipt_tax_components` turned off (ADR-0168 decision 4).
+fn components_off(session: EdgeSession) -> EdgeSession {
+    EdgeSession {
+        printing: PublishedPrinting {
+            receipt_tax_components: Some(false),
+            ..PublishedPrinting::default()
+        },
+        ..session
+    }
+}
+
+/// **Vietnam and Japan write and print what they did before**, with the store's switch for tax
+/// components on, as it is by default, and off. Neither publishes components, so the settle records
+/// none, and every byte of the event and the paper is main's either way.
 #[tokio::test]
 async fn vietnam_and_japan_write_and_print_the_bytes_they_did_before() {
-    let (session, lines) = vietnam();
-    check("Vietnam", &sell(session, lines).await, &VIETNAM);
-    let (session, lines) = japan();
-    check("Japan", &sell(session, lines).await, &JAPAN);
+    for off in [false, true] {
+        let turned = |session| {
+            if off {
+                components_off(session)
+            } else {
+                session
+            }
+        };
+        let (session, lines) = vietnam();
+        check("Vietnam", &sell(turned(session), lines).await, &VIETNAM);
+        let (session, lines) = japan();
+        check("Japan", &sell(turned(session), lines).await, &JAPAN);
+    }
 }
 
 /// An Indian store: rupees in paise, prices before tax, food at 5 % GST printed as two halves named
@@ -652,4 +674,138 @@ async fn a_copy_prints_the_components_its_settle_recorded_after_the_table_change
     let copy = sale.copy_printed().await;
     assert!(copy.contains("SGST 2.50%"), "{copy}");
     assert!(!copy.contains("UTGST"), "{copy}");
+}
+
+/// The text lines a printer was sent, its commands taken out. `printer-escpos` sends each line as
+/// `ESC a`, `ESC E` and `GS !` with one argument each, the text and a newline, and resets them after;
+/// a document starts with `ESC @` and ends with `GS V 0`.
+fn lines_of(bytes: &[u8]) -> Vec<String> {
+    let mut text = Vec::new();
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        match byte {
+            0x1B if bytes.get(at + 1) == Some(&0x40) => at += 2,
+            0x1B | 0x1D => at += 3,
+            _ => {
+                text.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&text)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// What an Indian store's pre-bill, receipt and copy print with
+/// `printing.receipt_tax_components` on, as it is by default: each tax line's components under its
+/// rate (ADR-0104, ADR-0168 decision 4).
+const WITH_COMPONENTS: [&[&str]; 3] = [
+    &[
+        "PRE-BILL",
+        "T41",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "  CGST 2.50%  INR 2.83",
+        "  SGST 2.50%  INR 2.84",
+        "INR 118.97",
+        "Not a receipt",
+    ],
+    &[
+        "#1",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "  CGST 2.50%  INR 2.83",
+        "  SGST 2.50%  INR 2.84",
+        "INR 118.97",
+    ],
+    &[
+        "#1",
+        "COPY",
+        "Reprint 1 - 2026-01-01 00:00",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "  CGST 2.50%  INR 2.83",
+        "  SGST 2.50%  INR 2.84",
+        "INR 118.97",
+    ],
+];
+
+/// The same paper with the switch off: each tax line alone.
+const WITHOUT_COMPONENTS: [&[&str]; 3] = [
+    &[
+        "PRE-BILL",
+        "T41",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "INR 118.97",
+        "Not a receipt",
+    ],
+    &[
+        "#1",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "INR 118.97",
+    ],
+    &[
+        "#1",
+        "COPY",
+        "Reprint 1 - 2026-01-01 00:00",
+        "Paneer tikka",
+        "  1 x INR 103.00  INR 103.00",
+        "Subtotal  INR 103.00",
+        "Service charge  INR 10.30",
+        "Tax 5.00%  INR 5.67",
+        "INR 118.97",
+    ],
+];
+
+/// **An Indian store prints CGST and SGST unless it turns them off** (ADR-0168 decision 4): on, its
+/// pre-bill, receipt and copy print each tax line's components under its rate; off, the line alone.
+/// The settle records them either way, because the switch is about paper.
+#[tokio::test]
+async fn an_indian_store_prints_its_tax_components_unless_it_turns_them_off() {
+    for (off, goldens) in [(false, WITH_COMPONENTS), (true, WITHOUT_COMPONENTS)] {
+        let (session, lines) = india(["CGST", "SGST"]);
+        let session = if off {
+            components_off(session)
+        } else {
+            session
+        };
+        let sale = sell(session, lines).await;
+        for ((document, bytes), golden) in ["pre-bill", "receipt", "copy"]
+            .iter()
+            .zip(&sale.paper)
+            .zip(goldens)
+        {
+            assert_eq!(lines_of(bytes), golden, "the {document}, switch off: {off}");
+        }
+        let settled = sale.settled();
+        let recorded = settled
+            .tax_lines
+            .first()
+            .map(|line| parts(&line.components))
+            .unwrap_or_default();
+        assert_eq!(
+            recorded,
+            [("CGST", 250, 283), ("SGST", 250, 284)],
+            "switch off: {off}"
+        );
+    }
 }
