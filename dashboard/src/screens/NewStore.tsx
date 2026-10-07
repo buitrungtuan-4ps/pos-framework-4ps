@@ -6,7 +6,8 @@
 //
 // A store it creates is given the owner's new-store values as soon as it exists
 // ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-// decision 1) — today, refusing to sell while no shift is open. That call is the wizard's only write
+// decision 1) — refusing to sell while no shift is open, and a drawer for each till among them, which
+// the closing step says what the store's devices need for. That call is the wizard's only write
 // after the store itself, and it is deliberately not part of creating it: a failure says so and
 // points at Shared settings, where the same values can be given again, but it neither undoes the
 // store nor holds the operator on the first step.
@@ -62,6 +63,9 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 ];
 
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
+
+/** The setting whose new-store value has a store keep a drawer for each till (ADR-0167). */
+const DRAWER_MODEL = "shift.drawer_model";
 
 /** Where giving the new store the owner's new-store values stands. */
 type Presets =
@@ -138,7 +142,9 @@ export function PresetsNote(props: { presets: Presets; tenant: string; store: st
 
 /**
  * The two steps that remain once the wizard has finished, as links rather than as two screen names
- * in prose.
+ * in prose — and, where the new-store values gave the store a drawer for each till (`applied`, the
+ * settings they wrote), what its devices need before it takes cash: a device bound to no till takes
+ * none, and a drawer at a printer nobody marked does not open (ADR-0167).
  *
  * The closing banner used to read "Next: activate the store's devices (Activation) and publish its
  * configuration (Configuration)". That is the right advice, addressed to somebody who already knows
@@ -150,7 +156,11 @@ export function PresetsNote(props: { presets: Presets; tenant: string; store: st
  * Exported so `tests/wizard-next-steps.test.tsx` can assert both links exist and both are scoped:
  * the defect was silent, because prose naming a screen renders exactly as well as a link to it.
  */
-export function NextSteps(props: { tenant: string; store: string }) {
+export function NextSteps(props: {
+  tenant: string;
+  store: string;
+  applied?: readonly string[];
+}) {
   return (
     <div class="flex flex-col gap-2 border-t border-line pt-4">
       <span class="text-sm font-medium text-ink">{t("wizard.nextTitle")}</span>
@@ -179,6 +189,9 @@ export function NextSteps(props: { tenant: string; store: string }) {
       {/* The order matters and nothing else says it: a menu published over a missing tax node boots
           a store that cannot close a bill (ADR-0122 §7). */}
       <p class="text-sm text-ink-muted">{t("wizard.publishOrder")}</p>
+      <Show when={props.applied?.includes(DRAWER_MODEL)}>
+        <p class="text-sm text-ink-muted">{t("wizard.nextDrawers")}</p>
+      </Show>
     </div>
   );
 }
@@ -228,6 +241,12 @@ export function NewStore() {
     setScopes((current) =>
       current.includes(wire) ? current.filter((s) => s !== wire) : [...current, wire],
     );
+  };
+
+  // The settings the new-store values wrote, for the closing step to say what they ask of the store.
+  const appliedPresets = () => {
+    const state = presets();
+    return state !== null && state.state === "applied" ? state.applied : [];
   };
 
   // The owner's new-store values for the store just created. Never thrown: whatever happens here,
@@ -634,7 +653,13 @@ export function NewStore() {
               </div>
 
               <Show when={created()}>
-                {(store) => <NextSteps tenant={tenantId()} store={store().store_id} />}
+                {(store) => (
+                  <NextSteps
+                    tenant={tenantId()}
+                    store={store().store_id}
+                    applied={appliedPresets()}
+                  />
+                )}
               </Show>
               <div>
                 <Button onClick={() => navigate(screenHref("stores", tenantId(), ""), { replace: true })}>

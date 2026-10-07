@@ -753,9 +753,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store can keep a drawer for each till, `shift.drawer_model`**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1, 7 and 8), set at the
+  tenant, a brand, a store group or a store, and honoured from 0.14.1.
+  - `DRAWER_MODEL_PER_STORE`, the default, keeps one drawer, every till's, as every store has.
+  - `DRAWER_MODEL_PER_TERMINAL` keeps a drawer for each till, each started, counted and closed on
+    its own: cash is taken only at a device bound to a till, and each till's drawer springs at the
+    receipt printer its terminal names.
+  - A store the console creates from now on is given `DRAWER_MODEL_PER_TERMINAL`, the owner's choice
+    for a new store, and the new-store wizard's closing step says what its devices need before it
+    takes cash.
+  - The console's Settings screen offers it in English and Vietnamese, and marks a store on an older
+    release, which ignores the field and keeps its one drawer.
+
+  **Upgrade note:** the console can now set `shift.drawer_model`. A store created from now on keeps
+  a drawer for each till; an existing store keeps its one drawer until the setting is written for
+  it. A change waits until no drawer is open: the edge stays on the model its open drawers were
+  started under, and switches once the last one closes. Before a store keeps a drawer for each till,
+  a new store from its first day: bind each till's device to its terminal on the till's Devices
+  screen, give each terminal its receipt printer and mark that printer **Cash drawer attached** in
+  the console, and run POS Station on this release where a drawer sits behind it. A device bound to
+  no till takes cards but no cash, and a till whose printer has no drawer marked opens its drawer
+  with the key. `docs/snapshots/settings.txt` and `docs/configuration.md` gain the setting.
+  `PROTOCOL_VERSION` is unchanged, and no route, permission, event or migration is added.
+
 - **A manager starts, counts and closes every till's drawer from any till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 10). Under
-  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet, a person who may act on another till's
+  `DRAWER_MODEL_PER_TERMINAL` (`shift.drawer_model`), a person who may act on another till's
   drawer, holding `cash.shift.manage_other_till` directly or with approval, sees every till's drawer
   on the Shift screen, below this till's own, or beside it from a tablet up: its name, closed, open
   since a time on the shop's clock, or counted, its default float, and a mark where it is past its
@@ -779,7 +803,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 - **A till's Shift screen shows its own drawer, where a store keeps one per till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 6, 8 and 11). Under
-  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet:
+  `DRAWER_MODEL_PER_TERMINAL` (`shift.drawer_model`):
   - The Shift screen is this till's own drawer, under its name, with every act the screen had on
     it, and its float filled in with the till's own default float. Another till's shift no longer
     changes the shift this till shows, and binding the device to a till on the Devices screen reads
@@ -840,7 +864,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 - **Cash goes into the drawer of the till it is taken at, where a store keeps a drawer per till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). Under
-  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet, a till's drawer now counts the cash
+  `DRAWER_MODEL_PER_TERMINAL` (`shift.drawer_model`), a till's drawer now counts the cash
   taken at that till, and only that till's drawer springs for it. Under `DRAWER_MODEL_PER_STORE`,
   every store today, nothing changes, and the events are written byte for byte as before.
   - A cash payment goes into the drawer of the till the device is bound to. Its payments, its
@@ -860,8 +884,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     till, and another till's only to a person whose own role grants `cash.shift.manage_other_till`
     directly.
 
-  **Upgrade note:** no store changes until the console can set `shift.drawer_model`, which comes
-  with the till's screens for it. `PROTOCOL_VERSION` is unchanged, and no route, permission, event,
+  **Upgrade note:** no store changes until `shift.drawer_model` is set for it, as its own entry
+  says. `PROTOCOL_VERSION` is unchanged, and no route, permission, event,
   setting or migration is added. Only under a drawer per till do the settle, the paid in and out
   and the no-sale opening answer `409 NOT_A_TILL` or `503`, and does `GET /api/shifts` read the
   device's binding.
@@ -889,13 +913,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - A newly published model waits until no drawer is open, and `GET /api/shifts` names it
     meanwhile (`waiting_drawer_model`).
 
-  **Upgrade note:** no store changes until the console can set `shift.drawer_model`, which comes
-  with the till's screens for it; it is not in the configuration register. `PROTOCOL_VERSION` is
-  unchanged. One route is added, `GET /api/shifts` (`docs/snapshots/routes.txt`).
-  `POST /api/shifts` and the count take optional fields, and the close an optional body; a request
-  without them works as before. No permission is new: the shift routes now check
-  `cash.shift.manage_other_till` (migration `0084`), which leaves `NOT_ON_A_ROUTE`. No event,
-  setting or migration changes.
+  **Upgrade note:** no store changes until `shift.drawer_model` is set for it, as its own entry
+  says. `PROTOCOL_VERSION` is unchanged. One route is added, `GET /api/shifts`
+  (`docs/snapshots/routes.txt`). `POST /api/shifts` and the count take optional fields, and the
+  close an optional body; a request without them works as before. No permission is new: the shift
+  routes now check `cash.shift.manage_other_till` (migration `0084`), which leaves
+  `NOT_ON_A_ROUTE`. No event, setting or migration changes.
 
 - **A permission to start, count or close another till's drawer, `cash.shift.manage_other_till`**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 13). Where each
@@ -932,8 +955,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     (`CLOSE_REPORT_PER_DRAWER`, `CLOSE_REPORT_COMBINED`, `CLOSE_REPORT_NONE`) and `drawer_day_end`
     (`DRAWER_DAY_END_FLAG`, `DRAWER_DAY_END_REQUIRE_CLOSE`), each with its `*_UNSPECIFIED` zero
     value. An absent, unspecified or unknown value reads as today: one drawer, a report where it
-    closes, and a flag that refuses nothing. They are not in the configuration register, so the
-    console cannot set them; each joins it with the release whose edge honours it.
+    closes, and a flag that refuses nothing. Each joins the configuration register with the
+    release whose edge honours it.
   - A `TERMINAL` entry on the `devices` node (`PublishedDevice`) gains `opening_float_minor`, the
     till's default float within `shift.opening_float_minor`'s bounds; absent, or out of bounds,
     is the store's. The cloud publishes none until the console can set one, so it adds no column.

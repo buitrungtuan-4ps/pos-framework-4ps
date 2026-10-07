@@ -187,6 +187,17 @@ shift.drawer_day_end	scope=SETTING_SCOPE_TENANT
 shift.drawer_day_end	since=0.14.1
 shift.drawer_day_end	value=DRAWER_DAY_END_FLAG
 shift.drawer_day_end	value=DRAWER_DAY_END_REQUIRE_CLOSE
+shift.drawer_model
+shift.drawer_model	default=DRAWER_MODEL_PER_STORE
+shift.drawer_model	kind=SETTING_KIND_CHOICE
+shift.drawer_model	preset=DRAWER_MODEL_PER_TERMINAL
+shift.drawer_model	scope=SETTING_SCOPE_BRAND
+shift.drawer_model	scope=SETTING_SCOPE_STORE
+shift.drawer_model	scope=SETTING_SCOPE_STORE_GROUP
+shift.drawer_model	scope=SETTING_SCOPE_TENANT
+shift.drawer_model	since=0.14.1
+shift.drawer_model	value=DRAWER_MODEL_PER_STORE
+shift.drawer_model	value=DRAWER_MODEL_PER_TERMINAL
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE
