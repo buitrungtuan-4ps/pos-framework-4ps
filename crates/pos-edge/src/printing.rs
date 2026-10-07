@@ -3841,6 +3841,7 @@ mod tests {
             amount: vnd(minor),
             class_shares: Vec::new(),
             tax: vnd(0),
+            tax_components: Vec::new(),
             waivable: false,
         }
     }
@@ -4766,6 +4767,7 @@ mod tests {
         // printing their sum is not a lesser rendering of the same fact — it is not a valid invoice.
         use pos_core::billing::{TaxComponentLine, TaxLine};
         use pos_proto::ids::TaxClassId;
+        use pos_proto::locale::TaxComponentName;
 
         let inr = CurrencyCode::parse("INR").expect("INR is three upper-case letters");
         let money = |amount| Money::new(inr, amount);
@@ -4782,12 +4784,12 @@ mod tests {
                 tax: money(5_000),
                 components: vec![
                     TaxComponentLine {
-                        name: "CGST".to_owned(),
+                        name: TaxComponentName::new("CGST").expect("a token"),
                         rate_basis_points: 250,
                         tax: money(2_500),
                     },
                     TaxComponentLine {
-                        name: "SGST".to_owned(),
+                        name: TaxComponentName::new("SGST").expect("a token"),
                         rate_basis_points: 250,
                         tax: money(2_500),
                     },

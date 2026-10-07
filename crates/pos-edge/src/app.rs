@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::billing::{
     self, BillInput, BillLine, BillTotals, ClassBase, FeeLine, FeeWhole, MergedFees, MergingBill,
-    Payment, TaxLine,
+    Payment, TaxComponentLine, TaxLine,
 };
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
@@ -50,10 +50,10 @@ use pos_proto::devices::{DeviceKind, PublishedDevices};
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillFeeLine, BillTaxLine, BillingBillMerged, BillingBillOpened, BillingBillSettled,
-    BillingBillSplit, BillingBillVoided, BillingDiscountApplied, BillingFeeWaived,
-    BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened, CashDrawerPaidIn,
-    CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    BillFeeLine, BillTaxComponent, BillTaxLine, BillingBillMerged, BillingBillOpened,
+    BillingBillSettled, BillingBillSplit, BillingBillVoided, BillingDiscountApplied,
+    BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened,
+    CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
     DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
     InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
     SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
@@ -2143,8 +2143,10 @@ impl From<SalesOrderLineAdded> for LineRecord {
 /// A bill's fees as the settle records them and the check reads show them
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
 /// in rule order, with the rule, its code and the name the bill froze, what it charged and the tax
-/// on it. One mapping for both, so the till and the log cannot describe a fee differently; the
-/// till's reads name each fee in the store's display language ([`fee_records_in`]).
+/// on it, and that tax by component where the store's `tax` node names components
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3).
+/// One mapping for both, so the till and the log cannot describe a fee differently; the till's
+/// reads name each fee in the store's display language ([`fee_records_in`]).
 pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
     totals
         .fee_lines
@@ -2155,7 +2157,20 @@ pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
             display_name: line.display_name.clone(),
             amount: line.amount,
             tax: line.tax,
-            tax_components: Vec::new(),
+            tax_components: component_records(&line.tax_components),
+        })
+        .collect()
+}
+
+/// Components as a settle records them, in the order the bill computed them: empty where the bill
+/// split nothing, which leaves the field off the event.
+fn component_records(components: &[TaxComponentLine]) -> Vec<BillTaxComponent> {
+    components
+        .iter()
+        .map(|component| BillTaxComponent {
+            name: component.name.clone(),
+            rate_basis_points: component.rate_basis_points,
+            tax: component.tax,
         })
         .collect()
 }
@@ -2179,7 +2194,8 @@ pub(crate) fn fee_records_in(
 }
 
 /// A bill's tax per class as the settle records it (ADR-0159 decision 4, roadmap-v3 B4.1): each
-/// class's base, rate and tax, rounded once on that whole base and summing to the bill's tax.
+/// class's base, rate and tax, rounded once on that whole base and summing to the bill's tax, and
+/// that tax by component where the store's `tax` node names components (ADR-0168 decision 3).
 fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
     totals
         .tax_lines
@@ -2189,7 +2205,7 @@ fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
             taxable_base: line.taxable_base,
             rate_basis_points: line.rate_basis_points,
             tax: line.tax,
-            components: Vec::new(),
+            components: component_records(&line.components),
         })
         .collect()
 }
@@ -2445,8 +2461,9 @@ struct SettledReceipt {
     /// Each fee the bill was charged, as settled ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
     /// decision 4). Empty for a bill settled with no fee, or before the settle recorded them.
     fee_lines: Vec<BillFeeLine>,
-    /// The tax per class, as settled. Empty for a bill settled before the settle recorded it,
-    /// whose copy recovers the lines by computing them again.
+    /// The tax per class, as settled, each line with the named parts it recorded (ADR-0168). Empty
+    /// for a bill settled before the settle recorded it, whose copy recovers the lines by computing
+    /// them again.
     tax_lines: Vec<BillTaxLine>,
     /// The corporate buyer, whose details stay in the subject store (ADR-0107).
     buyer_subject_id: Option<SubjectId>,
@@ -2482,10 +2499,10 @@ impl SettledReceipt {
     /// decision 5). Either way the paper adds up to what the guest paid.
     ///
     /// A settle that recorded its fees and its tax per class (ADR-0159 decision 4) is printed from
-    /// them, whatever the rate table or the fee rules say now. It records neither how its
-    /// reductions divide between a discount and a comp nor the named parts of a tax line, so
-    /// those two are taken from `recomputed` where they add up to the recorded figure, and
-    /// otherwise printed as one line.
+    /// them, whatever the rate table or the fee rules say now, each tax line with the named parts
+    /// it recorded ([`Self::tax_line`]). It does not record how its reductions divide between a
+    /// discount and a comp, so that is taken from `recomputed` where it adds up to the recorded
+    /// figure, and otherwise printed as one line.
     ///
     /// A settle from before those were recorded prints `recomputed` when it agrees with every
     /// figure the settle recorded, which is every day the rate table has not changed since, and
@@ -2565,30 +2582,56 @@ impl SettledReceipt {
             amount: recorded.amount,
             class_shares: Vec::new(),
             tax: recorded.tax,
+            tax_components: recorded
+                .tax_components
+                .iter()
+                .map(Self::component_line)
+                .collect(),
             // A settled bill owes nothing more to waive.
             waivable: false,
         }
     }
 
-    /// A recorded tax line as the copy prints it, with its named parts (ADR-0104) from `recomputed`
-    /// where the recomputation charged the class the same tax at the same rate, so they sum to it.
+    /// A recorded tax line as the copy prints it, with its named parts (ADR-0104).
+    ///
+    /// The parts the settle recorded, whatever the rate table says now (ADR-0168 decision 4). A
+    /// line that recorded none, as every line settled before the settle recorded them, takes them
+    /// as every copy did before: from `recomputed`'s line of the same class, rate and tax, so they
+    /// sum to it, and otherwise prints without them.
     fn tax_line(recorded: &BillTaxLine, recomputed: Option<&BillTotals>) -> TaxLine {
-        let components = recomputed
-            .and_then(|totals| {
-                totals.tax_lines.iter().find(|line| {
-                    line.tax_class_id == recorded.tax_class_id
-                        && line.rate_basis_points == recorded.rate_basis_points
-                        && line.tax == recorded.tax
+        let components = if recorded.components.is_empty() {
+            recomputed
+                .and_then(|totals| {
+                    totals.tax_lines.iter().find(|line| {
+                        line.tax_class_id == recorded.tax_class_id
+                            && line.rate_basis_points == recorded.rate_basis_points
+                            && line.tax == recorded.tax
+                    })
                 })
-            })
-            .map(|line| line.components.clone())
-            .unwrap_or_default();
+                .map(|line| line.components.clone())
+                .unwrap_or_default()
+        } else {
+            recorded
+                .components
+                .iter()
+                .map(Self::component_line)
+                .collect()
+        };
         TaxLine {
             tax_class_id: recorded.tax_class_id,
             taxable_base: recorded.taxable_base,
             rate_basis_points: recorded.rate_basis_points,
             tax: recorded.tax,
             components,
+        }
+    }
+
+    /// A recorded component as the copy prints it.
+    fn component_line(recorded: &BillTaxComponent) -> TaxComponentLine {
+        TaxComponentLine {
+            name: recorded.name.clone(),
+            rate_basis_points: recorded.rate_basis_points,
+            tax: recorded.tax,
         }
     }
 }
@@ -7245,8 +7288,8 @@ impl<S: EventStore> Edge<S> {
     /// The printing itself is the caller's, after the commit, as the settle's is.
     ///
     /// The figures are the settle's own ([`SettledReceipt::totals`]): the lines are the ones the
-    /// bill covered, and the totals are recomputed only to recover the per-rate tax lines, which
-    /// the copy prints when they still add up to what was recorded.
+    /// bill covered, and the totals are recomputed only to recover what the settle did not record,
+    /// which the copy prints when it still adds up to what was recorded.
     ///
     /// Two tills pressing at the same moment can both print copy *n*. Each is still its own event,
     /// so the count the dashboard reads stays right.
@@ -7279,9 +7322,9 @@ impl<S: EventStore> Edge<S> {
 
         let session = self.session();
         let order = self.bill_snapshot(&bill, &session)?;
-        // Recomputed only for the per-rate tax lines, which the settle did not record; a rate
-        // table that no longer prices one of these classes leaves the copy with the recorded
-        // total alone.
+        // Recomputed only for what the settle did not record: how its reductions divide, and the
+        // per-rate tax lines, or their named parts, of a settle that recorded none. A rate table
+        // that no longer prices one of these classes leaves the copy with the recorded figures.
         let recomputed = billing::assemble(&Self::bill_input(
             &session,
             &order,
@@ -11824,6 +11867,7 @@ mod tests {
             amount: vnd(minor),
             class_shares: Vec::new(),
             tax: vnd(0),
+            tax_components: Vec::new(),
             waivable: false,
         };
         // The first rule is still published and translated; the second is no longer published.
@@ -11969,6 +12013,85 @@ mod tests {
         for totals in [&unchanged, &moved, &regrouped, &alone] {
             assert!(adds_up(totals), "{totals:?} does not add up");
         }
+    }
+
+    /// A tax line prints the named parts its settle recorded, whatever the table names now
+    /// (ADR-0168 decision 4). A line that recorded none, as every line settled before the settle
+    /// recorded them, takes them as a copy always did: from the line computed again where it
+    /// charged the class the same tax at the same rate, and otherwise not at all.
+    #[test]
+    fn a_copy_prints_the_parts_a_line_recorded_and_recovers_them_only_where_it_recorded_none() {
+        use pos_core::billing::TaxComponentLine;
+        use pos_proto::events::{BillTaxComponent, BillTaxLine};
+        use pos_proto::locale::TaxComponentName;
+
+        let name = |name: &str| TaxComponentName::new(name).expect("a token");
+        let part = |half: &str| TaxComponentLine {
+            name: name(half),
+            rate_basis_points: 500,
+            tax: vnd(6_500),
+        };
+        let recomputed = |tax: i64, halves: [&str; 2]| BillTotals {
+            subtotal: vnd(150_000),
+            discount_total: vnd(20_000),
+            comp_total: vnd(0),
+            service_charge: vnd(0),
+            fee_lines: Vec::new(),
+            tax_lines: vec![TaxLine {
+                tax_class_id: EdgeSession::standard_tax_class(),
+                taxable_base: vnd(130_000),
+                rate_basis_points: 1_000,
+                tax: vnd(tax),
+                components: halves.iter().map(|half| part(half)).collect(),
+            }],
+            tax_total: vnd(tax),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(130_000 + tax),
+        };
+        let mut settled = a_settled_receipt(7, a_day(30), 1);
+        settled.tax_lines = vec![BillTaxLine {
+            tax_class_id: EdgeSession::standard_tax_class(),
+            taxable_base: vnd(130_000),
+            rate_basis_points: 1_000,
+            tax: vnd(13_000),
+            components: ["CGST", "SGST"]
+                .iter()
+                .map(|half| BillTaxComponent {
+                    name: name(half),
+                    rate_basis_points: 500,
+                    tax: vnd(6_500),
+                })
+                .collect(),
+        }];
+        let parts = |totals: BillTotals| -> Vec<TaxComponentLine> {
+            totals
+                .tax_lines
+                .into_iter()
+                .flat_map(|line| line.components)
+                .collect()
+        };
+
+        // Recorded: SGST, though the table now names UTGST at the same rate.
+        let today = recomputed(13_000, ["CGST", "UTGST"]);
+        assert_eq!(
+            parts(settled.totals(Some(&today))),
+            [part("CGST"), part("SGST")]
+        );
+        assert_eq!(
+            parts(settled.totals(None)),
+            [part("CGST"), part("SGST")],
+            "with nothing computed again"
+        );
+
+        // Recorded none: today's, where they give the recorded tax, as before; else none.
+        if let Some(line) = settled.tax_lines.first_mut() {
+            line.components.clear();
+        }
+        assert_eq!(
+            parts(settled.totals(Some(&today))),
+            [part("CGST"), part("UTGST")]
+        );
+        assert!(parts(settled.totals(Some(&recomputed(12_000, ["CGST", "UTGST"])))).is_empty());
     }
 
     /// Today's takings are every bill the day settled, at what its guests paid, and none of another

@@ -753,6 +753,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A settle records its tax components, and a copy prints the ones it recorded**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 2 and 3).
+  Where the store's `tax` node splits a rate into named components, such as CGST and SGST,
+  `billing.bill.settled` records each tax line's `components`, allocated out of its rounded tax with
+  the residual on the last, and each fee line's `tax_components`, its parts' tax split the same way
+  and summed by name and rate, so each list sums to its line's tax. A fee with a taxed part whose
+  class has no breakdown records none.
+  - A copy of the receipt prints each tax line's recorded components, whatever the table names
+    now. A line that recorded none, as every line settled before this release, takes them from the
+    bill computed again where it charged the same tax at the same rate, as before.
+  - A row that names a component with anything but a token, such as `Central GST`, is charged at
+    its rate with no breakdown, on the record and on the receipt, and the edge logs its tax class
+    when the table is applied.
+  - The till's check reads carry each fee's `tax_components` too, as the settle records them.
+
+  **Upgrade note:** from this release a settle in a store whose `tax` node names components records
+  them. Vietnam and Japan publish none, so their settle events, the chain hashes over them, and
+  their receipts, pre-bills and copies are unchanged byte for byte. A store whose table names a
+  component in free text prints that row without its breakdown from this release; the console
+  refuses such a row in a later change. `PROTOCOL_VERSION` is unchanged, and no route, event,
+  permission, setting or migration is added.
+
 - **A settled bill can carry its tax components**
   ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 1 to 3).
   `billing.bill.settled`'s tax lines gain `components`, and its fee lines `tax_components`: each a
