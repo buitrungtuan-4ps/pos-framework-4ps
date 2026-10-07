@@ -118,6 +118,7 @@
   "error.bills_on_different_orders": "Không thể gộp hoá đơn của hai order khác nhau. Hãy thanh toán riêng từng order.",
   "error.capability_disabled": "Cửa hàng không bật tính năng này.",
   "error.channel_not_accepted": "Cửa hàng này không nhận đơn qua kênh đó. Kiểm tra các kênh đã xuất bản cho cửa hàng trên console.",
+  "error.drawer_day_ended": "Ca của ngăn kéo tiền này bắt đầu từ ngày kinh doanh trước. Hãy kiểm đếm và đóng ca ở màn hình Ca trước khi nhận thêm tiền mặt. Vẫn thanh toán bằng thẻ được.",
   "error.empty": "Chưa có gì để thực hiện — hãy thêm món hoặc thanh toán trước.",
   "error.internal": "Máy chủ cửa hàng gặp lỗi. Hãy thử lại; nếu lặp lại, gọi hỗ trợ.",
   "error.invalid_argument": "Yêu cầu không hợp lệ. Hãy tải lại và thử lại.",

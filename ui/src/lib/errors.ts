@@ -42,6 +42,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
   CASH_REASON_NOT_VALID: "error.reason_not_valid",
   SHIFT_NOT_OPEN: "error.shift_not_open",
+  // A drawer still open past its business day, at a store that requires it closed (ADR-0167).
+  DRAWER_DAY_ENDED: "error.drawer_day_ended",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",

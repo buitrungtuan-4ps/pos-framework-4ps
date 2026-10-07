@@ -171,6 +171,10 @@ pub(crate) struct ShiftResponse {
     /// `DRAWER_UNAVAILABLE`. Absent on every other command.
     #[serde(skip_serializing_if = "Option::is_none")]
     drawer_open: Option<String>,
+    /// `true` while the shift is still open past the business day it opened on, which a till and
+    /// the console flag (ADR-0167 decision 11). Absent otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    day_ended: bool,
 }
 
 impl From<ShiftView> for ShiftResponse {
@@ -187,6 +191,7 @@ impl From<ShiftView> for ShiftResponse {
             print_shift_report: view.print_shift_report,
             shift_report_print: None,
             drawer_open: None,
+            day_ended: view.day_ended,
         }
     }
 }

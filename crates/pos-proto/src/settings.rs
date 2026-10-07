@@ -29,7 +29,7 @@ use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
-use crate::shift::{self, CloseReport, NoShiftSelling, PublishedShift};
+use crate::shift::{self, CloseReport, DrawerDayEnd, NoShiftSelling, PublishedShift};
 use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
@@ -338,6 +338,23 @@ pub fn register() -> Vec<Setting> {
                       and a drawer closed on its own still prints its own report. \
                       `CLOSE_REPORT_NONE` prints nothing, and the close still answers with the \
                       drawer's figures.",
+        },
+        Setting {
+            node: PublishedShift::NODE,
+            field: "drawer_day_end",
+            shape: SettingShape::Choice {
+                values: choices::<DrawerDayEnd>(),
+                default: PublishedShift::default().drawer_day_end().as_wire(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "What happens to a drawer whose shift is still open once its business day \
+                      has ended at the store's cutoff. `DRAWER_DAY_END_FLAG` refuses nothing, and \
+                      the shift reads say the drawer's day has ended. \
+                      `DRAWER_DAY_END_REQUIRE_CLOSE` also refuses cash, a paid in and a paid out \
+                      into it with `DRAWER_DAY_ENDED` until it is counted and closed; a card, the \
+                      count, the close and a no-sale opening still work.",
         },
         Setting {
             node: PublishedSession::NODE,
@@ -1180,6 +1197,7 @@ mod tests {
                     "opening_float_minor" => Some(json!(shift.opening_float_minor())),
                     "blind_close" => Some(json!(shift.blind_close())),
                     "close_report" => Some(json!(shift.close_report().as_wire())),
+                    "drawer_day_end" => Some(json!(shift.drawer_day_end().as_wire())),
                     _ => None,
                 }
             }

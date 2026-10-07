@@ -72,7 +72,7 @@ use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
-use pos_proto::shift::{CloseReport, DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
@@ -1203,6 +1203,11 @@ pub enum AppError {
     /// and a movement after the count would change what the count is checked against.
     #[error("that shift is not open for cash to be paid in or out")]
     ShiftNotOpen,
+    /// Cash into a drawer whose shift opened on an earlier business day, at a store that requires
+    /// such a drawer counted and closed first
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11).
+    #[error("this drawer's shift opened on an earlier business day; count and close it first")]
+    DrawerDayEnded,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
     /// attaches ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
@@ -1931,6 +1936,10 @@ pub struct ShiftView {
     /// The figures that report prints — present only on the close, which is the one command that
     /// has them all and the last moment the shift's record exists.
     pub report: Option<ShiftReport>,
+    /// Whether the shift opened on an earlier business day than today's and is still open: its
+    /// day has ended ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+    /// decision 11).
+    pub day_ended: bool,
 }
 
 /// Which till a request comes from, and which till's drawer it names
@@ -2274,6 +2283,12 @@ struct ShiftRecord {
     till: Option<DeviceId>,
     /// When it opened, which the drawers read reports.
     opened_time: Timestamp,
+    /// The business date it opened on: once today's is later, its day has ended (ADR-0167
+    /// decision 11).
+    business_date: BusinessDate,
+    /// The business date the edge last warned that the drawer is open past its day's end, so it
+    /// warns once a day.
+    day_end_warned: Option<BusinessDate>,
     state: ShiftState,
     opening_float: Money,
     cash_collected: Money,
@@ -2283,18 +2298,21 @@ struct ShiftRecord {
 }
 
 impl ShiftRecord {
-    /// A shift as it opens on `till`'s drawer at `opened_time`: its float, and nothing taken, paid
-    /// in or out, or counted yet, in `currency`.
+    /// A shift as it opens on `till`'s drawer at `opened_time`, on `business_date`: its float, and
+    /// nothing taken, paid in or out, or counted yet, in `currency`.
     fn opened(
         opening_float: Money,
         currency: CurrencyCode,
         till: Option<DeviceId>,
         opened_time: Timestamp,
+        business_date: BusinessDate,
     ) -> Self {
         let zero = Money::zero(currency);
         Self {
             till,
             opened_time,
+            business_date,
+            day_end_warned: None,
             state: ShiftState::Open,
             opening_float,
             cash_collected: zero,
@@ -2329,6 +2347,7 @@ fn closed_view(till: Option<DeviceId>, report: ShiftReport, print_shift_report: 
         paid_out: report.paid_out,
         print_shift_report,
         report: Some(report),
+        day_ended: false,
     }
 }
 
@@ -3602,6 +3621,18 @@ impl Projection {
     fn open_shift_record(&mut self, shift_id: ShiftId, record: ShiftRecord) {
         self.shifts.insert(shift_id, record);
         self.open_shifts.insert(record.till, shift_id);
+    }
+
+    /// Records that `shift_id`'s drawer was found open past its day's end on `today`, answering
+    /// whether that is the first time today: one warning a drawer a day.
+    fn warn_day_ended(&mut self, shift_id: ShiftId, today: BusinessDate) -> bool {
+        match self.shifts.get_mut(&shift_id) {
+            Some(record) if record.day_end_warned != Some(today) => {
+                record.day_end_warned = Some(today);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The shift `till`'s drawer has trading or counted, `None` for the store's drawer.
@@ -7428,7 +7459,7 @@ impl<S: EventStore> Edge<S> {
             .await?;
 
         let currency = self.session().currency;
-        let record = ShiftRecord::opened(opening_float, currency, till, ctx.now);
+        let record = ShiftRecord::opened(opening_float, currency, till, ctx.now, ctx.business_date);
         self.lock_projection().open_shift_record(shift_id, record);
         Ok(self.shift_view(shift_id, &record))
     }
@@ -7507,7 +7538,50 @@ impl<S: EventStore> Edge<S> {
             paid_out: record.paid_out,
             print_shift_report: false,
             report: None,
+            day_ended: self.day_ended(shift_id, record),
         }
+    }
+
+    /// Whether `shift_id`'s drawer is still open past its day's end: it opened on an earlier
+    /// business date than today's, at the store's cutoff
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11). The
+    /// first time a day finds a drawer so, the edge warns, once, naming the shift and its till and
+    /// no person. A clock it cannot read finds no drawer so.
+    fn day_ended(&self, shift_id: ShiftId, record: &ShiftRecord) -> bool {
+        let session = self.session();
+        let Ok(today) = derive_business_date(self.clock.now(), &session.timezone, session.cutoff)
+        else {
+            return false;
+        };
+        if record.state == ShiftState::Closed || record.business_date >= today {
+            return false;
+        }
+        if self.lock_projection().warn_day_ended(shift_id, today) {
+            tracing::warn!(
+                %shift_id,
+                till = ?record.till,
+                opened_on = %record.business_date,
+                %today,
+                "a drawer's shift is still open past its business day; count and close it"
+            );
+        }
+        true
+    }
+
+    /// Refuses cash into `shift_id`'s drawer once its day has ended, where the store's
+    /// `shift.drawer_day_end` requires such a drawer counted and closed first (ADR-0167 decision
+    /// 11). Only cash: a card, the count, the close and a no-sale opening go on.
+    fn refuse_after_day_end(
+        &self,
+        shift_id: ShiftId,
+        record: &ShiftRecord,
+    ) -> Result<(), AppError> {
+        if self.session().shift.drawer_day_end() == DrawerDayEnd::RequireClose
+            && self.day_ended(shift_id, record)
+        {
+            return Err(AppError::DrawerDayEnded);
+        }
+        Ok(())
     }
 
     /// The drawer model this edge runs ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1 and
@@ -7979,6 +8053,7 @@ impl<S: EventStore> Edge<S> {
         if !trading || record.state != ShiftState::Open || record.till != drawer {
             return Err(AppError::ShiftNotOpen);
         }
+        self.refuse_after_day_end(shift_id, &record)?;
         // On the shift's own drawer, and stamped with it, whichever drawer that is (ADR-0167).
         let shift = Some(shift_id);
         let (envelope, message) = match movement {
@@ -8456,6 +8531,7 @@ impl<S: EventStore> Edge<S> {
                         event.opening_float.currency_code,
                         event.terminal_device_id,
                         envelope.event_time,
+                        envelope.business_date,
                     ),
                 );
             }
@@ -8952,6 +9028,15 @@ impl<S: EventStore> Edge<S> {
         {
             let drawer = self.cash_drawer(scope)?;
             self.refuse_without_open_drawer(drawer)?;
+            let open = {
+                let projection = self.lock_projection();
+                projection
+                    .open_shift_of(drawer)
+                    .and_then(|shift_id| Some((shift_id, projection.shift(shift_id)?)))
+            };
+            if let Some((shift_id, record)) = open {
+                self.refuse_after_day_end(shift_id, &record)?;
+            }
             drawer
         } else {
             self.refuse_without_open_shift()?;
@@ -9062,8 +9147,8 @@ mod tests {
     };
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
-        BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId,
-        StoreId, TableId,
+        BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, ShiftId,
+        StationId, StoreId, TableId,
     };
     use pos_proto::locale::{TaxRate, TaxRateTable, TaxRounding};
     use pos_proto::menu::MenuCatalog;
@@ -11057,7 +11142,7 @@ mod tests {
         pos_fakes::executor::run_ready(async {
             let edge = edge();
             let refused = edge
-                .count_shift(actor(), pos_proto::ids::ShiftId::new(Ulid::from_u128(9)), 1)
+                .count_shift(actor(), ShiftId::new(Ulid::from_u128(9)), 1)
                 .await;
             assert!(matches!(refused, Err(super::AppError::UnknownShift)));
         });
@@ -11449,6 +11534,34 @@ mod tests {
             assert_eq!(edge.table_state(table), TableState::Free);
             assert!(edge.live_orders().is_empty());
         });
+    }
+
+    /// A drawer open past its day's end is warned about once a day, on its own record, so the
+    /// memory of the warning is no larger than the drawers (ADR-0167 decision 11).
+    #[test]
+    fn a_drawer_past_its_day_is_warned_about_once_a_day() {
+        let mut projection = super::Projection::default();
+        let day = |of| BusinessDate::from_ymd(2026, 10, of).expect("a date");
+        let opened = Timestamp::from_milliseconds_since_epoch(0).expect("a valid instant");
+        let shift_id = ShiftId::new(Ulid::from_u128(7));
+        let float = Money::zero(CurrencyCode::VND);
+        projection.open_shift_record(
+            shift_id,
+            super::ShiftRecord::opened(float, CurrencyCode::VND, None, opened, day(6)),
+        );
+        assert!(
+            projection.warn_day_ended(shift_id, day(7)),
+            "the first time on the 7th"
+        );
+        assert!(!projection.warn_day_ended(shift_id, day(7)), "once a day");
+        assert!(
+            projection.warn_day_ended(shift_id, day(8)),
+            "and again the next day"
+        );
+        assert!(
+            !projection.warn_day_ended(ShiftId::new(Ulid::from_u128(8)), day(8)),
+            "a shift it does not hold is nothing to warn about"
+        );
     }
 
     /// A store with no kitchen display never bumps, and its waiting set must still stop growing:
