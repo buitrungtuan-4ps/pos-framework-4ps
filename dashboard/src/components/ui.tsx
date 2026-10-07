@@ -1043,7 +1043,11 @@ export function CellField(props: {
   /** The accessible name — usually "<row> <column>", since the visible label is the header. */
   label: string;
   value: string;
-  onInput: (value: string) => void;
+  /**
+   * What was typed, and the input it was typed in, for a handler that rewrites the text and must
+   * put the caret back where it was (the tax grid's breakdown upper-cases as it is typed).
+   */
+  onInput: (value: string, input: HTMLInputElement) => void;
   placeholder?: string;
   /** A Tailwind width class, because a grid's columns are sized by the grid, not by the cell. */
   class?: string;
@@ -1058,7 +1062,7 @@ export function CellField(props: {
       placeholder={props.placeholder}
       disabled={props.disabled}
       value={props.value}
-      onInput={(event) => props.onInput(event.currentTarget.value)}
+      onInput={(event) => props.onInput(event.currentTarget.value, event.currentTarget)}
     />
   );
 }
