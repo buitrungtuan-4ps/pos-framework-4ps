@@ -517,6 +517,8 @@ where
         )
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
+        // Several counted drawers closed at once, a custom method on the collection (ADR-0167).
+        .route("/api/shifts:batch_close", post(shifts::batch_close::<S>))
         .route("/api/shifts/{id}/paid-in", post(shifts::paid_in::<S>))
         .route("/api/shifts/{id}/paid-out", post(shifts::paid_out::<S>))
         .route("/api/drawer/open", post(shifts::open_drawer::<S>))

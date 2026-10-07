@@ -65,6 +65,8 @@ pub struct PaperLabels {
     pub balanced: &'static str,
     /// The verdict when it is over.
     pub over: &'static str,
+    /// The heading over the store's totals on a slip for several drawers closed at once.
+    pub store_totals: &'static str,
     /// What a kitchen ticket prints for a guest note the edge no longer holds — it restarted since
     /// the note was written ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
     pub note_lost: &'static str,
@@ -94,6 +96,7 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     short: "Short",
     balanced: "Balanced",
     over: "Over",
+    store_totals: "STORE TOTALS",
     note_lost: "A note was written - ask the server",
 };
 
@@ -121,6 +124,7 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     short: "Thiếu",
     balanced: "Khớp",
     over: "Thừa",
+    store_totals: "TỔNG CỬA HÀNG",
     note_lost: "Có ghi chú - hỏi nhân viên phục vụ",
 };
 
@@ -196,6 +200,7 @@ mod tests {
             ENGLISH.short,
             ENGLISH.balanced,
             ENGLISH.over,
+            ENGLISH.store_totals,
         ] {
             assert!(label.is_ascii(), "{label}");
         }

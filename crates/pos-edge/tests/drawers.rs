@@ -31,8 +31,9 @@ use pos_edge::pairing::Minter;
 use pos_edge::print_agent::PrintAgents;
 use pos_edge::printing::{AgentDispatch, AgentLane, PrintOutcome, Printers, TransportFactory};
 use pos_edge::{
-    AppError, Approval, CashMovement, Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts,
-    LineDraft, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity, SystemClock, TillScope,
+    AppError, Approval, CashMovement, DrawerFigures, Edge, EdgeSession, InMemoryQueueNumbers,
+    InMemoryReceipts, LineDraft, Pairing, Sessions, StaffAuth, StaffRoster, StoreIdentity,
+    SystemClock, TillScope,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -51,7 +52,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
-use pos_proto::shift::{DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{CloseReport, DrawerModel, NoShiftSelling, PublishedShift};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -978,6 +979,219 @@ fn another_tills_expectation_shows_only_to_whoever_may_count_it_alone() {
     });
 }
 
+/// The store of [`session`], printing `report` at a close.
+fn reporting(model: DrawerModel, enforced: bool, report: CloseReport) -> EdgeSession {
+    let mut session = session(model, enforced);
+    session.shift.close_report = Open::from_known(report);
+    session
+}
+
+#[test]
+fn a_drawer_closed_on_its_own_prints_its_report_unless_the_store_prints_none() {
+    run_ready(async {
+        for (report, printed) in [
+            (CloseReport::PerDrawer, true),
+            (CloseReport::Combined, true),
+            (CloseReport::None, false),
+        ] {
+            let edge = edge_over(
+                FakeStore::new(),
+                reporting(DrawerModel::PerStore, false, report),
+            );
+            let shift = edge
+                .open_shift(person(MANAGER, 0xB1), vnd(500_000))
+                .await
+                .expect("opens")
+                .shift_id;
+            edge.count_shift(person(MANAGER, 0xB1), shift, 500_000)
+                .await
+                .expect("counts");
+            let closed = edge
+                .close_shift(person(MANAGER, 0xB1), shift)
+                .await
+                .expect("closes");
+            assert_eq!(closed.print_shift_report, printed, "{report:?}");
+            assert!(
+                closed.report.is_some(),
+                "the close answers with the figures whatever prints: {report:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
+    run_ready(async {
+        let edge = edge_over(
+            FakeStore::new(),
+            reporting(DrawerModel::PerTerminal, true, CloseReport::Combined),
+        );
+        let bar = edge
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .await
+            .expect("the bar's")
+            .shift_id;
+        let counter = edge
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .await
+            .expect("the counter's")
+            .shift_id;
+        let (bill, due) = a_bill(&edge, person(CASHIER, 0xB1), 41).await;
+        edge.settle_bill_at(
+            person(CASHIER, 0xB1),
+            at(BAR),
+            bill,
+            paid(PaymentMethod::Cash, due),
+            None,
+        )
+        .await
+        .expect("cash at the bar");
+        for (device, own, shift, movement, amount) in [
+            (0xB1, BAR, bar, CashMovement::PaidIn, 100_000),
+            (0xC1, COUNTER, counter, CashMovement::PaidOut, 50_000),
+        ] {
+            edge.record_cash_movement_at(
+                person(CASHIER, device),
+                at(own),
+                shift,
+                movement,
+                vnd(amount),
+                making_change(),
+            )
+            .await
+            .expect("moved at its own till");
+        }
+        for (device, own, shift, counted) in
+            [(0xB1, BAR, bar, 760_000), (0xC1, COUNTER, counter, 255_000)]
+        {
+            edge.count_shift_at(person(CASHIER, device), at(own), shift, counted, None)
+                .await
+                .expect("counted");
+        }
+
+        let closed = edge
+            .close_shifts_at(person(SUPERVISOR, 0xB1), at(BAR), &[bar, counter], None)
+            .await
+            .expect("both close at once");
+        assert!(
+            closed
+                .shifts
+                .iter()
+                .all(|view| view.state == ShiftState::Closed && !view.print_shift_report),
+            "the one slip stands for each drawer's report"
+        );
+        let combined = closed.combined.expect("one slip for both");
+        let names: Vec<Option<&str>> = combined
+            .drawers
+            .iter()
+            .map(|(name, _)| name.as_ref().map(DisplayName::as_str))
+            .collect();
+        assert_eq!(names, [Some("Bar"), Some("Counter")]);
+        assert_eq!(
+            combined.totals,
+            DrawerFigures {
+                opening_float: vnd(800_000),
+                cash_collected: vnd(165_000),
+                paid_in: vnd(100_000),
+                paid_out: vnd(50_000),
+                expected_amount: vnd(1_015_000),
+                counted_amount: vnd(1_015_000),
+                variance: vnd(0),
+            },
+            "each figure is the sum of the two drawers' own: 765k expected at the bar, 250k at \
+             the counter, 5k short and 5k over"
+        );
+    });
+}
+
+#[test]
+fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permission() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), session(DrawerModel::PerTerminal, true));
+        let bar = edge
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .await
+            .expect("the bar's")
+            .shift_id;
+        let counter = edge
+            .open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .await
+            .expect("the counter's")
+            .shift_id;
+        edge.count_shift_at(person(CASHIER, 0xB1), at(BAR), bar, 500_000, None)
+            .await
+            .expect("the bar's is counted");
+
+        let uncounted = edge
+            .close_shifts_at(person(SUPERVISOR, 0xB1), at(BAR), &[bar, counter], None)
+            .await;
+        assert!(
+            matches!(uncounted, Err(AppError::Domain(_))),
+            "{uncounted:?}"
+        );
+        let closings = |log: &[EventEnvelope<RawPayload>]| {
+            log.iter()
+                .filter(|envelope| envelope.event_type.as_str() == "cash.shift.closed")
+                .count()
+        };
+        assert_eq!(closings(&logged(&store).await), 0, "nothing closed");
+        assert!(
+            edge.current_shift_at(at(BAR)).is_some(),
+            "the bar's is open"
+        );
+
+        edge.count_shift_at(person(CASHIER, 0xC1), at(COUNTER), counter, 300_000, None)
+            .await
+            .expect("the counter's is counted");
+        let refused = edge
+            .close_shifts_at(person(CASHIER, 0xB1), at(BAR), &[bar, counter], None)
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(AppError::Domain(DomainError::PermissionDenied { permission }))
+                    if permission == "cash.shift.manage_other_till"
+            ),
+            "{refused:?}"
+        );
+        let unapproved = edge
+            .close_shifts_at(person(ASKING, 0xB1), at(BAR), &[bar, counter], None)
+            .await;
+        assert!(
+            matches!(unapproved, Err(AppError::ApprovalRequired)),
+            "{unapproved:?}"
+        );
+        let closed = edge
+            .close_shifts_at(
+                person(ASKING, 0xB1),
+                at(BAR),
+                &[bar, counter, bar],
+                Some(&manager()),
+            )
+            .await
+            .expect("one approval covers the batch");
+        assert_eq!(closed.shifts.len(), 2, "a shift named twice closes once");
+        assert!(
+            closed.shifts.iter().all(|view| view.print_shift_report),
+            "each drawer prints its own report"
+        );
+        assert!(closed.combined.is_none());
+        let log = logged(&store).await;
+        assert_eq!(closings(&log), 2);
+        let overrides: Vec<_> = log
+            .iter()
+            .filter(|envelope| envelope.event_type.as_str() == "security.permission.overridden")
+            .map(|envelope| envelope.shift_id)
+            .collect();
+        assert_eq!(
+            overrides,
+            [Some(counter)],
+            "the approval is recorded on the other till's drawer it covered"
+        );
+    });
+}
+
 // --- Over the shipped routes ------------------------------------------------------------------
 
 async fn send(
@@ -1041,30 +1255,45 @@ impl AgentDispatch for Unreadable {
     }
 }
 
-/// The printers written to, by address, in order: with no receipt printed on a settle, only a
-/// drawer's kick writes one.
+/// What each printer was sent, by address, in order: with no receipt printed on a settle, a
+/// drawer's kick and a shift's report are all a printer is sent.
 #[derive(Debug, Default)]
-struct Kicks(std::sync::Mutex<Vec<String>>);
+struct Written(std::sync::Mutex<Vec<(String, Vec<u8>)>>);
 
-impl Kicks {
+impl Written {
+    /// The addresses written to, one per job, in order.
     fn at(&self) -> Vec<String> {
-        self.0.lock().expect("the kicks").clone()
+        let sent = self.0.lock().expect("the printers");
+        sent.iter().map(|(address, _)| address.clone()).collect()
+    }
+
+    /// Whether the last job sent to `address` says `needle`.
+    fn last_says(&self, address: &str, needle: &str) -> bool {
+        let sent = self.0.lock().expect("the printers");
+        sent.iter()
+            .rev()
+            .find(|(at, _)| at == address)
+            .is_some_and(|(_, bytes)| {
+                bytes
+                    .windows(needle.len())
+                    .any(|window| window == needle.as_bytes())
+            })
     }
 }
 
 #[derive(Debug)]
-struct KicksAt(Arc<Kicks>);
+struct WrittenAt(Arc<Written>);
 
 #[derive(Debug)]
-struct KickTransport(Arc<Kicks>, String);
+struct WriteTransport(Arc<Written>, String);
 
-impl Transport for KickTransport {
-    fn write(&self, _bytes: &[u8]) -> Result<(), Unreachable> {
+impl Transport for WriteTransport {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
         self.0
             .0
             .lock()
             .map_err(|_| Unreachable)?
-            .push(self.1.clone());
+            .push((self.1.clone(), bytes.to_vec()));
         Ok(())
     }
 
@@ -1073,9 +1302,9 @@ impl Transport for KickTransport {
     }
 }
 
-impl TransportFactory for KicksAt {
+impl TransportFactory for WrittenAt {
     fn open(&self, device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
-        Ok(Box::new(KickTransport(
+        Ok(Box::new(WriteTransport(
             Arc::clone(&self.0),
             device.address.clone(),
         )))
@@ -1086,7 +1315,7 @@ impl TransportFactory for KicksAt {
 struct Tills {
     app: Router,
     edge: Arc<Edge<FakeStore>>,
-    kicks: Arc<Kicks>,
+    written: Arc<Written>,
     /// A device bound to the bar's till, one bound to the counter's, and one bound to none.
     bar: String,
     counter: String,
@@ -1113,9 +1342,9 @@ async fn drawers_app(unreadable: bool) -> Tills {
             wake.clone(),
         ))
     };
-    let kicks = Arc::new(Kicks::default());
+    let written = Arc::new(Written::default());
     let printers =
-        Arc::new(Printers::over(Arc::new(KicksAt(Arc::clone(&kicks)))).with_agents(dispatch));
+        Arc::new(Printers::over(Arc::new(WrittenAt(Arc::clone(&written)))).with_agents(dispatch));
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
     let mut paired = Vec::new();
@@ -1168,7 +1397,7 @@ async fn drawers_app(unreadable: bool) -> Tills {
     Tills {
         app,
         edge,
-        kicks,
+        written,
         bar,
         counter,
         stranger,
@@ -1357,7 +1586,7 @@ async fn cash_springs_only_the_drawer_of_the_till_it_is_taken_at() {
     assert_eq!(status, StatusCode::OK, "{settled}");
     assert_eq!(settled["drawer_open"], "OPENED");
     assert_eq!(
-        tills.kicks.at(),
+        tills.written.at(),
         [BAR_DRAWER],
         "the bar's drawer and no other"
     );
@@ -1366,7 +1595,7 @@ async fn cash_springs_only_the_drawer_of_the_till_it_is_taken_at() {
     let (status, _, settled) = settle_over(&tills, &tills.counter, 42, "PAYMENT_METHOD_CASH").await;
     assert_eq!(status, StatusCode::OK, "{settled}");
     assert_eq!(settled["drawer_open"], "NO_DRAWER");
-    assert_eq!(tills.kicks.at(), [BAR_DRAWER]);
+    assert_eq!(tills.written.at(), [BAR_DRAWER]);
 
     // A device that is no till takes a card, and no cash.
     let (status, reason, _) = settle_over(&tills, &tills.stranger, 43, "PAYMENT_METHOD_CASH").await;
@@ -1439,8 +1668,142 @@ async fn cash_springs_only_the_drawer_of_the_till_it_is_taken_at() {
         (StatusCode::CONFLICT, Some("NOT_A_TILL"))
     );
     assert_eq!(
-        tills.kicks.at(),
+        tills.written.at(),
         [BAR_DRAWER, BAR_DRAWER],
         "the store's drawer never sprang for a till's cash"
     );
+}
+
+/// Opens a drawer over the route from the device holding `token`, its own till's, answering its
+/// shift.
+async fn open_over(tills: &Tills, token: &str) -> String {
+    let open = json!({ "opening_float": vnd(500_000) });
+    let (status, _, opened) =
+        send(tills.app.clone(), token, "POST", "/api/shifts", Some(open)).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    opened["shift_id"].as_str().unwrap_or_default().to_owned()
+}
+
+/// Counts `shift` at 500,000 over the route from the device holding `token`.
+async fn count_over(tills: &Tills, token: &str, shift: &str) {
+    let count = json!({ "counted_minor": 500_000 });
+    let uri = format!("/api/shifts/{shift}/count");
+    let (status, _, counted) = send(tills.app.clone(), token, "POST", &uri, Some(count)).await;
+    assert_eq!(status, StatusCode::OK, "{counted}");
+}
+
+/// The manager's code and PIN, which approve their own act where the store does not enforce.
+fn approver() -> Value {
+    json!({ "approver_code": MANAGER_CODE, "approver_pin": MANAGER_PIN })
+}
+
+#[tokio::test]
+async fn a_drawers_report_prints_at_the_till_it_is_closed_at_or_not_at_all() {
+    let tills = drawers_app(false).await;
+    let bar = open_over(&tills, &tills.bar).await;
+    let counter = open_over(&tills, &tills.counter).await;
+    count_over(&tills, &tills.bar, &bar).await;
+    count_over(&tills, &tills.counter, &counter).await;
+
+    let (status, _, closed) = send(
+        tills.app.clone(),
+        &tills.bar,
+        "POST",
+        &format!("/api/shifts/{bar}/close"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(closed["shift_report_print"], "PRINTED");
+    assert_eq!(tills.written.at(), [BAR_DRAWER], "at the bar's own printer");
+    assert!(tills.written.last_says(BAR_DRAWER, "SHIFT REPORT"));
+
+    // Closed from a device that is no till, the report prints at the store's receipt printer.
+    let (status, _, closed) = send(
+        tills.app.clone(),
+        &tills.stranger,
+        "POST",
+        &format!("/api/shifts/{counter}/close"),
+        Some(approver()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(tills.written.at(), [BAR_DRAWER, STORE_DRAWER]);
+
+    // A store that prints no report at a close prints none.
+    tills.edge.apply_session(reporting(
+        DrawerModel::PerTerminal,
+        false,
+        CloseReport::None,
+    ));
+    let bar = open_over(&tills, &tills.bar).await;
+    count_over(&tills, &tills.bar, &bar).await;
+    let (status, _, closed) = send(
+        tills.app.clone(),
+        &tills.bar,
+        "POST",
+        &format!("/api/shifts/{bar}/close"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert!(closed.get("shift_report_print").is_none(), "{closed}");
+    assert_eq!(
+        closed["variance"],
+        json!(vnd(0)),
+        "the figures still answer"
+    );
+    assert_eq!(tills.written.at(), [BAR_DRAWER, STORE_DRAWER]);
+}
+
+#[tokio::test]
+async fn drawers_closed_together_print_one_slip_where_they_are_closed() {
+    let tills = drawers_app(false).await;
+    tills.edge.apply_session(reporting(
+        DrawerModel::PerTerminal,
+        false,
+        CloseReport::Combined,
+    ));
+    let bar = open_over(&tills, &tills.bar).await;
+    let counter = open_over(&tills, &tills.counter).await;
+    count_over(&tills, &tills.bar, &bar).await;
+
+    let mut batch = approver();
+    batch["shift_ids"] = json!([counter, bar]);
+    let (status, reason, _) = send(
+        tills.app.clone(),
+        &tills.counter,
+        "POST",
+        "/api/shifts:batch_close",
+        Some(batch.clone()),
+    )
+    .await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("TRANSITION_REFUSED")),
+        "the counter's drawer is not counted, so neither closes"
+    );
+    count_over(&tills, &tills.counter, &counter).await;
+
+    let (status, _, closed) = send(
+        tills.app.clone(),
+        &tills.counter,
+        "POST",
+        "/api/shifts:batch_close",
+        Some(batch),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(closed["shift_report_print"], "PRINTED");
+    assert_eq!(closed["shifts"][0]["shift_id"], counter.as_str());
+    assert_eq!(closed["shifts"][1]["state"], "SHIFT_STATE_CLOSED");
+    assert!(closed["shifts"][1].get("shift_report_print").is_none());
+    assert_eq!(
+        tills.written.at(),
+        [COUNTER_PAPER],
+        "one slip, at the counter's own printer"
+    );
+    for words in ["STORE TOTALS", "Bar", "Counter"] {
+        assert!(tills.written.last_says(COUNTER_PAPER, words), "{words}");
+    }
 }

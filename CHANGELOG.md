@@ -753,6 +753,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store chooses what prints when a drawer closes, `shift.close_report`**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10), set at the tenant, a
+  brand, a store group or a store, and honoured from 0.14.1.
+  - `CLOSE_REPORT_PER_DRAWER`, the default, prints each drawer's report where it is closed: at the
+    store's receipt printer, as before, or where the store keeps a drawer per till at the receipt
+    printer of the till the close is made at.
+  - `CLOSE_REPORT_COMBINED` prints one slip for several drawers closed together: the store's
+    totals, each the sum of the drawers' own figures, then each drawer under its till's name. A
+    drawer closed on its own still prints its own report.
+  - `CLOSE_REPORT_NONE` prints nothing, and the close still answers with the drawer's figures.
+  - `POST /api/shifts:batch_close` closes several counted drawers at once, every one or none. Each
+    needs what its own close needs, and one approver's code and PIN, checked once, cover every
+    other till's drawer it names, each recorded with its own `security.permission.overridden`.
+  - The console's Settings screen offers it, in English and Vietnamese.
+
+  **Upgrade note:** a store that sets nothing prints each drawer's report at its close as before.
+  One route is added, `POST /api/shifts:batch_close` (`docs/snapshots/routes.txt`, and
+  `ROUTE_PERMISSIONS` under `cash.shift.close` and `cash.shift.manage_other_till`), and
+  `docs/snapshots/settings.txt` and `docs/configuration.md` gain the setting. `PROTOCOL_VERSION` is
+  unchanged, and no permission, event or migration is added.
+
 - **Cash goes into the drawer of the till it is taken at, where a store keeps a drawer per till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). Under
   `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet, a till's drawer now counts the cash

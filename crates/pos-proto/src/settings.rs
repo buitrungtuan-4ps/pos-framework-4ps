@@ -29,7 +29,7 @@ use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
-use crate::shift::{self, NoShiftSelling, PublishedShift};
+use crate::shift::{self, CloseReport, NoShiftSelling, PublishedShift};
 use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
@@ -319,6 +319,25 @@ pub fn register() -> Vec<Setting> {
                       cashier counts first. Off, the Shift screen shows the cash the drawer \
                       should hold beside the count, and the variance still appears only at the \
                       close.",
+        },
+        Setting {
+            node: PublishedShift::NODE,
+            field: "close_report",
+            shape: SettingShape::Choice {
+                values: choices::<CloseReport>(),
+                default: PublishedShift::default().close_report().as_wire(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "What prints when a drawer's shift closes. `CLOSE_REPORT_PER_DRAWER` prints \
+                      each drawer's report where it is closed: at the store's receipt printer, or, \
+                      where the store keeps a drawer per till, at the receipt printer of the till \
+                      the close is made at. `CLOSE_REPORT_COMBINED` prints one slip for several \
+                      counted drawers closed at once, the store's totals and then each drawer, \
+                      and a drawer closed on its own still prints its own report. \
+                      `CLOSE_REPORT_NONE` prints nothing, and the close still answers with the \
+                      drawer's figures.",
         },
         Setting {
             node: PublishedSession::NODE,
@@ -1160,6 +1179,7 @@ mod tests {
                     "no_shift_selling" => Some(json!(shift.no_shift_selling().as_wire())),
                     "opening_float_minor" => Some(json!(shift.opening_float_minor())),
                     "blind_close" => Some(json!(shift.blind_close())),
+                    "close_report" => Some(json!(shift.close_report().as_wire())),
                     _ => None,
                 }
             }

@@ -67,6 +67,7 @@ POST /api/shifts/{id}/close
 POST /api/shifts/{id}/count
 POST /api/shifts/{id}/paid-in
 POST /api/shifts/{id}/paid-out
+POST /api/shifts:batch_close
 POST /api/tables/{id}/bill
 POST /api/tables/{id}/check/print
 POST /api/tables/{id}/clean

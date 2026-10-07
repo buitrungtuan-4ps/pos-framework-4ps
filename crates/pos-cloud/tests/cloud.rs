@@ -33142,6 +33142,69 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     );
 }
 
+/// `shift.close_report` (ADR-0167 decision 10) is offered from the release whose edge honours it,
+/// and a store's value reaches its `shift` node.
+#[tokio::test]
+async fn the_close_report_is_offered_from_its_release_and_reaches_the_shift_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    let catalogue = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let close_report = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "shift.close_report")
+        .cloned()
+        .expect("the setting is listed");
+    assert_eq!(close_report["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(
+        close_report["default"], "CLOSE_REPORT_PER_DRAWER",
+        "a store that sets nothing prints each drawer's report where it closes, as before"
+    );
+    assert!(close_report["preset"].is_null(), "{close_report}");
+    assert_eq!(
+        close_report["values"],
+        serde_json::json!([
+            "CLOSE_REPORT_PER_DRAWER",
+            "CLOSE_REPORT_COMBINED",
+            "CLOSE_REPORT_NONE"
+        ])
+    );
+    assert_eq!(
+        close_report["since"], "0.14.1",
+        "a store on an older release is not offered it"
+    );
+
+    let written = router
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "shift.close_report",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "CLOSE_REPORT_COMBINED",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert_eq!(
+        tenant_layer_node(&config_trees, first, "shift").await,
+        Some(serde_json::json!({ "close_report": "CLOSE_REPORT_COMBINED" }))
+    );
+}
+
 /// `qr.table_order` (ADR-0160 item 2) is a setting on a node the console's QR guardrails also
 /// publish. Written on the Tenant layer, it reaches the store beside the guardrails the Store layer
 /// holds, and leaves them as they are.

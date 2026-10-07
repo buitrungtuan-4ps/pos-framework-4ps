@@ -166,6 +166,17 @@ shift.blind_close	scope=SETTING_SCOPE_TENANT
 shift.blind_close	since=0.14.1
 shift.blind_close	value=false
 shift.blind_close	value=true
+shift.close_report
+shift.close_report	default=CLOSE_REPORT_PER_DRAWER
+shift.close_report	kind=SETTING_KIND_CHOICE
+shift.close_report	scope=SETTING_SCOPE_BRAND
+shift.close_report	scope=SETTING_SCOPE_STORE
+shift.close_report	scope=SETTING_SCOPE_STORE_GROUP
+shift.close_report	scope=SETTING_SCOPE_TENANT
+shift.close_report	since=0.14.1
+shift.close_report	value=CLOSE_REPORT_COMBINED
+shift.close_report	value=CLOSE_REPORT_NONE
+shift.close_report	value=CLOSE_REPORT_PER_DRAWER
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE
