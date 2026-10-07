@@ -248,8 +248,11 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
     let is_documentation = (a == 192 && b == 0 && c == 2)
         || (a == 198 && b == 51 && c == 100)
         || (a == 203 && b == 0 && c == 113);
-    let is_ietf_protocol_or_relay =
-        (a == 192 && b == 0 && c == 0) || (a == 192 && b == 88 && c == 99);
+    let is_ietf_protocol_or_relay = (a == 192 && b == 0 && c == 0)
+        || (a == 192 && b == 88 && c == 99)
+        || (a == 192 && b == 31 && c == 196)
+        || (a == 192 && b == 52 && c == 193)
+        || (a == 192 && b == 175 && c == 48);
     if a == 0 {
         // 0.0.0.0/8 (RFC 1122 "This host on this network", including 0.0.0.0 unspecified).
         Some(ForbiddenReason::Unspecified)
@@ -267,7 +270,8 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
     } else if is_documentation {
         Some(ForbiddenReason::Documentation)
     } else if ip.is_broadcast() || a >= 240 || is_ietf_protocol_or_relay {
-        // Reserved, future-use, 192.0.0.0/24 IETF Protocol Assignments (RFC 6890), and 192.88.99.0/24 6to4 relay.
+        // Reserved, future-use, 192.0.0.0/24 IETF Protocol Assignments (RFC 6890), 192.88.99.0/24 6to4 relay,
+        // 192.31.196.0/24 AS112 (RFC 7534), 192.52.193.0/24 AMT (RFC 7450), and 192.175.48.0/24 AS112 (RFC 7535).
         Some(ForbiddenReason::Reserved)
     } else if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
@@ -456,8 +460,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         Some(ForbiddenReason::Reserved)
     } else if (first == 0x2001 && second == 0x0003)
         || (first == 0x2001 && second == 0x0004 && third == 0x0112)
+        || (first == 0x2620 && second == 0x004f && third == 0x8000)
     {
-        // 2001:3::/32 AMT (RFC 7450) and 2001:4:112::/48 AS112 (RFC 7535).
+        // 2001:3::/32 AMT (RFC 7450), 2001:4:112::/48 AS112 (RFC 7535), and 2620:4f:8000::/48 AS112 (RFC 7535).
         Some(ForbiddenReason::Reserved)
     } else {
         None
@@ -587,7 +592,10 @@ mod tests {
             ("100.64.0.1", ForbiddenReason::SharedCgn),
             ("198.18.0.1", ForbiddenReason::Benchmarking),
             ("192.0.0.1", ForbiddenReason::Reserved),
+            ("192.31.196.1", ForbiddenReason::Reserved),
+            ("192.52.193.1", ForbiddenReason::Reserved),
             ("192.88.99.1", ForbiddenReason::Reserved),
+            ("192.175.48.1", ForbiddenReason::Reserved),
             ("255.255.255.255", ForbiddenReason::Reserved),
             ("224.0.0.1", ForbiddenReason::Multicast),
         ] {
@@ -933,6 +941,10 @@ mod tests {
                 ForbiddenReason::Benchmarking
             ))
         );
+    }
+
+    #[test]
+    fn v6_special_purpose_prefixes_are_refused() {
         // Discard-Only IPv6 range (100::/64, RFC 6666).
         assert_eq!(
             classify_ip(ip("100::1")),
@@ -983,6 +995,14 @@ mod tests {
             classify_ip(ip("2001:4:112::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("2001:4:112::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        // Direct Delegation AS112 IPv6 range (2620:4f:8000::/48, RFC 7535).
+        assert_eq!(
+            classify_ip(ip("2620:4f:8000::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2620:4f:8000::1"),
                 ForbiddenReason::Reserved
             ))
         );
