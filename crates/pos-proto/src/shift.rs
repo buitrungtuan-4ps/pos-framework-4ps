@@ -10,9 +10,10 @@
 //! as it ran before, which is what lets an upgrade change nothing until someone sets a value.
 //!
 //! The drawer fields, `drawer_model`, `close_report` and `drawer_day_end`
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), are typed here ahead of
-//! the edge that honours them, and each joins the register with the release that does. Until then
-//! nothing writes them and nothing reads them.
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), each join the register
+//! with the release whose edge honours them. `close_report` has. The edge reads `drawer_model`,
+//! which joins with the till's screens for a drawer per till, and `drawer_day_end` is typed here
+//! ahead of the edge that honours it.
 
 use core::ops::RangeInclusive;
 

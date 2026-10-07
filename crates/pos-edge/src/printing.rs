@@ -85,7 +85,8 @@ use pos_proto::ClockSource;
 use tokio::sync::oneshot;
 
 use crate::app::{
-    BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptCopy, ReceiptLine, ShiftReport,
+    BuyerDetails, CombinedReport, DrawerFigures, EdgeSession, FiredLine, PreBill, ReceiptCopy,
+    ReceiptLine, ShiftReport,
 };
 use crate::config::{ValueSource, log_in_force};
 use crate::line_notes::NoteText;
@@ -113,9 +114,10 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
 /// [`Printers::till_for`] resolves them for the device a print was asked from.
 ///
 /// Only a guest's paper follows it: a receipt, its copy and a pre-bill. A kitchen ticket goes to its
-/// station's printer and a shift report to the store's receipt printer. The cash drawer is
-/// [`drawer_printer`]'s choice: the store's, or where the store keeps a drawer per till the
-/// receipt printer the till's entry names, whatever its paper prints in.
+/// station's printer. A shift report goes to the store's receipt printer, or where the store keeps
+/// a drawer per till to the receipt printer of the till it is closed at, in the store's language.
+/// The cash drawer is [`drawer_printer`]'s choice: the store's, or where the store keeps a drawer
+/// per till the receipt printer the till's entry names, whatever its paper prints in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TillPrinting {
     /// The printer the till's paper goes to, where its terminal names one.
@@ -782,35 +784,83 @@ pub fn shift_report_document(
         short_reference(&report.shift_id.to_string()),
         false,
     ));
+    figure_blocks(&mut blocks, money, labels, &report.figures());
+    blocks.push(PrintBlock::Cut);
+    PrintDocument { blocks }
+}
+
+/// Several drawers closed at once on one slip
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10): the store's
+/// totals, then each drawer's report under its till's name, each set of figures printed as
+/// [`shift_report_document`] prints one drawer's.
+#[must_use]
+pub fn combined_shift_report_document(
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    combined: &CombinedReport,
+) -> PrintDocument {
+    let mut blocks = Vec::new();
+    if let Some(name) = profile.display_name() {
+        blocks.push(centred(name, true));
+    }
+    blocks.push(centred(labels.shift_report, true));
+    blocks.push(centred(labels.store_totals, true));
+    figure_blocks(&mut blocks, money, labels, &combined.totals);
+    for (till, report) in &combined.drawers {
+        if let Some(till) = till {
+            blocks.push(centred(till.as_str(), true));
+        }
+        blocks.push(centred(
+            short_reference(&report.shift_id.to_string()),
+            false,
+        ));
+        figure_blocks(&mut blocks, money, labels, &report.figures());
+    }
+    blocks.push(PrintBlock::Cut);
+    PrintDocument { blocks }
+}
+
+/// A drawer's figures, or several drawers' together, in the order a supervisor checks them: the
+/// float, the cash taken and the paid in, less the paid out, add up to the expectation, and the
+/// count less the expectation is the variance, with the verdict in words beneath it.
+fn figure_blocks(
+    blocks: &mut Vec<PrintBlock>,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    figures: &DrawerFigures,
+) {
     blocks.push(amount_line(
         labels.opening_float,
-        report.opening_float,
+        figures.opening_float,
         money,
     ));
-    blocks.push(amount_line(labels.cash_taken, report.cash_collected, money));
+    blocks.push(amount_line(
+        labels.cash_taken,
+        figures.cash_collected,
+        money,
+    ));
     // Only when there was one, so a shift that paid nothing in or out prints the report it always
     // did; when there was, the lines are what make the expectation add up on paper (ADR-0165).
-    if report.paid_in.amount_minor != 0 {
-        blocks.push(amount_line(labels.paid_in, report.paid_in, money));
+    if figures.paid_in.amount_minor != 0 {
+        blocks.push(amount_line(labels.paid_in, figures.paid_in, money));
     }
-    if report.paid_out.amount_minor != 0 {
-        blocks.push(amount_line(labels.paid_out, report.paid_out, money));
+    if figures.paid_out.amount_minor != 0 {
+        blocks.push(amount_line(labels.paid_out, figures.paid_out, money));
     }
     blocks.push(amount_line(
         labels.expected_in_drawer,
-        report.expected_amount,
+        figures.expected_amount,
         money,
     ));
-    blocks.push(amount_line(labels.counted, report.counted_amount, money));
-    blocks.push(amount_line(labels.variance, report.variance, money));
-    let verdict = match report.variance.amount_minor.cmp(&0) {
+    blocks.push(amount_line(labels.counted, figures.counted_amount, money));
+    blocks.push(amount_line(labels.variance, figures.variance, money));
+    let verdict = match figures.variance.amount_minor.cmp(&0) {
         core::cmp::Ordering::Less => labels.short,
         core::cmp::Ordering::Equal => labels.balanced,
         core::cmp::Ordering::Greater => labels.over,
     };
     blocks.push(centred(verdict, true));
-    blocks.push(PrintBlock::Cut);
-    PrintDocument { blocks }
 }
 
 /// Which document a bill's rows and totals are printed as.
@@ -2485,27 +2535,64 @@ impl Printers {
         .await
     }
 
-    /// Prints a closed shift's report on the store's receipt printer.
+    /// Prints a closed shift's report where it was closed: at the receipt printer of `till`, the
+    /// till the close was made at, and at the store's for [`TillPrinting::STORE`], which is where
+    /// every report printed before a till had a drawer of its own
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
     ///
     /// Never returns an error, for the reason [`Self::print_receipt`] gives: the shift is closed
     /// whether the paper comes out or not, and the caller tells the cashier which.
     pub async fn print_shift_report(
         &self,
         session: &EdgeSession,
+        till: &TillPrinting,
         store_id: StoreId,
         job_id: EventId,
         report: &ShiftReport,
     ) -> PrintOutcome {
-        let Some(device) = receipt_printer(&session.devices) else {
-            tracing::info!("no receipt printer is published for this store; nothing to print");
-            return PrintOutcome::NoPrinter;
-        };
         let document = shift_report_document(
             &session.profile,
             &MoneyStyle::of(session),
             self.labels_for(session),
             report,
         );
+        self.print_cash_up(session, till, store_id, job_id, document)
+            .await
+    }
+
+    /// Prints the one slip for several drawers closed at once, where they were closed, as
+    /// [`Self::print_shift_report`] prints one drawer's.
+    pub async fn print_combined_report(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        store_id: StoreId,
+        job_id: EventId,
+        combined: &CombinedReport,
+    ) -> PrintOutcome {
+        let document = combined_shift_report_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.labels_for(session),
+            combined,
+        );
+        self.print_cash_up(session, till, store_id, job_id, document)
+            .await
+    }
+
+    /// Sends a cash-up document to `till`'s receipt printer, the store's where it names none.
+    async fn print_cash_up(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        store_id: StoreId,
+        job_id: EventId,
+        document: PrintDocument,
+    ) -> PrintOutcome {
+        let device = match guest_printer(&session.devices, till) {
+            Ok(device) => device,
+            Err(outcome) => return outcome,
+        };
         self.dispatch(
             session,
             device,
@@ -2787,12 +2874,16 @@ mod tests {
     use super::{
         AgentLane, DrawerOutcome, KICKING_AGENTS, KICKS_AWAITED, MoneyStyle, PrintOutcome,
         Printers, SecondLanguage, SecondNames, TicketLine, TicketNote, TillPrinting,
-        TransportFactory, assumed_capabilities, connection_of, drawer_printer, pre_bill_document,
-        receipt_copy_document, receipt_document, receipt_language, receipt_lines_in,
-        receipt_printer, receipt_totals_in, shift_report_document, short_reference,
-        station_printer, ticket_at, ticket_document, ticket_language, ticket_line,
+        TransportFactory, assumed_capabilities, combined_shift_report_document, connection_of,
+        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
+        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
+        shift_report_document, short_reference, station_printer, ticket_at, ticket_document,
+        ticket_language, ticket_line,
     };
-    use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
+    use crate::app::{
+        BuyerDetails, CombinedReport, DrawerFigures, EdgeSession, FiredLine, ReceiptLine,
+        ShiftReport,
+    };
     use crate::config::ValueSource;
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
     use pos_core::billing::{BillTotals, FeeLine};
@@ -4050,6 +4141,72 @@ mod tests {
             &report(1_760_000),
         );
         assert_eq!(lines_of(&over).last(), Some(&"Over"));
+    }
+
+    #[test]
+    fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name() {
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let drawer = |seed: u128, float: i64, counted: i64| ShiftReport {
+            shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(seed)),
+            opening_float: vnd(float),
+            cash_collected: vnd(100_000),
+            paid_in: vnd(0),
+            paid_out: vnd(0),
+            expected_amount: vnd(float + 100_000),
+            counted_amount: vnd(counted),
+            variance: vnd(counted - float - 100_000),
+        };
+        let bar = drawer(0xBA, 500_000, 590_000);
+        let counter = drawer(0xC0, 300_000, 400_000);
+        let combined = CombinedReport {
+            totals: DrawerFigures {
+                opening_float: vnd(800_000),
+                cash_collected: vnd(200_000),
+                paid_in: vnd(0),
+                paid_out: vnd(0),
+                expected_amount: vnd(1_000_000),
+                counted_amount: vnd(990_000),
+                variance: vnd(-10_000),
+            },
+            drawers: vec![
+                (Some(DisplayName::new("Bar")), bar),
+                (Some(DisplayName::new("Counter")), counter),
+            ],
+        };
+        let slip = combined_shift_report_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            &combined,
+        );
+        let figures = |float: &'static str, expected: &'static str, counted: &'static str| {
+            [float, "Cash taken  VND 100,000", expected, counted]
+        };
+        let lines = lines_of(&slip);
+        assert_eq!(lines[..2], ["SHIFT REPORT", "STORE TOTALS"]);
+        assert_eq!(
+            lines[2..9],
+            [
+                "Opening float  VND 800,000",
+                "Cash taken  VND 200,000",
+                "Expected in drawer  VND 1,000,000",
+                "Counted  VND 990,000",
+                "Variance  VND -10,000",
+                "Short",
+                "Bar",
+            ]
+        );
+        assert_eq!(
+            lines[10..14],
+            figures(
+                "Opening float  VND 500,000",
+                "Expected in drawer  VND 600,000",
+                "Counted  VND 590,000"
+            )
+        );
+        assert_eq!(lines[16], "Counter");
+        assert_eq!(lines.last(), Some(&"Balanced"));
+        assert_eq!(slip.blocks.last(), Some(&PrintBlock::Cut));
     }
 
     #[test]

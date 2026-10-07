@@ -72,7 +72,7 @@ use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
-use pos_proto::shift::{DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{CloseReport, DrawerModel, NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
@@ -1453,6 +1453,90 @@ pub struct ShiftReport {
     pub variance: Money,
 }
 
+impl ShiftReport {
+    /// The drawer's figures, as its report prints them.
+    #[must_use]
+    pub const fn figures(&self) -> DrawerFigures {
+        DrawerFigures {
+            opening_float: self.opening_float,
+            cash_collected: self.cash_collected,
+            paid_in: self.paid_in,
+            paid_out: self.paid_out,
+            expected_amount: self.expected_amount,
+            counted_amount: self.counted_amount,
+            variance: self.variance,
+        }
+    }
+}
+
+/// A drawer's figures on paper, or what several drawers' came to together: the float, the cash
+/// taken, paid in and out, the expectation, the count and the difference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrawerFigures {
+    /// The float the drawer opened with.
+    pub opening_float: Money,
+    /// The cash taken into it.
+    pub cash_collected: Money,
+    /// Cash put into it outside a sale.
+    pub paid_in: Money,
+    /// Cash taken out of it outside a sale.
+    pub paid_out: Money,
+    /// What it should hold.
+    pub expected_amount: Money,
+    /// What was counted.
+    pub counted_amount: Money,
+    /// Counted minus expected. Negative means short.
+    pub variance: Money,
+}
+
+impl DrawerFigures {
+    /// Each figure of `reports` summed, in `currency`: what the drawers came to together, and no
+    /// figure of its own (ADR-0167 decision 10).
+    fn total(reports: &[ShiftReport], currency: CurrencyCode) -> Result<Self, DomainError> {
+        let zero = Money::zero(currency);
+        let none = Self {
+            opening_float: zero,
+            cash_collected: zero,
+            paid_in: zero,
+            paid_out: zero,
+            expected_amount: zero,
+            counted_amount: zero,
+            variance: zero,
+        };
+        reports.iter().try_fold(none, |sum, report| {
+            Ok(Self {
+                opening_float: sum.opening_float.checked_add(report.opening_float)?,
+                cash_collected: sum.cash_collected.checked_add(report.cash_collected)?,
+                paid_in: sum.paid_in.checked_add(report.paid_in)?,
+                paid_out: sum.paid_out.checked_add(report.paid_out)?,
+                expected_amount: sum.expected_amount.checked_add(report.expected_amount)?,
+                counted_amount: sum.counted_amount.checked_add(report.counted_amount)?,
+                variance: sum.variance.checked_add(report.variance)?,
+            })
+        })
+    }
+}
+
+/// One slip for several drawers closed at once, where the store's `shift.close_report` is
+/// `CLOSE_REPORT_COMBINED` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+/// decision 10): the store's totals, then each drawer's own report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombinedReport {
+    /// Each figure summed over the drawers below.
+    pub totals: DrawerFigures,
+    /// Each drawer's report, under its till's name, which the store's one drawer has none of.
+    pub drawers: Vec<(Option<DisplayName>, ShiftReport)>,
+}
+
+/// Several counted drawers closed in one act (ADR-0167 decision 10).
+#[derive(Debug, Clone)]
+pub struct ClosedDrawers {
+    /// Each drawer closed, in the order the request named them, as its own close would answer.
+    pub shifts: Vec<ShiftView>,
+    /// The one slip for all of them, where the store combines its close report.
+    pub combined: Option<CombinedReport>,
+}
+
 /// What a fire tells the kitchen, for the caller to turn into a ticket.
 ///
 /// The ids, not the names: resolving an item's name is the *session's* job (its published menu
@@ -2229,6 +2313,22 @@ impl ShiftRecord {
             .checked_add(self.cash_collected)?
             .checked_add(self.paid_in)?
             .checked_sub(self.paid_out)?)
+    }
+}
+
+/// A closed drawer, every figure revealed, with its report and whether to print it.
+fn closed_view(till: Option<DeviceId>, report: ShiftReport, print_shift_report: bool) -> ShiftView {
+    ShiftView {
+        shift_id: report.shift_id,
+        till,
+        state: ShiftState::Closed,
+        expected_amount: Some(report.expected_amount),
+        counted_amount: Some(report.counted_amount),
+        variance: Some(report.variance),
+        paid_in: report.paid_in,
+        paid_out: report.paid_out,
+        print_shift_report,
+        report: Some(report),
     }
 }
 
@@ -7654,7 +7754,115 @@ impl<S: EventStore> Edge<S> {
             .ok_or(AppError::UnknownShift)?;
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
+        let (payload, report) = self.closing(shift_id, &record)?;
+        self.commit_approved(&ctx, &payload, Some(shift_id), approver)
+            .await?;
+        self.anchor_chain(&ctx).await?;
 
+        self.lock_projection().close_shift_record(shift_id);
+        // A drawer closed on its own prints its own report unless the store prints none at a
+        // close, whether or not it combines several closed at once (ADR-0167 decision 10).
+        let print = decision.effects.contains(&Effect::PrintShiftReport)
+            && self.session().shift.close_report() != CloseReport::None;
+        Ok(closed_view(record.till, report, print))
+    }
+
+    /// Closes several counted drawers in one act: a `cash.shift.closed` for each, all in one
+    /// append, so every one closes or none does
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
+    ///
+    /// Each drawer closes as [`Self::close_shift_at`] closes one: counted already, under
+    /// `cash.shift.close`, and another till's under `cash.shift.manage_other_till` too. One approval
+    /// covers the act: its code and PIN are checked once, and each other till's drawer it covers is
+    /// recorded with an override of its own, stamped with that drawer's shift. A shift named twice
+    /// closes once.
+    ///
+    /// Where the store's `shift.close_report` combines them, the drawers print as one slip,
+    /// [`ClosedDrawers::combined`]. Where it prints per drawer each prints its own report, and where
+    /// it prints none none does.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownShift`] for a shift the edge does not know, [`AppError::Domain`] for one
+    /// that is not counted or a permission not held, the approval refusals of
+    /// [`Self::open_shift_at`], or [`AppError`] if the store cannot be written. Nothing closes on
+    /// any of them.
+    pub async fn close_shifts_at(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        shift_ids: &[ShiftId],
+        approval: Option<&Approval>,
+    ) -> Result<ClosedDrawers, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let mut named: Vec<(ShiftId, ShiftRecord)> = Vec::with_capacity(shift_ids.len());
+        {
+            let projection = self.lock_projection();
+            for shift_id in shift_ids {
+                if named.iter().all(|(seen, _)| seen != shift_id) {
+                    let record = projection.shift(*shift_id).ok_or(AppError::UnknownShift)?;
+                    named.push((*shift_id, record));
+                }
+            }
+        }
+        let another = named.iter().any(|(_, record)| another_till(scope, record));
+        let approver = self.manage_other_till(&mut ctx, another, approval)?;
+        let mode = self.session().shift.close_report();
+        let mut prepared = Vec::with_capacity(named.len());
+        let mut closed = Vec::with_capacity(named.len());
+        for (shift_id, record) in &named {
+            let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
+            let (payload, report) = self.closing(*shift_id, record)?;
+            prepared.push(self.prepare_on(&ctx, &payload, Some(*shift_id))?);
+            if let Some(approver) = approver.filter(|_| another_till(scope, record)) {
+                let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
+                prepared.push(self.prepare_on(&ctx, &overridden, Some(*shift_id))?);
+            }
+            let print = decision.effects.contains(&Effect::PrintShiftReport)
+                && mode == CloseReport::PerDrawer;
+            closed.push(closed_view(record.till, report, print));
+        }
+        let combined = if mode == CloseReport::Combined {
+            let reports: Vec<ShiftReport> = closed.iter().filter_map(|view| view.report).collect();
+            Some(CombinedReport {
+                totals: DrawerFigures::total(&reports, self.session().currency)?,
+                drawers: named
+                    .iter()
+                    .zip(reports)
+                    .map(|((_, record), report)| (self.till_name(record.till), report))
+                    .collect(),
+            })
+        } else {
+            None
+        };
+        if prepared.is_empty() {
+            return Ok(ClosedDrawers {
+                shifts: closed,
+                combined: None,
+            });
+        }
+        let (envelopes, messages) = prepared.into_iter().unzip();
+        self.append_and_publish(envelopes, messages).await?;
+        self.anchor_chain(&ctx).await?;
+        {
+            let mut projection = self.lock_projection();
+            for (shift_id, _) in &named {
+                projection.close_shift_record(*shift_id);
+            }
+        }
+        Ok(ClosedDrawers {
+            shifts: closed,
+            combined,
+        })
+    }
+
+    /// What closing `record`'s counted shift writes, its `cash.shift.closed`, and the report of
+    /// the figures it closes on.
+    fn closing(
+        &self,
+        shift_id: ShiftId,
+        record: &ShiftRecord,
+    ) -> Result<(CashShiftClosed, ShiftReport), AppError> {
         // Reaching Close means the shift was counted, so the count is present; the fallback never
         // fires but keeps this off any panic path.
         let counted_amount = record
@@ -7664,7 +7872,6 @@ impl<S: EventStore> Edge<S> {
         let variance = counted_amount
             .checked_sub(expected_amount)
             .map_err(DomainError::from)?;
-
         let payload = CashShiftClosed {
             closed_shift_id: shift_id,
             expected_amount,
@@ -7672,32 +7879,28 @@ impl<S: EventStore> Edge<S> {
             variance,
             terminal_device_id: record.till,
         };
-        self.commit_approved(&ctx, &payload, Some(shift_id), approver)
-            .await?;
-        self.anchor_chain(&ctx).await?;
-
-        self.lock_projection().close_shift_record(shift_id);
-        Ok(ShiftView {
+        let report = ShiftReport {
             shift_id,
-            till: record.till,
-            state: ShiftState::Closed,
-            expected_amount: Some(expected_amount),
-            counted_amount: Some(counted_amount),
-            variance: Some(variance),
+            opening_float: record.opening_float,
+            cash_collected: record.cash_collected,
             paid_in: record.paid_in,
             paid_out: record.paid_out,
-            print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
-            report: Some(ShiftReport {
-                shift_id,
-                opening_float: record.opening_float,
-                cash_collected: record.cash_collected,
-                paid_in: record.paid_in,
-                paid_out: record.paid_out,
-                expected_amount,
-                counted_amount,
-                variance,
-            }),
-        })
+            expected_amount,
+            counted_amount,
+            variance,
+        };
+        Ok((payload, report))
+    }
+
+    /// The name of `till`'s `TERMINAL` entry, which the store's one drawer, `None`, has none of.
+    fn till_name(&self, till: Option<DeviceId>) -> Option<DisplayName> {
+        let till = till?;
+        self.session()
+            .devices
+            .devices()
+            .iter()
+            .find(|device| device.device_id == till && is_till(device))
+            .map(|device| device.name.clone())
     }
 
     /// Records cash paid into or out of the drawer outside a sale, against the shift trading now

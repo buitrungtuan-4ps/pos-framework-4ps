@@ -20,6 +20,9 @@
 //! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
 //! /api/shifts` lists every drawer. A paid in, a paid out and a no-sale opening are made at a till,
 //! in its own drawer, and that drawer is the one that opens.
+//!
+//! What prints at a close is the store's `shift.close_report`: each drawer's report where it is
+//! closed, one slip for several closed at once by `POST /api/shifts:batch_close`, or nothing.
 
 use std::sync::Arc;
 
@@ -38,9 +41,11 @@ use pos_proto::shift::DrawerModel;
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 
-use crate::app::{AppError, Approval, CashMovement, DrawersView, Edge, ShiftView, TillScope};
+use crate::app::{
+    AppError, Approval, CashMovement, DrawersView, Edge, EdgeSession, ShiftView, TillScope,
+};
 use crate::http::{bad_request, error_response, parse_ulid};
-use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
+use crate::printing::{DrawerOutcome, PrintOutcome, Printers, TillPrinting, published_terminals};
 
 /// The code and PIN of somebody approving an act the person acting holds only with approval: both
 /// halves, or no approval at all.
@@ -84,6 +89,26 @@ struct CloseRequest {
     approver_code: Option<String>,
     #[serde(default)]
     approver_pin: Option<String>,
+}
+
+/// Closing several counted drawers at once: their shifts, and one approver for those that are
+/// other tills' (ADR-0167 decision 10).
+#[derive(Debug, Deserialize)]
+pub(crate) struct BatchCloseRequest {
+    shift_ids: Vec<ShiftId>,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+/// What a batch close answers: each drawer closed, and what came of the one slip for all of them
+/// where the store combines its close report.
+#[derive(Debug, Serialize)]
+struct BatchCloseResponse {
+    shifts: Vec<ShiftResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shift_report_print: Option<String>,
 }
 
 /// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1).
@@ -286,8 +311,7 @@ where
         None => None,
     };
     let own = bound.filter(|terminal| {
-        crate::printing::published_terminals(&edge.session().devices)
-            .any(|entry| entry.device_id == *terminal)
+        published_terminals(&edge.session().devices).any(|entry| entry.device_id == *terminal)
     });
     Ok(TillScope { own, named })
 }
@@ -519,27 +543,114 @@ where
         Ok(view) => view,
         Err(error) => return error_response(&error),
     };
-    let printed = match (view.print_shift_report, view.report.as_ref()) {
-        (true, Some(report)) => Some(match printers.as_deref() {
-            // The shift's own id as the idempotency key: a close retried after an ambiguous failure
-            // prints one report, not two.
+    let at = printed_at(&edge.session(), scope);
+    let printed = print_report(printers.as_deref(), &edge, &at, &view).await;
+    let mut response = ShiftResponse::from(view);
+    response.shift_report_print = printed;
+    Json(response).into_response()
+}
+
+/// `POST /api/shifts:batch_close` — close several counted drawers in one act, every one or none,
+/// and print what the store's `shift.close_report` asks for: one slip for them all, each drawer's
+/// report, or nothing (ADR-0167 decision 10). One approver covers every other till's drawer named.
+pub(crate) async fn batch_close<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Json(request): Json<BatchCloseRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    if request.shift_ids.is_empty() {
+        return bad_request("a batch close names the shifts it closes");
+    }
+    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
+    let closed = match edge
+        .close_shifts_at(actor, scope, &request.shift_ids, approval.as_ref())
+        .await
+    {
+        Ok(closed) => closed,
+        Err(error) => return error_response(&error),
+    };
+    let session = edge.session();
+    let at = printed_at(&session, scope);
+    let mut shifts = Vec::with_capacity(closed.shifts.len());
+    for view in closed.shifts {
+        let printed = print_report(printers.as_deref(), &edge, &at, &view).await;
+        let mut response = ShiftResponse::from(view);
+        response.shift_report_print = printed;
+        shifts.push(response);
+    }
+    let mut shift_report_print = None;
+    if let Some(combined) = closed.combined {
+        // The first drawer's shift as the idempotency key: no close of its own prints under it.
+        let job_id = combined.drawers.first().map_or_else(
+            || edge.print_job_id(),
+            |(_, report)| EventId::new(report.shift_id.as_ulid()),
+        );
+        let outcome = match printers.as_deref() {
             Some(printers) => {
                 printers
-                    .print_shift_report(
-                        &edge.session(),
-                        edge.store_id(),
-                        EventId::new(report.shift_id.as_ulid()),
-                        report,
-                    )
+                    .print_combined_report(&session, &at, edge.store_id(), job_id, &combined)
                     .await
             }
             None => PrintOutcome::NoPrinter,
-        }),
-        _ => None,
+        };
+        shift_report_print = Some(outcome.as_wire().to_owned());
+    }
+    Json(BatchCloseResponse {
+        shifts,
+        shift_report_print,
+    })
+    .into_response()
+}
+
+/// Where a cash-up prints: the receipt printer of the till the device is, where the store keeps a
+/// drawer per till, and the store's otherwise, as every report printed before (ADR-0167 decision
+/// 10).
+fn printed_at(session: &EdgeSession, scope: TillScope) -> TillPrinting {
+    scope
+        .own
+        .and_then(|own| published_terminals(&session.devices).find(|entry| entry.device_id == own))
+        .map_or(TillPrinting::STORE, TillPrinting::of)
+}
+
+/// Prints a closed drawer's report at `at` where its close asks for one, and says what came of it.
+async fn print_report<S>(
+    printers: Option<&Arc<Printers>>,
+    edge: &Edge<S>,
+    at: &TillPrinting,
+    view: &ShiftView,
+) -> Option<String>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let report = view.report.as_ref().filter(|_| view.print_shift_report)?;
+    let outcome = match printers {
+        // The shift's own id as the idempotency key: a close retried after an ambiguous failure
+        // prints one report, not two.
+        Some(printers) => {
+            printers
+                .print_shift_report(
+                    &edge.session(),
+                    at,
+                    edge.store_id(),
+                    EventId::new(report.shift_id.as_ulid()),
+                    report,
+                )
+                .await
+        }
+        None => PrintOutcome::NoPrinter,
     };
-    let mut response = ShiftResponse::from(view);
-    response.shift_report_print = printed.map(|outcome| outcome.as_wire().to_owned());
-    Json(response).into_response()
+    Some(outcome.as_wire().to_owned())
 }
 
 /// Maps a shift command outcome to a response.

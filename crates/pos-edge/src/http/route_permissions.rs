@@ -206,6 +206,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::RecordCashMovement]),
     ),
     (
+        "POST /api/shifts:batch_close",
+        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
+    ),
+    (
         "POST /api/tables/{id}/bill",
         RouteGate::Person(&[Permission::OpenBill]),
     ),
