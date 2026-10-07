@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **RowActions menu dismissal and focus management.**
+  When `RowActions` menu in `dashboard/src/components/kit.tsx` is closed via the `Escape` key, keyboard focus is restored back to the trigger button when focus was inside the container, preventing DOM focus loss to `<body>`. Also replaced custom `mousedown` listener with `useClickOutside` (`pointerdown`).
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
