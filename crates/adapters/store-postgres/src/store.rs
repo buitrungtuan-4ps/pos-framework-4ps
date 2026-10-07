@@ -330,6 +330,13 @@ const MIGRATION_0082: &str = include_str!("../migrations/0082_terminal_receipts.
 /// migration that changes what roles grant queues its stores here too: the file's header states how.
 const MIGRATION_0083: &str = include_str!("../migrations/0083_people_republishes.sql");
 
+/// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
+/// `cash.drawer.open_no_sale`: directly where it grants that directly, and with approval otherwise,
+/// and every store whose people have been published is queued for the cloud to publish them again
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 3).
+const MIGRATION_0084: &str =
+    include_str!("../migrations/0084_roles_can_manage_another_tills_drawer.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -720,6 +727,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0083)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0084)
             .await
             .map_err(unavailable)
     }

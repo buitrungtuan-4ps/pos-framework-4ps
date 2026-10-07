@@ -753,6 +753,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A permission to start, count or close another till's drawer, `cash.shift.manage_other_till`**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 13). Where each
+  till will have its own drawer, `cash.shift.open` and `cash.shift.close` cover a till's own, and
+  this covers another till's, from any till, one, several or all at once.
+  - In the catalogue under cash and shifts, PIN-flagged, medium risk as closing a shift is, and held
+    out of the box by the supervisor, the manager and the owner, the roles that open the drawer
+    without a sale. A new tenant's other starting roles hold it with approval, so a cashier manages
+    another till's drawer only with a holder's code and PIN.
+  - The console's role editor and readiness panel show it, in English and Vietnamese, and
+    `docs/permissions.md` and `docs/snapshots/permissions.txt` list it.
+  - It does nothing at a till yet: every store keeps one drawer, every till's, and no edge route
+    asks for it until each till has its own.
+
+  **Upgrade note:** migration `0084_roles_can_manage_another_tills_drawer` grants it once, behind a
+  `data_migrations` marker: directly to every role that grants `cash.drawer.open_no_sale` directly,
+  with approval to every other role, archived ones included, and nothing else in either list
+  changes. A later boot grants nothing again, so a permission an owner takes away stays away. In the
+  same statement it queues every store whose people have been published, and the cloud publishes
+  their people again by itself (migration `0083`), so nobody needs to press **Publish** on People.
+  It takes effect at the till only when each till has its own drawer. No route, event, setting or
+  protocol version changes.
+
 - **The wire can say which till's drawer a cash event belongs to, and the configuration can say
   how many drawers a store keeps** ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md)
   decisions 1, 4, 5, 10 and 11). Additive types for the drawer per till; nothing writes or reads

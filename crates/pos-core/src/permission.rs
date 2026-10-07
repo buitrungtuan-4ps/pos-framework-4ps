@@ -436,6 +436,24 @@ permissions! {
         default_roles: [Cashier, Supervisor, Manager, Owner],
         description: "Close a shift; the count is blind",
     },
+    /// Start, count or close a drawer that is not the till's own, from any till: one, several or
+    /// all at once ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions
+    /// 3 and 13).
+    ///
+    /// `cash.shift.open` and `cash.shift.close` cover a till's own drawer, so a cashier keeps to
+    /// their own unless a holder of this approves the act. Where a store keeps one drawer, every
+    /// till's, nothing needs it. PIN-flagged with the default roles of `cash.drawer.open_no_sale`,
+    /// and migration 0084 gave it once to every role that existed on the terms it grants that one.
+    /// `Medium`, as closing a shift is, and not `High`: it starts, counts or closes a drawer's
+    /// session, which the shift's own events record, and it moves no cash and opens no drawer.
+    ManageOtherTill {
+        id: "cash.shift.manage_other_till",
+        group: CashAndShifts,
+        risk: Medium,
+        pin: true,
+        default_roles: [Supervisor, Manager, Owner],
+        description: "Start, count or close another till's drawer from any till, one or many at once",
+    },
     /// Record a paid-in or paid-out with a reason.
     RecordCashMovement {
         id: "cash.movement.record",
@@ -856,6 +874,30 @@ mod tests {
             Permission::OverrideDiscountCeiling.meta().default_roles
         );
         assert_eq!(Permission::WaiveFee.meta().id, "billing.fee.waive");
+    }
+
+    #[test]
+    fn another_tills_drawer_is_managed_by_default_by_whoever_may_open_one_without_a_sale() {
+        // ADR-0167 decision 3: a PIN-flagged permission held out of the box by the roles that open
+        // a drawer without a sale, so migration 0084's rule, directly where a role grants that one
+        // directly and with approval otherwise, gives an existing tenant what a new one starts with.
+        let manage = Permission::ManageOtherTill.meta();
+        assert_eq!(manage.id, "cash.shift.manage_other_till");
+        assert!(
+            manage.pin_required,
+            "a cashier needs a holder's approval for it"
+        );
+        assert_eq!(manage.group.as_token(), "CASH_AND_SHIFTS");
+        assert_eq!(
+            manage.risk,
+            Permission::CloseShift.meta().risk,
+            "a drawer's session, as closing one's own is"
+        );
+        assert_eq!(
+            manage.default_roles,
+            Permission::OpenDrawerNoSale.meta().default_roles
+        );
+        assert!(!default_grants(Role::Cashier).contains(Permission::ManageOtherTill));
     }
 
     #[test]

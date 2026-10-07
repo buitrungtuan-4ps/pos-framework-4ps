@@ -1607,6 +1607,7 @@
   "permission.cash.drawer.open_no_sale": "Open the cash drawer with no sale",
   "permission.cash.movement.record": "Record cash paid in or out",
   "permission.cash.shift.close": "Close a shift",
+  "permission.cash.shift.manage_other_till": "Start, count or close another till's drawer",
   "permission.cash.shift.open": "Open a shift",
   "permission.inventory.receipt.record": "Record goods received",
   "permission.inventory.stocktake.perform": "Count stock",

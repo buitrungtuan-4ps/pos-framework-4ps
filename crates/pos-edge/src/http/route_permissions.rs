@@ -258,6 +258,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         "refunds are not built yet (ADR-0028)",
     ),
     (
+        Permission::ManageOtherTill,
+        "a till has no drawer of its own yet, so the store's one drawer is every till's (ADR-0167)",
+    ),
+    (
         Permission::PerformStocktake,
         "stocktakes are not built at the store yet",
     ),

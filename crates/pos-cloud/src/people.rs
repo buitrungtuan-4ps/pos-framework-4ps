@@ -928,7 +928,8 @@ mod tests {
     /// directly, with approval, from a literal list in its SQL: the catalogue's PIN-flagged
     /// permissions as they were then, in byte order and once each. A PIN-flagged permission added
     /// since is granted by a migration of its own, which names it — 0076 for `billing.fee.waive`
-    /// (ADR-0159 decision 5). Together they are the `pin_required=true` lines of
+    /// (ADR-0159 decision 5) and 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3).
+    /// Together they are the `pin_required=true` lines of
     /// `docs/snapshots/permissions.txt`, each granted once, so the backfills and the catalogue
     /// cannot drift.
     #[test]
@@ -938,6 +939,9 @@ mod tests {
         );
         const MIGRATION_0076: &str =
             include_str!("../../adapters/store-postgres/migrations/0076_roles_can_waive_a_fee.sql");
+        const MIGRATION_0084: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
+        );
         let open = MIGRATION_0074
             .find("ARRAY[")
             .expect("the backfill's literal list")
@@ -956,7 +960,10 @@ mod tests {
         assert_eq!(literal, sorted, "0074's list is in byte order, once each");
 
         // Each permission granted by a later migration of its own, and that migration.
-        let later = [("billing.fee.waive", MIGRATION_0076)];
+        let later = [
+            ("billing.fee.waive", MIGRATION_0076),
+            ("cash.shift.manage_other_till", MIGRATION_0084),
+        ];
         for (id, migration) in later {
             assert!(
                 migration.contains(&format!("'{id}'")),
@@ -991,6 +998,9 @@ mod tests {
         const MIGRATION_0079: &str = include_str!(
             "../../adapters/store-postgres/migrations/0079_approvers_who_close_a_shift_see_takings.sql"
         );
+        const MIGRATION_0084: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
+        );
         let open = MIGRATION_0079
             .find("ARRAY[")
             .expect("the grant's literal list")
@@ -1008,8 +1018,8 @@ mod tests {
         sorted.dedup();
         assert_eq!(literal, sorted, "0079's list is in byte order, once each");
 
-        // Each PIN-flagged permission added after 0079, and the migration that grants it. None yet.
-        let later: [(&str, &str); 0] = [];
+        // Each PIN-flagged permission added after 0079, and the migration that grants it.
+        let later = [("cash.shift.manage_other_till", MIGRATION_0084)];
         for (id, migration) in later {
             assert!(
                 migration.contains(&format!("'{id}'")),

@@ -5855,8 +5855,8 @@ mod role_templates_and_assignments {
     /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
     /// since taken away.
     ///
-    /// The 0073, 0076 and 0079 markers are written before the boot, so the boot runs 0074 alone
-    /// against the roles as they were authored.
+    /// The 0073, 0076, 0079 and 0084 markers are written before the boot, so the boot runs 0074
+    /// alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -5881,11 +5881,12 @@ mod role_templates_and_assignments {
                 .execute(
                     "INSERT INTO data_migrations (name) \
                      VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee'), \
-                            ('0079_approvers_who_close_a_shift_see_takings')",
+                            ('0079_approvers_who_close_a_shift_see_takings'), \
+                            ('0084_roles_can_manage_another_tills_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0076 and 0079 have already run");
+                .expect("0073, 0076, 0079 and 0084 have already run");
             let people = store.people();
             // A manager who voids directly, and so approves voids for others, listed out of order
             // as a console may have written it.
@@ -6028,8 +6029,8 @@ mod role_templates_and_assignments {
     /// grants the override directly, and with approval otherwise. Nothing else in either list
     /// changes, and a later boot does not hand back a waive an owner has since taken away.
     ///
-    /// The 0073, 0074 and 0079 markers are written before the boot, so the boot runs 0076 alone
-    /// against the roles as they were authored.
+    /// The 0073, 0074, 0079 and 0084 markers are written before the boot, so the boot runs 0076
+    /// alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -6048,11 +6049,12 @@ mod role_templates_and_assignments {
                     "INSERT INTO data_migrations (name) \
                      VALUES ('0073_roles_keep_every_till_action'), \
                             ('0074_role_permissions_with_approval'), \
-                            ('0079_approvers_who_close_a_shift_see_takings')",
+                            ('0079_approvers_who_close_a_shift_see_takings'), \
+                            ('0084_roles_can_manage_another_tills_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0074 and 0079 have already run");
+                .expect("0073, 0074, 0079 and 0084 have already run");
             let people = store.people();
             // A manager who exceeds the ceiling directly, and so approves it for others.
             people
@@ -6222,8 +6224,8 @@ mod role_templates_and_assignments {
     /// only with approval. No with-approval list changes, an archived approver is included, and a
     /// later boot does not hand back takings an owner has since taken away.
     ///
-    /// The 0073, 0074 and 0076 markers are written before the boot, so the boot runs 0079 alone
-    /// against the roles as they were authored.
+    /// The 0073, 0074, 0076 and 0084 markers are written before the boot, so the boot runs 0079
+    /// alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -6243,11 +6245,12 @@ mod role_templates_and_assignments {
                     "INSERT INTO data_migrations (name) \
                      VALUES ('0073_roles_keep_every_till_action'), \
                             ('0074_role_permissions_with_approval'), \
-                            ('0076_roles_can_waive_a_fee')",
+                            ('0076_roles_can_waive_a_fee'), \
+                            ('0084_roles_can_manage_another_tills_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0074 and 0076 have already run");
+                .expect("0073, 0074, 0076 and 0084 have already run");
             let people = store.people();
             // (role, name, direct, with approval), each the one case it is named for.
             let authored = [
@@ -7023,7 +7026,8 @@ mod people_republishes_queue {
     /// store is. A later boot queues nothing.
     ///
     /// `prepared` truncates `data_migrations` and the queue, so the boot below is the migration's
-    /// first run, as it is on a database that has never seen the file.
+    /// first run, as it is on a database that has never seen the file. 0084's marker is written
+    /// first, so what the boot queues is 0083's alone, under its own name.
     #[test]
     fn the_stores_whose_people_were_published_are_queued_once() {
         let tenant = TenantId::new(Ulid::from_u128(0x0083_7E11));
@@ -7070,7 +7074,15 @@ mod people_republishes_queue {
             (other_tenant, store(1), tree(&empty, &people)),
         ];
         block_on(async {
-            let (postgres, _admin) = prepared().await.expect("prepare the database");
+            let (postgres, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0084_roles_can_manage_another_tills_drawer')",
+                    &[],
+                )
+                .await
+                .expect("0084 has already run");
             let trees = postgres.config_trees();
             for (tenant_id, store_id, state) in &seeded {
                 trees
@@ -7124,6 +7136,268 @@ mod people_republishes_queue {
                     .expect("read the queue")
                     .is_empty(),
                 "a later boot queues nothing"
+            );
+        });
+    }
+
+    /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
+    /// `cash.drawer.open_no_sale` (migration 0084, ADR-0167 decision 3): directly where it grants
+    /// that directly, and with approval otherwise, an archived role included, and nothing else in
+    /// either list changes. The same statement queues every store holding a `permissions` roster on
+    /// some layer under the migration's name, and no other store. A later boot grants nothing again
+    /// and queues nothing.
+    ///
+    /// The markers of the earlier grants and of 0083 are written before the boot, so the boot runs
+    /// 0084 alone against the roles and the trees as they were.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over four roles and four stores, and the boot after it"
+    )]
+    fn another_tills_drawer_is_granted_once_on_the_drawers_terms_and_its_stores_are_queued() {
+        const GRANT: &str = "0084_roles_can_manage_another_tills_drawer";
+        const MANAGE: &str = "cash.shift.manage_other_till";
+        const MANAGER: &str = "01ROLE000000000000000000M4";
+        const SUPERVISOR: &str = "01ROLE000000000000000000V4";
+        const SERVER: &str = "01ROLE000000000000000000S4";
+        const RETIRED: &str = "01ROLE000000000000000000R4";
+        let tenant = TenantId::new(Ulid::from_u128(0x0084_7E11));
+        let tenant_id = tenant.to_string();
+        let store = |n: u128| StoreId::new(Ulid::from_u128(0x0084_0000 + n));
+        let empty = serde_json::json!({});
+        let switch = serde_json::json!({ "permissions": { "enforced": true } });
+        let seeded = [
+            // People published: queued.
+            (
+                store(1),
+                tree(
+                    &empty,
+                    &serde_json::json!({ "permissions": { "staff": [] } }),
+                ),
+            ),
+            // Rolled back, the roster on the Tenant layer: queued.
+            (
+                store(2),
+                tree(
+                    &serde_json::json!({ "permissions": { "enforced": true, "staff": [] } }),
+                    &empty,
+                ),
+            ),
+            // The switch alone: not queued.
+            (store(3), tree(&switch, &empty)),
+            // No `permissions` node: not queued.
+            (store(4), tree(&empty, &empty)),
+        ];
+        block_on(async {
+            let (postgres, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), \
+                            ('0074_role_permissions_with_approval'), \
+                            ('0076_roles_can_waive_a_fee'), \
+                            ('0079_approvers_who_close_a_shift_see_takings'), \
+                            ('0083_people_republishes')",
+                    &[],
+                )
+                .await
+                .expect("the earlier grants and the queue have already run");
+            let people = postgres.people();
+            // A manager who opens the drawer without a sale directly, and so approves it for others.
+            people
+                .insert_role_template(
+                    MANAGER,
+                    &tenant_id,
+                    "Manager",
+                    r#"["cash.drawer.open_no_sale","cash.shift.close","cash.shift.open"]"#,
+                    r#"["billing.comp.apply"]"#,
+                    Some(500_000),
+                )
+                .await
+                .expect("a manager");
+            // A supervisor who opens it only with somebody's approval.
+            people
+                .insert_role_template(
+                    SUPERVISOR,
+                    &tenant_id,
+                    "Supervisor",
+                    r#"["cash.shift.close"]"#,
+                    r#"["billing.bill.void","cash.drawer.open_no_sale"]"#,
+                    None,
+                )
+                .await
+                .expect("a supervisor");
+            // A server who cannot open it at all, listed out of order as a console may have
+            // written it.
+            people
+                .insert_role_template(
+                    SERVER,
+                    &tenant_id,
+                    "Server",
+                    r#"["sales.line.add","billing.discount.apply"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a server");
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    &tenant_id,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    &tenant_id,
+                    RETIRED,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let before = people
+                .fetch_role_templates(&tenant_id)
+                .await
+                .expect("fetch");
+            let direct_before = |id: &str| -> String {
+                before
+                    .iter()
+                    .find(|role| role.id == id)
+                    .map(|role| role.permissions_json.clone())
+                    .expect("the role is listed")
+            };
+            let trees = postgres.config_trees();
+            for (store_id, state) in &seeded {
+                trees
+                    .save_state(tenant, *store_id, state, None)
+                    .await
+                    .expect("seed a tree");
+            }
+
+            postgres
+                .migrate()
+                .await
+                .expect("the boot that runs 0084 first");
+            let roles = people
+                .fetch_role_templates(&tenant_id)
+                .await
+                .expect("fetch");
+            let role = |id: &str| {
+                roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed")
+            };
+            let list = |json: &str| -> Vec<String> {
+                serde_json::from_str(json).expect("a permission list is JSON")
+            };
+            assert_eq!(
+                list(&role(MANAGER).permissions_json),
+                [
+                    "cash.drawer.open_no_sale",
+                    "cash.shift.close",
+                    MANAGE,
+                    "cash.shift.open",
+                ],
+                "directly, beside the drawer, in byte order"
+            );
+            assert_eq!(
+                list(&role(MANAGER).permissions_with_approval_json),
+                ["billing.comp.apply"],
+                "not with approval as well"
+            );
+            for (id, approved) in [
+                (
+                    SUPERVISOR,
+                    vec!["billing.bill.void", "cash.drawer.open_no_sale", MANAGE],
+                ),
+                (SERVER, vec![MANAGE]),
+                (RETIRED, vec![MANAGE]),
+            ] {
+                assert_eq!(
+                    role(id).permissions_json,
+                    direct_before(id),
+                    "{id}: what it grants directly is byte-identical"
+                );
+                assert_eq!(
+                    list(&role(id).permissions_with_approval_json),
+                    approved,
+                    "{id}: with approval, in byte order"
+                );
+            }
+
+            let queue = postgres.people_republishes();
+            let queued = queue.pending(None, 100).await.expect("read the queue");
+            let keys: Vec<(String, String, &str)> = queued
+                .iter()
+                .map(|row| {
+                    (
+                        row.tenant_id.clone(),
+                        row.store_id.clone(),
+                        row.reason.as_str(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                keys,
+                vec![
+                    (tenant_id.clone(), store(1).to_string(), GRANT),
+                    (tenant_id.clone(), store(2).to_string(), GRANT),
+                ],
+                "exactly the stores holding a roster on some layer, under the grant's name"
+            );
+
+            // The drain clears the rows, and the owner takes the act off servers altogether.
+            for row in &queued {
+                assert!(
+                    queue
+                        .clear(&row.tenant_id, &row.store_id, row.enqueued_time_ms)
+                        .await
+                        .expect("clear a row")
+                );
+            }
+            let server = role(SERVER);
+            people
+                .set_role_template(
+                    &tenant_id,
+                    SERVER,
+                    "Server",
+                    &server.permissions_json,
+                    "[]",
+                    "active",
+                    None,
+                    &server.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            postgres.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template(&tenant_id, SERVER)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(
+                list(&after.permissions_with_approval_json),
+                Vec::<String>::new(),
+                "a later boot does not hand back what the owner took away"
+            );
+            assert!(
+                queue
+                    .pending(None, 100)
+                    .await
+                    .expect("read the queue")
+                    .is_empty(),
+                "and queues nothing"
             );
         });
     }

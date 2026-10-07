@@ -1607,6 +1607,7 @@
   "permission.cash.drawer.open_no_sale": "Mở ngăn kéo tiền khi không bán hàng",
   "permission.cash.movement.record": "Ghi tiền nộp vào hoặc rút ra",
   "permission.cash.shift.close": "Đóng ca",
+  "permission.cash.shift.manage_other_till": "Mở, đếm hoặc đóng ngăn kéo tiền của máy POS khác",
   "permission.cash.shift.open": "Mở ca",
   "permission.inventory.receipt.record": "Ghi nhận hàng nhập",
   "permission.inventory.stocktake.perform": "Kiểm kho",
