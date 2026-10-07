@@ -25,6 +25,7 @@ import type {
   ModifierGroup,
   PaymentRequest,
   DrawerOutcome,
+  DrawersResponse,
   ReasonCodeEntry,
   ShiftResponse,
   SyncResponse,
@@ -126,6 +127,9 @@ export interface ShiftInfo {
   // added up here: a device reads them back rather than counting events it may have seen twice.
   paidIn?: Money;
   paidOut?: Money;
+  // Still open past the business day it opened on, which the Shift screen flags (ADR-0167
+  // decision 11). The edge's judgement, read with the shift: the till keeps no business day.
+  dayEnded?: boolean;
 }
 
 interface StoreShape {
@@ -272,6 +276,10 @@ interface StoreShape {
   // The kitchen stations the store published, for the board's filter.
   stations: Station[];
   shift: ShiftInfo | null;
+  // Every drawer the store keeps, from `GET /api/shifts` (ADR-0167): the model the store server runs
+  // and any it waits to change to, which drawer is this device's own, and each drawer's shift. Null
+  // until the first read, and from an edge too old to serve it, which keeps one drawer.
+  drawers: DrawersResponse | null;
   // The cloud link and the outbox (ADR-0137), polled by the status bar. Null until the first read,
   // and on an edge that predates the route — the bar then says nothing about the cloud, which is
   // what it said before.
@@ -342,6 +350,7 @@ const [state, setState] = createStore<StoreShape>({
   billOrder: {},
   stations: [],
   shift: null,
+  drawers: null,
   sync: null,
 });
 
@@ -858,33 +867,52 @@ export function fold(event: ServerEvent): void {
     // The cash shift, so a shift opened, counted or closed on one device is the shift every other
     // device shows (F4). Each carries its id under its own name — the payloads predate one field for
     // it — and a counted event carries the count, never the expectation: the close is what reveals.
+    //
+    // Where the store keeps a drawer per till, the shift a device shows is its own till's, so an
+    // event about another till's drawer changes only the list of drawers (ADR-0167).
     case "cash.shift.opened": {
       const shiftId = str(payload, "opened_shift_id");
-      if (shiftId !== null) {
+      const own = ownDrawer(str(payload, "terminal_device_id"));
+      if (shiftId !== null && own === true) {
         replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+      } else if (own === null) {
+        void loadShift();
       }
+      void loadDrawers();
       break;
     }
+    // A count names the drawer's shift and no till: under a drawer per till it is this device's when
+    // the shift is the one it shows.
     case "cash.shift.counted": {
       const shiftId = str(payload, "counted_shift_id");
       const counted = asMoney(payload["counted_amount"]);
       if (shiftId !== null) {
-        replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+        const oneDrawer = state.drawers?.drawer_model === "DRAWER_MODEL_PER_STORE";
+        if (oneDrawer || state.shift?.shiftId === shiftId) {
+          replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+        } else if (state.drawers === null) {
+          void loadShift();
+        }
       }
+      void loadDrawers();
       break;
     }
     // A paid in or out on any device: read the shift's totals back, rather than add the amount here,
     // because the device that recorded it has already taken the totals from its own response.
     case "cash.drawer.paid_in":
     case "cash.drawer.paid_out":
-      void loadShift();
+      if (ownDrawer(str(payload, "terminal_device_id")) !== false) {
+        void loadShift();
+      }
+      void loadDrawers();
       break;
     case "cash.shift.closed": {
       const shiftId = str(payload, "closed_shift_id");
       const expected = asMoney(payload["expected_amount"]);
       const counted = asMoney(payload["counted_amount"]);
       const variance = asMoney(payload["variance"]);
-      if (shiftId !== null) {
+      const own = ownDrawer(str(payload, "terminal_device_id"));
+      if (shiftId !== null && own === true) {
         replaceShift({
           shiftId,
           state: "SHIFT_STATE_CLOSED",
@@ -892,7 +920,10 @@ export function fold(event: ServerEvent): void {
           counted: counted ?? undefined,
           variance: variance ?? undefined,
         });
+      } else if (own === null) {
+        void loadShift();
       }
+      void loadDrawers();
       break;
     }
     case "billing.bill.settled": {
@@ -1866,6 +1897,8 @@ export async function loadConfiguration(): Promise<void> {
     loadReasonCodes(),
     // One read of `GET /api/session` for the idle lock and the person's permissions both.
     loadSession(),
+    // How many drawers the store keeps, which its configuration decides (ADR-0167).
+    loadDrawers(),
   ]);
 }
 
@@ -1882,19 +1915,23 @@ export async function loadShift(): Promise<void> {
   } catch {
     return;
   }
-  replaceShift(
-    response === null
-      ? null
-      : {
-          shiftId: response.shift_id,
-          state: response.state,
-          // Only where the store's count is not blind (ADR-0160): a blind store is sent none.
-          expected: response.expected_amount,
-          counted: response.counted_amount,
-          paidIn: response.paid_in_amount,
-          paidOut: response.paid_out_amount,
-        },
-  );
+  // The expectation only where the store's count is not blind (ADR-0160): a blind store is sent none.
+  replaceShift(response === null ? null : shiftInfo(response));
+}
+
+// A shift as the edge answered it, every field named.
+function shiftInfo(response: ShiftResponse): ShiftInfo {
+  return {
+    shiftId: response.shift_id,
+    state: response.state,
+    expected: response.expected_amount,
+    counted: response.counted_amount,
+    variance: response.variance,
+    reportPrint: response.shift_report_print,
+    paidIn: response.paid_in_amount,
+    paidOut: response.paid_out_amount,
+    dayEnded: response.day_ended === true,
+  };
 }
 
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
@@ -1913,8 +1950,42 @@ function replaceShift(info: ShiftInfo | null): void {
           reportPrint: info.reportPrint,
           paidIn: info.paidIn,
           paidOut: info.paidOut,
+          dayEnded: info.dayEnded,
         },
   );
+}
+
+// Every drawer the store keeps (ADR-0167). Forgiving like the other loaders: an edge that predates
+// the read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
+export async function loadDrawers(): Promise<void> {
+  let response: DrawersResponse;
+  try {
+    response = await api.drawers();
+  } catch {
+    return;
+  }
+  setState("drawers", reconcile(response));
+}
+
+// Whether the store keeps a drawer per till, as the store server last said (ADR-0167 decision 1).
+export function drawerPerTill(): boolean {
+  return state.drawers?.drawer_model === "DRAWER_MODEL_PER_TERMINAL";
+}
+
+// The till this device is, whose drawer is its own, where the store keeps a drawer per till; absent
+// where it keeps one, and for a device that is no till.
+export function ownTill(): string | undefined {
+  return drawerPerTill() ? state.drawers?.terminal_device_id : undefined;
+}
+
+// Whether a cash event naming `till` is about this device's own drawer: one naming none is about the
+// store's one drawer, which is every device's. `null` where the till cannot tell — before the first
+// drawers read, or on one from before the store changed model — and the shift is read back instead.
+function ownDrawer(till: string | null): boolean | null {
+  if (till === null) {
+    return true;
+  }
+  return drawerPerTill() ? till === state.drawers?.terminal_device_id : null;
 }
 
 // The cloud link and the outbox, for the status bar (ADR-0137). A failed read keeps the last one:
@@ -2211,15 +2282,7 @@ export async function openShift(openingFloatMinor: number): Promise<void> {
   const response = await api.openShift({
     opening_float: { currency_code: storeCurrency(), amount_minor: openingFloatMinor },
   });
-  setState("shift", {
-    shiftId: response.shift_id,
-    state: response.state,
-    expected: response.expected_amount,
-    counted: response.counted_amount,
-    variance: response.variance,
-    paidIn: response.paid_in_amount,
-    paidOut: response.paid_out_amount,
-  });
+  replaceShift(shiftInfo(response));
 }
 
 export async function countShift(shiftId: string, countedMinor: number): Promise<void> {
@@ -2231,17 +2294,8 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
 
 export async function closeShift(shiftId: string): Promise<ShiftInfo> {
   const response = await api.closeShift(shiftId);
-  const info: ShiftInfo = {
-    shiftId: response.shift_id,
-    state: response.state,
-    expected: response.expected_amount,
-    counted: response.counted_amount,
-    variance: response.variance,
-    reportPrint: response.shift_report_print,
-    paidIn: response.paid_in_amount,
-    paidOut: response.paid_out_amount,
-  };
-  setState("shift", info);
+  const info = shiftInfo(response);
+  replaceShift(info);
   return info;
 }
 

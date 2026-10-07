@@ -3676,6 +3676,149 @@ test("a store that publishes no till says where tills are created", async ({ pag
   }
 });
 
+// A drawer per till (ADR-0167). The `drawers` store keeps one for each of its two tills, the
+// counter's on the store's float of 500,000₫ and the bar's on its own 200,000₫. A device becomes a
+// till the way a manager makes it one, on the Devices screen.
+
+/** Makes this device one of the store's tills on its Devices screen, then opens the Shift screen. */
+async function bindTill(page, name) {
+  await navigateTo(page, "/devices");
+  const card = page.locator('[data-outcome="till"]');
+  await card.locator("button[aria-pressed]").filter({ hasText: name }).click();
+  await card.getByRole("button", { name: `Bind this device to ${name}` }).click();
+  await expect(card.locator('[data-outcome="till-status"]')).toHaveText(`This device is ${name}.`);
+  await navigateTo(page, "/shift");
+}
+
+// The second device pairs with a code this one gets on its Devices screen, as in the tills test.
+test("a till's own drawer comes first on its own float, and another till's shift leaves it be", async ({
+  page,
+  browser,
+}) => {
+  const edge = await startEdge("drawers");
+  const other = await browser.newPage();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Bar till");
+    await expect(page.locator('[data-outcome="own-drawer"]')).toHaveText(
+      "Bar till — this till's drawer",
+    );
+    await expect(page.locator("#float")).toHaveValue("200000");
+
+    await navigateTo(page, "/devices");
+    await page.getByRole("button", { name: "Get a pairing code" }).click();
+    const link = page.getByText(/\/pair\?code=\d{6}$/);
+    const code = /code=(\d{6})/.exec((await link.textContent()) ?? "")?.[1];
+    await other.goto(`${edge.baseURL}/pair?code=${code}`);
+    await other.locator("#pair-submit").click();
+    await expect(other).toHaveURL(/\/signin$/);
+    await signIn(other, edge);
+    await bindTill(other, "Counter till");
+    await expect(other.locator("#float")).toHaveValue("500000");
+
+    // The counter opens its own drawer. This till hears it, reads the drawers again — the read that
+    // shows the counter's open is the one the event set off — and still shows its own closed.
+    await navigateTo(page, "/shift");
+    await expect(page.locator("#float")).toHaveValue("200000");
+    const heard = page.waitForResponse(
+      async (response) =>
+        new URL(response.url()).pathname === "/api/shifts" &&
+        response.request().method() === "GET" &&
+        (await response.json()).drawers.some((drawer) => drawer.shift !== null),
+    );
+    await other.locator('[data-step="openShift"]').click();
+    await expect(other.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await heard;
+    await expect(page.locator('[data-outcome="shift-open"]')).toHaveCount(0);
+    await expect(page.locator("header").getByText("No shift open")).toBeVisible();
+    await expect(page.locator("#float")).toHaveValue("200000");
+  } finally {
+    await other.close();
+    await edge.stop();
+  }
+});
+
+test("a device that is no till says so, offers no drawer of its own, and is refused cash", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-outcome="no-till"]')).toHaveText(
+      "This device is not one of the store's tills, so it has no drawer of its own: cash is taken at a till. A manager binds a device to a till on the Devices screen.",
+    );
+    await expect(page.locator('[data-outcome="own-drawer"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="openShift"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="askOpenDrawer"]')).toHaveCount(0);
+
+    // Cash is refused here in the till's own words; a card still works.
+    await navigateTo(page, "/");
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(
+      page.getByText(
+        "Cash is taken at a till, and this device is not one of the store's tills: a manager binds it to a till on the Devices screen. Cards and other ways to pay still work here.",
+      ),
+    ).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The example keeps the machine's clock, and its business day is fixed when it boots, so no drawer
+// passes its day's end within a test. The two shift reads are rewritten to say one has, as
+// `aSessionThatSays` rewrites a session, and the store as waiting to change back to one drawer.
+test("a drawer open past its business day is flagged, and a change of model waits in words", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    const ended = (shift) => (shift === null ? null : { ...shift, day_ended: true });
+    await page.route("**/api/shifts/current", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: ended(await response.json()) });
+    });
+    await page.route("**/api/shifts", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const response = await route.fetch();
+      const read = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...read,
+          waiting_drawer_model: "DRAWER_MODEL_PER_STORE",
+          drawers: read.drawers.map((drawer) => ({ ...drawer, shift: ended(drawer.shift) })),
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    // Read again when the screen opens, as a till does on a shift still trading.
+    await navigateTo(page, "/");
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-outcome="day-ended"]')).toHaveText(
+      "This drawer's shift began on an earlier business day. Count and close it.",
+    );
+    await expect(page.locator('[data-outcome="model-waiting"]')).toHaveText(
+      "The store changes to one drawer for the whole store once every till's drawer is closed.",
+    );
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A role changed in the console reaches an open till with the configuration, without a new sign-in:
 // the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
 // session again. The frame is given the next position on the stream, so it is heard as itself.

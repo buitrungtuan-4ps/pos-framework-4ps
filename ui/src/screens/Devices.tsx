@@ -14,7 +14,7 @@ import { type MessageKey, locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
-import { loadSync, state } from "../state/store";
+import { loadDrawers, loadShift, loadSync, state } from "../state/store";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -178,7 +178,8 @@ function ThisDevice() {
   };
 
   // A bind or a release, then the tills read again: the card says what the store server holds, not
-  // what this screen expects it to.
+  // what this screen expects it to. Where the store keeps a drawer per till, the till this device is
+  // decides which drawer is its own (ADR-0167), so its shift and the drawers are read again too.
   const act = async (send: () => Promise<MessageKey>) => {
     setBusy(true);
     setOutcome(null);
@@ -186,6 +187,8 @@ function ThisDevice() {
     try {
       setOutcome(await send());
       await load();
+      void loadShift();
+      void loadDrawers();
     } catch (caught) {
       setFailure(errorMessage(caught));
     } finally {
