@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Memoize offered capability presets in the Config screen.**
+  `offeredPresets` in `dashboard/src/screens/Config.tsx` is now memoized with `createMemo` to avoid
+  redundant Set allocations and array filtering on every render pass.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a

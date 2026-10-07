@@ -442,7 +442,7 @@ export function Config() {
       <PageHeader title={t("config.title")} description={t("config.description")} />
       <RequireContext need="store">
         <Show when={catalogue()}>
-          {(cat) => (
+          {(_cat) => (
             <div class="mb-6">
               <Card
                 title={t("config.capabilities.title")}
