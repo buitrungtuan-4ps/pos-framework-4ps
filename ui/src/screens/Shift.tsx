@@ -10,10 +10,13 @@ import {
   closeShift,
   countShift,
   currencyExponent,
+  drawerPerTill,
   formatAmount,
+  loadDrawers,
   loadShift,
   openDrawerNoSale,
   openShift,
+  ownTill,
   parseAmount,
   reasonsFor,
   recordCashMovement,
@@ -57,6 +60,10 @@ const nonZero = (amount: Money | undefined) => amount !== undefined && amount.am
 // Two of the store's settings change that (ADR-0160 decision 2). `shift.opening_float_minor` fills
 // in the float, which the cashier may change before opening. `shift.blind_close` off has the edge
 // send what the drawer should hold, and then, and only then, the count field shows it.
+//
+// Where the store keeps a drawer per till (ADR-0167), all of that is this till's own drawer, on its
+// till's own float. A device that is no till says so and offers no drawer of its own. What the
+// store waits to change to, and a drawer open past its business day, are said wherever they apply.
 export function Shift() {
   const [amount, setAmount] = createSignal("");
   // The float field holds the store's float until the cashier types, and what they typed from then
@@ -80,6 +87,19 @@ export function Shift() {
   const shift = () => state.shift;
   const phase = () => shift()?.state ?? "NONE";
 
+  // Every drawer the store keeps, and which of them is this device's, where it keeps one per till.
+  const drawers = () => state.drawers?.drawers ?? [];
+  const ownDrawer = () => {
+    const own = ownTill();
+    return own === undefined
+      ? undefined
+      : drawers().find((drawer) => drawer.terminal_device_id === own);
+  };
+  // A device that is no till has no drawer of its own (decision 6).
+  const noTill = () => drawerPerTill() && ownTill() === undefined;
+  // The model the store has published while a drawer still open keeps the other (decision 8).
+  const waiting = () => state.drawers?.waiting_drawer_model;
+
   // What the drawer should hold, as the edge reports it to a store whose count is not blind. Read
   // again when the screen opens on a shift still trading, so it includes the cash taken since the
   // shift was last read. A closed shift is left as it is, so its variance stays on screen.
@@ -88,6 +108,7 @@ export function Shift() {
     if (current !== null && current.state !== "SHIFT_STATE_CLOSED") {
       void loadShift();
     }
+    void loadDrawers();
   });
 
   const run = async (action: () => Promise<unknown>) => {
@@ -101,14 +122,16 @@ export function Shift() {
     }
   };
 
-  // The store's float as the cashier would type it: whole units of the currency, which is all the
-  // keypad types. A store that sets none fills in nothing, as before the setting, and so does a
-  // float that is not a whole number of units, rather than open the shift on a different amount.
-  const storeFloat = () => {
-    const minor = openingFloatMinor();
+  // A float as the cashier would type it: whole units of the currency, which is all the keypad
+  // types. Nothing fills in for no float, as before the setting, nor for one that is not a whole
+  // number of units, rather than open the shift on a different amount.
+  const wholeUnits = (minor: number) => {
     const unit = 10 ** currencyExponent();
     return minor > 0 && minor % unit === 0 ? String(minor / unit) : "";
   };
+  // The store's float, or where the store keeps a drawer per till this till's own (decision 4).
+  const storeFloat = () =>
+    wholeUnits(ownDrawer()?.default_float.amount_minor ?? openingFloatMinor());
   const floatText = () => (floatTyped() ? amount() : storeFloat());
   const typeFloat = (text: string) => {
     setFloatTyped(true);
@@ -200,8 +223,58 @@ export function Shift() {
         )}
       </Show>
 
+      {/* Worded for each way, since a store may change either way and waits all the same. */}
+      <Show when={waiting()}>
+        {(model) => (
+          <p
+            class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
+            role="status"
+            data-outcome="model-waiting"
+          >
+            {t(
+              model() === "DRAWER_MODEL_PER_TERMINAL"
+                ? "shift.waiting_per_till"
+                : "shift.waiting_per_store",
+            )}
+          </p>
+        )}
+      </Show>
+
+      <Show when={noTill()}>
+        <p
+          class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
+          role="status"
+          data-outcome="no-till"
+        >
+          {t("shift.not_a_till")}
+        </p>
+      </Show>
+
+      <Show when={ownDrawer()?.name}>
+        {(name) => (
+          <h2 class="mb-3 font-semibold" data-outcome="own-drawer">
+            {t("shift.own_drawer", { name: name() })}
+          </h2>
+        )}
+      </Show>
+
+      {/* Still open once the business day it opened on has ended (decision 11). */}
+      <Show when={shift()?.dayEnded === true && phase() !== "SHIFT_STATE_CLOSED"}>
+        <p
+          class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
+          role="status"
+          data-outcome="day-ended"
+        >
+          {t("shift.day_ended")}
+        </p>
+      </Show>
+
       <Show
-        when={(phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") && can("cash.shift.open")}
+        when={
+          (phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") &&
+          can("cash.shift.open") &&
+          !noTill()
+        }
       >
         <label class="block text-sm text-ink-muted" for="float">
           {t("shift.float_label", { currency: storeCurrency() })}
@@ -452,7 +525,7 @@ export function Shift() {
         <Show
           when={openingDrawer()}
           fallback={
-            <Show when={can("cash.drawer.open_no_sale")}>
+            <Show when={can("cash.drawer.open_no_sale") && !noTill()}>
             <button
               type="button"
               class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"

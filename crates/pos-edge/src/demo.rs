@@ -182,6 +182,17 @@ fn tills() -> bool {
     std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("tills"))
 }
 
+/// Whether this demo store keeps a drawer per till — `POS_DEMO_PROFILE=drawers`.
+///
+/// That profile publishes the tills of [`tills`], the bar's with a float of its own, and the `shift`
+/// node [`demo_drawers`] builds, which keeps a drawer per till
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), so the browser gate can
+/// drive the Shift screen drawer by drawer once a manager binds a device to a till on the Devices
+/// screen. Every other profile keeps the one drawer every store kept before.
+fn drawers() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("drawers"))
+}
+
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
 ///
 /// That profile publishes no `permissions` node, which is what a store the console has not staffed
@@ -356,6 +367,10 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 /// `POS_DEMO_PROFILE=tills` publishes the same store with a `devices` node naming two tills and no
 /// printer, which a manager binds a device to on the Devices screen. See [`tills`].
 ///
+/// # The drawers profile
+///
+/// `POS_DEMO_PROFILE=drawers` publishes the same two tills, and a drawer for each. See [`drawers`].
+///
 /// # The walk-in profiles
 ///
 /// `POS_DEMO_PROFILE=walk-in-takeaway`, `walk-in-dine-in` and `walk-in-ask` publish the same store
@@ -453,7 +468,15 @@ pub fn config_document() -> Option<serde_json::Value> {
     if tills()
         && let Some(object) = document.as_object_mut()
     {
-        object.insert("devices".to_owned(), demo_tills());
+        object.insert("devices".to_owned(), demo_tills(None));
+    }
+    // Published only on its own profile, so every other flow keeps the one drawer every store kept
+    // before, as a store that sets nothing does.
+    if drawers()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("devices".to_owned(), demo_tills(Some(DEMO_BAR_FLOAT)));
+        object.insert("shift".to_owned(), demo_drawers());
     }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
@@ -491,9 +514,10 @@ fn demo_stations() -> serde_json::Value {
 
 /// Two tills a device can be bound to, and no printer
 /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Nothing dials a terminal, so each has no
-/// address and no connection. Published as JSON, as the floor is, so it goes through the
-/// deserialisation a cloud's node does.
-fn demo_tills() -> serde_json::Value {
+/// address and no connection. The bar's drawer opens on `bar_float` where one is given, and on the
+/// store's float otherwise, as the counter's always does (ADR-0167 decision 4). Published as JSON,
+/// as the floor is, so it goes through the deserialisation a cloud's node does.
+fn demo_tills(bar_float: Option<i64>) -> serde_json::Value {
     let till = |id: u128, name: &str| {
         serde_json::json!({
             "device_id": DeviceId::new(Ulid::from_u128(id)).to_string(),
@@ -503,7 +527,23 @@ fn demo_tills() -> serde_json::Value {
             "name": name,
         })
     };
-    serde_json::json!({ "devices": [till(401, "Counter till"), till(402, "Bar till")] })
+    let mut bar = till(402, "Bar till");
+    if let (Some(float), Some(entry)) = (bar_float, bar.as_object_mut()) {
+        entry.insert("opening_float_minor".to_owned(), serde_json::json!(float));
+    }
+    serde_json::json!({ "devices": [till(401, "Counter till"), bar] })
+}
+
+/// The bar till's own float in the drawers profile, 200,000₫, beside the store's 500,000₫.
+const DEMO_BAR_FLOAT: i64 = 200_000;
+
+/// The drawers profile's `shift` node: a drawer per till, each opening on the store's float of
+/// 500,000₫ unless its till sets its own.
+fn demo_drawers() -> serde_json::Value {
+    serde_json::json!({
+        "drawer_model": "DRAWER_MODEL_PER_TERMINAL",
+        "opening_float_minor": 500_000,
+    })
 }
 
 /// A store's own tip keys, ten and twenty percent with the middle key hidden, and an even split of up
@@ -618,11 +658,12 @@ fn demo_floor() -> serde_json::Value {
 mod tests {
     use pos_proto::SalesChannel;
     use pos_proto::ids::MenuItemId;
+    use pos_proto::shift::DrawerModel;
     use pos_proto::ulid::Ulid;
 
     use super::{
-        DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_counter, demo_menu, demo_stations,
-        demo_tender_keys, demo_tills,
+        DEMO_BAR_FLOAT, DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_counter,
+        demo_drawers, demo_menu, demo_stations, demo_tender_keys, demo_tills,
     };
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
@@ -776,13 +817,33 @@ mod tests {
     /// nothing a receipt prints at.
     #[test]
     fn the_tills_node_publishes_two_terminals_and_no_printer() {
-        let document = serde_json::json!({ "devices": demo_tills() });
+        let document = serde_json::json!({ "devices": demo_tills(None) });
         let session = session_from_config(&EdgeSession::bootstrap(), &document);
         let tills: Vec<&str> = published_terminals(&session.devices)
             .map(|till| till.name.as_str())
             .collect();
         assert_eq!(tills, ["Counter till", "Bar till"]);
         assert!(published_printers(&session.devices).is_empty());
+    }
+
+    /// The drawers profile keeps a drawer per till, the counter's on the store's float and the
+    /// bar's on its own.
+    #[test]
+    fn the_drawers_profile_keeps_a_drawer_per_till_and_the_bar_floats_its_own() {
+        let document = serde_json::json!({
+            "devices": demo_tills(Some(DEMO_BAR_FLOAT)),
+            "shift": demo_drawers(),
+        });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert_eq!(session.shift.drawer_model(), DrawerModel::PerTerminal);
+        assert_eq!(session.shift.opening_float_minor(), 500_000);
+        let floats: Vec<(&str, Option<i64>)> = published_terminals(&session.devices)
+            .map(|till| (till.name.as_str(), till.opening_float_minor()))
+            .collect();
+        assert_eq!(
+            floats,
+            [("Counter till", None), ("Bar till", Some(DEMO_BAR_FLOAT))]
+        );
     }
 
     /// The tender-keys profile's node offers the store's own two tip keys, without the one it hid.

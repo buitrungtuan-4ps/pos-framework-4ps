@@ -1980,6 +1980,10 @@ pub struct DrawersView {
     /// The model the store has published, while open shifts keep the edge on the other until they
     /// close.
     pub waiting: Option<DrawerModel>,
+    /// The till the device asking is, where the edge keeps a drawer per till: its own drawer, which
+    /// the till's Shift screen shows first. `None` for a device that is no till, and where the edge
+    /// keeps one drawer.
+    pub own: Option<DeviceId>,
     /// The store's one drawer, or one per till its `devices` node lists.
     pub drawers: Vec<DrawerView>,
 }
@@ -7657,6 +7661,7 @@ impl<S: EventStore> Edge<S> {
         DrawersView {
             model,
             waiting: (published != model).then_some(published),
+            own: scope.own.filter(|_| model == DrawerModel::PerTerminal),
             drawers,
         }
     }

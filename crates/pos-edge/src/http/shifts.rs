@@ -254,6 +254,10 @@ struct DrawersResponse {
     /// The model the store has published, while open shifts keep the edge on the other.
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting_drawer_model: Option<&'static str>,
+    /// The till this device is, whose drawer is its own, where the store keeps a drawer per till.
+    /// Absent for a device that is no till, and where the store keeps one drawer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_device_id: Option<String>,
     drawers: Vec<DrawerResponse>,
 }
 
@@ -276,6 +280,7 @@ impl From<DrawersView> for DrawersResponse {
         Self {
             drawer_model: view.model.as_wire(),
             waiting_drawer_model: view.waiting.map(DrawerModel::as_wire),
+            terminal_device_id: view.own.map(|till| till.to_string()),
             drawers: view
                 .drawers
                 .into_iter()

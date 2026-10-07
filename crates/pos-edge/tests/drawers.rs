@@ -1689,6 +1689,21 @@ async fn the_drawers_read_lists_each_till_and_a_bound_device_opens_its_own() {
     assert_eq!(read["waiting_drawer_model"], "DRAWER_MODEL_PER_STORE");
 }
 
+/// The read names the till the device asking is, whose drawer its Shift screen shows first, and
+/// tells a device that is no till it is none.
+#[tokio::test]
+async fn the_drawers_read_names_the_till_the_device_asking_is() {
+    let tills = drawers_app(false).await;
+    let (app, bar, stranger) = (tills.app, tills.bar, tills.stranger);
+    let (_, _, read) = send(app.clone(), &bar, "GET", "/api/shifts", None).await;
+    assert_eq!(read["terminal_device_id"], till(BAR).to_string(), "{read}");
+    let (_, _, read) = send(app.clone(), &stranger, "GET", "/api/shifts", None).await;
+    assert!(
+        read.get("terminal_device_id").is_none(),
+        "a device that is no till is told so: {read}"
+    );
+}
+
 #[tokio::test]
 async fn a_binding_that_cannot_be_read_refuses_rather_than_guesses_the_till() {
     let tills = drawers_app(true).await;

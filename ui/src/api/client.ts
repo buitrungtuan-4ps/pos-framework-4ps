@@ -23,6 +23,7 @@ import type {
   CounterOrder,
   DiscountRequest,
   DiscountResponse,
+  DrawersResponse,
   FireRequest,
   QuantityRequest,
   FloorResponse,
@@ -407,8 +408,11 @@ export const api = {
 
   openShift: (open: OpenShiftRequest) =>
     request<ShiftResponse>("POST", "/api/shifts", open),
-  // The shift open now, or null (F4): what lets a device that reloaded count and close it.
+  // The shift open now, or null (F4): what lets a device that reloaded count and close it. Where the
+  // store keeps a drawer per till, this device's own till's.
   currentShift: () => request<ShiftResponse | null>("GET", "/api/shifts/current"),
+  // Every drawer the store keeps, the model it runs, and which drawer is this device's (ADR-0167).
+  drawers: () => request<DrawersResponse>("GET", "/api/shifts"),
   // The cloud link and the outbox, for the status bar (ADR-0137).
   sync: () => request<SyncResponse>("GET", "/api/sync"),
   // The vendor connections the cloud published to this store (ADR-0153).

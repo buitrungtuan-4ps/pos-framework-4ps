@@ -753,6 +753,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A till's Shift screen shows its own drawer, where a store keeps one per till**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 6, 8 and 11). Under
+  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet:
+  - The Shift screen is this till's own drawer, under its name, with every act the screen had on
+    it, and its float filled in with the till's own default float. Another till's shift no longer
+    changes the shift this till shows, and binding the device to a till on the Devices screen reads
+    its drawer again.
+  - A device that is no till says that cash is taken at a till and that a manager binds a device to
+    one on the Devices screen, and offers no drawer of its own. It is refused cash in the till's own
+    words, in English and Vietnamese, rather than as `NOT_A_TILL`.
+  - On every store, a drawer still open past its business day says so on the Shift screen, and a
+    change of model the store waits to make until every drawer is closed is said in words, either
+    way.
+  - `GET /api/shifts` names the till the device asking is (`terminal_device_id`).
+  - `POS_DEMO_PROFILE=drawers` publishes, in `examples/minimal-edge`, the two tills of `tills` with
+    a drawer each, the bar's on a float of its own, which the browser gate drives.
+
+  **Upgrade note:** a store that keeps one drawer sees the Shift screen it had, apart from the two
+  notices. `PROTOCOL_VERSION` is unchanged, and no route, permission, event, setting or migration is
+  added; `GET /api/shifts` gains one optional field.
+
 - **A store chooses what a drawer left open past its business day does, `shift.drawer_day_end`**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11), set at the tenant, a
   brand, a store group or a store, and honoured from 0.14.1. A drawer is past its day's end when

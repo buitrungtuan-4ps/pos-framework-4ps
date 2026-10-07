@@ -624,6 +624,8 @@ export interface CountShiftRequest {
 
 export interface ShiftResponse {
   shift_id: string;
+  /** The till whose drawer it is, where the store keeps a drawer per till (ADR-0167). */
+  terminal_device_id?: string;
   state: string;
   expected_amount?: Money;
   counted_amount?: Money;
@@ -639,6 +641,37 @@ export interface ShiftResponse {
   paid_out_amount?: Money;
   /** What came of opening the drawer, on a paid in or a paid out (ADR-0165). */
   drawer_open?: DrawerOutcome;
+  /**
+   * Present, and true, while the shift is still open past the business day it opened on
+   * (ADR-0167 decision 11), which the Shift screen flags.
+   */
+  day_ended?: boolean;
+}
+
+/** How many drawers the store keeps: its one, or one for each till (ADR-0167 decision 1). */
+export type DrawerModel = "DRAWER_MODEL_PER_STORE" | "DRAWER_MODEL_PER_TERMINAL";
+
+/** One drawer the store keeps, from `GET /api/shifts`. */
+export interface DrawerEntry {
+  /** The till whose drawer it is; absent for the store's one drawer. */
+  terminal_device_id?: string;
+  /** The till's name; absent for the store's one drawer, and for a till the store no longer lists. */
+  name?: string;
+  /** What its shift opens on unless somebody types another float. */
+  default_float: Money;
+  /** Its shift, as blind as `GET /api/shifts/current`; `null` while the drawer is closed. */
+  shift: ShiftResponse | null;
+}
+
+/** Every drawer the store keeps, and which is this device's own (ADR-0167 decisions 3 and 8). */
+export interface DrawersResponse {
+  /** The model the store server runs now. */
+  drawer_model: DrawerModel;
+  /** The model the store has published, while a drawer still open keeps the other. */
+  waiting_drawer_model?: DrawerModel;
+  /** The till this device is, whose drawer is its own; absent for a device that is no till. */
+  terminal_device_id?: string;
+  drawers: DrawerEntry[];
 }
 
 /** A paid in or a paid out: how much, in minor units, and why (ADR-0165). */

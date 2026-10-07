@@ -44,6 +44,9 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   SHIFT_NOT_OPEN: "error.shift_not_open",
   // A drawer still open past its business day, at a store that requires it closed (ADR-0167).
   DRAWER_DAY_ENDED: "error.drawer_day_ended",
+  // Cash, or a drawer of its own, at a device that is none of the store's tills, where the store
+  // keeps a drawer per till (ADR-0167 decision 6).
+  NOT_A_TILL: "error.not_a_till",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",
