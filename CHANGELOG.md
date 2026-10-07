@@ -753,6 +753,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console shows tax by component, and its tax grid names each part with a code**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 2 and 5).
+  - Reports gains a **Tax by component** card under Revenue, for a role that reads revenue: each
+    tax component name and rate the window's settled bills recorded, such as CGST at 2.5%, with
+    its tax summed over the days, in order of name and then rate. **Export CSV** downloads
+    `revenue-tax.csv` for the same window. A window that recorded no component, as every
+    Vietnamese and Japanese one, shows no card. The card has no total, and says that a bill settled
+    before its store recorded components counts in the day's tax but under no component.
+  - The Tax rates screen's help says each part of a breakdown is named with a code of 2 to 8
+    capital letters or digits, starting with a letter, such as CGST or SGST. A breakdown's letters
+    a to z are upper-cased as they are typed, with the caret left where it was, and a cell whose
+    part is named otherwise says so and keeps the grid from being saved. A row the cloud marks says that a name is not a valid code, that the grid
+    cannot be saved until it is renamed, and that until then the store charges the rate without
+    printing the breakdown. The cloud's refusal of such a name is shown in the operator's words.
+  - The new words are in English and Vietnamese.
+
 - **The cloud reports tax by component, and the tax grid names each component with a code**
   ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 2 and 5).
   - The daily revenue rollup gains `by_tax_component`: the tax the day's settled bills' tax lines

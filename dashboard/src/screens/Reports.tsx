@@ -1,9 +1,9 @@
 // Reports & analytics for the store in context (ADR-0081, Track O4). A windowed view over the
 // materialised rollups: activity counts (everyone), and — for Owner/Admin, because prices are T2 —
-// revenue, its fees by code, product mix, an X/Z report, and a cross-store comparison. Charts are
-// hand-rolled inline SVG (no chart library, so nothing to load past the CSP). The operator sets the
-// tenant/store in the top bar; the date-range window defaults to the server's most recent 90
-// trading days.
+// revenue, its tax by component, its fees by code, product mix, an X/Z report, and a cross-store
+// comparison. Charts are hand-rolled inline SVG (no chart library, so nothing to load past the
+// CSP). The operator sets the tenant/store in the top bar; the date-range window defaults to the
+// server's most recent 90 trading days.
 //
 // The X/Z report's cash is the store's, and below it each drawer's where the day kept more than the
 // store's one (ADR-0167 decision 13), under the till names the cloud read from the store's devices.
@@ -18,9 +18,11 @@ import type {
   DailyRollup,
   FeeTotal,
   Store,
+  TaxComponentTotal,
   XzReport,
 } from "../api/types";
 import { t } from "../i18n";
+import { percentText } from "../lib/fees";
 import { formatCount } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -288,6 +290,25 @@ export function Reports() {
     return [...totals.values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
   });
 
+  // Each tax component over the window, by name and rate (ADR-0168 decision 5): the days' tax
+  // summed, in name-then-rate order as the export lists them. No total: a bill settled before its
+  // store recorded components is in the day's tax and under none, so a sum here is not the tax.
+  const taxComponentTotals = createMemo(() => {
+    const totals = new Map<string, TaxComponentTotal>();
+    for (const day of revenue()) {
+      for (const part of day.by_tax_component ?? []) {
+        const key = `${part.component_name} ${part.rate_basis_points}`;
+        const held = totals.get(key)?.tax ?? 0;
+        totals.set(key, { ...part, tax: held + part.tax });
+      }
+    }
+    const byName = (a: TaxComponentTotal, b: TaxComponentTotal) =>
+      a.component_name < b.component_name ? -1 : a.component_name > b.component_name ? 1 : 0;
+    return [...totals.values()].sort(
+      (a, b) => byName(a, b) || a.rate_basis_points - b.rate_basis_points,
+    );
+  });
+
   const revenueCurrency = () => revenue().find((day) => day.currency_code)?.currency_code ?? "";
 
   return (
@@ -480,6 +501,56 @@ export function Reports() {
                 </div>
               </Show>
             </Card>
+
+            {/* Tax by component (ADR-0168), under the day's tax. Unlike the Fees card, it is not
+                drawn at all for a window that recorded no component, rather than drawn empty: a
+                store whose tax table names none, as every Vietnamese and Japanese one, never will,
+                and an empty card on every visit would be clutter. */}
+            <Show when={taxComponentTotals().length > 0}>
+              <Card
+                title={t("reports.taxComponentsTitle")}
+                actions={
+                  <Button
+                    variant="secondary"
+                    disabled={busy()}
+                    onClick={() => void api.exportRevenueTaxCsv(tenantId(), storeId(), win())}
+                  >
+                    {t("reports.exportCsv")}
+                  </Button>
+                }
+              >
+                <div class="overflow-x-auto">
+                  <table class="w-full text-left text-sm">
+                    <thead>
+                      <tr class="border-b border-line text-ink-muted">
+                        <th class="py-2 pr-4 font-medium">{t("reports.taxComponent")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("reports.taxComponentRate")}</th>
+                        <th class="py-2 font-medium">{t("reports.tax")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={taxComponentTotals()}>
+                        {(part) => (
+                          <tr class="border-b border-line text-ink">
+                            <td class="py-2 pr-4 font-mono">{part.component_name}</td>
+                            <td class="py-2 pr-4">
+                              {t("reports.taxComponentPercent", {
+                                rate: percentText({
+                                  numerator: part.rate_basis_points,
+                                  denominator: 10_000,
+                                }),
+                              })}
+                            </td>
+                            <td class="py-2 font-medium">{money(part.tax, revenueCurrency())}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+                <p class="mt-2 text-sm text-ink-muted">{t("reports.taxComponentsHint")}</p>
+              </Card>
+            </Show>
 
             {/* Fees by code (ADR-0159) */}
             <Card

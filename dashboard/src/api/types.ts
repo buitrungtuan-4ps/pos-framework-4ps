@@ -220,6 +220,21 @@ export interface DailyRevenue {
    * from before fee lines is in `service_charge` and under no code.
    */
   readonly by_fee: Record<string, FeeTotal>;
+  /**
+   * The tax the day's settled bills' tax lines recorded by tax component, one entry per name and
+   * rate, in order of name and then rate (ADR-0168). Absent on a day that recorded none, as every
+   * Vietnamese and Japanese day; a bill settled before its store recorded components is in `tax`
+   * and in no entry, so these can sum to less than it.
+   */
+  readonly by_tax_component?: readonly TaxComponentTotal[];
+}
+
+/** One tax component's tax on a trading day, at one rate (part of `DailyRevenue`). Minor units. */
+export interface TaxComponentTotal {
+  /** The component's code, such as `CGST`. */
+  readonly component_name: string;
+  readonly rate_basis_points: number;
+  readonly tax: number;
 }
 
 /** One fee's total on a trading day, under its code (part of `DailyRevenue`). Minor units. */
@@ -479,6 +494,13 @@ export interface TaxRate {
    * `[CGST 2.5 %, SGST 2.5 %]`, because the halves go to different governments.
    */
   readonly components: readonly TaxComponent[];
+  /**
+   * `true` on a row saved before the cloud checked names, one of whose `components` is named with
+   * anything but a code of two to eight capital letters and digits, starting with a letter
+   * (ADR-0168). Absent otherwise. The cloud refuses to save the grid until it is renamed, and the
+   * store charges the rate without its breakdown meanwhile. Read only: a save sends no such field.
+   */
+  readonly component_name_invalid?: boolean;
 }
 
 /** One named part of a tax rate, in basis points. */

@@ -9,12 +9,14 @@
 // Each priced cell also takes a **breakdown** (ADR-0104): the named parts the invoice prints, typed
 // as `CGST 2.5, SGST 2.5`. India needs it — an intra-state tax invoice must show the two halves
 // separately, because they go to different governments — and most of the world leaves it blank,
-// which means "print one line". The parts must sum to the cell's own rate; the screen says so
-// inline, and the server refuses a save where they do not.
+// which means "print one line". The parts must sum to the cell's own rate, and each part is named
+// with a code (ADR-0168), because a settled bill records it and the reports sum it under that name.
+// The screen says so inline, and the server refuses a save where either fails. A row saved before
+// names were checked comes back marked, and the screen says what that costs until it is renamed.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import {
   SALES_CHANNELS,
   type SalesChannel,
@@ -32,6 +34,7 @@ import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 import { addToRelease, describePublish, previewNode } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
+import { isTaxComponentName } from "../lib/tax-components";
 
 /** The already-defined per-channel labels (shared with the Catalog price editor). */
 const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
@@ -74,8 +77,10 @@ function percentToBps(text: string): number | null {
  * (ADR-0104).
  *
  * `null` rather than dropping the bad part, because a breakdown that silently loses a half would
- * print an invoice missing a tax the guest paid — worse than refusing to save. The name is
- * everything up to the last space so a two-word label survives; the rate is what follows it.
+ * print an invoice missing a tax the guest paid — worse than refusing to save. The rate is what
+ * follows the last space and the name is everything before it, so a name typed as words, such as
+ * `Central GST 2.5`, is read as the name it is and refused for not being a code
+ * (`isTaxComponentName`), rather than reported as a rate that does not parse.
  */
 function parseComponents(text: string): TaxComponent[] | null {
   const trimmed = text.trim();
@@ -109,6 +114,19 @@ function formatComponents(components: readonly TaxComponent[]): string {
     .join(", ");
 }
 
+/**
+ * Whether the cloud refused a part's name for not being a code (`400`, `INVALID_FORMAT` on `rates`,
+ * ADR-0168), which the screen says in the operator's words: the cloud's sentence names the row by
+ * its ids, which is right for a log and wrong for a person.
+ */
+function misnamed(caught: unknown): boolean {
+  return (
+    caught instanceof ApiError &&
+    caught.status === 400 &&
+    caught.details.some((detail) => detail.field === "rates" && detail.reason === "INVALID_FORMAT")
+  );
+}
+
 export function TaxRates() {
   const [classes, setClasses] = createSignal<TaxClass[]>([]);
   // The edited grid: cellKey → the percent text in the input (empty string means "not priced").
@@ -116,6 +134,9 @@ export function TaxRates() {
   // The breakdown beside each cell: cellKey → `CGST 2.5, SGST 2.5`. Empty means one printed line,
   // which is most of the world (ADR-0104).
   const [breakdowns, setBreakdowns] = createSignal<Record<string, string>>({});
+  // The cells the read marked as saved with a part named otherwise than by a code (ADR-0168):
+  // cellKey → the breakdown as it was read, so the mark lasts until the operator changes it.
+  const [marked, setMarked] = createSignal<Record<string, string>>({});
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
@@ -141,7 +162,7 @@ export function TaxRates() {
       await table.refetch();
       return;
     }
-    const message = apiMessage(caught);
+    const message = misnamed(caught) ? t("taxRates.refused.componentName") : apiMessage(caught);
     setError(message);
     toast.error(message);
   };
@@ -174,13 +195,18 @@ export function TaxRates() {
     setVersion(read.rates.etag);
     const grid: Record<string, string> = {};
     const parts: Record<string, string> = {};
+    const misnamedRows: Record<string, string> = {};
     for (const rate of read.rates.value) {
       const key = cellKey(rate.tax_class_id, rate.sales_channel);
       grid[key] = bpsToPercent(rate.rate_bps);
       parts[key] = formatComponents(rate.components ?? []);
+      if (rate.component_name_invalid === true) {
+        misnamedRows[key] = parts[key];
+      }
     }
     setCells(grid);
     setBreakdowns(parts);
+    setMarked(misnamedRows);
   });
 
   // Load on open and whenever the tenant changes — never with an empty context (F0).
@@ -189,8 +215,32 @@ export function TaxRates() {
     setCells({ ...cells(), [cellKey(taxClassId, channel)]: value });
   };
 
-  const setBreakdown = (taxClassId: string, channel: SalesChannel, value: string) => {
-    setBreakdowns({ ...breakdowns(), [cellKey(taxClassId, channel)]: value });
+  // Upper-cased as it is typed, where the operator sees it, because a part's name is a code in
+  // capitals: `cgst 2.5` becomes `CGST 2.5` in the input rather than a refusal. Only ASCII letters,
+  // so the text keeps its length (`toUpperCase` makes `ß` two letters) and anything else is left as
+  // typed for the code check to refuse. The input is rewritten here and its caret put back, so the
+  // value Solid then sets is the one the input already holds, which leaves the caret alone: an
+  // operator correcting the middle of a breakdown is not thrown to its end on every key.
+  const setBreakdown = (
+    taxClassId: string,
+    channel: SalesChannel,
+    typed: string,
+    input: HTMLInputElement,
+  ) => {
+    const upper = typed.replace(/[a-z]+/gu, (letters) => letters.toUpperCase());
+    if (upper !== input.value) {
+      const { selectionStart, selectionEnd } = input;
+      input.value = upper;
+      input.setSelectionRange(selectionStart, selectionEnd);
+    }
+    setBreakdowns({ ...breakdowns(), [cellKey(taxClassId, channel)]: upper });
+  };
+
+  /** Whether the read marked this cell and the operator has not changed its breakdown since. */
+  const stillMarked = (taxClassId: string, channel: SalesChannel): boolean => {
+    const key = cellKey(taxClassId, channel);
+    const read = marked()[key];
+    return read !== undefined && read === (breakdowns()[key] ?? "");
   };
 
   /**
@@ -209,6 +259,9 @@ export function TaxRates() {
     const parts = parseComponents(text);
     if (parts === null) {
       return "taxRates.breakdownMalformed";
+    }
+    if (!parts.every((part) => isTaxComponentName(part.name))) {
+      return "taxRates.breakdownName";
     }
     const rate = percentToBps(cells()[key] ?? "");
     if (rate === null) {
@@ -339,14 +392,25 @@ export function TaxRates() {
                                   class="mt-1 w-40"
                                   placeholder={t("taxRates.breakdownPlaceholder")}
                                   value={breakdowns()[cellKey(taxClass.tax_class_id, channel)] ?? ""}
-                                  onInput={(value) =>
-                                    setBreakdown(taxClass.tax_class_id, channel, value)
+                                  onInput={(value, input) =>
+                                    setBreakdown(taxClass.tax_class_id, channel, value, input)
                                   }
                                 />
-                                <Show when={breakdownProblem(taxClass.tax_class_id, channel)}>
-                                  {(problem) => (
-                                    <p class="mt-1 w-40 text-xs text-danger">{t(problem())}</p>
-                                  )}
+                                {/* A marked row says what its name costs until it is renamed,
+                                    which the check below would only call a misnamed part. */}
+                                <Show
+                                  when={stillMarked(taxClass.tax_class_id, channel)}
+                                  fallback={
+                                    <Show when={breakdownProblem(taxClass.tax_class_id, channel)}>
+                                      {(problem) => (
+                                        <p class="mt-1 w-40 text-xs text-danger">{t(problem())}</p>
+                                      )}
+                                    </Show>
+                                  }
+                                >
+                                  <p class="mt-1 w-40 text-xs text-danger">
+                                    {t("taxRates.breakdownMarked")}
+                                  </p>
                                 </Show>
                               </td>
                             )}
