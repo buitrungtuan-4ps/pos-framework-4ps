@@ -375,6 +375,25 @@ pub fn register() -> Vec<Setting> {
                       count, the close and a no-sale opening still work.",
         },
         Setting {
+            node: PublishedShift::NODE,
+            field: "variance_reason_minor",
+            shape: SettingShape::Int {
+                min: *shift::VARIANCE_REASON_MINOR.start(),
+                max: *shift::VARIANCE_REASON_MINOR.end(),
+                unit: SettingUnit::MinorUnits,
+                default: PublishedShift::default().variance_reason_minor(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "How far over or short a drawer may close, either way, before its close asks \
+                      a reason, in the store currency's minor unit: `50000` is 50,000 đồng at a \
+                      store in Vietnam. The till asks only after the count, so a blind close stays \
+                      blind, and `cash.shift.closed` records the reason \
+                      (`REASON_ACTION_CASH_VARIANCE`). `0` asks no reason, as before, and a store \
+                      whose reason list offers none for a variance still closes.",
+        },
+        Setting {
             node: PublishedSession::NODE,
             field: "idle_lock_seconds",
             shape: SettingShape::Int {
@@ -1217,6 +1236,7 @@ mod tests {
                     "drawer_model" => Some(json!(shift.drawer_model().as_wire())),
                     "close_report" => Some(json!(shift.close_report().as_wire())),
                     "drawer_day_end" => Some(json!(shift.drawer_day_end().as_wire())),
+                    "variance_reason_minor" => Some(json!(shift.variance_reason_minor())),
                     _ => None,
                 }
             }

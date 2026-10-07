@@ -753,6 +753,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store sets the over or short a drawer closes with before it asks a reason, and the till
+  asks it** ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). The setting
+  `shift.variance_reason_minor` joins the register: an amount in the store currency's minor unit,
+  `0` to `1000000000`, at the four scopes, default `0`, which asks nothing.
+  - The Shift screen answers a close refused for a reason with the expected and counted figures,
+    the variance, and the store's reasons for a variance; one tap on a reason closes the shift and
+    records it. It does so for a till's own close, for one drawer closed from the list of every
+    till's drawer, and for several closed together, where each drawer owed a reason gets its own and
+    the close goes again, every drawer or none, with the manager's code and PIN typed for it.
+  - The console's Settings screen labels the setting in English and Vietnamese. Where the limit is
+    above 0 and the tenant's reason list offers no active reason for a close over or short, it says
+    beside the value that the limit asks nothing. A tenant with no list of its own runs the
+    framework's, which offers two.
+  - The demo's `drawers` store asks a reason beyond 20,000₫, and the browser gate replays both
+    closes there.
+
+  **Upgrade note:** no store changes until the setting is written; `docs/snapshots/settings.txt`
+  and `docs/configuration.md` gain it, honoured from 0.14.1. The till a store's own edge serves has
+  the reason step in the same release. A till build another origin serves (ADR-0111) needs this
+  release's too, or it cannot give the reason, so set a limit there only once it has.
+  `PROTOCOL_VERSION` is unchanged, and no route, event, permission or migration is added.
+
 - **A close over or short beyond a store's limit gives a reason**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). The `shift` node
   gains `variance_reason_minor`, an amount in the store currency's minor unit, `0` to

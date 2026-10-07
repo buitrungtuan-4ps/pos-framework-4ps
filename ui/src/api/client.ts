@@ -11,7 +11,6 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
-  ApproverRequest,
   BatchCloseRequest,
   BatchCloseResponse,
   BindResponse,
@@ -21,6 +20,7 @@ import type {
   BumpResponse,
   CheckResponse,
   CashMovementRequest,
+  CloseShiftRequest,
   CountShiftRequest,
   BillCheckResponse,
   CounterOrder,
@@ -73,12 +73,21 @@ export class ApiError extends Error {
   // too old to send one. The message is the edge's English sentence; this is what a screen
   // translates.
   readonly reason: string | null;
+  // The rest of the one refusal that answers JSON rather than a sentence, `VARIANCE_REASON_REQUIRED`
+  // (ADR-0167 decision 12): the drawers still owed a reason, which the Shift screen asks one for.
+  readonly details: unknown;
 
-  constructor(status: number, message: string, reason: string | null = null) {
+  constructor(
+    status: number,
+    message: string,
+    reason: string | null = null,
+    details: unknown = undefined,
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.reason = reason;
+    this.details = details;
   }
 
   // A refused command (illegal move, missing permission, underpaid bill) — the caller's fault, worth
@@ -121,6 +130,15 @@ function authHeaders(hasBody: boolean): Record<string, string> {
   return headers;
 }
 
+// `text` read as JSON, or `undefined` where it is not.
+function jsonOf(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 // `base` defaults to the edge this device paired with. Pairing itself passes one explicitly,
 // because at that moment nothing is stored yet — the base is what the operator just supplied, and
 // storing it before the call succeeds would leave a device claiming an edge that refused it.
@@ -147,10 +165,15 @@ async function request<T>(
       clearDeviceToken();
     }
     const text = await response.text().catch(() => "");
+    const reason = response.headers.get("pos-error-reason");
+    // That refusal's sentence is its `message`, so a screen that shows the sentence shows a sentence.
+    const details = reason === "VARIANCE_REASON_REQUIRED" ? jsonOf(text) : undefined;
+    const said = (details as { message?: unknown } | undefined)?.message;
     throw new ApiError(
       response.status,
-      text.trim() || response.statusText,
-      response.headers.get("pos-error-reason"),
+      (typeof said === "string" ? said : text.trim()) || response.statusText,
+      reason,
+      details,
     );
   }
   // A `204` has nothing to read, and reading nothing as JSON throws: retiring a device, and sending
@@ -439,10 +462,10 @@ export const api = {
     request<void>("POST", "/api/print/agent/revoke", { agent_device_id: agentDeviceId }),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
-  // No body unless an approver is sent, as every close sent before another till's drawer could be
-  // closed.
-  closeShift: (shiftId: string, approval?: ApproverRequest) =>
-    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`, approval),
+  // No body unless an approver or a reason is sent, as every close sent before another till's
+  // drawer could be closed.
+  closeShift: (shiftId: string, close?: CloseShiftRequest) =>
+    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`, close),
   // Several counted drawers in one act, every one or none (ADR-0167 decision 10).
   batchCloseShifts: (close: BatchCloseRequest) =>
     request<BatchCloseResponse>("POST", "/api/shifts:batch_close", close),

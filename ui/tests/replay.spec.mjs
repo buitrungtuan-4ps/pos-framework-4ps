@@ -3959,6 +3959,110 @@ test("two counted drawers close together, and each shows its figures", async ({ 
   }
 });
 
+// A close over or short by more than the store allows gives a reason (ADR-0167 decision 12). The
+// `drawers` store asks one beyond 20,000₫, and the framework's own reasons offer two for it: Staff
+// error, `00000000000000000000000004`, and Counting difference, `00000000000000000000000009`.
+test("a close beyond the store's limit shows the variance and closes with the reason picked", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await page.locator("#count").fill("450000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+
+    const closes = [];
+    page.on("request", (request) => {
+      if (/^\/api\/shifts\/[^/]+\/close$/.test(new URL(request.url()).pathname)) {
+        closes.push(request.postDataJSON());
+      }
+    });
+    await page.locator('[data-step="closeShift"]').click();
+    const owed = page.locator('[data-outcome="variance-owed"]');
+    await expect(owed).toContainText("Over or short by more than the store allows. Why?");
+    await expect(owed).toContainText("Expected 500,000₫ · counted 450,000₫");
+    await expect(owed).toContainText("Variance -50,000₫");
+    await expect(page.locator('[data-outcome="shift-closed"]')).toHaveCount(0);
+    await owed.getByRole("button", { name: "Counting difference" }).click();
+    await expect(page.locator('[data-outcome="shift-closed"]')).toContainText("-50,000₫");
+    await expect(owed).toHaveCount(0);
+    expect(closes).toEqual([null, { reason_code_id: "00000000000000000000000009" }]);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("drawers closed together each take the reason the store asks, under the one approver", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="startDrawers"]').click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText("Started: Bar till.");
+
+    // The counter's 30,000₫ short and the bar's 50,000₫ short, each beyond the limit.
+    await page.locator("#count").fill("470000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await page.locator("#drawer-count").fill("150000");
+    await approve(page, edge);
+    await page.locator('[data-step="countDrawer"]').click();
+    await expect(page.locator('[data-outcome="drawer-counted"]')).toBeVisible();
+
+    const closes = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/shifts:")) {
+        closes.push(request.postDataJSON());
+      }
+    });
+    await drawerRow(page, "Counter till").click();
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="closeDrawers"]').click();
+    const owed = page.locator('[data-outcome="drawer-variance-owed"]');
+    await expect(owed).toHaveCount(2);
+    await expect(owed.nth(0)).toContainText("Counter till");
+    await expect(owed.nth(0)).toContainText("Variance -30,000₫");
+    await expect(owed.nth(1)).toContainText("Bar till");
+    await expect(owed.nth(1)).toContainText("Expected 200,000₫ · counted 150,000₫");
+    // A reason for each drawer, and the close goes again once the last one has its own.
+    await owed.nth(0).getByRole("button", { name: "Staff error" }).click();
+    await expect(page.locator('[data-outcome="drawers-closed"]')).toHaveCount(0);
+    await owed.nth(1).getByRole("button", { name: "Counting difference" }).click();
+    await expect(page.locator('[data-outcome="drawers-closed"]')).toContainText("2 drawers closed");
+    const batch = {
+      shift_ids: [expect.any(String), expect.any(String)],
+      approver_code: edge.staffCode,
+      approver_pin: edge.staffPin,
+    };
+    expect(closes).toEqual([
+      batch,
+      {
+        ...batch,
+        variance_reasons: [
+          { shift_id: expect.any(String), reason_code_id: "00000000000000000000000004" },
+          { shift_id: expect.any(String), reason_code_id: "00000000000000000000000009" },
+        ],
+      },
+    ]);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every till's drawer is listed only for a person who may act on another till's", async ({
   page,
 }) => {
@@ -4185,6 +4289,8 @@ test("a store that publishes no idle lock never locks", async ({ page }) => {
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
+      "Close another till's drawer over or short, giving a reason",
+      "Close the shift over or short, giving a reason",
       "Close two counted drawers together",
       "Count another till's drawer, blind",
       "Open the cash drawer without a sale",

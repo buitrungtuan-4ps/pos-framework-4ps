@@ -39,6 +39,13 @@
 // not grant (`components/PermissionsReadiness.tsx`), whatever the switch says. It reads the store's
 // roles, so it needs `console.people.read`; a role without it is told who can see it.
 //
+// # A limit that asks nothing (ADR-0167 decision 12)
+//
+// `shift.variance_reason_minor` above 0 asks a reason of a close over or short beyond it, but only
+// where the store's reason list offers one for that. Where the tenant's list offers none, the card
+// says the limit asks nothing, beside the value. A tenant with no list of its own runs the
+// framework's, which offers two, and is told nothing.
+//
 // Nothing on this screen is personal data: setting values, store, brand and group names, the
 // release each store runs, and role names with a count of the people holding each.
 
@@ -121,6 +128,9 @@ const STAFF_READERS: ReadonlySet<string> = new Set(["owner", "admin"]);
 
 /** The setting the readiness panel stands beside. */
 const ENFORCED = "permissions.enforced";
+
+/** The setting that asks a reason of a large over or short, if the reason list offers one. */
+const VARIANCE_REASON = "shift.variance_reason_minor";
 
 /** How each outcome is drawn. `UNCHANGED` is neutral: the store already ran the value. */
 const OUTCOME: Record<
@@ -723,6 +733,26 @@ export function Settings() {
     </Show>
   );
 
+  /**
+   * Said beside a variance limit where the tenant's reason list offers no active reason for a close
+   * over or short, so the limit asks nothing (ADR-0167 decision 12). Read only where it is shown.
+   */
+  const VarianceReasonNotice = () => {
+    const codes = createAdminResource((tenant) => api.listReasonCodes(tenant), {
+      scope: "tenant",
+    });
+    const uncovered = () => {
+      const list = codes.value() ?? [];
+      return (
+        list.length > 0 &&
+        !list.some(
+          (code) => code.active && code.applies_to.includes("REASON_ACTION_CASH_VARIANCE"),
+        )
+      );
+    };
+    return <Notice lines={uncovered() ? [t("settings.varianceReasonUncovered")] : []} />;
+  };
+
   /** What the chosen store runs for `setting`, as the node carries it, once that has been read. */
   const runsValue = (setting: SettingDefinition): Json | undefined => {
     const panel = effective();
@@ -847,6 +877,9 @@ export function Settings() {
             </Show>
           </Show>
           <Notice lines={releaseNotes(setting())} />
+          <Show when={key() === VARIANCE_REASON && (numberShown() ?? 0) > 0}>
+            <VarianceReasonNotice />
+          </Show>
           <Show
             when={settable()}
             fallback={<p class="text-sm text-ink-muted">{t("settings.notAtScope")}</p>}

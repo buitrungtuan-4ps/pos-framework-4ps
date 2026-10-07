@@ -33,6 +33,11 @@
 const DRAWERS_REPLAYED_APART =
   "the walk boots a store with one drawer, and these need the `drawers` store, a device bound to a till, and a manager's badge and PIN typed between the taps; dedicated replays below run them";
 
+// Why the walk skips a close that gives a reason: it boots a store that asks none of any close, and
+// the `drawers` store asks one of an over or short beyond 20,000₫ (ADR-0167 decision 12).
+const VARIANCE_REPLAYED_APART =
+  "the walk boots a store that asks no close for a reason, and the `drawers` store asks one beyond 20,000₫ of a till bound to it; a dedicated replay below runs it there";
+
 export const TASKS = [
   {
     task: "Seat a table and start its order",
@@ -436,6 +441,17 @@ export const TASKS = [
     steps: [{ route: "/shift", action: "closeShift" }],
     outcome: { route: "/shift", mark: "shift-closed" },
   },
+  {
+    task: "Close the shift over or short, giving a reason",
+    budget: 3,
+    note: "Where the store asks a reason of a variance beyond its limit (`shift.variance_reason_minor`, ADR-0167 decision 12), **Close & reveal** answers with the variance the count fixed and the store's reasons for one, and a reason closes it: two taps. Only after the count, so a blind close stays blind; within the limit it is the one tap above.",
+    steps: [
+      { route: "/shift", action: "closeShift" },
+      { route: "/shift", action: "varianceReason" },
+    ],
+    outcome: { route: "/shift", mark: "shift-closed" },
+    unreplayable: VARIANCE_REPLAYED_APART,
+  },
   // Every till's drawer, where the store keeps one per till (ADR-0167 decision 3). Rare, a manager's
   // acts at either end of the day, so three taps each.
   {
@@ -480,6 +496,18 @@ export const TASKS = [
       { route: "/shift", action: "pickDrawer" },
       { route: "/shift", action: "pickDrawer" },
       { route: "/shift", action: "closeDrawers" },
+    ],
+    outcome: { route: "/shift", mark: "drawers-closed" },
+    unreplayable: DRAWERS_REPLAYED_APART,
+  },
+  {
+    task: "Close another till's drawer over or short, giving a reason",
+    budget: 3,
+    note: "Pick the counted drawer, **Close & reveal**, then the reason the store asks of its variance (ADR-0167 decision 12): three, at the ceiling. A manager's code and PIN typed before the close where the person needs one go with the reason's close too. Drawers closed together are the same, a pick more for each and a reason for each drawer the store asks one of, every one or none.",
+    steps: [
+      { route: "/shift", action: "pickDrawer" },
+      { route: "/shift", action: "closeDrawers" },
+      { route: "/shift", action: "drawerVarianceReason" },
     ],
     outcome: { route: "/shift", mark: "drawers-closed" },
     unreplayable: DRAWERS_REPLAYED_APART,

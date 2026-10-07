@@ -2292,8 +2292,12 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
   setState("shift", "expected", response.expected_amount);
 }
 
-export async function closeShift(shiftId: string): Promise<ShiftInfo> {
-  const response = await api.closeShift(shiftId);
+// With the reason for an over or short the store asks one of, where it asked (ADR-0167 decision 12).
+export async function closeShift(shiftId: string, reasonCodeId?: string): Promise<ShiftInfo> {
+  const response = await api.closeShift(
+    shiftId,
+    reasonCodeId === undefined ? undefined : { reason_code_id: reasonCodeId },
+  );
   const info = shiftInfo(response);
   replaceShift(info);
   return info;
@@ -2343,12 +2347,31 @@ export async function countDrawerShift(
 export async function closeDrawerShifts(
   shiftIds: readonly string[],
   approval?: ApproverRequest,
+  reasons: Readonly<Record<string, string>> = {},
 ): Promise<{ shifts: ShiftResponse[]; slip?: string }> {
   const [only] = shiftIds;
+  // The reason given each drawer whose over or short the store asked one of (ADR-0167 decision 12),
+  // and nothing more where it asked none, as before.
+  const given = Object.entries(reasons).map(([shift_id, reason_code_id]) => ({
+    shift_id,
+    reason_code_id,
+  }));
   const closed =
     shiftIds.length === 1 && only !== undefined
-      ? { shifts: [await api.closeShift(only, approval)], shift_report_print: undefined }
-      : await api.batchCloseShifts({ shift_ids: [...shiftIds], ...approval });
+      ? {
+          shifts: [
+            await api.closeShift(
+              only,
+              given.length === 0 ? approval : { ...approval, reason_code_id: reasons[only] },
+            ),
+          ],
+          shift_report_print: undefined,
+        }
+      : await api.batchCloseShifts({
+          shift_ids: [...shiftIds],
+          ...approval,
+          ...(given.length === 0 ? {} : { variance_reasons: given }),
+        });
   for (const response of closed.shifts) {
     if (response.shift_id === state.shift?.shiftId) {
       replaceShift(shiftInfo(response));
