@@ -1,3 +1,9 @@
+## 2026-09-26 - Action Menu Dismissal Must Restore Focus To Trigger Button
+
+**Learning:** When popovers, action menus, or dropdowns (such as `RowActions`) are closed via the `Escape` key, keyboard focus is lost if the trigger element is not explicitly refocused. Without checking whether focus was within the menu's container and calling `triggerRef?.focus()`, DOM focus resets to `<body>`, forcing keyboard and screen-reader users to tab through the entire page again to resume their position.
+
+**Action:** Always capture a reference to the trigger button (`triggerRef`) in popover/menu components, check if `container?.contains(document.activeElement)` when `useEscape` fires, and restore focus to `triggerRef?.focus()`.
+
 ## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
 
 **Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.
