@@ -14,12 +14,14 @@ use std::collections::BTreeMap;
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
-    BillFeeLine, BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed,
-    CashShiftOpened, DeviceAdmissionGranted, DeviceAdmissionRevoked, SalesOrderLineAdded,
+    BillFeeLine, BillTaxLine, BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut,
+    CashShiftClosed, CashShiftOpened, DeviceAdmissionGranted, DeviceAdmissionRevoked,
+    SalesOrderLineAdded,
 };
 
 use crate::cloud::{
     AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
+    TaxComponentTotal,
 };
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
@@ -125,10 +127,10 @@ pub fn render(days: BTreeMap<String, DailyRollup>) -> Vec<DailyRollup> {
 }
 
 /// Folds one event's **money** into `revenue` (ADR-0081, Track O4): `billing.bill.settled` into the
-/// day's recognised revenue totals and its fees by code ([`fold_fees`]), and
-/// `sales.order_line.added` into the day's gross ordered mix. Every other event is ignored. A
-/// payload that fails to decode is skipped rather than failing the pass — these are events this
-/// system wrote, so a decode failure is a corrupt row, not the norm.
+/// day's recognised revenue totals, its fees by code ([`fold_fees`]) and its tax by component
+/// ([`fold_tax_components`]), and `sales.order_line.added` into the day's gross ordered mix. Every
+/// other event is ignored. A payload that fails to decode is skipped rather than failing the pass —
+/// these are events this system wrote, so a decode failure is a corrupt row, not the norm.
 pub fn fold_revenue(
     revenue: &mut BTreeMap<String, DailyRevenue>,
     event: &EventEnvelope<RawPayload>,
@@ -153,6 +155,7 @@ pub fn fold_revenue(
             day.tax = day.tax.saturating_add(bill.tax_total.amount_minor);
             day.net = day.net.saturating_add(bill.total_due.amount_minor);
             fold_fees(&mut day.by_fee, &bill.fee_lines);
+            fold_tax_components(&mut day.by_tax_component, &bill.tax_lines);
         }
         "sales.order_line.added" => {
             let Ok(line) = event.data.decode::<SalesOrderLineAdded>() else {
@@ -206,6 +209,37 @@ fn fold_fees(by_fee: &mut BTreeMap<String, FeeTotal>, lines: &[BillFeeLine]) {
         if !counted.contains(&code) {
             counted.push(code);
             total.bills = total.bills.saturating_add(1);
+        }
+    }
+}
+
+/// Folds one settled bill's tax lines' `components` into its day's tax by component
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5):
+/// each component's tax to the entry of its name and rate, which stay in order of name and then
+/// rate.
+///
+/// Its fee lines' `tax_components` are not read ([`DailyRevenue::by_tax_component`] says why). A
+/// line that recorded no components adds nothing here, while its tax still reaches the day's
+/// figure.
+fn fold_tax_components(totals: &mut Vec<TaxComponentTotal>, lines: &[BillTaxLine]) {
+    for component in lines.iter().flat_map(|line| &line.components) {
+        let key = (component.name.as_str(), component.rate_basis_points);
+        match totals.binary_search_by(|total| {
+            (total.component_name.as_str(), total.rate_basis_points).cmp(&key)
+        }) {
+            Ok(found) => {
+                if let Some(total) = totals.get_mut(found) {
+                    total.tax = total.tax.saturating_add(component.tax.amount_minor);
+                }
+            }
+            Err(at) => totals.insert(
+                at,
+                TaxComponentTotal {
+                    component_name: component.name.as_str().to_owned(),
+                    rate_basis_points: component.rate_basis_points,
+                    tax: component.tax.amount_minor,
+                },
+            ),
         }
     }
 }
@@ -341,6 +375,7 @@ pub fn empty_revenue(business_date: &str) -> DailyRevenue {
         net: 0,
         by_item: BTreeMap::new(),
         by_fee: BTreeMap::new(),
+        by_tax_component: Vec::new(),
     }
 }
 
@@ -1109,6 +1144,344 @@ mod tests {
         assert_eq!(
             written, stored,
             "the store's figures sit where they always did"
+        );
+    }
+
+    // --- tax by component (ADR-0168 decision 5) ---
+
+    use crate::cloud::{DailyRevenue, TaxComponentTotal};
+
+    /// An amount of `currency`, in its minor units.
+    fn minor(currency: &str, amount: i64) -> serde_json::Value {
+        json!({ "currency_code": currency, "amount_minor": amount })
+    }
+
+    /// A tax line as a settle records it: `rate` basis points on `base`, charging `tax`, for the
+    /// class taxed at that rate, and its components as (name, rate, tax), none for a line that
+    /// recorded none.
+    fn tax_line(
+        currency: &str,
+        (base, rate, tax): (i64, u32, i64),
+        components: &[(&str, u32, i64)],
+    ) -> serde_json::Value {
+        let mut line = json!({
+            "tax_class_id": ulid(u128::from(rate)), "taxable_base": minor(currency, base),
+            "rate_basis_points": rate, "tax": minor(currency, tax),
+        });
+        if !components.is_empty() {
+            line["components"] = components
+                .iter()
+                .map(|&(name, rate, tax)| {
+                    json!({ "name": name, "rate_basis_points": rate, "tax": minor(currency, tax) })
+                })
+                .collect();
+        }
+        line
+    }
+
+    /// A bill settled on `date` in `currency`, of `subtotal` less `reduction`, plus
+    /// `service_charge` and `tax`, recording `tax_lines` and `fee_lines` where it has them.
+    fn bill(
+        date: &str,
+        currency: &str,
+        (subtotal, reduction, service_charge, tax): (i64, i64, i64, i64),
+        tax_lines: &[serde_json::Value],
+        fee_lines: &[serde_json::Value],
+    ) -> EventEnvelope<RawPayload> {
+        let mut payload = json!({
+            "bill_id": ulid(1), "receipt_number": 7u64,
+            "subtotal": minor(currency, subtotal), "reduction_total": minor(currency, reduction),
+            "service_charge": minor(currency, service_charge), "tax_total": minor(currency, tax),
+            "rounding_adjustment": minor(currency, 0),
+            "total_due": minor(currency, subtotal - reduction + service_charge + tax),
+        });
+        if !tax_lines.is_empty() {
+            payload["tax_lines"] = json!(tax_lines);
+        }
+        if !fee_lines.is_empty() {
+            payload["fee_lines"] = json!(fee_lines);
+        }
+        event_with(date, EventType::BillingBillSettled, &payload)
+    }
+
+    /// A line of `quantity` ordered on `date`: `item` at `unit_price` each.
+    fn ordered(
+        date: &str,
+        currency: &str,
+        (item, name): (u128, &str),
+        quantity: i64,
+        unit_price: i64,
+    ) -> EventEnvelope<RawPayload> {
+        event_with(
+            date,
+            EventType::SalesOrderLineAdded,
+            &json!({
+                "order_id": ulid(2), "order_line_id": ulid(3), "menu_item_id": ulid(item),
+                "display_name": name, "quantity": { "milli": quantity * 1000 },
+                "unit_price": minor(currency, unit_price),
+                "line_total": minor(currency, quantity * unit_price),
+                "tax_class_id": ulid(5), "tax_rate": { "numerator": 8, "denominator": 100 },
+                "seat": null, "course_id": null, "note_present": false,
+            }),
+        )
+    }
+
+    /// A Vietnamese trading day, as every one is: one rate per class and no components. A
+    /// dine-in bill with a 5% service charge, a takeaway bill with a discount, and a bill from an
+    /// edge before tax lines.
+    fn vietnamese_day() -> Vec<EventEnvelope<RawPayload>> {
+        let date = "2026-10-05";
+        vec![
+            ordered(date, "VND", (11, "Pizza Margherita"), 2, 225_000),
+            ordered(date, "VND", (12, "Burrata Parma"), 1, 180_000),
+            bill(
+                date,
+                "VND",
+                (450_000, 0, 22_500, 37_800),
+                &[tax_line("VND", (472_500, 800, 37_800), &[])],
+                &[json!({
+                    "fee_id": ulid(9), "code": "SVC", "display_name": "Phí phục vụ",
+                    "amount": minor("VND", 22_500), "tax": minor("VND", 1_800),
+                })],
+            ),
+            bill(
+                date,
+                "VND",
+                (180_000, 18_000, 0, 12_960),
+                &[tax_line("VND", (162_000, 800, 12_960), &[])],
+                &[],
+            ),
+            bill(date, "VND", (95_000, 0, 0, 7_600), &[], &[]),
+        ]
+    }
+
+    /// A Japanese trading day: 10% dine-in, 8% takeaway, and a takeaway bill taxed at both, with no
+    /// components.
+    fn japanese_day() -> Vec<EventEnvelope<RawPayload>> {
+        let date = "2026-10-05";
+        vec![
+            ordered(date, "JPY", (21, "マルゲリータ"), 2, 1_600),
+            bill(
+                date,
+                "JPY",
+                (3_200, 0, 0, 320),
+                &[tax_line("JPY", (3_200, 1_000, 320), &[])],
+                &[],
+            ),
+            bill(
+                date,
+                "JPY",
+                (1_800, 0, 0, 144),
+                &[tax_line("JPY", (1_800, 800, 144), &[])],
+                &[],
+            ),
+            bill(
+                date,
+                "JPY",
+                (2_600, 0, 0, 228),
+                &[
+                    tax_line("JPY", (1_600, 800, 128), &[]),
+                    tax_line("JPY", (1_000, 1_000, 100), &[]),
+                ],
+                &[],
+            ),
+        ]
+    }
+
+    /// The one day `events` fold into.
+    fn folded(events: &[EventEnvelope<RawPayload>]) -> DailyRevenue {
+        let mut revenue = BTreeMap::new();
+        for event in events {
+            fold_revenue(&mut revenue, event);
+        }
+        assert_eq!(revenue.len(), 1, "one trading day");
+        revenue.into_values().next().expect("the day")
+    }
+
+    /// [`vietnamese_day`] as main wrote it before `by_tax_component` existed, captured from it.
+    const VIETNAMESE_DAY: &str = concat!(
+        r#"{"business_date":"2026-10-05","currency_code":"VND","bills":3,"gross":725000"#,
+        r#","reductions":18000,"service_charge":22500,"tax":58360,"net":787860"#,
+        r#","by_item":{"0000000000000000000000000B":{"name":"Pizza Margherita""#,
+        r#","ordered_qty_milli":2000,"ordered_value":450000}"#,
+        r#","0000000000000000000000000C":{"name":"Burrata Parma","ordered_qty_milli":1000"#,
+        r#","ordered_value":180000}},"by_fee":{"SVC":{"name":"Phí phục vụ","bills":1"#,
+        r#","amount":22500,"tax":1800}}}"#,
+    );
+
+    /// [`japanese_day`] as main wrote it, captured the same way.
+    const JAPANESE_DAY: &str = concat!(
+        r#"{"business_date":"2026-10-05","currency_code":"JPY","bills":3,"gross":7600"#,
+        r#","reductions":0,"service_charge":0,"tax":692,"net":8292"#,
+        r#","by_item":{"0000000000000000000000000N":{"name":"マルゲリータ","ordered_qty_milli":2000"#,
+        r#","ordered_value":3200}},"by_fee":{}}"#,
+    );
+
+    #[test]
+    fn a_day_with_no_components_reads_and_writes_the_bytes_it_did_before() {
+        for (events, stored, totals) in [
+            (
+                vietnamese_day(),
+                VIETNAMESE_DAY,
+                "2026-10-05,VND,3,725000,18000,22500,58360,787860",
+            ),
+            (
+                japanese_day(),
+                JAPANESE_DAY,
+                "2026-10-05,JPY,3,7600,0,0,692,8292",
+            ),
+        ] {
+            let day = folded(&events);
+            assert!(
+                day.by_tax_component.is_empty(),
+                "no tax line recorded a component"
+            );
+            assert_eq!(serde_json::to_string(&day).expect("json"), stored);
+            assert_eq!(
+                serde_json::from_str::<DailyRevenue>(stored).expect("a stored day loads"),
+                day,
+                "a day stored before the field loads as the same day"
+            );
+            let csv = crate::export::revenue_csv(&[day]).expect("csv");
+            assert_eq!(
+                String::from_utf8(csv).expect("utf-8"),
+                format!(
+                    "business_date,currency_code,bills,gross,reductions,service_charge,tax,net\n\
+                     {totals}\n"
+                )
+            );
+        }
+    }
+
+    /// An Indian bill on 2026-10-05: `subtotal` plus `service_charge`, taxed at 5 % with the tax
+    /// split into CGST and SGST at 2.5 % each as `components`, and charged `fee_lines`.
+    fn indian(
+        (subtotal, service_charge, tax): (i64, i64, i64),
+        components: &[(&str, u32, i64)],
+        fee_lines: &[serde_json::Value],
+    ) -> EventEnvelope<RawPayload> {
+        bill(
+            "2026-10-05",
+            "INR",
+            (subtotal, 0, service_charge, tax),
+            &[tax_line(
+                "INR",
+                (subtotal + service_charge, 500, tax),
+                components,
+            )],
+            fee_lines,
+        )
+    }
+
+    /// One entry of the day's tax by component.
+    fn total(name: &str, rate_basis_points: u32, tax: i64) -> TaxComponentTotal {
+        TaxComponentTotal {
+            component_name: name.to_owned(),
+            rate_basis_points,
+            tax,
+        }
+    }
+
+    #[test]
+    fn a_days_tax_by_component_sums_its_tax_lines_and_never_its_fee_lines() {
+        let day = folded(&[
+            indian(
+                (100_000, 0, 5_000),
+                &[("CGST", 250, 2_500), ("SGST", 250, 2_500)],
+                &[],
+            ),
+            // A 10% service charge taxed as the lines are: its tax is part of the tax line's.
+            indian(
+                (60_000, 6_000, 3_300),
+                &[("CGST", 250, 1_650), ("SGST", 250, 1_650)],
+                &[json!({
+                    "fee_id": ulid(9), "code": "SVC", "display_name": "Service charge",
+                    "amount": minor("INR", 6_000), "tax": minor("INR", 300),
+                    "tax_components": [
+                        { "name": "CGST", "rate_basis_points": 250, "tax": minor("INR", 150) },
+                        { "name": "SGST", "rate_basis_points": 250, "tax": minor("INR", 150) },
+                    ],
+                })],
+            ),
+        ]);
+        assert_eq!(
+            day.by_tax_component,
+            [total("CGST", 250, 4_150), total("SGST", 250, 4_150)],
+            "the tax lines' components, and the fee's not again"
+        );
+        let split: i64 = day.by_tax_component.iter().map(|total| total.tax).sum();
+        assert_eq!(
+            (split, day.tax),
+            (8_300, 8_300),
+            "every bill recorded components, so they are the day's tax"
+        );
+    }
+
+    #[test]
+    fn a_bill_that_recorded_no_components_adds_to_the_tax_alone() {
+        let day = folded(&[
+            indian(
+                (100_000, 0, 5_000),
+                &[("CGST", 250, 2_500), ("SGST", 250, 2_500)],
+                &[],
+            ),
+            // Settled by an edge from before components.
+            indian((40_000, 0, 2_000), &[], &[]),
+            // Settled by an edge from before tax lines.
+            bill("2026-10-05", "INR", (30_000, 0, 0, 1_500), &[], &[]),
+            // Named with words rather than tokens, so it reads as not split.
+            indian(
+                (20_000, 0, 1_000),
+                &[("Central GST", 250, 500), ("State GST", 250, 500)],
+                &[],
+            ),
+        ]);
+        assert_eq!(
+            day.by_tax_component,
+            [total("CGST", 250, 2_500), total("SGST", 250, 2_500)],
+            "no entry stands for the bills that recorded none"
+        );
+        let split: i64 = day.by_tax_component.iter().map(|total| total.tax).sum();
+        assert_eq!(
+            (day.bills, day.tax - split),
+            (4, 2_000 + 1_500 + 1_000),
+            "every bill counts, and the gap is exactly the unrecorded bills' tax"
+        );
+    }
+
+    #[test]
+    fn one_name_at_two_rates_is_two_entries_in_order_of_name_then_rate() {
+        let day = folded(&[
+            bill(
+                "2026-10-05",
+                "INR",
+                (10_000, 0, 0, 1_800),
+                &[tax_line(
+                    "INR",
+                    (10_000, 1_800, 1_800),
+                    &[("CGST", 900, 900), ("SGST", 900, 900)],
+                )],
+                &[],
+            ),
+            indian(
+                (10_000, 0, 500),
+                &[("CGST", 250, 250), ("SGST", 250, 250)],
+                &[],
+            ),
+            indian(
+                (20_000, 0, 1_000),
+                &[("CGST", 250, 500), ("SGST", 250, 500)],
+                &[],
+            ),
+        ]);
+        assert_eq!(
+            day.by_tax_component,
+            [
+                total("CGST", 250, 750),
+                total("CGST", 900, 900),
+                total("SGST", 250, 750),
+                total("SGST", 900, 900),
+            ]
         );
     }
 }

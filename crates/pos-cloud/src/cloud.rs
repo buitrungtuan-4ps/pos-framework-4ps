@@ -143,6 +143,42 @@ pub struct DailyRevenue {
     /// lever) folds every settled bill on the log into it.
     #[serde(default)]
     pub by_fee: BTreeMap<String, FeeTotal>,
+    /// The tax the day's settled bills recorded by tax component, one entry per component name and
+    /// rate, in order of name and then rate
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5).
+    ///
+    /// Folded from each `billing.bill.settled`'s tax lines' `components` alone, never from its fee
+    /// lines' `tax_components`, because a fee's tax is already inside the tax lines as its share of
+    /// its class's tax, and folding both would count it twice.
+    ///
+    /// So on a day whose every bill recorded its components, these sum to [`tax`](Self::tax). A
+    /// bill that recorded none adds to `tax` alone: one settled before its edge recorded them, one
+    /// taxed at rates with no components, as every Vietnamese and Japanese bill is, and one whose
+    /// names are not tokens, which reads as not split. There is no entry for that difference: a
+    /// bucket for it would read as a component no bill named, so the gap is left as the gap between
+    /// the two figures, as it is for [`by_fee`](Self::by_fee).
+    ///
+    /// Bounded by the tenant's tax table, not by the store's trade: one entry per component name and
+    /// rate a row of the table in force named that day.
+    ///
+    /// Left out when empty, so a day with none serialises byte for byte as before this field, and
+    /// `#[serde(default)]`, so a day stored before it loads with none and gains them from the
+    /// rollup's cursor forward. Resetting the rollup re-folds every settled bill on the log into it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_tax_component: Vec<TaxComponentTotal>,
+}
+
+/// One tax component's tax on a trading day, at one rate (part of [`DailyRevenue`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct TaxComponentTotal {
+    /// The component's name as the bills recorded it, such as `CGST`: a
+    /// [`TaxComponentName`](pos_proto::locale::TaxComponentName) when it was folded. Text here, so
+    /// a stored day loads whatever a later release lets a name be.
+    pub component_name: String,
+    /// Its part of the rate, in basis points: CGST at 2.5 % and at 9 % are two entries.
+    pub rate_basis_points: u32,
+    /// Sum of the tax the day's tax lines recorded under it, minor units.
+    pub tax: i64,
 }
 
 /// One fee's total on a trading day, under its code (part of [`DailyRevenue`]).

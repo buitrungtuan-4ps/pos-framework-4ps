@@ -149,7 +149,7 @@ use pos_proto::ids::{
     ReasonCodeId, StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
-use pos_proto::locale::TaxRate;
+use pos_proto::locale::{TaxComponent, TaxRate};
 use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction, ReasonCode};
 use pos_proto::text::DisplayName;
@@ -3903,6 +3903,179 @@ async fn the_fees_export_is_a_row_per_day_per_code_and_needs_the_revenue_permiss
             store_id().to_string(),
             Some(serde_json::json!({ "domain": "revenue_fees", "rows": 3 }))
         )
+    );
+}
+
+// --- Tax by component (`GET /admin/stores/{id}/revenue/tax/export`, ADR-0168 decision 5) --------
+
+/// A day of a store's revenue in the stored blob's own shape, with `by_tax_component` where the day
+/// recorded any. What is under test is the route; the fold that fills it has its own tests.
+fn taxed_day(
+    date: &str,
+    currency: &str,
+    components: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut day = serde_json::json!({
+        "business_date": date, "currency_code": currency, "bills": 2, "gross": 200_000,
+        "reductions": 0, "service_charge": 0, "tax": 10_000, "net": 210_000,
+        "by_item": {}, "by_fee": {},
+    });
+    if let Some(components) = components {
+        day["by_tax_component"] = components;
+    }
+    day
+}
+
+/// The router over a rollup store seeded with `revenue`, a store's days by date, and the admin and
+/// the audit recorder it answers with.
+async fn tax_export_app(revenue: serde_json::Value) -> (axum::Router, FakeAdmin, FakeAudit) {
+    let seeded: StoredRollups =
+        serde_json::from_value(serde_json::json!({ "days": {}, "revenue": revenue }))
+            .expect("a stored rollup");
+    let rollups = FakeRollups::default();
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the revenue");
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_with_admin(
+        Cloud::new(FakeStore::new()),
+        rollups,
+        FakeKeys::default(),
+        admin.clone(),
+    );
+    let router = http::router(app.with_audit(Arc::new(AuditSink::new(audit.clone()))));
+    (router, admin, audit)
+}
+
+/// The tax export of [`store_id`] from 2026-03-15 to 2026-03-17.
+fn tax_export_uri() -> String {
+    format!(
+        "/admin/stores/{}/revenue/tax/export?tenant_id={}&from=2026-03-15&to=2026-03-17",
+        store_id().as_ulid(),
+        tenant().as_ulid()
+    )
+}
+
+/// What the audit trail recorded of the tax exports: the tenant, the store and the entry's value.
+async fn tax_exports_audited(
+    audit: &FakeAudit,
+) -> Vec<(Option<TenantId>, String, Option<serde_json::Value>)> {
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    recorded
+        .iter()
+        .filter(|entry| entry.action == "reports.export_revenue_tax")
+        .map(|entry| {
+            (
+                entry.tenant_id,
+                entry.entity_id.clone(),
+                entry.after.clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_tax_export_is_a_row_per_day_per_component_and_rate_and_needs_the_revenue_permission() {
+    let gst = |tax: i64| {
+        Some(serde_json::json!([
+            { "component_name": "CGST", "rate_basis_points": 250, "tax": tax },
+            { "component_name": "SGST", "rate_basis_points": 250, "tax": tax },
+        ]))
+    };
+    let (router, admin, audit) = tax_export_app(serde_json::json!({
+        // Outside the window, on either side of it.
+        "2026-03-14": taxed_day("2026-03-14", "INR", gst(9)),
+        "2026-03-15": taxed_day("2026-03-15", "INR", Some(serde_json::json!([
+            { "component_name": "CGST", "rate_basis_points": 250, "tax": 2_500 },
+            { "component_name": "CGST", "rate_basis_points": 900, "tax": 900 },
+            { "component_name": "SGST", "rate_basis_points": 250, "tax": 2_500 },
+            { "component_name": "SGST", "rate_basis_points": 900, "tax": 900 },
+        ]))),
+        // A day stored before components, which has none.
+        "2026-03-16": taxed_day("2026-03-16", "INR", None),
+        "2026-03-17": taxed_day("2026-03-17", "INR", gst(5_000)),
+        "2026-03-18": taxed_day("2026-03-18", "INR", gst(9)),
+    }))
+    .await;
+
+    // The tax on prices is T2, as the prices are.
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-tax"),
+        (AdminRole::Ops, "ops-tax"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&tax_export_uri(), &cookie))
+            .await
+            .expect("route the export");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{role:?}");
+    }
+
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-tax").await;
+    let exported = router
+        .oneshot(get_with_cookie(&tax_export_uri(), &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let headers = exported.headers();
+    assert_eq!(
+        [&headers["content-type"], &headers["content-disposition"]],
+        [
+            "text/csv; charset=utf-8",
+            "attachment; filename=\"revenue-tax.csv\""
+        ]
+    );
+    // One row per day per name and rate, oldest day first and then by name and rate, in the
+    // window only; the day with none has no row.
+    assert_eq!(
+        text_body(exported).await,
+        "business_date,currency_code,component_name,rate_basis_points,tax\n\
+         2026-03-15,INR,CGST,250,2500\n\
+         2026-03-15,INR,CGST,900,900\n\
+         2026-03-15,INR,SGST,250,2500\n\
+         2026-03-15,INR,SGST,900,900\n\
+         2026-03-17,INR,CGST,250,5000\n\
+         2026-03-17,INR,SGST,250,5000\n"
+    );
+    // Audited by the rows it held, never their contents.
+    assert_eq!(
+        tax_exports_audited(&audit).await,
+        [(
+            Some(tenant()),
+            store_id().to_string(),
+            Some(serde_json::json!({ "domain": "revenue_tax", "rows": 6 }))
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_store_whose_tax_table_names_no_components_exports_only_the_tax_header() {
+    // A Vietnamese store's days, stored with no such key, as every one is.
+    let (router, admin, audit) = tax_export_app(serde_json::json!({
+        "2026-03-15": taxed_day("2026-03-15", "VND", None),
+        "2026-03-16": taxed_day("2026-03-16", "VND", None),
+    }))
+    .await;
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-tax").await;
+    let exported = router
+        .oneshot(get_with_cookie(&tax_export_uri(), &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    assert_eq!(
+        text_body(exported).await,
+        "business_date,currency_code,component_name,rate_basis_points,tax\n"
+    );
+    assert_eq!(
+        tax_exports_audited(&audit).await,
+        [(
+            Some(tenant()),
+            store_id().to_string(),
+            Some(serde_json::json!({ "domain": "revenue_tax", "rows": 0 }))
+        )]
     );
 }
 
@@ -14310,6 +14483,188 @@ async fn tax_rate_components_round_trip_and_must_sum_to_their_rate() {
         .await
         .expect("route the legacy save");
     assert_eq!(legacy.status(), StatusCode::OK);
+}
+
+/// A component's name is a token, or its row is refused where it is typed, by its class and channel
+/// and with the rule ([ADR-0168](../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+/// decision 2).
+#[tokio::test]
+async fn a_tax_component_name_that_is_not_a_token_is_refused_where_it_is_typed() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Food");
+    let router = tax_rate_app(provisioned_admin(), catalog, FakeTaxRates::default());
+    let cookie = admin_cookie(&router).await;
+    let grid = |name: &str| {
+        serde_json::json!({ "tenant_id": tenant, "rates": [
+            { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_DINE_IN", "rate_bps": 500,
+              "components": [{ "name": name, "rate_bps": 250 }, { "name": "SGST", "rate_bps": 250 }] },
+            // A Vietnamese row, which names no component, passes whatever its neighbour names.
+            { "tax_class_id": class, "sales_channel": "SALES_CHANNEL_TAKEAWAY", "rate_bps": 800 },
+        ] })
+    };
+
+    for name in ["Central GST", "cgst"] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_etag(
+                "/admin/catalog/tax-rates",
+                &grid(name),
+                &cookie,
+                "*",
+            ))
+            .await
+            .expect("route the save");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{name}");
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"],
+            serde_json::json!([{ "field": "rates", "reason": "INVALID_FORMAT" }]),
+            "{name}"
+        );
+        let message = body["error"]["message"].as_str().expect("a message");
+        assert!(
+            message.contains(&class)
+                && message.contains("SALES_CHANNEL_DINE_IN")
+                && message.contains("2 to 8 upper-case letters and digits, starting with a letter"),
+            "the refusal names the row and the rule: {message}"
+        );
+        assert!(!message.contains(name), "and not the name: {message}");
+    }
+
+    // A token passes, and so does one typed with spaces around it, which is stored trimmed.
+    let saved = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &grid(" CGST "),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the save");
+    assert_eq!(saved.status(), StatusCode::OK);
+    let current = etag_of(&saved);
+    let resaved = router
+        .clone()
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &grid("CGST"),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the save");
+    assert_eq!(resaved.status(), StatusCode::OK);
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    let rows = json_body(listed).await;
+    assert_eq!(rows[0]["components"][0]["name"], "CGST");
+    assert!(
+        rows.as_array()
+            .expect("rows")
+            .iter()
+            .all(|row| row.get("component_name_invalid").is_none()),
+        "a sound grid reads as it always did: {rows}"
+    );
+}
+
+/// A row saved before names were checked is kept as it was saved and marked when it is read, and
+/// the grid holding it cannot be saved again until the name changes (ADR-0168 decision 2).
+#[tokio::test]
+async fn a_stored_row_named_otherwise_is_kept_marked_and_refuses_an_unchanged_save() {
+    let catalog = FakeCatalog::default();
+    let tenant = ulid_text(1);
+    let class = ulid_text(7);
+    seed_tax_class(&catalog, &tenant, &class, "Food");
+    let tenant_id = TenantId::new(tenant.parse::<Ulid>().expect("a tenant ULID"));
+    let class_id = TaxClassId::new(class.parse::<Ulid>().expect("a class ULID"));
+    let (gst, half) = (
+        TaxRate::from_basis_points(500),
+        TaxRate::from_basis_points(250),
+    );
+    let before = vec![
+        TaxRateEntry::new(class_id, SalesChannel::DineIn, gst).with_components(vec![
+            TaxComponent::new("Central GST", half),
+            TaxComponent::new("SGST", half),
+        ]),
+        TaxRateEntry::new(class_id, SalesChannel::Takeaway, gst).with_components(vec![
+            TaxComponent::new("CGST", half),
+            TaxComponent::new("SGST", half),
+        ]),
+    ];
+    // Written straight to the store, as the grid was saved before the rule.
+    let tax_rates = FakeTaxRates::default();
+    tax_rates
+        .rows
+        .lock()
+        .expect("lock")
+        .extend(before.iter().map(|entry| (tenant_id, entry.clone())));
+    tax_rates
+        .versions
+        .lock()
+        .expect("lock")
+        .insert(tenant_id, Version::new("tx-before"));
+    let stored = || -> Vec<TaxRateEntry> {
+        let rows = tax_rates.rows.lock().expect("lock");
+        rows.iter().map(|(_owner, entry)| entry.clone()).collect()
+    };
+    let router = tax_rate_app(provisioned_admin(), catalog, tax_rates.clone());
+    let cookie = admin_cookie(&router).await;
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/tax-rates?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let current = etag_of(&listed);
+    let rows = json_body(listed).await;
+    assert_eq!(
+        (
+            &rows[0]["component_name_invalid"],
+            &rows[0]["components"][0]["name"]
+        ),
+        (&serde_json::json!(true), &serde_json::json!("Central GST")),
+        "the row is marked, and reads as it was saved: {rows}"
+    );
+    assert!(
+        rows[1].get("component_name_invalid").is_none(),
+        "a sound row carries no mark: {rows}"
+    );
+    assert_eq!(
+        (stored(), current.as_str()),
+        (before.clone(), "tx-before"),
+        "and reading it rewrote nothing"
+    );
+
+    // The grid sent back as it was read, mark and all, is refused: the mark is output only, and a
+    // save replaces the whole grid.
+    let unchanged = serde_json::json!({ "tenant_id": tenant, "rates": rows });
+    let refused = router
+        .oneshot(put_with_etag(
+            "/admin/catalog/tax-rates",
+            &unchanged,
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the save");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(refused).await["error"]["details"],
+        serde_json::json!([{ "field": "rates", "reason": "INVALID_FORMAT" }])
+    );
+    assert_eq!(stored(), before, "and the refused save changed nothing");
 }
 
 /// A save against a version the grid no longer holds is refused, and changes nothing (ADR-0095).

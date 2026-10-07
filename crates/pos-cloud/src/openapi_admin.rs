@@ -133,6 +133,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_set_terminal_receipt,
         crate::http::admin_set_terminal_float,
         crate::http::admin_export_revenue_fees,
+        crate::http::admin_export_revenue_tax,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -236,8 +237,9 @@ pub(crate) struct ErrorResponse {
             description = "A store's takings over a window of its trading days, read from the \
                            materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route \
                            here needs `console.reports.revenue`. The daily reads and the revenue \
-                           export are still coverage debt; the export of fees by code (ADR-0159) \
-                           is documented because a route new to this surface is."
+                           export are still coverage debt; the exports of fees by code (ADR-0159) \
+                           and of tax by component (ADR-0168) are documented because a route new \
+                           to this surface is."
         ),
         (
             name = "fleet",
