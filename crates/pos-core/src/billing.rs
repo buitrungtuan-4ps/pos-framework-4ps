@@ -821,15 +821,31 @@ fn fee_components(
             return Ok(Vec::new());
         }
         for part in split {
-            match components.iter_mut().find(|summed| {
-                summed.name == part.name && summed.rate_basis_points == part.rate_basis_points
-            }) {
-                Some(summed) => summed.tax = summed.tax.checked_add(part.tax)?,
-                None => components.push(part),
-            }
+            add_component(&mut components, part)?;
         }
     }
     Ok(components)
+}
+
+/// Adds `part` to `sums`: to the entry of its name and rate, or as a new one after the rest
+/// (ADR-0168), so a name at two rates stays two entries. How a fee's parts, a shift's bills and a
+/// slip's drawers each total their tax by component.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] on overflow, or for a part in another currency from the sums'.
+pub fn add_component(
+    sums: &mut Vec<TaxComponentLine>,
+    part: TaxComponentLine,
+) -> Result<(), DomainError> {
+    match sums
+        .iter_mut()
+        .find(|sum| sum.name == part.name && sum.rate_basis_points == part.rate_basis_points)
+    {
+        Some(sum) => sum.tax = sum.tax.checked_add(part.tax)?,
+        None => sums.push(part),
+    }
+    Ok(())
 }
 
 /// Splits a class's tax among the parts of its base, in proportion: each share floored, and the
@@ -1392,14 +1408,16 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 mod tests {
     use super::{
         BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, FeeWhole, MergedFees,
-        MergingBill, Payment, TaxComponentLine, assemble, fee_wholes, merge_fee_rules, settle,
-        split_by_weights, split_evenly, split_fee_rules, waivable_fee,
+        MergingBill, Payment, TaxComponentLine, add_component, assemble, fee_wholes,
+        merge_fee_rules, settle, split_by_weights, split_evenly, split_fee_rules, waivable_fee,
     };
     use core::num::NonZeroI64;
 
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
-    use pos_proto::locale::{LocaleSettings, TaxComponent, TaxRate, TaxRateTable, TaxRounding};
+    use pos_proto::locale::{
+        LocaleSettings, TaxComponent, TaxComponentName, TaxRate, TaxRateTable, TaxRounding,
+    };
     use pos_proto::money::{Money, Ratio, Rounding, div_round};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
@@ -2323,6 +2341,38 @@ mod tests {
             .sum();
         assert_eq!(split, fee.tax.amount_minor, "the parts are the fee's tax");
         assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn components_sum_by_name_and_rate_in_the_order_they_first_appear() {
+        // A shift's bills and a slip's drawers total their tax this way (ADR-0168 decision 5).
+        let part = |name: &str, basis_points: u32, tax: i64| TaxComponentLine {
+            name: TaxComponentName::new(name).expect("a token"),
+            rate_basis_points: basis_points,
+            tax: vnd(tax),
+        };
+        let mut sums = Vec::new();
+        for added in [
+            part("SGST", 250, 284),
+            part("CGST", 250, 283),
+            part("SGST", 250, 567),
+            part("SGST", 900, 9),
+        ] {
+            add_component(&mut sums, added).expect("in range");
+        }
+        assert_eq!(
+            sums,
+            [
+                part("SGST", 250, 851),
+                part("CGST", 250, 283),
+                part("SGST", 900, 9),
+            ]
+        );
+        let rupees = TaxComponentLine {
+            tax: Money::new(CurrencyCode::INR, 1),
+            ..part("CGST", 250, 0)
+        };
+        assert!(add_component(&mut sums, rupees).is_err(), "one currency");
     }
 
     #[test]
