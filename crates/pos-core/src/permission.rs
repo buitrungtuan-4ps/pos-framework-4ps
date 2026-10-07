@@ -454,6 +454,25 @@ permissions! {
         default_roles: [Supervisor, Manager, Owner],
         description: "Start, count or close another till's drawer from any till, one or many at once",
     },
+    /// Act, for one act, on a drawer assigned to someone else: take cash into it, pay in or out of
+    /// it, open it without a sale, count it or close it
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9).
+    ///
+    /// Where a store assigns each drawer, for its session, to the person who answers for it, only
+    /// that person acts on it, and anyone else needs this, held directly or approved for the one act
+    /// by a holder. Where drawers are shared, nothing needs it. PIN-flagged with the default roles of
+    /// `cash.drawer.open_no_sale`, and migration 0086 gave it once to every role that existed on the
+    /// terms it grants that one. `High`, as opening a drawer without a sale is, and not `Medium` as
+    /// managing another till's drawer is: it reaches cash another person answers for, which is what
+    /// the assignment is there to stop.
+    OverrideDrawerAssignment {
+        id: "cash.drawer.override_assignment",
+        group: CashAndShifts,
+        risk: High,
+        pin: true,
+        default_roles: [Supervisor, Manager, Owner],
+        description: "Act once on a drawer assigned to someone else: take cash, pay in or out, open, count or close it",
+    },
     /// Record a paid-in or paid-out with a reason.
     RecordCashMovement {
         id: "cash.movement.record",
@@ -898,6 +917,30 @@ mod tests {
             Permission::OpenDrawerNoSale.meta().default_roles
         );
         assert!(!default_grants(Role::Cashier).contains(Permission::ManageOtherTill));
+    }
+
+    #[test]
+    fn an_assigned_drawer_is_overridden_by_default_by_whoever_may_open_one_without_a_sale() {
+        // ADR-0167 decision 9: held out of the box by the roles that open a drawer without a sale,
+        // so migration 0086's rule, directly where a role grants that one directly and with approval
+        // otherwise, gives an existing tenant what a new one starts with.
+        let over = Permission::OverrideDrawerAssignment.meta();
+        assert_eq!(over.id, "cash.drawer.override_assignment");
+        assert!(
+            over.pin_required,
+            "a cashier needs a holder's approval for it"
+        );
+        assert_eq!(over.group.as_token(), "CASH_AND_SHIFTS");
+        assert_eq!(
+            over.risk,
+            Permission::OpenDrawerNoSale.meta().risk,
+            "cash another person answers for, as a drawer opened without a sale is"
+        );
+        assert_eq!(
+            over.default_roles,
+            Permission::OpenDrawerNoSale.meta().default_roles
+        );
+        assert!(!default_grants(Role::Cashier).contains(Permission::OverrideDrawerAssignment));
     }
 
     #[test]

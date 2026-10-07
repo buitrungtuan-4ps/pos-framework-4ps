@@ -1616,6 +1616,7 @@
   "permission.billing.receipt.reprint": "Reprint a receipt",
   "permission.billing.refund.issue": "Refund a settled bill",
   "permission.cash.drawer.open_no_sale": "Open the cash drawer with no sale",
+  "permission.cash.drawer.override_assignment": "Act once on a drawer assigned to someone else",
   "permission.cash.movement.record": "Record cash paid in or out",
   "permission.cash.shift.close": "Close a shift",
   "permission.cash.shift.manage_other_till": "Start, count or close another till's drawer",

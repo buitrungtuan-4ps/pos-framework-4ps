@@ -341,6 +341,13 @@ const MIGRATION_0084: &str =
 /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
 const MIGRATION_0085: &str = include_str!("../migrations/0085_terminal_opening_float.sql");
 
+/// Every role that exists is given, once, `cash.drawer.override_assignment` on the terms it grants
+/// `cash.drawer.open_no_sale`, as 0084 gave `cash.shift.manage_other_till`, and every store whose
+/// people have been published is queued for the cloud to publish them again
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9).
+const MIGRATION_0086: &str =
+    include_str!("../migrations/0086_roles_can_override_an_assigned_drawer.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -739,6 +746,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0085)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0086)
             .await
             .map_err(unavailable)
     }

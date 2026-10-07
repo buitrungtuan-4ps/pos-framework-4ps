@@ -5855,8 +5855,8 @@ mod role_templates_and_assignments {
     /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
     /// since taken away.
     ///
-    /// The 0073, 0076, 0079 and 0084 markers are written before the boot, so the boot runs 0074
-    /// alone against the roles as they were authored.
+    /// The 0073, 0076, 0079, 0084 and 0086 markers are written before the boot, so the boot runs
+    /// 0074 alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -5882,11 +5882,12 @@ mod role_templates_and_assignments {
                     "INSERT INTO data_migrations (name) \
                      VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee'), \
                             ('0079_approvers_who_close_a_shift_see_takings'), \
-                            ('0084_roles_can_manage_another_tills_drawer')",
+                            ('0084_roles_can_manage_another_tills_drawer'), \
+                            ('0086_roles_can_override_an_assigned_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0076, 0079 and 0084 have already run");
+                .expect("0073, 0076, 0079, 0084 and 0086 have already run");
             let people = store.people();
             // A manager who voids directly, and so approves voids for others, listed out of order
             // as a console may have written it.
@@ -6029,8 +6030,8 @@ mod role_templates_and_assignments {
     /// grants the override directly, and with approval otherwise. Nothing else in either list
     /// changes, and a later boot does not hand back a waive an owner has since taken away.
     ///
-    /// The 0073, 0074, 0079 and 0084 markers are written before the boot, so the boot runs 0076
-    /// alone against the roles as they were authored.
+    /// The 0073, 0074, 0079, 0084 and 0086 markers are written before the boot, so the boot runs
+    /// 0076 alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -6050,11 +6051,12 @@ mod role_templates_and_assignments {
                      VALUES ('0073_roles_keep_every_till_action'), \
                             ('0074_role_permissions_with_approval'), \
                             ('0079_approvers_who_close_a_shift_see_takings'), \
-                            ('0084_roles_can_manage_another_tills_drawer')",
+                            ('0084_roles_can_manage_another_tills_drawer'), \
+                            ('0086_roles_can_override_an_assigned_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0074, 0079 and 0084 have already run");
+                .expect("0073, 0074, 0079, 0084 and 0086 have already run");
             let people = store.people();
             // A manager who exceeds the ceiling directly, and so approves it for others.
             people
@@ -6224,8 +6226,8 @@ mod role_templates_and_assignments {
     /// only with approval. No with-approval list changes, an archived approver is included, and a
     /// later boot does not hand back takings an owner has since taken away.
     ///
-    /// The 0073, 0074, 0076 and 0084 markers are written before the boot, so the boot runs 0079
-    /// alone against the roles as they were authored.
+    /// The 0073, 0074, 0076, 0084 and 0086 markers are written before the boot, so the boot runs
+    /// 0079 alone against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -6246,11 +6248,12 @@ mod role_templates_and_assignments {
                      VALUES ('0073_roles_keep_every_till_action'), \
                             ('0074_role_permissions_with_approval'), \
                             ('0076_roles_can_waive_a_fee'), \
-                            ('0084_roles_can_manage_another_tills_drawer')",
+                            ('0084_roles_can_manage_another_tills_drawer'), \
+                            ('0086_roles_can_override_an_assigned_drawer')",
                     &[],
                 )
                 .await
-                .expect("0073, 0074, 0076 and 0084 have already run");
+                .expect("0073, 0074, 0076, 0084 and 0086 have already run");
             let people = store.people();
             // (role, name, direct, with approval), each the one case it is named for.
             let authored = [
@@ -7026,8 +7029,8 @@ mod people_republishes_queue {
     /// store is. A later boot queues nothing.
     ///
     /// `prepared` truncates `data_migrations` and the queue, so the boot below is the migration's
-    /// first run, as it is on a database that has never seen the file. 0084's marker is written
-    /// first, so what the boot queues is 0083's alone, under its own name.
+    /// first run, as it is on a database that has never seen the file. The 0084 and 0086 markers are
+    /// written first, so what the boot queues is 0083's alone, under its own name.
     #[test]
     fn the_stores_whose_people_were_published_are_queued_once() {
         let tenant = TenantId::new(Ulid::from_u128(0x0083_7E11));
@@ -7078,11 +7081,12 @@ mod people_republishes_queue {
             admin
                 .execute(
                     "INSERT INTO data_migrations (name) \
-                     VALUES ('0084_roles_can_manage_another_tills_drawer')",
+                     VALUES ('0084_roles_can_manage_another_tills_drawer'), \
+                            ('0086_roles_can_override_an_assigned_drawer')",
                     &[],
                 )
                 .await
-                .expect("0084 has already run");
+                .expect("0084 and 0086 have already run");
             let trees = postgres.config_trees();
             for (tenant_id, store_id, state) in &seeded {
                 trees
@@ -7140,30 +7144,57 @@ mod people_republishes_queue {
         });
     }
 
+    /// Every marker-gated migration that grants roles a permission, and the queue's: a test of one
+    /// writes the others' markers before its boot, so the boot runs that one alone.
+    const MARKED: [&str; 7] = [
+        "0073_roles_keep_every_till_action",
+        "0074_role_permissions_with_approval",
+        "0076_roles_can_waive_a_fee",
+        "0079_approvers_who_close_a_shift_see_takings",
+        "0083_people_republishes",
+        "0084_roles_can_manage_another_tills_drawer",
+        "0086_roles_can_override_an_assigned_drawer",
+    ];
+
     /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
-    /// `cash.drawer.open_no_sale` (migration 0084, ADR-0167 decision 3): directly where it grants
-    /// that directly, and with approval otherwise, an archived role included, and nothing else in
-    /// either list changes. The same statement queues every store holding a `permissions` roster on
-    /// some layer under the migration's name, and no other store. A later boot grants nothing again
-    /// and queues nothing.
-    ///
-    /// The markers of the earlier grants and of 0083 are written before the boot, so the boot runs
-    /// 0084 alone against the roles and the trees as they were.
+    /// `cash.drawer.open_no_sale` (migration 0084, ADR-0167 decision 3).
     #[test]
+    fn another_tills_drawer_is_granted_once_on_the_drawers_terms_and_its_stores_are_queued() {
+        granted_once_on_the_drawers_terms(MARKED[5], "cash.shift.manage_other_till", 0x0084);
+    }
+
+    /// Every role that exists is given, once, `cash.drawer.override_assignment` on the same terms
+    /// (migration 0086, ADR-0167 decision 9).
+    #[test]
+    fn an_assigned_drawers_override_is_granted_once_and_its_stores_are_queued() {
+        granted_once_on_the_drawers_terms(MARKED[6], "cash.drawer.override_assignment", 0x0086);
+    }
+
+    /// The migration `grant` gives every role, once, `permission` on the terms it grants
+    /// `cash.drawer.open_no_sale`: directly where it grants that directly, and with approval
+    /// otherwise, an archived role included, and nothing else in either list changes. The same
+    /// statement queues every store holding a `permissions` roster on some layer under the
+    /// migration's name, and no other store. A later boot grants nothing again and queues nothing.
+    ///
+    /// Every other marker in [`MARKED`] is written before the boot, so the boot runs `grant` alone
+    /// against the roles and the trees as they were. `seed` keeps each case's tenant and stores its
+    /// own.
     #[expect(
         clippy::too_many_lines,
         reason = "one boot over four roles and four stores, and the boot after it"
     )]
-    fn another_tills_drawer_is_granted_once_on_the_drawers_terms_and_its_stores_are_queued() {
-        const GRANT: &str = "0084_roles_can_manage_another_tills_drawer";
-        const MANAGE: &str = "cash.shift.manage_other_till";
+    fn granted_once_on_the_drawers_terms(grant: &str, permission: &str, seed: u128) {
         const MANAGER: &str = "01ROLE000000000000000000M4";
         const SUPERVISOR: &str = "01ROLE000000000000000000V4";
         const SERVER: &str = "01ROLE000000000000000000S4";
         const RETIRED: &str = "01ROLE000000000000000000R4";
-        let tenant = TenantId::new(Ulid::from_u128(0x0084_7E11));
+        fn sorted(mut ids: Vec<&str>) -> Vec<&str> {
+            ids.sort_unstable();
+            ids
+        }
+        let tenant = TenantId::new(Ulid::from_u128((seed << 16) | 0x7E11));
         let tenant_id = tenant.to_string();
-        let store = |n: u128| StoreId::new(Ulid::from_u128(0x0084_0000 + n));
+        let store = |n: u128| StoreId::new(Ulid::from_u128((seed << 16) + n));
         let empty = serde_json::json!({});
         let switch = serde_json::json!({ "permissions": { "enforced": true } });
         let seeded = [
@@ -7190,18 +7221,12 @@ mod people_republishes_queue {
         ];
         block_on(async {
             let (postgres, admin) = prepared().await.expect("prepare the database");
-            admin
-                .execute(
-                    "INSERT INTO data_migrations (name) \
-                     VALUES ('0073_roles_keep_every_till_action'), \
-                            ('0074_role_permissions_with_approval'), \
-                            ('0076_roles_can_waive_a_fee'), \
-                            ('0079_approvers_who_close_a_shift_see_takings'), \
-                            ('0083_people_republishes')",
-                    &[],
-                )
-                .await
-                .expect("the earlier grants and the queue have already run");
+            for marker in MARKED.into_iter().filter(|marker| *marker != grant) {
+                admin
+                    .execute("INSERT INTO data_migrations (name) VALUES ($1)", &[&marker])
+                    .await
+                    .expect("every other grant and the queue have already run");
+            }
             let people = postgres.people();
             // A manager who opens the drawer without a sale directly, and so approves it for others.
             people
@@ -7286,7 +7311,7 @@ mod people_republishes_queue {
             postgres
                 .migrate()
                 .await
-                .expect("the boot that runs 0084 first");
+                .expect("the boot that runs the grant first");
             let roles = people
                 .fetch_role_templates(&tenant_id)
                 .await
@@ -7302,12 +7327,12 @@ mod people_republishes_queue {
             };
             assert_eq!(
                 list(&role(MANAGER).permissions_json),
-                [
+                sorted(vec![
                     "cash.drawer.open_no_sale",
                     "cash.shift.close",
-                    MANAGE,
+                    permission,
                     "cash.shift.open",
-                ],
+                ]),
                 "directly, beside the drawer, in byte order"
             );
             assert_eq!(
@@ -7318,10 +7343,14 @@ mod people_republishes_queue {
             for (id, approved) in [
                 (
                     SUPERVISOR,
-                    vec!["billing.bill.void", "cash.drawer.open_no_sale", MANAGE],
+                    sorted(vec![
+                        "billing.bill.void",
+                        "cash.drawer.open_no_sale",
+                        permission,
+                    ]),
                 ),
-                (SERVER, vec![MANAGE]),
-                (RETIRED, vec![MANAGE]),
+                (SERVER, vec![permission]),
+                (RETIRED, vec![permission]),
             ] {
                 assert_eq!(
                     role(id).permissions_json,
@@ -7350,8 +7379,8 @@ mod people_republishes_queue {
             assert_eq!(
                 keys,
                 vec![
-                    (tenant_id.clone(), store(1).to_string(), GRANT),
-                    (tenant_id.clone(), store(2).to_string(), GRANT),
+                    (tenant_id.clone(), store(1).to_string(), grant),
+                    (tenant_id.clone(), store(2).to_string(), grant),
                 ],
                 "exactly the stores holding a roster on some layer, under the grant's name"
             );

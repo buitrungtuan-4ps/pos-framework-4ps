@@ -928,10 +928,10 @@ mod tests {
     /// directly, with approval, from a literal list in its SQL: the catalogue's PIN-flagged
     /// permissions as they were then, in byte order and once each. A PIN-flagged permission added
     /// since is granted by a migration of its own, which names it — 0076 for `billing.fee.waive`
-    /// (ADR-0159 decision 5) and 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3).
-    /// Together they are the `pin_required=true` lines of
-    /// `docs/snapshots/permissions.txt`, each granted once, so the backfills and the catalogue
-    /// cannot drift.
+    /// (ADR-0159 decision 5), 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3) and 0086
+    /// for `cash.drawer.override_assignment` (decision 9). Together they are the `pin_required=true`
+    /// lines of `docs/snapshots/permissions.txt`, each granted once, so the backfills and the
+    /// catalogue cannot drift.
     #[test]
     fn the_with_approval_backfills_list_exactly_the_pin_flagged_permissions() {
         const MIGRATION_0074: &str = include_str!(
@@ -941,6 +941,9 @@ mod tests {
             include_str!("../../adapters/store-postgres/migrations/0076_roles_can_waive_a_fee.sql");
         const MIGRATION_0084: &str = include_str!(
             "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
+        );
+        const MIGRATION_0086: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
         );
         let open = MIGRATION_0074
             .find("ARRAY[")
@@ -963,6 +966,7 @@ mod tests {
         let later = [
             ("billing.fee.waive", MIGRATION_0076),
             ("cash.shift.manage_other_till", MIGRATION_0084),
+            ("cash.drawer.override_assignment", MIGRATION_0086),
         ];
         for (id, migration) in later {
             assert!(
@@ -1001,6 +1005,9 @@ mod tests {
         const MIGRATION_0084: &str = include_str!(
             "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
         );
+        const MIGRATION_0086: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
+        );
         let open = MIGRATION_0079
             .find("ARRAY[")
             .expect("the grant's literal list")
@@ -1019,7 +1026,10 @@ mod tests {
         assert_eq!(literal, sorted, "0079's list is in byte order, once each");
 
         // Each PIN-flagged permission added after 0079, and the migration that grants it.
-        let later = [("cash.shift.manage_other_till", MIGRATION_0084)];
+        let later = [
+            ("cash.shift.manage_other_till", MIGRATION_0084),
+            ("cash.drawer.override_assignment", MIGRATION_0086),
+        ];
         for (id, migration) in later {
             assert!(
                 migration.contains(&format!("'{id}'")),
