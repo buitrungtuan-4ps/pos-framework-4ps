@@ -4,11 +4,22 @@
 // hand-rolled inline SVG (no chart library, so nothing to load past the CSP). The operator sets the
 // tenant/store in the top bar; the date-range window defaults to the server's most recent 90
 // trading days.
+//
+// The X/Z report's cash is the store's, and below it each drawer's where the day kept more than the
+// store's one (ADR-0167 decision 13), under the till names the cloud read from the store's devices.
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { DailyRevenue, DailyRollup, FeeTotal, Store, XzReport } from "../api/types";
+import { STORE_DRAWER } from "../api/types";
+import type {
+  CashTotals,
+  DailyRevenue,
+  DailyRollup,
+  FeeTotal,
+  Store,
+  XzReport,
+} from "../api/types";
 import { t } from "../i18n";
 import { formatCount } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -28,6 +39,87 @@ function canReadRevenue(): boolean {
 /** A minor-unit amount in a currency, read as money for the active locale (ADR-0135). */
 function money(minor: number, currency: string): string {
   return formatAmount({ amount_minor: minor, currency_code: currency || "" });
+}
+
+/** One of the day's drawers, as the X/Z table lists it. */
+interface DrawerRow {
+  readonly key: string;
+  /** The till's name, `null` for the store's drawer and for a till the devices no longer list. */
+  readonly name: string | null;
+  readonly figures: CashTotals;
+}
+
+/**
+ * The day's drawers for the X/Z table: the store's first, then each till by name, then each till no
+ * longer listed by its id. None where the day kept only the store's drawer, so that day reads as it
+ * always did.
+ */
+function drawerRows(report: XzReport): DrawerRow[] {
+  const entries = Object.entries(report.cash.by_drawer);
+  if (entries.every(([key]) => key === STORE_DRAWER)) {
+    return [];
+  }
+  const rank = (row: DrawerRow) => (row.key === STORE_DRAWER ? 0 : row.name === null ? 2 : 1);
+  return entries
+    .map(([key, figures]) => ({ key, name: report.till_names[key] ?? null, figures }))
+    .sort((a, b) => rank(a) - rank(b) || (a.name ?? a.key).localeCompare(b.name ?? b.key));
+}
+
+/**
+ * Each drawer's cash under the store's on the X/Z report (ADR-0167 decision 13), drawn only where the
+ * day kept more than the store's one drawer.
+ */
+function DrawerTable(props: { report: XzReport }) {
+  const cash = (minor: number) => money(minor, props.report.cash.currency_code);
+  return (
+    <Show when={drawerRows(props.report).length > 0}>
+      <div class="mt-4 overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <caption class="mb-2 text-left font-medium text-ink">{t("reports.drawersTitle")}</caption>
+          <thead>
+            <tr class="border-b border-line text-ink-muted">
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerTill")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerFloat")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerPaidIn")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerPaidOut")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerExpected")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerCounted")}</th>
+              <th class="py-2 font-medium">{t("reports.drawerOverShort")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={drawerRows(props.report)}>
+              {(drawer) => {
+                // Only a close says what a drawer should have held: with none closed there is
+                // nothing to show, and nothing here works one out.
+                const closed = (minor: number) =>
+                  drawer.figures.shifts_closed > 0 ? cash(minor) : "—";
+                return (
+                  <tr class="border-b border-line text-ink">
+                    <td class="py-2 pr-4">
+                      <Show when={drawer.key !== STORE_DRAWER} fallback={t("reports.drawerStore")}>
+                        {drawer.name ?? t("reports.drawerUnlisted")}
+                        <Show when={drawer.name === null}>
+                          <span class="block font-mono text-xs text-ink-muted">{drawer.key}</span>
+                        </Show>
+                      </Show>
+                    </td>
+                    <td class="py-2 pr-4">{cash(drawer.figures.opening_float)}</td>
+                    <td class="py-2 pr-4">{cash(drawer.figures.paid_in)}</td>
+                    <td class="py-2 pr-4">{cash(drawer.figures.paid_out)}</td>
+                    <td class="py-2 pr-4">{closed(drawer.figures.expected)}</td>
+                    <td class="py-2 pr-4">{closed(drawer.figures.counted)}</td>
+                    <td class="py-2 font-medium">{closed(drawer.figures.variance)}</td>
+                  </tr>
+                );
+              }}
+            </For>
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-2 text-sm text-ink-muted">{t("reports.drawersHint")}</p>
+    </Show>
+  );
 }
 
 /** A minimal, theme-aware inline-SVG bar chart. The data table beside it carries the real values, so
@@ -524,6 +616,7 @@ export function Reports() {
                   </dl>
                 )}
               </Show>
+              <Show when={xz()}>{(report) => <DrawerTable report={report()} />}</Show>
             </Card>
 
           </Show>

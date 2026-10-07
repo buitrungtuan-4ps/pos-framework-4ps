@@ -232,18 +232,32 @@ export interface FeeTotal {
   readonly tax: number;
 }
 
-/** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
-export interface DailyCash {
-  readonly business_date: string;
-  readonly currency_code: string;
+/** A day's cash figures for one drawer, or for the store's every drawer together. Minor units. */
+export interface CashTotals {
   readonly opening_float: number;
   readonly paid_in: number;
   readonly paid_out: number;
   readonly shifts_opened: number;
   readonly shifts_closed: number;
+  /** Summed from closes only: a drawer still open has no expected amount (`docs/pos-spec.md` §6). */
   readonly expected: number;
   readonly counted: number;
   readonly variance: number;
+}
+
+/** The key `DailyCash.by_drawer` files the store's one drawer under (ADR-0167 decision 5). */
+export const STORE_DRAWER = "store";
+
+/** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
+export interface DailyCash extends CashTotals {
+  readonly business_date: string;
+  readonly currency_code: string;
+  /**
+   * The same figures for each drawer, keyed by the till's `terminal_device_id`, or `STORE_DRAWER`
+   * for the store's one drawer (ADR-0167 decisions 10 and 13). They add up to the store's. Empty
+   * for a day folded before the split, until the store's rollup is reset.
+   */
+  readonly by_drawer: Readonly<Record<string, CashTotals>>;
 }
 
 /**
@@ -256,6 +270,12 @@ export interface XzReport {
   readonly activity: DailyRollup;
   readonly revenue: DailyRevenue;
   readonly cash: DailyCash;
+  /**
+   * The name of each till among the day's drawers, keyed as `by_drawer` is, from the store's
+   * published devices as the report is served. The store's drawer, and a till no longer listed,
+   * have none.
+   */
+  readonly till_names: Readonly<Record<string, string>>;
 }
 
 /** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */

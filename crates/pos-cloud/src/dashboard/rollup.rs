@@ -18,7 +18,9 @@ use pos_proto::events::{
     CashShiftOpened, DeviceAdmissionGranted, DeviceAdmissionRevoked, SalesOrderLineAdded,
 };
 
-use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, FeeTotal};
+use crate::cloud::{
+    AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
+};
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
 /// id ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
@@ -212,63 +214,90 @@ fn fold_fees(by_fee: &mut BTreeMap<String, FeeTotal>, lines: &[BillFeeLine]) {
 /// expected/counted/variance) and drawer paid-in/paid-out. `cash.shift.counted` is deliberately not
 /// folded — the blind count is recorded on the close, and folding the pre-close count would blur the
 /// blindness the control depends on. A payload that fails to decode is skipped.
+///
+/// Each event's figures are added to the store's and to its drawer's alike, the till it names or
+/// the store's one drawer ([`STORE_DRAWER`]), so the drawers add up to the store by construction
+/// (ADR-0167 decision 13). `cash.drawer.opened` is not folded: nothing in the X/Z counts drawer
+/// openings, and the day's activity counts it by type already.
 pub fn fold_cash(cash: &mut BTreeMap<String, DailyCash>, event: &EventEnvelope<RawPayload>) {
+    let folded = match event.event_type.as_str() {
+        "cash.shift.opened" => event.data.decode::<CashShiftOpened>().ok().map(|ev| {
+            let totals = CashTotals {
+                opening_float: ev.opening_float.amount_minor,
+                shifts_opened: 1,
+                ..CashTotals::default()
+            };
+            (
+                ev.opening_float.currency_code,
+                ev.terminal_device_id,
+                totals,
+            )
+        }),
+        "cash.shift.closed" => event.data.decode::<CashShiftClosed>().ok().map(|ev| {
+            let totals = CashTotals {
+                shifts_closed: 1,
+                expected: ev.expected_amount.amount_minor,
+                counted: ev.counted_amount.amount_minor,
+                variance: ev.variance.amount_minor,
+                ..CashTotals::default()
+            };
+            (
+                ev.expected_amount.currency_code,
+                ev.terminal_device_id,
+                totals,
+            )
+        }),
+        "cash.drawer.paid_in" => event.data.decode::<CashDrawerPaidIn>().ok().map(|ev| {
+            let totals = CashTotals {
+                paid_in: ev.amount.amount_minor,
+                ..CashTotals::default()
+            };
+            (ev.amount.currency_code, ev.terminal_device_id, totals)
+        }),
+        "cash.drawer.paid_out" => event.data.decode::<CashDrawerPaidOut>().ok().map(|ev| {
+            let totals = CashTotals {
+                paid_out: ev.amount.amount_minor,
+                ..CashTotals::default()
+            };
+            (ev.amount.currency_code, ev.terminal_device_id, totals)
+        }),
+        _ => None,
+    };
+    let Some((currency, till, totals)) = folded else {
+        return;
+    };
     let date = event.business_date.to_string();
-    match event.event_type.as_str() {
-        "cash.shift.opened" => {
-            let Ok(ev) = event.data.decode::<CashShiftOpened>() else {
-                return;
-            };
-            let day = cash
-                .entry(date.clone())
-                .or_insert_with(|| empty_cash(&date));
-            set_currency(
-                &mut day.currency_code,
-                ev.opening_float.currency_code.to_string(),
-            );
-            day.opening_float = day
-                .opening_float
-                .saturating_add(ev.opening_float.amount_minor);
-            day.shifts_opened = day.shifts_opened.saturating_add(1);
-        }
-        "cash.shift.closed" => {
-            let Ok(ev) = event.data.decode::<CashShiftClosed>() else {
-                return;
-            };
-            let day = cash
-                .entry(date.clone())
-                .or_insert_with(|| empty_cash(&date));
-            set_currency(
-                &mut day.currency_code,
-                ev.expected_amount.currency_code.to_string(),
-            );
-            day.shifts_closed = day.shifts_closed.saturating_add(1);
-            day.expected = day.expected.saturating_add(ev.expected_amount.amount_minor);
-            day.counted = day.counted.saturating_add(ev.counted_amount.amount_minor);
-            day.variance = day.variance.saturating_add(ev.variance.amount_minor);
-        }
-        "cash.drawer.paid_in" => {
-            let Ok(ev) = event.data.decode::<CashDrawerPaidIn>() else {
-                return;
-            };
-            let day = cash
-                .entry(date.clone())
-                .or_insert_with(|| empty_cash(&date));
-            set_currency(&mut day.currency_code, ev.amount.currency_code.to_string());
-            day.paid_in = day.paid_in.saturating_add(ev.amount.amount_minor);
-        }
-        "cash.drawer.paid_out" => {
-            let Ok(ev) = event.data.decode::<CashDrawerPaidOut>() else {
-                return;
-            };
-            let day = cash
-                .entry(date.clone())
-                .or_insert_with(|| empty_cash(&date));
-            set_currency(&mut day.currency_code, ev.amount.currency_code.to_string());
-            day.paid_out = day.paid_out.saturating_add(ev.amount.amount_minor);
-        }
-        _ => {}
-    }
+    let day = cash
+        .entry(date.clone())
+        .or_insert_with(|| empty_cash(&date));
+    set_currency(&mut day.currency_code, currency.to_string());
+    add_to_store(day, &totals);
+    let drawer = till.map_or_else(|| STORE_DRAWER.to_owned(), |till| till.to_string());
+    add_to_drawer(day.by_drawer.entry(drawer).or_default(), &totals);
+}
+
+/// Adds one event's figures to the store's day, each saturating as every rollup sum does.
+fn add_to_store(sum: &mut DailyCash, figures: &CashTotals) {
+    sum.opening_float = sum.opening_float.saturating_add(figures.opening_float);
+    sum.paid_in = sum.paid_in.saturating_add(figures.paid_in);
+    sum.paid_out = sum.paid_out.saturating_add(figures.paid_out);
+    sum.shifts_opened = sum.shifts_opened.saturating_add(figures.shifts_opened);
+    sum.shifts_closed = sum.shifts_closed.saturating_add(figures.shifts_closed);
+    sum.expected = sum.expected.saturating_add(figures.expected);
+    sum.counted = sum.counted.saturating_add(figures.counted);
+    sum.variance = sum.variance.saturating_add(figures.variance);
+}
+
+/// Adds the same figures to the drawer's day, by the same rule as [`add_to_store`].
+fn add_to_drawer(sum: &mut CashTotals, figures: &CashTotals) {
+    sum.opening_float = sum.opening_float.saturating_add(figures.opening_float);
+    sum.paid_in = sum.paid_in.saturating_add(figures.paid_in);
+    sum.paid_out = sum.paid_out.saturating_add(figures.paid_out);
+    sum.shifts_opened = sum.shifts_opened.saturating_add(figures.shifts_opened);
+    sum.shifts_closed = sum.shifts_closed.saturating_add(figures.shifts_closed);
+    sum.expected = sum.expected.saturating_add(figures.expected);
+    sum.counted = sum.counted.saturating_add(figures.counted);
+    sum.variance = sum.variance.saturating_add(figures.variance);
 }
 
 /// Sets `slot` to `code` only if it is still empty — the first cash event of the day fixes the
@@ -873,6 +902,213 @@ mod tests {
             ids,
             [live_newest.as_str(), live_older.as_str(), retired.as_str()],
             "live tills newest-first, then the retired one — an operator looks at what is running"
+        );
+    }
+
+    // --- cash fold, by drawer (ADR-0167 decisions 10 and 13) ---
+
+    use super::fold_cash;
+    use crate::cloud::{CashTotals, DailyCash, STORE_DRAWER};
+
+    /// A cash event on 2026-03-15 at the till `till`, or at the store's drawer for `None`.
+    fn cash_event(
+        event_type: EventType,
+        till: Option<u128>,
+        mut payload: serde_json::Value,
+    ) -> EventEnvelope<RawPayload> {
+        if let Some(till) = till {
+            payload["terminal_device_id"] = json!(ulid(till));
+        }
+        event_with("2026-03-15", event_type, &payload)
+    }
+
+    /// A drawer's day as its till records it: started on `float`, paid in and out, and closed with
+    /// `(expected, counted)`, or still open for `None`.
+    fn drawer_day(
+        till: Option<u128>,
+        (float, paid_in, paid_out): (i64, i64, i64),
+        closed: Option<(i64, i64)>,
+    ) -> Vec<EventEnvelope<RawPayload>> {
+        let shift = ulid(0x5F);
+        let mut events = vec![
+            cash_event(
+                EventType::CashShiftOpened,
+                till,
+                json!({ "opened_shift_id": shift, "opening_float": money(float) }),
+            ),
+            cash_event(
+                EventType::CashDrawerPaidIn,
+                till,
+                json!({ "amount": money(paid_in), "reason_code_id": ulid(0x7A) }),
+            ),
+            cash_event(
+                EventType::CashDrawerPaidOut,
+                till,
+                json!({ "amount": money(paid_out), "reason_code_id": ulid(0x7B) }),
+            ),
+        ];
+        if let Some((expected, counted)) = closed {
+            events.push(cash_event(
+                EventType::CashShiftClosed,
+                till,
+                json!({
+                    "closed_shift_id": shift,
+                    "expected_amount": money(expected),
+                    "counted_amount": money(counted),
+                    "variance": money(counted - expected),
+                }),
+            ));
+        }
+        events
+    }
+
+    /// The store's figures on `day`, as a drawer's are kept, to set beside its drawers'.
+    fn store_figures(day: &DailyCash) -> CashTotals {
+        CashTotals {
+            opening_float: day.opening_float,
+            paid_in: day.paid_in,
+            paid_out: day.paid_out,
+            shifts_opened: day.shifts_opened,
+            shifts_closed: day.shifts_closed,
+            expected: day.expected,
+            counted: day.counted,
+            variance: day.variance,
+        }
+    }
+
+    /// 2026-03-15's cash, folded from `events` as the projector folds them.
+    fn cash_day(events: &[EventEnvelope<RawPayload>]) -> DailyCash {
+        let mut cash = BTreeMap::new();
+        for event in events {
+            fold_cash(&mut cash, event);
+        }
+        cash.remove("2026-03-15").expect("the day")
+    }
+
+    #[test]
+    fn each_tills_drawer_is_its_own_events_and_the_drawers_add_up_to_the_store() {
+        let (bar, door, patio) = (0xBA, 0xD0, 0xFA);
+        let mut events = drawer_day(
+            Some(bar),
+            (500_000, 100_000, 30_000),
+            Some((1_570_000, 1_560_000)),
+        );
+        events.extend(drawer_day(
+            Some(door),
+            (200_000, 50_000, 20_000),
+            Some((230_000, 230_000)),
+        ));
+        events.extend(drawer_day(Some(patio), (100_000, 10_000, 0), None));
+        let day = cash_day(&events);
+
+        let drawer = |till: u128| day.by_drawer.get(&ulid(till)).copied();
+        let closed =
+            |opening_float, paid_in, paid_out, (expected, counted): (i64, i64)| CashTotals {
+                opening_float,
+                paid_in,
+                paid_out,
+                shifts_opened: 1,
+                shifts_closed: 1,
+                expected,
+                counted,
+                variance: counted - expected,
+            };
+        assert_eq!(
+            drawer(bar),
+            Some(closed(500_000, 100_000, 30_000, (1_570_000, 1_560_000)))
+        );
+        assert_eq!(
+            drawer(door),
+            Some(closed(200_000, 50_000, 20_000, (230_000, 230_000)))
+        );
+        assert_eq!(
+            drawer(patio),
+            Some(CashTotals {
+                opening_float: 100_000,
+                paid_in: 10_000,
+                shifts_opened: 1,
+                ..CashTotals::default()
+            }),
+            "an open drawer has no expected amount: only its close carries one"
+        );
+        assert_eq!(day.by_drawer.len(), 3, "every event named its till");
+
+        let summed = day
+            .by_drawer
+            .values()
+            .fold(CashTotals::default(), |sum, drawer| CashTotals {
+                opening_float: sum.opening_float + drawer.opening_float,
+                paid_in: sum.paid_in + drawer.paid_in,
+                paid_out: sum.paid_out + drawer.paid_out,
+                shifts_opened: sum.shifts_opened + drawer.shifts_opened,
+                shifts_closed: sum.shifts_closed + drawer.shifts_closed,
+                expected: sum.expected + drawer.expected,
+                counted: sum.counted + drawer.counted,
+                variance: sum.variance + drawer.variance,
+            });
+        assert_eq!(
+            summed,
+            store_figures(&day),
+            "the drawers add up to the store"
+        );
+        assert_eq!(
+            store_figures(&day),
+            CashTotals {
+                opening_float: 800_000,
+                paid_in: 160_000,
+                paid_out: 50_000,
+                shifts_opened: 3,
+                shifts_closed: 2,
+                expected: 1_800_000,
+                counted: 1_790_000,
+                variance: -10_000,
+            },
+            "and the store's figures are the sums they always were"
+        );
+    }
+
+    #[test]
+    fn a_store_with_one_drawer_folds_it_under_the_stores_key_with_the_days_figures() {
+        let day = cash_day(&drawer_day(
+            None,
+            (500_000, 100_000, 30_000),
+            Some((570_000, 565_000)),
+        ));
+        let figures = CashTotals {
+            opening_float: 500_000,
+            paid_in: 100_000,
+            paid_out: 30_000,
+            shifts_opened: 1,
+            shifts_closed: 1,
+            expected: 570_000,
+            counted: 565_000,
+            variance: -5_000,
+        };
+        assert_eq!(store_figures(&day), figures);
+        assert_eq!(
+            day.by_drawer.into_iter().collect::<Vec<_>>(),
+            [(STORE_DRAWER.to_owned(), figures)]
+        );
+    }
+
+    #[test]
+    fn a_day_stored_before_its_drawers_loads_with_none_and_writes_its_figures_where_they_were() {
+        let stored = json!({
+            "business_date": "2026-03-15", "currency_code": "VND", "opening_float": 500_000,
+            "paid_in": 0, "paid_out": 0, "shifts_opened": 1, "shifts_closed": 0,
+            "expected": 0, "counted": 0, "variance": 0,
+        });
+        let day: DailyCash = serde_json::from_value(stored.clone()).expect("an older day loads");
+        assert!(day.by_drawer.is_empty());
+        assert_eq!(day.opening_float, 500_000);
+        let mut written = serde_json::to_value(&day).expect("json");
+        let drawers = written
+            .as_object_mut()
+            .and_then(|object| object.remove("by_drawer"));
+        assert_eq!(drawers, Some(json!({})));
+        assert_eq!(
+            written, stored,
+            "the store's figures sit where they always did"
         );
     }
 }

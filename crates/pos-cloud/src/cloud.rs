@@ -194,6 +194,52 @@ pub struct DailyCash {
     pub counted: i64,
     /// Sum of variance (counted − expected) across closes; negative is short.
     pub variance: i64,
+    /// The same figures for each drawer, keyed by the till's `terminal_device_id`, or by
+    /// [`STORE_DRAWER`] for the store's one drawer
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).
+    /// Each drawer's are the sums of its own events, which are the events the store's figures sum,
+    /// so the drawers add up to the store.
+    ///
+    /// `#[serde(default)]`, so a day stored before this field loads with no drawers and gains them
+    /// from the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay
+    /// lever) folds every cash event on the log into it.
+    #[serde(default)]
+    pub by_drawer: BTreeMap<String, CashTotals>,
+}
+
+/// The key [`DailyCash::by_drawer`] files the store's one drawer under: the drawer of every cash
+/// event that names no till, which is every event of a store that keeps one drawer (ADR-0167
+/// decision 5).
+///
+/// It cannot be a till's: a till is keyed by its `terminal_device_id`, a 26-character ULID, and this
+/// is not one. And it says what it is wherever the map is read, the stored rollup, the X/Z report
+/// and the console, where an empty key would say nothing and a reserved ULID would pass for a till.
+pub const STORE_DRAWER: &str = "store";
+
+/// A day's cash figures for one drawer (part of [`DailyCash`]), the same as the store's.
+///
+/// The store's stay inline on [`DailyCash`] rather than in one of these under
+/// `#[serde(flatten)]`, which would keep the wire as it is and does not pass the lints: the
+/// flatten buffer carries `f32` and `f64`, which `clippy.toml` bans (money is never a float).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct CashTotals {
+    /// Sum of opening floats across shifts opened on the day.
+    pub opening_float: i64,
+    /// Sum of paid-in movements.
+    pub paid_in: i64,
+    /// Sum of paid-out movements.
+    pub paid_out: i64,
+    /// Shifts opened on the day.
+    pub shifts_opened: u64,
+    /// Shifts closed on the day.
+    pub shifts_closed: u64,
+    /// Sum of expected drawer amounts across closes. Only a close carries one: the edge works out
+    /// what a drawer should hold at its close, so a shift still open adds nothing here.
+    pub expected: i64,
+    /// Sum of counted amounts across closes (the blind counts).
+    pub counted: i64,
+    /// Sum of variance (counted − expected) across closes; negative is short.
+    pub variance: i64,
 }
 
 /// One device a store has admitted, as the fleet console finally sees it
@@ -250,6 +296,11 @@ pub struct XzReport {
     pub revenue: DailyRevenue,
     /// The day's cash-drawer summary.
     pub cash: DailyCash,
+    /// The name of each till among the day's drawers, keyed as [`DailyCash::by_drawer`] is, from the
+    /// store's published `devices` node when the report is served (ADR-0167 decision 13). The
+    /// store's drawer, and a till the node no longer lists, have none. Device names, never a person.
+    #[serde(default)]
+    pub till_names: BTreeMap<String, String>,
 }
 
 /// The cloud's application layer over an [`EventStore`].
