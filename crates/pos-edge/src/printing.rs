@@ -2120,10 +2120,7 @@ impl Printers {
         if !a_till_prints_its_own(&session.devices) {
             return TillPrinting::STORE;
         }
-        let Some(lane) = self.agents.as_ref() else {
-            return TillPrinting::STORE;
-        };
-        match lane.terminal_of(device).await {
+        match self.terminal_of(device).await {
             Ok(terminal) => terminal
                 .and_then(|terminal| {
                     published_terminals(&session.devices).find(|entry| entry.device_id == terminal)
@@ -2133,6 +2130,20 @@ impl Printers {
                 tracing::warn!(%device, %error, "the terminal a device is bound to could not be read");
                 TillPrinting::UNKNOWN
             }
+        }
+    }
+
+    /// The terminal `device` is bound to through the print-agent binding
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), which is the till it is: `None` for one
+    /// bound to none, and in a composition with no binding record.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the binding cannot be read.
+    pub async fn terminal_of(&self, device: DeviceId) -> Result<Option<DeviceId>, PortError> {
+        match self.agents.as_ref() {
+            Some(lane) => lane.terminal_of(device).await,
+            None => Ok(None),
         }
     }
 

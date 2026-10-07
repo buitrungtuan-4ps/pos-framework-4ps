@@ -187,15 +187,15 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     ),
     (
         "POST /api/shifts",
-        RouteGate::Person(&[Permission::OpenShift]),
+        RouteGate::Person(&[Permission::OpenShift, Permission::ManageOtherTill]),
     ),
     (
         "POST /api/shifts/{id}/close",
-        RouteGate::Person(&[Permission::CloseShift]),
+        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
     ),
     (
         "POST /api/shifts/{id}/count",
-        RouteGate::Person(&[Permission::CloseShift]),
+        RouteGate::Person(&[Permission::CloseShift, Permission::ManageOtherTill]),
     ),
     (
         "POST /api/shifts/{id}/paid-in",
@@ -256,10 +256,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::IssueRefund,
         "refunds are not built yet (ADR-0028)",
-    ),
-    (
-        Permission::ManageOtherTill,
-        "a till has no drawer of its own yet, so the store's one drawer is every till's (ADR-0167)",
     ),
     (
         Permission::PerformStocktake,
