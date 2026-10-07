@@ -753,6 +753,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store chooses whether its receipts print each tax's breakdown**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 4). The
+  `printing` node gains `receipt_tax_components`, a switch at the four scopes, on by default. On, a
+  receipt, its copy and a pre-bill print each tax line's named components under its rate, such as
+  CGST and SGST, wherever the store's `tax` node names them, and a copy prints the ones its settle
+  recorded, as before. Off, each prints the tax line alone; the settle records the components
+  either way. The console labels it in English and Vietnamese.
+
+  **Upgrade note:** on by default, so nothing changes until a store turns it off.
+  `docs/snapshots/settings.txt` and `docs/configuration.md` gain it, honoured from 0.14.1. A store
+  whose `tax` node names no components, as every Vietnamese and Japanese store, prints the same
+  bytes either way. `PROTOCOL_VERSION` is unchanged, and no route, event, permission or migration is
+  added.
+
 - **A settle records its tax components, and a copy prints the ones it recorded**
   ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 2 and 3).
   Where the store's `tax` node splits a rate into named components, such as CGST and SGST,

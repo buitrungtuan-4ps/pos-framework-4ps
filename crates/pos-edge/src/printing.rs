@@ -1414,34 +1414,47 @@ fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, words: Words<'_>) -> Vec<
     blocks
 }
 
-/// A bill's totals with each fee named in the receipt's language
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): the store's current
-/// rule's translation where it has one, and the name the bill froze where it does not.
+/// A bill's totals as the store's paper prints them.
 ///
-/// Unlike an item's, a fee's frozen name is the rule's own rather than one already resolved to the
-/// display language, so it is looked up in whatever language the receipt prints in.
-fn receipt_totals_in<'a>(
+/// Each fee is named in the receipt's language
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): the store's current
+/// rule's translation where it has one, and the name the bill froze where it does not. Unlike an
+/// item's, a fee's frozen name is the rule's own rather than one already resolved to the display
+/// language, so it is looked up in whatever language the receipt prints in.
+///
+/// Each tax line keeps its named components only where the store prints them, its
+/// `printing.receipt_tax_components`
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 4).
+/// Off, the paper prints the line alone; a settle records the components either way.
+fn printed_totals<'a>(
     session: &EdgeSession,
     till: &TillPrinting,
     totals: &'a BillTotals,
 ) -> Cow<'a, BillTotals> {
-    let Some(language) = receipt_language(session, till) else {
-        return Cow::Borrowed(totals);
-    };
-    if !totals
-        .fee_lines
-        .iter()
-        .any(|fee| session.fee_translation(fee.fee_id, &language).is_some())
+    let mut printed = Cow::Borrowed(totals);
+    if let Some(language) = receipt_language(session, till)
+        && totals
+            .fee_lines
+            .iter()
+            .any(|fee| session.fee_translation(fee.fee_id, &language).is_some())
     {
-        return Cow::Borrowed(totals);
-    }
-    let mut named = totals.clone();
-    for fee in &mut named.fee_lines {
-        if let Some(name) = session.fee_translation(fee.fee_id, &language) {
-            fee.display_name = name.clone();
+        for fee in &mut printed.to_mut().fee_lines {
+            if let Some(name) = session.fee_translation(fee.fee_id, &language) {
+                fee.display_name = name.clone();
+            }
         }
     }
-    Cow::Owned(named)
+    if !session.printing.receipt_tax_components()
+        && totals
+            .tax_lines
+            .iter()
+            .any(|line| !line.components.is_empty())
+    {
+        for line in &mut printed.to_mut().tax_lines {
+            line.components.clear();
+        }
+    }
+    printed
 }
 
 /// One tax rate's line, and the components it is made of beneath it.
@@ -2414,7 +2427,7 @@ impl Printers {
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
         let printed = receipt_lines_in(session, till, lines);
-        let totals = receipt_totals_in(session, till, totals);
+        let totals = printed_totals(session, till, totals);
         let second = self.second_language_for(session, till, device, lines, &printed, &totals);
         let document = receipt_document(
             &session.profile,
@@ -2463,7 +2476,7 @@ impl Printers {
             .map(|time| time.to_string())
             .unwrap_or_default();
         let printed = receipt_lines_in(session, till, &copy.lines);
-        let totals = receipt_totals_in(session, till, &copy.totals);
+        let totals = printed_totals(session, till, &copy.totals);
         let second =
             self.second_language_for(session, till, device, &copy.lines, &printed, &totals);
         let document = receipt_copy_document(
@@ -2510,7 +2523,7 @@ impl Printers {
             Err(outcome) => return outcome,
         };
         let printed = receipt_lines_in(session, till, &pre_bill.lines);
-        let totals = receipt_totals_in(session, till, &pre_bill.totals);
+        let totals = printed_totals(session, till, &pre_bill.totals);
         let second =
             self.second_language_for(session, till, device, &pre_bill.lines, &printed, &totals);
         let document = pre_bill_document(
@@ -2875,10 +2888,9 @@ mod tests {
         AgentLane, DrawerOutcome, KICKING_AGENTS, KICKS_AWAITED, MoneyStyle, PrintOutcome,
         Printers, SecondLanguage, SecondNames, TicketLine, TicketNote, TillPrinting,
         TransportFactory, assumed_capabilities, combined_shift_report_document, connection_of,
-        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
-        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
-        shift_report_document, short_reference, station_printer, ticket_at, ticket_document,
-        ticket_language, ticket_line,
+        drawer_printer, pre_bill_document, printed_totals, receipt_copy_document, receipt_document,
+        receipt_language, receipt_lines_in, receipt_printer, shift_report_document,
+        short_reference, station_printer, ticket_at, ticket_document, ticket_language, ticket_line,
     };
     use crate::app::{
         BuyerDetails, CombinedReport, DrawerFigures, EdgeSession, FiredLine, ReceiptLine,
@@ -3936,13 +3948,13 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            names(&receipt_totals_in(&session, &STORE, &totals)),
+            names(&printed_totals(&session, &STORE, &totals)),
             ["Phí phục vụ", "Cover charge", "Bag"]
         );
         // In English nothing is translated, so the receipt prints the names the bill froze.
         session.printing = printing_in(ReceiptLanguage::English);
         assert!(matches!(
-            receipt_totals_in(&session, &STORE, &totals),
+            printed_totals(&session, &STORE, &totals),
             std::borrow::Cow::Borrowed(same) if same == &totals
         ));
     }

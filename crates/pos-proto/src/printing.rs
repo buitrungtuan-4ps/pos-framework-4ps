@@ -6,8 +6,9 @@
 //! decision 2).
 //!
 //! Every field is a setting in [`crate::settings`], and every default is what the edge did before the
-//! field existed: a receipt in the store's display language alone, printed on every settle. So a
-//! document with no `printing` node, or a node without a field, prints exactly as it printed before.
+//! field existed: a receipt in the store's display language alone, printed on every settle, with
+//! each tax line's named components under its rate. So a document with no `printing` node, or a
+//! node without a field, prints exactly as it printed before.
 //! Kitchen tickets are not here: each station's language belongs to the `stations` node, as a
 //! [`ReceiptLanguage`] of its own ([`crate::floor::KitchenStation::ticket_language`]).
 //!
@@ -116,6 +117,11 @@ pub struct PublishedPrinting {
     /// em. Read it through [`PublishedPrinting::font_size_dots`]. Left off the wire while absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_dots: Option<i64>,
+    /// Whether a receipt, its copy and a pre-bill print each tax line's named components. Read it
+    /// through [`PublishedPrinting::receipt_tax_components`]: absent is `true`. Left off the wire
+    /// while absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_tax_components: Option<bool>,
 }
 
 impl PublishedPrinting {
@@ -143,6 +149,17 @@ impl PublishedPrinting {
     #[must_use]
     pub fn receipt_printed_on_settle(&self) -> bool {
         self.receipt_printed_on_settle.unwrap_or(true)
+    }
+
+    /// Whether a receipt, its copy and a pre-bill print each tax line's named components under its
+    /// rate, where the store's `tax` node names them
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+    /// decision 4): `true` unless the store says otherwise, because every receipt printed them
+    /// before the setting existed. Off, each prints the tax line alone; the settle records the
+    /// components either way.
+    #[must_use]
+    pub fn receipt_tax_components(&self) -> bool {
+        self.receipt_tax_components.unwrap_or(true)
     }
 
     /// The second language a receipt prints in.
@@ -188,9 +205,31 @@ mod tests {
         let node: PublishedPrinting = serde_json::from_str("{}").expect("an empty node parses");
         assert_eq!(node.receipt_language(), ReceiptLanguage::Display);
         assert!(node.receipt_printed_on_settle());
+        assert!(
+            node.receipt_tax_components(),
+            "each tax line's components print"
+        );
         assert_eq!(node.receipt_second_language(), ReceiptSecondLanguage::None);
         assert_eq!(node.font_size_dots(), None, "the box's own size");
         assert_eq!(PublishedPrinting::default(), node);
+    }
+
+    #[test]
+    fn a_store_that_turns_tax_components_off_says_so_and_one_that_does_not_writes_nothing() {
+        // ADR-0168 decision 4: on until a store turns it off, and left off the wire until then, so
+        // a node written before the setting is written the same.
+        let off: PublishedPrinting = serde_json::from_str(r#"{ "receipt_tax_components": false }"#)
+            .expect("the node parses");
+        assert!(!off.receipt_tax_components());
+        assert_eq!(
+            serde_json::to_string(&off).expect("serialise"),
+            r#"{"receipt_language":"RECEIPT_LANGUAGE_UNSPECIFIED","receipt_tax_components":false}"#
+        );
+        assert!(
+            !serde_json::to_string(&PublishedPrinting::default())
+                .expect("serialise")
+                .contains("receipt_tax_components")
+        );
     }
 
     #[test]
@@ -298,6 +337,7 @@ mod tests {
             receipt_printed_on_settle: None,
             receipt_second_language: Open::default(),
             font_size_dots: None,
+            receipt_tax_components: None,
         };
         let text = serde_json::to_string(&node).expect("serialise");
         assert_eq!(text, r#"{"receipt_language":"RECEIPT_LANGUAGE_EN"}"#);

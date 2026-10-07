@@ -33380,6 +33380,12 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     let on_settle = listed("printing.receipt_printed_on_settle");
     assert_eq!(on_settle["kind"], "SETTING_KIND_BOOL");
     assert_eq!(on_settle["default"], true);
+    // Each tax line's components print unless a store turns them off, which every receipt did
+    // before the switch (ADR-0168 decision 4), so a new store is given nothing else.
+    let components = listed("printing.receipt_tax_components");
+    assert_eq!(components["kind"], "SETTING_KIND_BOOL");
+    assert_eq!(components["default"], true);
+    assert!(components["preset"].is_null(), "{components}");
     // A bilingual receipt is a choice each store makes, so a new store is given none (the owner,
     // 2026-10-01).
     let second = listed("printing.receipt_second_language");
@@ -33395,13 +33401,14 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     assert_eq!(size["default"], 24);
     assert!(size["preset"].is_null(), "{size}");
 
-    // A store that turns the switch off and sets a size has both on its `printing` node.
+    // A store that turns the switches off and sets a size has all three on its `printing` node.
     for (setting_key, value) in [
         (
             "printing.receipt_printed_on_settle",
             serde_json::json!(false),
         ),
         ("printing.font_size_dots", serde_json::json!(32)),
+        ("printing.receipt_tax_components", serde_json::json!(false)),
     ] {
         let written = router
             .clone()
@@ -33422,7 +33429,11 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     }
     assert_eq!(
         tenant_layer_node(&config_trees, first, "printing").await,
-        Some(serde_json::json!({ "receipt_printed_on_settle": false, "font_size_dots": 32 }))
+        Some(serde_json::json!({
+            "receipt_printed_on_settle": false,
+            "font_size_dots": 32,
+            "receipt_tax_components": false,
+        }))
     );
 }
 
