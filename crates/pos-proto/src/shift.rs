@@ -8,13 +8,18 @@
 //! Every field is a setting in [`crate::settings`], and every default is what the edge did before the
 //! field existed. So a document with no `shift` node, or a node without a field, runs a store exactly
 //! as it ran before, which is what lets an upgrade change nothing until someone sets a value.
+//!
+//! The drawer fields, `drawer_model`, `close_report` and `drawer_day_end`
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), are typed here ahead of
+//! the edge that honours them, and each joins the register with the release that does. Until then
+//! nothing writes them and nothing reads them.
 
 use core::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
 use crate::wire_enum;
-use crate::wire_enum::Open;
+use crate::wire_enum::{Open, is_absent};
 
 /// The opening floats a store may set, in the store currency's minor unit, both bounds included.
 /// `0` fills in nothing. A billion at the most: ten million in a currency with two decimals, and far
@@ -36,6 +41,36 @@ wire_enum! {
     Refuse = "REFUSE",
 }
 
+wire_enum! {
+    /// How many cash drawers a store keeps
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 1).
+    DrawerModel, prefix = "DRAWER_MODEL";
+    /// One drawer, the store's, which every till's cash goes into: the behaviour before the field.
+    PerStore = "PER_STORE",
+    /// A drawer per till, each started, counted and closed on its own (decision 2).
+    PerTerminal = "PER_TERMINAL",
+}
+
+wire_enum! {
+    /// What prints when a drawer closes (ADR-0167 decision 10).
+    CloseReport, prefix = "CLOSE_REPORT";
+    /// Each drawer's report prints where it is closed, as the one shift report does today.
+    PerDrawer = "PER_DRAWER",
+    /// Closing several drawers prints one slip: the store's totals, then each drawer's.
+    Combined = "COMBINED",
+    /// Nothing prints, and the console has the figures.
+    None = "NONE",
+}
+
+wire_enum! {
+    /// What a drawer still open past its business day's cutoff does (ADR-0167 decision 11).
+    DrawerDayEnd, prefix = "DRAWER_DAY_END";
+    /// It is flagged on the till and in the console, and keeps working.
+    Flag = "FLAG",
+    /// It takes no more cash until it is counted and closed; other methods still work.
+    RequireClose = "REQUIRE_CLOSE",
+}
+
 /// The `shift` node.
 ///
 /// No `deny_unknown_fields`, as for every published node: an edge on an older release applies a node
@@ -55,6 +90,18 @@ pub struct PublishedShift {
     /// absent is `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blind_close: Option<bool>,
+    /// How many drawers the store keeps. Read it through [`PublishedShift::drawer_model`]. Left
+    /// off the wire while absent, as the drawer fields below are, so a node that sets none is
+    /// written as before.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub drawer_model: Open<DrawerModel>,
+    /// What prints when a drawer closes. Read it through [`PublishedShift::close_report`].
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub close_report: Open<CloseReport>,
+    /// What a drawer open past its day's cutoff does. Read it through
+    /// [`PublishedShift::drawer_day_end`].
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub drawer_day_end: Open<DrawerDayEnd>,
 }
 
 impl PublishedShift {
@@ -95,11 +142,43 @@ impl PublishedShift {
     pub fn blind_close(&self) -> bool {
         self.blind_close.unwrap_or(true)
     }
+
+    /// How many drawers the store keeps. An absent, unspecified or unknown value reads as
+    /// [`DrawerModel::PerStore`], the one drawer every store kept before the field, read as
+    /// [`Self::no_shift_selling`] reads its own.
+    #[must_use]
+    pub fn drawer_model(&self) -> DrawerModel {
+        match self.drawer_model.known() {
+            DrawerModel::Unspecified | DrawerModel::PerStore => DrawerModel::PerStore,
+            DrawerModel::PerTerminal => DrawerModel::PerTerminal,
+        }
+    }
+
+    /// What prints when a drawer closes: [`CloseReport::PerDrawer`], the one report printed where
+    /// it closes, unless the node says otherwise.
+    #[must_use]
+    pub fn close_report(&self) -> CloseReport {
+        match self.close_report.known() {
+            CloseReport::Unspecified | CloseReport::PerDrawer => CloseReport::PerDrawer,
+            CloseReport::Combined => CloseReport::Combined,
+            CloseReport::None => CloseReport::None,
+        }
+    }
+
+    /// What a drawer open past its day's cutoff does: [`DrawerDayEnd::Flag`], which refuses
+    /// nothing, unless the node says otherwise.
+    #[must_use]
+    pub fn drawer_day_end(&self) -> DrawerDayEnd {
+        match self.drawer_day_end.known() {
+            DrawerDayEnd::Unspecified | DrawerDayEnd::Flag => DrawerDayEnd::Flag,
+            DrawerDayEnd::RequireClose => DrawerDayEnd::RequireClose,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NoShiftSelling, PublishedShift};
+    use super::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
     use crate::wire_enum::{Open, WireEnum};
 
     #[test]
@@ -199,5 +278,71 @@ mod tests {
         );
         let back: PublishedShift = serde_json::from_str(&text).expect("deserialise");
         assert_eq!(back, set);
+    }
+
+    #[test]
+    fn an_absent_drawer_field_reads_as_the_one_drawer_every_store_kept() {
+        // ADR-0167: typed ahead of the edge that honours them, and read as today until then.
+        let node: PublishedShift = serde_json::from_str("{}").expect("an empty node parses");
+        assert_eq!(node.drawer_model(), DrawerModel::PerStore);
+        assert_eq!(node.close_report(), CloseReport::PerDrawer);
+        assert_eq!(node.drawer_day_end(), DrawerDayEnd::Flag);
+
+        let later: PublishedShift = serde_json::from_str(
+            r#"{ "drawer_model": "DRAWER_MODEL_LATER", "close_report": "CLOSE_REPORT_LATER",
+                 "drawer_day_end": "DRAWER_DAY_END_LATER" }"#,
+        )
+        .expect("unknown tokens still parse");
+        assert_eq!(later.drawer_model(), DrawerModel::PerStore);
+        assert_eq!(later.close_report(), CloseReport::PerDrawer);
+        assert_eq!(later.drawer_day_end(), DrawerDayEnd::Flag);
+    }
+
+    #[test]
+    fn every_drawer_value_is_read_and_round_trips() {
+        for (model, report, day_end) in [
+            (
+                DrawerModel::PerTerminal,
+                CloseReport::Combined,
+                DrawerDayEnd::RequireClose,
+            ),
+            (DrawerModel::PerStore, CloseReport::None, DrawerDayEnd::Flag),
+            (
+                DrawerModel::PerStore,
+                CloseReport::PerDrawer,
+                DrawerDayEnd::Flag,
+            ),
+        ] {
+            let text = format!(
+                r#"{{"drawer_model":"{}","close_report":"{}","drawer_day_end":"{}"}}"#,
+                model.as_wire(),
+                report.as_wire(),
+                day_end.as_wire()
+            );
+            let node: PublishedShift = serde_json::from_str(&text).expect("the node parses");
+            assert_eq!(
+                (
+                    node.drawer_model(),
+                    node.close_report(),
+                    node.drawer_day_end()
+                ),
+                (model, report, day_end)
+            );
+            let fields = text.strip_prefix('{').expect("an object");
+            assert_eq!(
+                serde_json::to_string(&node).expect("serialise"),
+                format!(r#"{{"no_shift_selling":"NO_SHIFT_SELLING_UNSPECIFIED",{fields}"#),
+                "each set value is written, after the fields before it"
+            );
+        }
+        assert_eq!(
+            DrawerModel::PerTerminal.as_wire(),
+            "DRAWER_MODEL_PER_TERMINAL"
+        );
+        assert_eq!(CloseReport::None.as_wire(), "CLOSE_REPORT_NONE");
+        assert_eq!(
+            DrawerDayEnd::RequireClose.as_wire(),
+            "DRAWER_DAY_END_REQUIRE_CLOSE"
+        );
     }
 }

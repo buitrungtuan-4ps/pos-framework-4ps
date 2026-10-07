@@ -12886,6 +12886,9 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                         .receipt_second_language
                         .as_deref()
                         .map_or_else(Open::default, Open::parse),
+                    // No column holds a till's own float until the console sets one (ADR-0167
+                    // decision 4), so every till runs the store's, as it did before.
+                    opening_float_minor: None,
                 })
             })
             .collect(),
