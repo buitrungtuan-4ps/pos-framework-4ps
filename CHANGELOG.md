@@ -753,6 +753,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Cash goes into the drawer of the till it is taken at, where a store keeps a drawer per till**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). Under
+  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet, a till's drawer now counts the cash
+  taken at that till, and only that till's drawer springs for it. Under `DRAWER_MODEL_PER_STORE`,
+  every store today, nothing changes, and the events are written byte for byte as before.
+  - A cash payment goes into the drawer of the till the device is bound to. Its payments, its
+    settle and a no-sale opening are stamped with that drawer's shift, which is how a restart puts
+    the cash back. A device that is no till takes any other tender and is refused cash, a paid in,
+    a paid out and a no-sale opening (`409 NOT_A_TILL`). A binding the edge cannot read refuses
+    cash with `503`, and lets a card through.
+  - A paid in or out is made at the till whose drawer it moves; at another till its shift answers
+    `409 SHIFT_NOT_OPEN`. A no-sale opening names its till (`terminal_device_id`).
+  - The kick opens the drawer the cash went into: the receipt printer the till's `TERMINAL` entry
+    names, where it is marked **Cash drawer attached** and may open one, directly or through a
+    print agent that carries the kick. A till with none answers `NO_DRAWER`, and the store's drawer
+    never springs for a till's cash.
+  - `NO_SHIFT_SELLING_REFUSE` takes cash only while the till's own drawer has a shift open, and
+    anything else while any drawer has.
+  - Where the blind close is off, `GET /api/shifts` shows a drawer's expected amount at its own
+    till, and another till's only to a person whose own role grants `cash.shift.manage_other_till`
+    directly.
+
+  **Upgrade note:** no store changes until the console can set `shift.drawer_model`, which comes
+  with the till's screens for it. `PROTOCOL_VERSION` is unchanged, and no route, permission, event,
+  setting or migration is added. Only under a drawer per till do the settle, the paid in and out
+  and the no-sale opening answer `409 NOT_A_TILL` or `503`, and does `GET /api/shifts` read the
+  device's binding.
+
 - **The edge keeps a shift per drawer, one drawer per till where a store keeps one per till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2, 3, 5 and 8). Under
   `shift.drawer_model` `DRAWER_MODEL_PER_TERMINAL`, each till (a `TERMINAL` entry on the `devices`
@@ -775,9 +803,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     drawer rebuilds as one drawer.
   - A newly published model waits until no drawer is open, and `GET /api/shifts` names it
     meanwhile (`waiting_drawer_model`).
-  - Not yet under `PER_TERMINAL`: cash taken at a till reaching its drawer, `NOT_A_TILL` for cash,
-    paid in and out and no-sale at a device that is no till, the kick at the till's own printer,
-    and `NO_SHIFT_SELLING_REFUSE` per till. They come with the next slice.
 
   **Upgrade note:** no store changes until the console can set `shift.drawer_model`, which comes
   with the till's screens for it; it is not in the configuration register. `PROTOCOL_VERSION` is

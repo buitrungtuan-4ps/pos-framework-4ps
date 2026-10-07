@@ -230,7 +230,8 @@ impl StaffRoster {
     /// enforcement switch says.
     ///
     /// For the acts a store decides from the person's own role in every store: managing devices
-    /// (ADR-0118, ADR-0112) and seeing the day's takings (ADR-0160). Read from the roster the cloud
+    /// (ADR-0118, ADR-0112), seeing the day's takings (ADR-0160), and seeing what another till's
+    /// drawer should hold (ADR-0167). Read from the roster the cloud
     /// published, never from anything a request carried: the store authorises against the set the
     /// console published and invents nothing (ADR-0070). `false` for an identity the roster does not
     /// know.
@@ -1662,6 +1663,10 @@ pub struct BillView {
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4). Cash is what the drawer holds: a card, a QR payment or a
     /// voucher does not open it.
     pub open_drawer: bool,
+    /// The till whose drawer the cash went into, where the store keeps a drawer per till, and
+    /// `None` for the store's one drawer: the drawer the caller opens
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    pub drawer_till: Option<DeviceId>,
     /// The rows that receipt lists, present once settled and empty otherwise (ADR-0129).
     ///
     /// Carried out of the settle rather than read back afterwards: the receipt is composed **after**
@@ -6813,7 +6818,28 @@ impl<S: EventStore> Edge<S> {
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
             open_drawer: false,
+            drawer_till: None,
         })
+    }
+
+    /// Settles a bill at the store's one drawer: [`Self::settle_bill_at`] from a device that is no
+    /// till, which is what every device is where the store keeps one drawer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::settle_bill_at`].
+    pub async fn settle_bill(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        payments: Vec<Payment>,
+        buyer: Option<&BuyerDetails>,
+    ) -> Result<BillView, AppError>
+    where
+        S: SubjectStore,
+    {
+        self.settle_bill_at(actor, TillScope::default(), bill_id, payments, buyer)
+            .await
     }
 
     /// Settles a bill (`billing.bill.settled`) and cycles its table to needs-cleaning.
@@ -6842,15 +6868,26 @@ impl<S: EventStore> Edge<S> {
     /// buyer that committed without its settle would hold a person's tax code for a sale that never
     /// happened.
     ///
+    /// # The drawer the cash goes into
+    ///
+    /// Where the store keeps one drawer, every till's cash goes into it. Where it keeps one per till,
+    /// the cash goes into the drawer of the till `scope` says the device is, and the payments are
+    /// stamped with that drawer's shift, which is how a replay puts them back
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). A
+    /// device that is no till takes any other tender, and no cash.
+    ///
     /// # Errors
     ///
-    /// [`AppError::OpenShiftRequired`] while no shift is open at a store that refuses selling without
-    /// one; [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the
+    /// [`AppError::NotATill`] for cash at a device that is no till where the store keeps a drawer per
+    /// till; [`AppError::OpenShiftRequired`] at a store that refuses selling without a shift, for
+    /// cash while the drawer it goes into has none open and for anything else while no drawer has;
+    /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the
     /// bill is not open, the table is not awaiting payment, the payments do not sum to the total, or
     /// a line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
-    pub async fn settle_bill(
+    pub async fn settle_bill_at(
         &self,
         actor: Actor,
+        scope: TillScope,
         bill_id: BillId,
         payments: Vec<Payment>,
         buyer: Option<&BuyerDetails>,
@@ -6860,7 +6897,7 @@ impl<S: EventStore> Edge<S> {
     {
         // Before anything is read: a store that refuses selling without a shift takes no money
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
-        self.refuse_without_open_shift()?;
+        let (drawer, shift) = self.settle_drawer(scope, &payments)?;
         let ctx = self.decision_ctx(actor)?;
         let bill = self
             .lock_projection()
@@ -6924,7 +6961,8 @@ impl<S: EventStore> Edge<S> {
 
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse).
-        let (mut envelopes, mut messages) = self.capture_payments(&ctx, bill_id, &payments)?;
+        let (mut envelopes, mut messages) =
+            self.capture_payments(&ctx, bill_id, &payments, shift)?;
 
         // The buyer's id is minted here and the details go to the subject store below. The event
         // gets the identifier and nothing else (ADR-0107).
@@ -6945,7 +6983,7 @@ impl<S: EventStore> Edge<S> {
             fee_lines: fee_records(&totals),
             tax_lines: tax_records(&totals),
         };
-        let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
+        let (settled_envelope, settled_message) = self.prepare_on(&ctx, &settled, shift)?;
         envelopes.push(settled_envelope);
         messages.push(settled_message);
 
@@ -6974,7 +7012,6 @@ impl<S: EventStore> Edge<S> {
                 bill_id,
                 SettledReceipt::of(&settled, ctx.business_date, ctx.now),
             );
-            let shift = projection.open_shift_of(None);
             projection.collect_cash(shift, cash_taken)?;
             bill.table_id
                 .map(|table_id| projection.table_state(table_id))
@@ -6992,6 +7029,7 @@ impl<S: EventStore> Edge<S> {
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt)
                 && session.printing.receipt_printed_on_settle(),
             open_drawer: cash_taken.amount_minor > 0,
+            drawer_till: drawer,
             lines: Self::receipt_lines(&order.lines),
         })
     }
@@ -7156,12 +7194,14 @@ impl<S: EventStore> Edge<S> {
     /// The captured payments are what let the shift cash roll-up and the tip-out be rebuilt from the
     /// log; each records its own change and its own tip, held apart from the sale. Returned as
     /// envelopes and messages so the caller appends the settled event to the same pair and commits
-    /// them together.
+    /// them together. Each is stamped with `shift`, the shift of the drawer the payment was taken
+    /// into, which names that drawer (ADR-0167 decision 5).
     fn capture_payments(
         &self,
         ctx: &DecisionCtx,
         bill_id: BillId,
         payments: &[Payment],
+        shift: Option<ShiftId>,
     ) -> Result<(Vec<EventEnvelope<RawPayload>>, Vec<ServerMessage>), AppError> {
         let zero = Money::zero(self.session().currency);
         let mut envelopes = Vec::with_capacity(payments.len() + 1);
@@ -7182,7 +7222,7 @@ impl<S: EventStore> Edge<S> {
                 change_given: if change.is_negative() { zero } else { change },
                 tip_amount: payment.tip,
             };
-            let (envelope, message) = self.prepare(ctx, &captured)?;
+            let (envelope, message) = self.prepare_on(ctx, &captured, shift)?;
             envelopes.push(envelope);
             messages.push(message);
         }
@@ -7310,16 +7350,47 @@ impl<S: EventStore> Edge<S> {
     /// device that is no till does not have (ADR-0167 decision 2).
     #[must_use]
     pub fn current_shift_at(&self, scope: TillScope) -> Option<ShiftView> {
-        let till = match self.drawer_model() {
+        let shift_id = self.drawer_shift(scope)?;
+        let record = self.lock_projection().shift(shift_id)?;
+        Some(self.shift_view(shift_id, &record))
+    }
+
+    /// The shift of the drawer the device `scope` says acts at, trading or counted: the store's
+    /// one drawer's, or where the store keeps one per till the device's own till's, which a device
+    /// that is no till has none of. A payment taken there is stamped with it (ADR-0167 decision 5).
+    fn drawer_shift(&self, scope: TillScope) -> Option<ShiftId> {
+        let drawer = match self.drawer_model() {
             DrawerModel::PerTerminal => Some(scope.own?),
             _ => None,
         };
-        let (shift_id, record) = {
-            let projection = self.lock_projection();
-            let shift_id = projection.open_shift_of(till)?;
-            (shift_id, projection.shift(shift_id)?)
-        };
-        Some(self.shift_view(shift_id, &record))
+        self.lock_projection().open_shift_of(drawer)
+    }
+
+    /// The drawer cash taken or moved at the device `scope` says acts goes into: the store's one
+    /// drawer, or where the store keeps one per till the device's own till's
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NotATill`] where the store keeps a drawer per till and the device is none of its
+    /// tills, which takes any other tender but no cash.
+    fn cash_drawer(&self, scope: TillScope) -> Result<Option<DeviceId>, AppError> {
+        if self.drawer_model() != DrawerModel::PerTerminal {
+            return Ok(None);
+        }
+        match scope.own {
+            Some(till) if self.is_published_till(till) => Ok(Some(till)),
+            _ => Err(AppError::NotATill),
+        }
+    }
+
+    /// Whether `till` is a `TERMINAL` entry on the store's `devices` node.
+    fn is_published_till(&self, till: DeviceId) -> bool {
+        self.session()
+            .devices
+            .devices()
+            .iter()
+            .any(|device| device.device_id == till && is_till(device))
     }
 
     /// A shift as any read before its close may show it: blind, with the expectation only where the
@@ -7351,9 +7422,16 @@ impl<S: EventStore> Edge<S> {
     /// Every drawer the store keeps, for `GET /api/shifts` (ADR-0167 decision 3): the store's one,
     /// or one for each till its `devices` node lists and any other whose shift is still open, each
     /// with its default float and its shift while one is open, as blind as [`Self::current_shift`].
+    ///
+    /// Where the store has turned the blind close off, a drawer's expectation shows to the device
+    /// that is its till, and another till's only to `actor` where their own role grants
+    /// `cash.shift.manage_other_till` directly, so a cashier does not read the bar's drawer.
     #[must_use]
-    pub fn drawers(&self) -> DrawersView {
+    pub fn drawers(&self, actor: Actor, scope: TillScope) -> DrawersView {
         let session = self.session();
+        let sees_others = session
+            .staff
+            .grants(actor.employee_id, Permission::ManageOtherTill);
         let model = self.drawer_model();
         let published = session.shift.drawer_model();
         let float = |minor| Money::new(session.currency, minor);
@@ -7386,12 +7464,19 @@ impl<S: EventStore> Edge<S> {
                         .open_shift_of(till)
                         .and_then(|shift_id| Some((shift_id, projection.shift(shift_id)?)))
                 };
+                let shift = open.map(|(shift_id, record)| {
+                    let mut view = self.shift_view(shift_id, &record);
+                    if another_till(scope, &record) && !sees_others {
+                        view.expected_amount = None;
+                    }
+                    view
+                });
                 DrawerView {
                     till,
                     name,
                     default_float,
                     opened_time: open.map(|(_, record)| record.opened_time),
-                    shift: open.map(|(shift_id, record)| self.shift_view(shift_id, &record)),
+                    shift,
                 }
             })
             .collect();
@@ -7409,13 +7494,7 @@ impl<S: EventStore> Edge<S> {
             return Ok((None, false));
         }
         let till = scope.named.or(scope.own).ok_or(AppError::NotATill)?;
-        if !self
-            .session()
-            .devices
-            .devices()
-            .iter()
-            .any(|device| device.device_id == till && is_till(device))
-        {
+        if !self.is_published_till(till) {
             return Err(AppError::NotATill);
         }
         Ok((Some(till), scope.own != Some(till)))
@@ -7633,13 +7712,42 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::Domain`] without `cash.movement.record`, [`AppError::CashReasonNotValid`] for a
-    /// reason the store does not hold for this act, [`AppError::UnknownShift`] for a shift the edge
-    /// does not know, [`AppError::ShiftNotOpen`] for one that is not trading or has been counted, or
-    /// [`AppError`] if the store cannot be written.
+    /// As [`Self::record_cash_movement_at`].
     pub async fn record_cash_movement(
         &self,
         actor: Actor,
+        shift_id: ShiftId,
+        movement: CashMovement,
+        amount: Money,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<ShiftView, AppError> {
+        self.record_cash_movement_at(
+            actor,
+            TillScope::default(),
+            shift_id,
+            movement,
+            amount,
+            reason_code_id,
+        )
+        .await
+    }
+
+    /// [`Self::record_cash_movement`] at the till `scope` says the device is. Where the store keeps
+    /// a drawer per till, a paid in or out is made at the till whose drawer it springs, on that
+    /// drawer's shift ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+    /// decision 3).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] without `cash.movement.record`, [`AppError::CashReasonNotValid`] for a
+    /// reason the store does not hold for this act, [`AppError::NotATill`] at a device that is no
+    /// till where the store keeps a drawer per till, [`AppError::UnknownShift`] for a shift the edge
+    /// does not know, [`AppError::ShiftNotOpen`] for one that is not trading, has been counted or is
+    /// another till's drawer's, or [`AppError`] if the store cannot be written.
+    pub async fn record_cash_movement_at(
+        &self,
+        actor: Actor,
+        scope: TillScope,
         shift_id: ShiftId,
         movement: CashMovement,
         amount: Money,
@@ -7654,6 +7762,7 @@ impl<S: EventStore> Edge<S> {
         {
             return Err(AppError::CashReasonNotValid);
         }
+        let drawer = self.cash_drawer(scope)?;
         let (record, trading) = {
             let projection = self.lock_projection();
             let record = projection.shift(shift_id);
@@ -7662,7 +7771,9 @@ impl<S: EventStore> Edge<S> {
             (record, trading)
         };
         let record = record.ok_or(AppError::UnknownShift)?;
-        if !trading || record.state != ShiftState::Open {
+        // Another till's drawer's shift is not open at this one: the cash would go into one drawer
+        // and the kick spring another.
+        if !trading || record.state != ShiftState::Open || record.till != drawer {
             return Err(AppError::ShiftNotOpen);
         }
         // On the shift's own drawer, and stamped with it, whichever drawer that is (ADR-0167).
@@ -7707,16 +7818,37 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::CashReasonNotValid`] for a reason the store does not hold for opening the drawer,
-    /// [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
-    /// [`AppError::ApproverLockedOut`] for the PIN, [`AppError::Domain`] without the permission, or
-    /// [`AppError`] if the store cannot be written.
+    /// As [`Self::open_drawer_no_sale_at`].
     pub async fn open_drawer_no_sale(
         &self,
         actor: Actor,
         reason_code_id: ReasonCodeId,
         approval: Option<&Approval>,
     ) -> Result<(), AppError> {
+        self.open_drawer_no_sale_at(actor, TillScope::default(), reason_code_id, approval)
+            .await
+            .map(|_drawer| ())
+    }
+
+    /// [`Self::open_drawer_no_sale`] at the till `scope` says the device is, answering with the till
+    /// whose drawer to open: `None` for the store's one drawer, and where the store keeps one per
+    /// till the device's own, which the opening names and whose shift it is stamped with
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 5).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CashReasonNotValid`] for a reason the store does not hold for opening the drawer,
+    /// [`AppError::NotATill`] at a device that is no till where the store keeps a drawer per till,
+    /// [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
+    /// [`AppError::ApproverLockedOut`] for the PIN, [`AppError::Domain`] without the permission, or
+    /// [`AppError`] if the store cannot be written.
+    pub async fn open_drawer_no_sale_at(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<Option<DeviceId>, AppError> {
         let mut ctx = self.decision_ctx(actor)?;
         if !self
             .session()
@@ -7725,25 +7857,27 @@ impl<S: EventStore> Edge<S> {
         {
             return Err(AppError::CashReasonNotValid);
         }
+        let drawer = self.cash_drawer(scope)?;
         let approver = self.resolve_step_up(&mut ctx, Permission::OpenDrawerNoSale, approval)?;
         ctx.require(Permission::OpenDrawerNoSale)?;
         let opened = CashDrawerOpened {
             standalone: true,
             reason_code_id: Some(reason_code_id),
-            terminal_device_id: None,
+            terminal_device_id: drawer,
         };
-        let (envelope, message) = self.prepare(&ctx, &opened)?;
+        let shift = self.lock_projection().open_shift_of(drawer);
+        let (envelope, message) = self.prepare_on(&ctx, &opened, shift)?;
         let mut envelopes = vec![envelope];
         let mut messages = vec![message];
         if let Some(approver) = approver {
             let override_record =
                 Self::override_record(Permission::OpenDrawerNoSale, approver, None);
-            let (envelope, message) = self.prepare(&ctx, &override_record)?;
+            let (envelope, message) = self.prepare_on(&ctx, &override_record, shift)?;
             envelopes.push(envelope);
             messages.push(message);
         }
         self.append_and_publish(envelopes, messages).await?;
-        Ok(())
+        Ok(drawer)
     }
 
     /// Publishes the head of this store's hash chain
@@ -8583,9 +8717,52 @@ impl<S: EventStore> Edge<S> {
     /// guest or a delivery partner sends is still taken, because nobody is at the till to open a
     /// shift for it; its payment waits for one. Under the default, `NO_SHIFT_SELLING_ALLOW`, the
     /// store sells as it always has.
+    ///
+    /// Where the store keeps a drawer per till, any till's open shift lets a sale start and a tender
+    /// other than cash be taken; cash asks [`Self::refuse_without_open_drawer`] instead.
     fn refuse_without_open_shift(&self) -> Result<(), AppError> {
         if self.session().shift.no_shift_selling() == NoShiftSelling::Refuse
             && self.lock_projection().open_shifts.is_empty()
+        {
+            return Err(AppError::OpenShiftRequired);
+        }
+        Ok(())
+    }
+
+    /// The drawer a settle's cash goes into, the till's where the store keeps one per till
+    /// (ADR-0167 decision 6), and `None` for the store's one drawer or a settle that takes none;
+    /// and the shift its payments are stamped with, [`Self::drawer_shift`]'s.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NotATill`] for cash at a device that is no till where the store keeps a drawer
+    /// per till, and [`AppError::OpenShiftRequired`] where the store refuses selling without a
+    /// shift and that drawer, or for any other tender every drawer, has none open.
+    fn settle_drawer(
+        &self,
+        scope: TillScope,
+        payments: &[Payment],
+    ) -> Result<(Option<DeviceId>, Option<ShiftId>), AppError> {
+        let drawer = if payments
+            .iter()
+            .any(|payment| payment.method == PaymentMethod::Cash)
+        {
+            let drawer = self.cash_drawer(scope)?;
+            self.refuse_without_open_drawer(drawer)?;
+            drawer
+        } else {
+            self.refuse_without_open_shift()?;
+            None
+        };
+        Ok((drawer, self.drawer_shift(scope)))
+    }
+
+    /// [`Self::refuse_without_open_shift`] for cash, which goes into one drawer, `drawer`, whose own
+    /// shift must be open: the store's one drawer's, or a till's where the store keeps one per till
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    fn refuse_without_open_drawer(&self, drawer: Option<DeviceId>) -> Result<(), AppError> {
+        if self.session().shift.no_shift_selling() == NoShiftSelling::Refuse
+            && self.lock_projection().open_shift_of(drawer).is_none()
         {
             return Err(AppError::OpenShiftRequired);
         }

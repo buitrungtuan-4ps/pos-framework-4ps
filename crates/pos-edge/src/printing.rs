@@ -22,7 +22,9 @@
 //! *When* to open one is the caller's decision: a cash payment, a paid in or out, a no-sale opening
 //! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 //! This module only performs it, through the printer the console marked `drawer_attached`
-//! ([`drawer_printer`]).
+//! ([`drawer_printer`]). Where the store keeps a drawer per till, that is the receipt printer the
+//! till's `TERMINAL` entry names, and a till that names none has no drawer the edge opens
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 //! [`PrinterConnection::may_open_a_drawer`](pos_ports::printer::PrinterConnection::may_open_a_drawer)
 //! is false for anything but USB, because port 9100 has no authentication and the drawer-kick rides
 //! the same channel as everything else (`docs/architecture.md` §5). A published node marking a network
@@ -111,8 +113,9 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
 /// [`Printers::till_for`] resolves them for the device a print was asked from.
 ///
 /// Only a guest's paper follows it: a receipt, its copy and a pre-bill. A kitchen ticket goes to its
-/// station's printer, a shift report to the store's receipt printer, and the cash drawer opens
-/// through the store's ([`drawer_printer`]) until the multi-drawer shift work gives a till its own.
+/// station's printer and a shift report to the store's receipt printer. The cash drawer is
+/// [`drawer_printer`]'s choice: the store's, or where the store keeps a drawer per till the
+/// receipt printer the till's entry names, whatever its paper prints in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TillPrinting {
     /// The printer the till's paper goes to, where its terminal names one.
@@ -255,25 +258,41 @@ fn is_printer(device: &PublishedDevice) -> bool {
 /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
 /// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 ///
-/// The first printer that serves the bill rather than a station, that the console marked
-/// `drawer_attached`, whose connection may open a drawer, which is USB and nothing else, and whose
-/// bytes this edge writes itself or a print agent writes that `carries_kick` says carries the kick.
-/// Each condition is a way the kick would go wrong: a station printer's drawer is not the till's,
-/// port 9100 has no authentication (`docs/architecture.md` §5), and an agent built before kicks
-/// cannot read one. The one place the choice is made, so the drawer per till (ADR-0167) changes it
-/// here.
+/// The store's one drawer, `till` `None`, opens through the first printer that serves the bill
+/// rather than a station, that the console marked `drawer_attached`, whose connection may open a
+/// drawer, which is USB and nothing else, and whose bytes this edge writes itself or a print agent
+/// writes that `carries_kick` says carries the kick. Each condition is a way the kick would go
+/// wrong: a station printer's drawer is not the till's, port 9100 has no authentication
+/// (`docs/architecture.md` §5), and an agent built before kicks cannot read one.
+///
+/// A till's drawer, where the store keeps one per till, opens only through the receipt printer its
+/// `TERMINAL` entry names, on the same conditions. A till that names none, or one that cannot open
+/// a drawer, has no drawer the edge opens: the store's drawer never springs for a till's cash. The
+/// one place the choice is made.
 #[must_use]
 pub fn drawer_printer(
     devices: &PublishedDevices,
+    till: Option<DeviceId>,
     carries_kick: impl Fn(DeviceId) -> bool,
 ) -> Option<&PublishedDevice> {
-    devices.devices().iter().find(|device| {
+    let springs = |device: &&PublishedDevice| {
         device.station_id.is_none()
             && is_printer(device)
             && device.drawer_attached
             && device.agent_device_id.is_none_or(&carries_kick)
             && connection_of(device).may_open_a_drawer()
-    })
+    };
+    let Some(till) = till else {
+        return devices.devices().iter().find(springs);
+    };
+    let own = published_terminals(devices)
+        .find(|terminal| terminal.device_id == till)?
+        .receipt_printer_id?;
+    devices
+        .devices()
+        .iter()
+        .find(|device| device.device_id == own)
+        .filter(springs)
 }
 
 /// How a published device is attached, in the port's vocabulary.
@@ -2147,8 +2166,10 @@ impl Printers {
         }
     }
 
-    /// Opens the store's cash drawer through the printer [`drawer_printer`] picks
-    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+    /// Opens a cash drawer through the printer [`drawer_printer`] picks for it: the store's one
+    /// drawer where `till` is `None`, and that till's otherwise
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
+    /// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     ///
     /// The caller asks only after the act the drawer is for has committed: a cash payment, a paid in
     /// or out, a no-sale opening. Never an error, for the reason a receipt is never one: the money is
@@ -2164,10 +2185,16 @@ impl Printers {
         session: &EdgeSession,
         store_id: StoreId,
         kick_id: EventId,
+        till: Option<DeviceId>,
     ) -> DrawerOutcome {
-        let Some(device) = drawer_printer(&session.devices, |agent| self.carries_kick(agent))
+        let Some(device) = drawer_printer(&session.devices, till, |agent| self.carries_kick(agent))
         else {
-            if session
+            if let Some(till) = till {
+                tracing::info!(
+                    %till,
+                    "this till names no receipt printer with a cash drawer this edge may open"
+                );
+            } else if session
                 .devices
                 .devices()
                 .iter()
@@ -5249,7 +5276,7 @@ mod tests {
     fn only_a_marked_usb_counter_printer_written_here_or_by_a_kicking_agent_is_a_drawer_printer() {
         let marked = drawer_device(1);
         let devices = PublishedDevices::new(vec![marked.clone()]);
-        assert_eq!(drawer_printer(&devices, |_| false), Some(&marked));
+        assert_eq!(drawer_printer(&devices, None, |_| false), Some(&marked));
         assert!(
             assumed_capabilities(&marked, false).may_open_a_drawer(),
             "the mark is what the adapter's own check reads"
@@ -5287,7 +5314,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                drawer_printer(&PublishedDevices::new(vec![device]), |_| false),
+                drawer_printer(&PublishedDevices::new(vec![device]), None, |_| false),
                 None,
                 "{why}"
             );
@@ -5301,9 +5328,49 @@ mod tests {
         };
         let devices = PublishedDevices::new(vec![behind.clone()]);
         assert_eq!(
-            drawer_printer(&devices, |kicking| kicking == agent),
+            drawer_printer(&devices, None, |kicking| kicking == agent),
             Some(&behind)
         );
+    }
+
+    #[test]
+    fn a_tills_drawer_opens_only_through_the_receipt_printer_its_terminal_names() {
+        let store_drawer = drawer_device(2);
+        let bar_drawer = PublishedDevice {
+            address: "/dev/usb/lp1".to_owned(),
+            ..drawer_device(3)
+        };
+        let devices = PublishedDevices::new(vec![
+            store_drawer.clone(),
+            bar_drawer.clone(),
+            PublishedDevice {
+                drawer_attached: false,
+                ..drawer_device(4)
+            },
+            till(7, Some(3), None),
+            till(8, Some(4), None),
+            till(9, None, None),
+        ]);
+        assert_eq!(
+            drawer_printer(&devices, None, |_| false),
+            Some(&store_drawer),
+            "the store's one drawer, as before"
+        );
+        assert_eq!(
+            drawer_printer(&devices, Some(paired(7)), |_| false),
+            Some(&bar_drawer)
+        );
+        for (why, till) in [
+            ("names a printer with no drawer", 8),
+            ("names no printer", 9),
+            ("is not in the node", 10),
+        ] {
+            assert_eq!(
+                drawer_printer(&devices, Some(paired(till)), |_| false),
+                None,
+                "a till that {why} has no drawer, and the store's does not open for it"
+            );
+        }
     }
 
     #[tokio::test]
@@ -5314,6 +5381,7 @@ mod tests {
                 &session_with(PublishedDevices::new(vec![drawer_device(2)])),
                 store_id(),
                 event_id(0xD0),
+                None,
             )
             .await;
         assert_eq!(outcome, DrawerOutcome::Opened);
@@ -5333,6 +5401,7 @@ mod tests {
                 &session_with(PublishedDevices::new(vec![unmarked])),
                 store_id(),
                 event_id(0xD0),
+                None,
             )
             .await;
         assert_eq!(outcome, DrawerOutcome::NoDrawer);
@@ -5350,6 +5419,7 @@ mod tests {
                 &session_with(PublishedDevices::new(vec![drawer_device(2)])),
                 store_id(),
                 event_id(0xD0),
+                None,
             )
             .await;
         assert_eq!(outcome, DrawerOutcome::Unavailable);
@@ -5383,6 +5453,7 @@ mod tests {
                 &session_with(PublishedDevices::new(vec![drawer_device(2)])),
                 store_id(),
                 event_id(0xD0),
+                None,
             )
             .await;
         assert_eq!(outcome, DrawerOutcome::Opened);
@@ -5489,7 +5560,7 @@ mod tests {
         let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
 
         let (outcome, kick) = tokio::join!(
-            printers.open_drawer(&session, store_id(), event_id(0xD0)),
+            printers.open_drawer(&session, store_id(), event_id(0xD0), None),
             an_agent_kicks(&printers, &lane)
         );
         assert_eq!(outcome, DrawerOutcome::Opened);
@@ -5516,7 +5587,7 @@ mod tests {
         let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
         assert_eq!(
             printers
-                .open_drawer(&session, store_id(), event_id(0xD0))
+                .open_drawer(&session, store_id(), event_id(0xD0), None)
                 .await,
             DrawerOutcome::NoDrawer
         );
@@ -5527,7 +5598,7 @@ mod tests {
         printers.heard_from_agent(lane.agent, false);
         assert_eq!(
             printers
-                .open_drawer(&session, store_id(), event_id(0xD0))
+                .open_drawer(&session, store_id(), event_id(0xD0), None)
                 .await,
             DrawerOutcome::NoDrawer
         );
@@ -5543,7 +5614,7 @@ mod tests {
         let session = session_with(PublishedDevices::new(vec![drawer_via_agent(lane.agent)]));
         assert_eq!(
             printers
-                .open_drawer(&session, store_id(), event_id(0xD0))
+                .open_drawer(&session, store_id(), event_id(0xD0), None)
                 .await,
             DrawerOutcome::Unavailable
         );
