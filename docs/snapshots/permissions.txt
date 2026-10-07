@@ -116,6 +116,13 @@ cash.shift.close	default_role=SUPERVISOR
 cash.shift.close	group=CASH_AND_SHIFTS
 cash.shift.close	pin_required=false
 cash.shift.close	risk=MEDIUM
+cash.shift.manage_other_till
+cash.shift.manage_other_till	default_role=MANAGER
+cash.shift.manage_other_till	default_role=OWNER
+cash.shift.manage_other_till	default_role=SUPERVISOR
+cash.shift.manage_other_till	group=CASH_AND_SHIFTS
+cash.shift.manage_other_till	pin_required=true
+cash.shift.manage_other_till	risk=MEDIUM
 cash.shift.open
 cash.shift.open	default_role=CASHIER
 cash.shift.open	default_role=MANAGER
