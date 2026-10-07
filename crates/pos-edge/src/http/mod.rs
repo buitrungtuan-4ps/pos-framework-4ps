@@ -676,6 +676,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::VoidReasonNotValid => "VOID_REASON_NOT_VALID",
         AppError::CashReasonNotValid => "CASH_REASON_NOT_VALID",
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
+        AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -728,6 +729,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::VoidReasonNotValid
         | AppError::CashReasonNotValid
         | AppError::ShiftNotOpen
+        | AppError::DrawerDayEnded
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable

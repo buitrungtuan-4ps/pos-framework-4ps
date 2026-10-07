@@ -11,9 +11,8 @@
 //!
 //! The drawer fields, `drawer_model`, `close_report` and `drawer_day_end`
 //! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), each join the register
-//! with the release whose edge honours them. `close_report` has. The edge reads `drawer_model`,
-//! which joins with the till's screens for a drawer per till, and `drawer_day_end` is typed here
-//! ahead of the edge that honours it.
+//! with the release whose edge honours them. `close_report` and `drawer_day_end` have. The edge
+//! reads `drawer_model` too, which joins with the till's screens for a drawer per till.
 
 use core::ops::RangeInclusive;
 

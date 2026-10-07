@@ -753,6 +753,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store chooses what a drawer left open past its business day does, `shift.drawer_day_end`**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11), set at the tenant, a
+  brand, a store group or a store, and honoured from 0.14.1. A drawer is past its day's end when
+  its shift is still open after the business day it opened on has ended, at the store's cutoff.
+  - `DRAWER_DAY_END_FLAG`, the default, refuses nothing. `GET /api/shifts/current` and
+    `GET /api/shifts` say `day_ended: true` for such a drawer, so the till and the console can flag
+    it, and the edge logs one warning a drawer a day, naming no person.
+  - `DRAWER_DAY_END_REQUIRE_CLOSE` also refuses cash, a paid in and a paid out into it,
+    `409 DRAWER_DAY_ENDED`, until it is counted and closed. A card or any other tender, the count,
+    the close and a no-sale opening still work: the no-sale moves no cash, and it is how such a
+    drawer is opened to be counted.
+  - The till says what to do in English and Vietnamese instead of the code, and the console's
+    Settings screen offers the setting in both.
+
+  **Upgrade note:** a store that sets nothing refuses nothing it took before; its shift reads gain
+  `day_ended` only where a drawer is past its day. One refusal code is added, `DRAWER_DAY_ENDED`,
+  and `docs/snapshots/settings.txt` and `docs/configuration.md` gain the setting.
+  `PROTOCOL_VERSION` is unchanged, and no route, permission, event or migration is added.
+
 - **A store chooses what prints when a drawer closes, `shift.close_report`**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10), set at the tenant, a
   brand, a store group or a store, and honoured from 0.14.1.

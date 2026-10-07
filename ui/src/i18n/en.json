@@ -118,6 +118,7 @@
   "error.bills_on_different_orders": "Bills on different orders cannot be merged. Take payment for each order on its own.",
   "error.capability_disabled": "This store does not use that feature.",
   "error.channel_not_accepted": "This store does not take orders on that channel. Check the channels published for it in the console.",
+  "error.drawer_day_ended": "This drawer's shift began on an earlier business day. Count and close it on the Shift screen before it takes more cash. Cards still work.",
   "error.empty": "Nothing to do yet — add an item or a payment first.",
   "error.internal": "Something went wrong on the store PC. Try again; if it repeats, call support.",
   "error.invalid_argument": "The request was not understood. Reload and try again.",

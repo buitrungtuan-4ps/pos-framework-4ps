@@ -177,6 +177,16 @@ shift.close_report	since=0.14.1
 shift.close_report	value=CLOSE_REPORT_COMBINED
 shift.close_report	value=CLOSE_REPORT_NONE
 shift.close_report	value=CLOSE_REPORT_PER_DRAWER
+shift.drawer_day_end
+shift.drawer_day_end	default=DRAWER_DAY_END_FLAG
+shift.drawer_day_end	kind=SETTING_KIND_CHOICE
+shift.drawer_day_end	scope=SETTING_SCOPE_BRAND
+shift.drawer_day_end	scope=SETTING_SCOPE_STORE
+shift.drawer_day_end	scope=SETTING_SCOPE_STORE_GROUP
+shift.drawer_day_end	scope=SETTING_SCOPE_TENANT
+shift.drawer_day_end	since=0.14.1
+shift.drawer_day_end	value=DRAWER_DAY_END_FLAG
+shift.drawer_day_end	value=DRAWER_DAY_END_REQUIRE_CLOSE
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE

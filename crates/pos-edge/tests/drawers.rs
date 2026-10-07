@@ -24,6 +24,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::billing::Payment;
+use pos_core::business_date::StoreTimeZone;
 use pos_core::decision::Actor;
 use pos_core::error::DomainError;
 use pos_core::permission::{Permission, PermissionSet};
@@ -52,7 +53,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
-use pos_proto::shift::{CloseReport, DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -1192,6 +1193,158 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
     });
 }
 
+/// Twelve hours behind UTC and fourteen ahead: the business day a drawer opens on behind is always
+/// earlier than the one the same instant falls on ahead, so moving a store from one to the other
+/// moves its day on.
+const BEHIND: &str = "Etc/GMT+12";
+const AHEAD: &str = "Etc/GMT-14";
+
+/// The store of [`session`], keeping a drawer per till in the time zone `zone`, and handling a
+/// drawer left open past its day as `day_end` says.
+fn zoned(zone: &str, day_end: DrawerDayEnd, enforced: bool) -> EdgeSession {
+    let mut session = session(DrawerModel::PerTerminal, enforced);
+    session.timezone = StoreTimeZone::from_iana_name(zone).expect("a real zone");
+    session.shift.drawer_day_end = Open::from_known(day_end);
+    session
+}
+
+#[test]
+fn a_drawer_left_open_past_its_day_is_flagged_and_by_default_refused_nothing() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::new(), zoned(BEHIND, DrawerDayEnd::Flag, true));
+        let bar = edge
+            .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+            .await
+            .expect("the bar's")
+            .shift_id;
+        let opened_today = edge.current_shift_at(at(BAR)).expect("open");
+        assert!(!opened_today.day_ended, "a drawer opened today");
+
+        edge.apply_session(zoned(AHEAD, DrawerDayEnd::Flag, true));
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .await
+            .expect("the counter's opens today");
+        let ended = |own| {
+            edge.current_shift_at(at(own))
+                .is_some_and(|shift| shift.day_ended)
+        };
+        assert!(ended(BAR), "the bar's opened on an earlier business day");
+        assert!(!ended(COUNTER), "the counter's opened today");
+        let listed: Vec<bool> = edge
+            .drawers(person(MANAGER, 0xB1), TillScope::default())
+            .drawers
+            .iter()
+            .map(|drawer| drawer.shift.as_ref().is_some_and(|shift| shift.day_ended))
+            .collect();
+        assert_eq!(listed, [true, false]);
+
+        let (bill, due) = a_bill(&edge, person(CASHIER, 0xB1), 41).await;
+        edge.settle_bill_at(
+            person(CASHIER, 0xB1),
+            at(BAR),
+            bill,
+            paid(PaymentMethod::Cash, due),
+            None,
+        )
+        .await
+        .expect("flagged, it still takes cash");
+        edge.record_cash_movement_at(
+            person(CASHIER, 0xB1),
+            at(BAR),
+            bar,
+            CashMovement::PaidIn,
+            vnd(1_000),
+            making_change(),
+        )
+        .await
+        .expect("and a paid in");
+    });
+}
+
+#[test]
+fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_closes() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let bar = edge_over(
+            store.clone(),
+            zoned(BEHIND, DrawerDayEnd::RequireClose, true),
+        )
+        .open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None)
+        .await
+        .expect("the bar's")
+        .shift_id;
+        // A day on, and a restart: the log says which day the drawer opened on.
+        let edge = edge_over(
+            store.clone(),
+            zoned(AHEAD, DrawerDayEnd::RequireClose, true),
+        );
+        edge.rebuild().await.expect("replays the log");
+        edge.open_shift_at(person(CASHIER, 0xC1), at(COUNTER), vnd(300_000), None)
+            .await
+            .expect("the counter's opens today");
+
+        let (bill, due) = a_bill(&edge, person(CASHIER, 0xB1), 41).await;
+        let cash = edge
+            .settle_bill_at(
+                person(CASHIER, 0xB1),
+                at(BAR),
+                bill,
+                paid(PaymentMethod::Cash, due),
+                None,
+            )
+            .await;
+        assert!(matches!(cash, Err(AppError::DrawerDayEnded)), "{cash:?}");
+        for movement in [CashMovement::PaidIn, CashMovement::PaidOut] {
+            let moved = edge
+                .record_cash_movement_at(
+                    person(CASHIER, 0xB1),
+                    at(BAR),
+                    bar,
+                    movement,
+                    vnd(1_000),
+                    making_change(),
+                )
+                .await;
+            assert!(matches!(moved, Err(AppError::DrawerDayEnded)), "{moved:?}");
+        }
+        edge.settle_bill_at(
+            person(CASHIER, 0xB1),
+            at(BAR),
+            bill,
+            paid(PaymentMethod::Card, due),
+            None,
+        )
+        .await
+        .expect("a card still goes through");
+        edge.open_drawer_no_sale_at(person(SUPERVISOR, 0xB1), at(BAR), making_change(), None)
+            .await
+            .expect("the drawer opens without a sale, to be counted");
+        let (bill, due) = a_bill(&edge, person(CASHIER, 0xC1), 42).await;
+        edge.settle_bill_at(
+            person(CASHIER, 0xC1),
+            at(COUNTER),
+            bill,
+            paid(PaymentMethod::Cash, due),
+            None,
+        )
+        .await
+        .expect("a drawer opened today takes cash");
+
+        edge.count_shift_at(person(CASHIER, 0xB1), at(BAR), bar, 500_000, None)
+            .await
+            .expect("counted");
+        let closed = edge
+            .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None)
+            .await
+            .expect("closing is the way out");
+        assert_eq!(
+            closed.variance,
+            Some(vnd(0)),
+            "no cash went in after its day"
+        );
+    });
+}
+
 // --- Over the shipped routes ------------------------------------------------------------------
 
 async fn send(
@@ -1806,4 +1959,43 @@ async fn drawers_closed_together_print_one_slip_where_they_are_closed() {
     for words in ["STORE TOTALS", "Bar", "Counter"] {
         assert!(tills.written.last_says(COUNTER_PAPER, words), "{words}");
     }
+}
+
+#[tokio::test]
+async fn the_shift_reads_say_a_drawers_day_has_ended_and_its_cash_is_refused_by_name() {
+    let tills = drawers_app(false).await;
+    tills
+        .edge
+        .apply_session(zoned(BEHIND, DrawerDayEnd::RequireClose, false));
+    let bar = open_over(&tills, &tills.bar).await;
+    let (_, _, current) = send(
+        tills.app.clone(),
+        &tills.bar,
+        "GET",
+        "/api/shifts/current",
+        None,
+    )
+    .await;
+    assert!(current.get("day_ended").is_none(), "{current}");
+
+    tills
+        .edge
+        .apply_session(zoned(AHEAD, DrawerDayEnd::RequireClose, false));
+    let (_, _, current) = send(
+        tills.app.clone(),
+        &tills.bar,
+        "GET",
+        "/api/shifts/current",
+        None,
+    )
+    .await;
+    assert_eq!(current["shift_id"], bar.as_str());
+    assert_eq!(current["day_ended"], true);
+    let (_, _, listed) = send(tills.app.clone(), &tills.bar, "GET", "/api/shifts", None).await;
+    assert_eq!(listed["drawers"][0]["shift"]["day_ended"], true, "{listed}");
+    let (status, reason, _) = settle_over(&tills, &tills.bar, 41, "PAYMENT_METHOD_CASH").await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("DRAWER_DAY_ENDED"))
+    );
 }
