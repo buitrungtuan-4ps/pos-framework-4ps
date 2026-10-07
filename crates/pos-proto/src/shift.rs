@@ -12,8 +12,8 @@
 //! The drawer fields, `drawer_model`, `close_report` and `drawer_day_end`
 //! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), each joined the register
 //! with the release whose edge honours them, `drawer_model` once the till's screens for a drawer per
-//! till had shipped (decision 7). `variance_reason_minor` (decision 12) is read ahead of its entry,
-//! which joins the register with the till's step that gives the reason.
+//! till had shipped (decision 7), and `variance_reason_minor` (decision 12) with the till's step that
+//! gives the reason.
 
 use core::ops::RangeInclusive;
 

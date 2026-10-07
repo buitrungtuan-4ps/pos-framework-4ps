@@ -684,8 +684,26 @@ export interface DrawersResponse {
   drawers: DrawerEntry[];
 }
 
-/** Several counted drawers closed in one act, with one approver for every other till's among them. */
-export type BatchCloseRequest = { shift_ids: string[] } & Partial<ApproverRequest>;
+/**
+ * A close's optional body: an approver for another till's drawer, and the reason for an over or short
+ * the store asks one of (ADR-0167 decision 12).
+ */
+export type CloseShiftRequest = Partial<ApproverRequest> & { reason_code_id?: string };
+
+/** The reason for one drawer's over or short, in a batch close (ADR-0167 decision 12). */
+export interface VarianceReason {
+  shift_id: string;
+  reason_code_id: string;
+}
+
+/**
+ * Several counted drawers closed in one act, with one approver for every other till's among them,
+ * and a reason for each over or short the store asks one of.
+ */
+export type BatchCloseRequest = {
+  shift_ids: string[];
+  variance_reasons?: VarianceReason[];
+} & Partial<ApproverRequest>;
 
 /** Each closed drawer's figures, and what came of the one slip a combined close report prints. */
 export interface BatchCloseResponse {

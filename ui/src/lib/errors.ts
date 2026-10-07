@@ -10,6 +10,7 @@
 // English is better than nothing, and the entry can be added without a change on the edge.
 
 import { ApiError } from "../api/client";
+import type { ShiftResponse } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 
 // Token → catalogue key. Several tokens share a sentence where the operator's next step is the same.
@@ -42,6 +43,9 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
   CASH_REASON_NOT_VALID: "error.reason_not_valid",
   SHIFT_NOT_OPEN: "error.shift_not_open",
+  // A close over or short by more than the store allows, without a reason (ADR-0167 decision 12).
+  // The Shift screen asks the reason instead; this is the sentence anywhere else.
+  VARIANCE_REASON_REQUIRED: "error.variance_reason_required",
   // A drawer still open past its business day, at a store that requires it closed (ADR-0167).
   DRAWER_DAY_ENDED: "error.drawer_day_ended",
   // Cash, or a drawer of its own, at a device that is none of the store's tills, where the store
@@ -91,4 +95,15 @@ export function errorMessage(
   }
   const key = caught.reason === null ? undefined : (own[caught.reason] ?? REASONS[caught.reason]);
   return key === undefined ? caught.message : t(key);
+}
+
+// The drawers a close was refused for until each has a reason for its over or short, with the
+// figures their counts fixed, as the refusal lists them (ADR-0167 decision 12); `null` for anything
+// else a close threw.
+export function owedVariances(caught: unknown): ShiftResponse[] | null {
+  if (!(caught instanceof ApiError) || caught.reason !== "VARIANCE_REASON_REQUIRED") {
+    return null;
+  }
+  const shifts = (caught.details as { shifts?: unknown } | undefined)?.shifts;
+  return Array.isArray(shifts) ? (shifts as ShiftResponse[]) : null;
 }

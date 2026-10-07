@@ -144,6 +144,35 @@ const PRINT_ON_SETTLE = {
   since: "0.14.1",
 };
 
+/** How far over or short a drawer may close before its close asks a reason (ADR-0167 decision 12). */
+const VARIANCE_REASON = {
+  setting_key: "shift.variance_reason_minor",
+  node: "shift",
+  field: "variance_reason_minor",
+  kind: "SETTING_KIND_INT",
+  min: 0,
+  max: 1_000_000_000,
+  unit: "SETTING_UNIT_MINOR_UNITS",
+  default: 0,
+  scopes: [
+    "SETTING_SCOPE_TENANT",
+    "SETTING_SCOPE_BRAND",
+    "SETTING_SCOPE_STORE_GROUP",
+    "SETTING_SCOPE_STORE",
+  ],
+  since: "0.14.1",
+};
+
+/** A reason in the tenant's list, valid for `applies_to`. */
+const reasonCode = (applies_to: string[], active = true) => ({
+  id: "01REASONAAAAAAAAAAAAAAAAAA",
+  code: "WASTE",
+  display_name: "Waste",
+  applies_to,
+  active,
+  etag: "r1",
+});
+
 /** One store on the release that honours the setting, one behind it, and one that never said. */
 const FLEET = [
   { store_id: CURRENT.store_id, installed_version: "0.14.1" },
@@ -160,6 +189,7 @@ const publishSettings = vi.fn();
 const applySettingPresets = vi.fn();
 const listFleet = vi.fn();
 const permissionsReadiness = vi.fn();
+const listReasonCodes = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
@@ -175,6 +205,7 @@ vi.mock("../src/api/client", () => ({
     listStoreGroups: () => Promise.resolve([GROUP]),
     listFleet: () => listFleet(),
     permissionsReadiness: (...args: unknown[]) => permissionsReadiness(...args),
+    listReasonCodes: (...args: unknown[]) => listReasonCodes(...args),
   },
   ApiError: class ApiError extends Error {
     readonly status: number;
@@ -479,6 +510,42 @@ describe("shared settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(applySettingPresets).toHaveBeenCalledWith(TENANT.id, CURRENT.store_id));
     expect(await screen.findByText("Gave this store 1 new-store value.")).toBeTruthy();
+  });
+
+  it("says beside a variance limit that a reason list offering none for it asks nothing", async () => {
+    // ADR-0167 decision 12: a store whose list offers no reason for a variance still closes, so a
+    // limit above 0 asks nothing there, and the card says so where the limit is set.
+    settingsCatalogue.mockResolvedValue([VARIANCE_REASON]);
+    listReasonCodes.mockResolvedValue([
+      reasonCode(["REASON_ACTION_VOID_LINE"]),
+      reasonCode(["REASON_ACTION_CASH_VARIANCE"], false),
+    ]);
+    await mount();
+    expect(await screen.findByText("Reason for a large over or short")).toBeTruthy();
+    const notice = /so this limit asks nothing and every drawer closes as before/;
+    expect(screen.queryByText(notice)).toBeNull();
+    fireEvent.input(screen.getByLabelText(/^Value for every store/), {
+      target: { value: "50000" },
+    });
+    expect(await screen.findByText(notice)).toBeTruthy();
+    expect(listReasonCodes).toHaveBeenCalledWith(TENANT.id);
+  });
+
+  it("says nothing of a limit the reason list covers, nor where the tenant has no list", async () => {
+    // A tenant with no list of its own runs the framework's, which offers two reasons for this.
+    settingsCatalogue.mockResolvedValue([VARIANCE_REASON]);
+    for (const list of [[reasonCode(["REASON_ACTION_CASH_VARIANCE"])], []]) {
+      listReasonCodes.mockClear();
+      listReasonCodes.mockResolvedValue(list);
+      await mount();
+      fireEvent.input(await screen.findByLabelText(/^Value for every store/), {
+        target: { value: "50000" },
+      });
+      await waitFor(() => expect(listReasonCodes).toHaveBeenCalled());
+      await new Promise((settled) => setTimeout(settled, 0));
+      expect(screen.queryByText(/so this limit asks nothing/)).toBeNull();
+      cleanup();
+    }
   });
 
   it("draws a whole number as a field bounded by its range and named in its unit", async () => {

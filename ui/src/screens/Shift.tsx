@@ -27,7 +27,7 @@ import {
   storeCurrency,
 } from "../state/store";
 import { openingFloatMinor } from "../state/session";
-import { errorMessage } from "../lib/errors";
+import { errorMessage, owedVariances } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 
@@ -35,6 +35,8 @@ import { asksApprover, can } from "../state/permissions";
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
 const PAID_OUT = "REASON_ACTION_CASH_PAID_OUT";
 const DRAWER_OPEN = "REASON_ACTION_DRAWER_OPEN";
+// …and the close's, where the store asks a reason of a large over or short (ADR-0167 decision 12).
+const CASH_VARIANCE = "REASON_ACTION_CASH_VARIANCE";
 
 // What to tell the cashier about the drawer after an act that opened it (ADR-0165). A drawer that
 // should have sprung and did not is said in red, because cash is waiting to go in or come out; a
@@ -100,6 +102,10 @@ interface ClosedDrawer {
 // one or several, count one, and close one or several together, each with a manager's code and PIN
 // where the person needs one. What the store waits to change to, and a drawer open past its
 // business day, are said wherever they apply.
+//
+// A close over or short by more than the store allows (`shift.variance_reason_minor`, ADR-0167
+// decision 12) is answered with the variance its count fixed and the store's reasons for one, and a
+// reason closes it. The count is final by then, so this shows what the close reveals anyway.
 export function Shift() {
   const [amount, setAmount] = createSignal("");
   // The float field holds the store's float until the cashier types, and what they typed from then
@@ -119,6 +125,8 @@ export function Shift() {
   const [approverCode, setApproverCode] = createSignal("");
   const [approverPin, setApproverPin] = createSignal("");
   const [drawer, setDrawer] = createSignal<DrawerOutcome | null>(null);
+  // This till's own close, refused until it gives a reason for its over or short: its figures.
+  const [owedClose, setOwedClose] = createSignal<ShiftResponse | null>(null);
 
   const shift = () => state.shift;
   const phase = () => shift()?.state ?? "NONE";
@@ -250,6 +258,32 @@ export function Shift() {
   };
   const drawerReason = (reasonCodeId: string) => void openDrawer(reasonCodeId);
 
+  // Closes this till's own drawer; where the store asks a reason first, says so with the figures.
+  const closeOwn = (close: () => Promise<unknown>) =>
+    run(async () => {
+      try {
+        await close();
+        setOwedClose(null);
+      } catch (caught) {
+        const [owed] = owedVariances(caught) ?? [];
+        if (owed === undefined) {
+          throw caught;
+        }
+        setOwedClose(owed);
+      }
+    });
+  const varianceReason = (reasonCodeId: string) => {
+    const current = shift();
+    if (current) {
+      void closeOwn(() => closeShift(current.shiftId, reasonCodeId));
+    }
+  };
+  // Only for the shift it was asked of: one closed meanwhile from the list asks nothing more.
+  const owedHere = () => {
+    const owed = owedClose();
+    return owed !== null && owed.shift_id === shift()?.shiftId ? owed : null;
+  };
+
   // ---- every till's drawer (ADR-0167 decision 3) ----
   //
   // Which drawers are picked, the float or count typed for one, the approver for another till's,
@@ -271,6 +305,9 @@ export function Shift() {
     drawers: ClosedDrawer[];
     slip?: string;
   } | null>(null);
+  // The drawers a close was refused for until each has a reason, and the reasons given so far.
+  const [owedDrawers, setOwedDrawers] = createSignal<readonly ShiftResponse[]>([]);
+  const [givenReasons, setGivenReasons] = createSignal<Readonly<Record<string, string>>>({});
 
   // The drawers picked, as the list reads now, all in one state: what the list offers is what that
   // state allows. A drawer the list no longer has, or one that moved on, drops out.
@@ -338,6 +375,12 @@ export function Shift() {
     setClosedDrawers(null);
     setListAmount("");
     setListFloatTyped(false);
+    if (owedDrawers().length > 0) {
+      setOwedDrawers([]);
+      setGivenReasons({});
+      setListCode("");
+      setListPin("");
+    }
     if (current.some((chosen) => tillKey(chosen) === key)) {
       setPicked(current.filter((chosen) => tillKey(chosen) !== key).map(tillKey));
       return;
@@ -350,17 +393,26 @@ export function Shift() {
     setPicked(together ? [...current.map(tillKey), key] : [key]);
   };
 
-  // Runs one act on the list, and drops the approver after it whatever came of it.
+  // Runs one act on the list, and drops the approver after it whatever came of it, but for a close
+  // refused until its drawers have a reason, which the reason step sends again at once with it.
   const onList = async (act: () => Promise<void>) => {
     setListBusy(true);
     setListError(null);
+    let owed: ShiftResponse[] | null = null;
     try {
       await act();
     } catch (caught) {
-      setListError(errorMessage(caught, DRAWER_REASONS));
+      owed = owedVariances(caught);
+      if (owed === null) {
+        setListError(errorMessage(caught, DRAWER_REASONS));
+      } else {
+        setOwedDrawers(owed);
+      }
     } finally {
-      setListCode("");
-      setListPin("");
+      if (owed === null) {
+        setListCode("");
+        setListPin("");
+      }
       setListBusy(false);
     }
   };
@@ -422,7 +474,9 @@ export function Shift() {
           names.set(drawer.shift.shift_id, drawerName(drawer));
         }
       }
-      const closed = await closeDrawerShifts([...names.keys()], listApproval());
+      const closed = await closeDrawerShifts([...names.keys()], listApproval(), givenReasons());
+      setOwedDrawers([]);
+      setGivenReasons({});
       setClosedDrawers({
         drawers: closed.shifts.map((closedShift) => ({
           name: names.get(closedShift.shift_id) ?? "",
@@ -432,6 +486,19 @@ export function Shift() {
       });
       setPicked([]);
     });
+
+  // A reason for one drawer owed one; once each has its reason, the close goes again with them.
+  const drawerVarianceReason = (shiftId: string, reasonCodeId: string) => {
+    const given = { ...givenReasons(), [shiftId]: reasonCodeId };
+    setGivenReasons(given);
+    if (owedDrawers().every((owed) => given[owed.shift_id] !== undefined)) {
+      void closeDrawers();
+    }
+  };
+  const owedName = (owed: ShiftResponse) => {
+    const listed = drawers().find((drawer) => drawer.shift?.shift_id === owed.shift_id);
+    return listed === undefined ? "" : drawerName(listed);
+  };
 
   return (
     <section
@@ -695,12 +762,49 @@ export function Shift() {
           onClick={() => {
             const current = shift();
             if (current) {
-              void run(() => closeShift(current.shiftId));
+              void closeOwn(() => closeShift(current.shiftId));
             }
           }}
         >
           {t("shift.close")}
         </button>
+        </Show>
+        <Show when={owedHere()}>
+          {(owed) => (
+            <div class="mt-3 rounded-token border border-line bg-surface p-3" data-outcome="variance-owed">
+              <p class="font-semibold">{t("shift.variance_reason")}</p>
+              <p class="mt-1 text-sm text-ink-muted tabular-nums">
+                {t("shift.drawer_figures", {
+                  expected: amountOf(owed().expected_amount),
+                  counted: amountOf(owed().counted_amount),
+                })}
+              </p>
+              <p class="text-danger tabular-nums">
+                {t("shift.variance")} {amountOf(owed().variance)}
+              </p>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <For each={reasonsFor(CASH_VARIANCE)}>
+                  {(reason) => (
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface px-3 text-left"
+                      data-step="varianceReason"
+                      onClick={() => varianceReason(reason.reason_code_id)}
+                    >
+                      {reason.display_name}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <button
+                type="button"
+                class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                onClick={() => setOwedClose(null)}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          )}
         </Show>
       </Show>
 
@@ -944,6 +1048,49 @@ export function Shift() {
                   >
                     {t("shift.close_drawers", { count: pickedDrawers().length })}
                   </button>
+                </Show>
+                <Show when={picking() === "counted" && owedDrawers().length > 0}>
+                  <div class="mt-3" data-outcome="drawers-variance-owed">
+                    <p class="font-semibold">{t("shift.variance_reason")}</p>
+                    <For each={owedDrawers()}>
+                      {(owed) => (
+                        <div class="mt-3 tabular-nums" data-outcome="drawer-variance-owed">
+                          <p class="font-semibold">{owedName(owed)}</p>
+                          <p class="text-sm text-ink-muted">
+                            {t("shift.drawer_figures", {
+                              expected: amountOf(owed.expected_amount),
+                              counted: amountOf(owed.counted_amount),
+                            })}
+                          </p>
+                          <p class="text-danger">
+                            {t("shift.variance")} {amountOf(owed.variance)}
+                          </p>
+                          <div class="mt-2 grid grid-cols-2 gap-2">
+                            <For each={reasonsFor(CASH_VARIANCE)}>
+                              {(reason) => (
+                                <button
+                                  type="button"
+                                  class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                                  classList={{
+                                    "border-primary":
+                                      givenReasons()[owed.shift_id] === reason.reason_code_id,
+                                  }}
+                                  aria-pressed={givenReasons()[owed.shift_id] === reason.reason_code_id}
+                                  disabled={listBusy()}
+                                  data-step="drawerVarianceReason"
+                                  onClick={() =>
+                                    drawerVarianceReason(owed.shift_id, reason.reason_code_id)
+                                  }
+                                >
+                                  {reason.display_name}
+                                </button>
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                  </div>
                 </Show>
               </div>
             )}

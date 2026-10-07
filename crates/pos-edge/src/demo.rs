@@ -185,10 +185,11 @@ fn tills() -> bool {
 /// Whether this demo store keeps a drawer per till — `POS_DEMO_PROFILE=drawers`.
 ///
 /// That profile publishes the tills of [`tills`], the bar's with a float of its own, and the `shift`
-/// node [`demo_drawers`] builds, which keeps a drawer per till
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), so the browser gate can
-/// drive the Shift screen drawer by drawer once a manager binds a device to a till on the Devices
-/// screen. Every other profile keeps the one drawer every store kept before.
+/// node [`demo_drawers`] builds, which keeps a drawer per till and asks a reason of a large over or
+/// short ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2 and 12),
+/// so the browser gate can drive the Shift screen drawer by drawer, and the reason step, once a
+/// manager binds a device to a till on the Devices screen. Every other profile keeps the one drawer
+/// every store kept before, and asks no reason.
 fn drawers() -> bool {
     std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("drawers"))
 }
@@ -369,7 +370,8 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 ///
 /// # The drawers profile
 ///
-/// `POS_DEMO_PROFILE=drawers` publishes the same two tills, and a drawer for each. See [`drawers`].
+/// `POS_DEMO_PROFILE=drawers` publishes the same two tills, and a drawer for each, which asks a
+/// reason of a close over or short by more than 20,000₫. See [`drawers`].
 ///
 /// # The walk-in profiles
 ///
@@ -538,11 +540,13 @@ fn demo_tills(bar_float: Option<i64>) -> serde_json::Value {
 const DEMO_BAR_FLOAT: i64 = 200_000;
 
 /// The drawers profile's `shift` node: a drawer per till, each opening on the store's float of
-/// 500,000₫ unless its till sets its own.
+/// 500,000₫ unless its till sets its own, and closing over or short by more than 20,000₫ only with a
+/// reason (ADR-0167 decision 12), which the framework's own reasons offer.
 fn demo_drawers() -> serde_json::Value {
     serde_json::json!({
         "drawer_model": "DRAWER_MODEL_PER_TERMINAL",
         "opening_float_minor": 500_000,
+        "variance_reason_minor": 20_000,
     })
 }
 
@@ -827,7 +831,7 @@ mod tests {
     }
 
     /// The drawers profile keeps a drawer per till, the counter's on the store's float and the
-    /// bar's on its own.
+    /// bar's on its own, and asks a reason of a close more than 20,000₫ over or short.
     #[test]
     fn the_drawers_profile_keeps_a_drawer_per_till_and_the_bar_floats_its_own() {
         let document = serde_json::json!({
@@ -837,6 +841,7 @@ mod tests {
         let session = session_from_config(&EdgeSession::bootstrap(), &document);
         assert_eq!(session.shift.drawer_model(), DrawerModel::PerTerminal);
         assert_eq!(session.shift.opening_float_minor(), 500_000);
+        assert_eq!(session.shift.variance_reason_minor(), 20_000);
         let floats: Vec<(&str, Option<i64>)> = published_terminals(&session.devices)
             .map(|till| (till.name.as_str(), till.opening_float_minor()))
             .collect();

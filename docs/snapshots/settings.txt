@@ -220,6 +220,17 @@ shift.opening_float_minor	scope=SETTING_SCOPE_STORE_GROUP
 shift.opening_float_minor	scope=SETTING_SCOPE_TENANT
 shift.opening_float_minor	since=0.14.1
 shift.opening_float_minor	unit=SETTING_UNIT_MINOR_UNITS
+shift.variance_reason_minor
+shift.variance_reason_minor	default=0
+shift.variance_reason_minor	kind=SETTING_KIND_INT
+shift.variance_reason_minor	max=1000000000
+shift.variance_reason_minor	min=0
+shift.variance_reason_minor	scope=SETTING_SCOPE_BRAND
+shift.variance_reason_minor	scope=SETTING_SCOPE_STORE
+shift.variance_reason_minor	scope=SETTING_SCOPE_STORE_GROUP
+shift.variance_reason_minor	scope=SETTING_SCOPE_TENANT
+shift.variance_reason_minor	since=0.14.1
+shift.variance_reason_minor	unit=SETTING_UNIT_MINOR_UNITS
 tender_keys.first_tip_percent
 tender_keys.first_tip_percent	default=5
 tender_keys.first_tip_percent	kind=SETTING_KIND_INT
