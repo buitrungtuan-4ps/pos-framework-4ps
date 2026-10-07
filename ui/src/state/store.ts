@@ -2299,6 +2299,65 @@ export async function closeShift(shiftId: string): Promise<ShiftInfo> {
   return info;
 }
 
+// ---- every till's drawer, where the store keeps one per till (ADR-0167 decision 3) -------------
+//
+// Each answers the drawer it acted on and reads every drawer back. One that is this device's own
+// is shown as its own commands show it, so the drawer at the top of the Shift screen moves too.
+
+// Starts `till`'s drawer on a float, with an approver where it is another till's and the person needs
+// one.
+export async function openDrawerShift(
+  till: string,
+  floatMinor: number,
+  approval?: ApproverRequest,
+): Promise<ShiftResponse> {
+  const response = await api.openShift({
+    opening_float: { currency_code: storeCurrency(), amount_minor: floatMinor },
+    terminal_device_id: till,
+    ...approval,
+  });
+  if (till === ownTill()) {
+    replaceShift(shiftInfo(response));
+  }
+  await loadDrawers();
+  return response;
+}
+
+// Enters the blind count of one drawer's shift.
+export async function countDrawerShift(
+  shiftId: string,
+  countedMinor: number,
+  approval?: ApproverRequest,
+): Promise<ShiftResponse> {
+  const response = await api.countShift(shiftId, { counted_minor: countedMinor, ...approval });
+  if (state.shift?.shiftId === shiftId) {
+    replaceShift(shiftInfo(response));
+  }
+  await loadDrawers();
+  return response;
+}
+
+// Closes counted drawers: one on its own, which prints its own report as a close always has, or
+// several in one act, every one or none, under one approver (ADR-0167 decision 10). Each drawer's
+// figures come back, with what came of a combined slip where the store prints one.
+export async function closeDrawerShifts(
+  shiftIds: readonly string[],
+  approval?: ApproverRequest,
+): Promise<{ shifts: ShiftResponse[]; slip?: string }> {
+  const [only] = shiftIds;
+  const closed =
+    shiftIds.length === 1 && only !== undefined
+      ? { shifts: [await api.closeShift(only, approval)], shift_report_print: undefined }
+      : await api.batchCloseShifts({ shift_ids: [...shiftIds], ...approval });
+  for (const response of closed.shifts) {
+    if (response.shift_id === state.shift?.shiftId) {
+      replaceShift(shiftInfo(response));
+    }
+  }
+  await loadDrawers();
+  return { shifts: closed.shifts, slip: closed.shift_report_print };
+}
+
 // Cash paid into or out of the drawer outside a sale (ADR-0165): the edge's new totals replace the
 // held ones, and what came of opening the drawer goes back to the screen.
 export async function recordCashMovement(

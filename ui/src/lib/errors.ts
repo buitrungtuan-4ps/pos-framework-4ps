@@ -79,10 +79,16 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
 
 // The sentence for anything a command threw: a translated refusal, the edge's own words for a
 // refusal the till has no sentence for, or "the store did not respond" when there was no answer.
-export function errorMessage(caught: unknown): string {
+//
+// `own` words a token for the screen asking, where the till's one sentence for it would name the
+// wrong thing: a drawer that changed on another device is not a table or a bill.
+export function errorMessage(
+  caught: unknown,
+  own: Readonly<Record<string, MessageKey>> = {},
+): string {
   if (!(caught instanceof ApiError)) {
     return t("common.store_error");
   }
-  const key = caught.reason === null ? undefined : REASONS[caught.reason];
+  const key = caught.reason === null ? undefined : (own[caught.reason] ?? REASONS[caught.reason]);
   return key === undefined ? caught.message : t(key);
 }

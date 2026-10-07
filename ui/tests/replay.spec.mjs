@@ -3678,7 +3678,8 @@ test("a store that publishes no till says where tills are created", async ({ pag
 
 // A drawer per till (ADR-0167). The `drawers` store keeps one for each of its two tills, the
 // counter's on the store's float of 500,000₫ and the bar's on its own 200,000₫. A device becomes a
-// till the way a manager makes it one, on the Devices screen.
+// till the way a manager makes it one, on the Devices screen, and the demo's one employee approves
+// another till's drawer with their own badge and PIN, as a manager would.
 
 /** Makes this device one of the store's tills on its Devices screen, then opens the Shift screen. */
 async function bindTill(page, name) {
@@ -3688,6 +3689,26 @@ async function bindTill(page, name) {
   await card.getByRole("button", { name: `Bind this device to ${name}` }).click();
   await expect(card.locator('[data-outcome="till-status"]')).toHaveText(`This device is ${name}.`);
   await navigateTo(page, "/shift");
+}
+
+/** A till's drawer in the Shift screen's list of every till's drawer. */
+const drawerRow = (page, name) => page.locator('[data-step="pickDrawer"]').filter({ hasText: name });
+
+/** Types the demo manager's badge and PIN where another till's drawer asks for them. */
+async function approve(page, edge, pin = edge.staffPin) {
+  await page.locator("#drawer-approver-code").fill(edge.staffCode);
+  await page.locator("#drawer-approver-pin").fill(pin);
+}
+
+/** Every start this page asks the store server for, as it sent them. */
+function startsSent(page) {
+  const starts = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/shifts") {
+      starts.push(request.postDataJSON());
+    }
+  });
+  return starts;
 }
 
 // The second device pairs with a code this one gets on its Devices screen, as in the tills test.
@@ -3754,6 +3775,14 @@ test("a device that is no till says so, offers no drawer of its own, and is refu
     await expect(page.locator('[data-step="openShift"]')).toHaveCount(0);
     await expect(page.locator('[data-step="askOpenDrawer"]')).toHaveCount(0);
 
+    // A manager's tablet in the back office still starts a till's drawer, by naming it.
+    await drawerRow(page, "Counter till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="startDrawers"]').click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText(
+      "Started: Counter till.",
+    );
+
     // Cash is refused here in the till's own words; a card still works.
     await navigateTo(page, "/");
     await seatTable(page);
@@ -3766,6 +3795,202 @@ test("a device that is no till says so, offers no drawer of its own, and is refu
         "Cash is taken at a till, and this device is not one of the store's tills: a manager binds it to a till on the Devices screen. Cards and other ways to pay still work here.",
       ),
     ).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a manager starts another till's drawer on that till's float, with a manager's PIN", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    // This till's own drawer comes first, on the store's float, since the counter sets none.
+    await expect(page.locator('[data-outcome="own-drawer"]')).toHaveText(
+      "Counter till — this till's drawer",
+    );
+    await expect(page.locator("#float")).toHaveValue("500000");
+    await expect(drawerRow(page, "Counter till")).toContainText("This till");
+    const bar = drawerRow(page, "Bar till");
+    await expect(bar).toContainText("Closed");
+    await expect(bar).toContainText("Float 200,000₫");
+
+    const starts = startsSent(page);
+    await bar.click();
+    await expect(page.locator("#drawer-float")).toHaveValue("200000");
+    const start = page.locator('[data-step="startDrawers"]');
+    await expect(start).toHaveText("Start this drawer");
+    await expect(start).toBeDisabled();
+    await approve(page, edge);
+    await start.click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText("Started: Bar till.");
+    expect(starts).toEqual([
+      {
+        opening_float: { currency_code: "VND", amount_minor: 200_000 },
+        terminal_device_id: expect.any(String),
+        approver_code: edge.staffCode,
+        approver_pin: edge.staffPin,
+      },
+    ]);
+    await expect(bar).toContainText(/Open since \d\d:\d\d/);
+    // It was the bar's drawer that started: this till's own is still closed.
+    await expect(drawerRow(page, "Counter till")).toContainText("Closed");
+    await expect(page.locator('[data-step="openShift"]')).toBeVisible();
+    // The manager's code and PIN went with that act alone.
+    await bar.click();
+    await expect(page.locator("#drawer-approver-code")).toHaveValue("");
+    await expect(page.locator("#drawer-approver-pin")).toHaveValue("");
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("starting several drawers stops at the first refusal and says which did not start", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Bar till");
+    const starts = startsSent(page);
+    await drawerRow(page, "Counter till").click();
+    await drawerRow(page, "Bar till").click();
+    const start = page.locator('[data-step="startDrawers"]');
+    await expect(start).toHaveText("Start 2 drawers");
+    await expect(page.locator("#drawer-float")).toHaveCount(0);
+
+    // A wrong PIN refuses the counter's drawer, and the bar's is not tried after it.
+    await approve(page, edge, edge.staffPin === "0000" ? "1111" : "0000");
+    await start.click();
+    await expect(page.locator('[data-outcome="drawers-not-started"]')).toHaveText(
+      "Not started: Counter till, Bar till.",
+    );
+    await expect(page.getByText("That manager PIN cannot authorise this.")).toBeVisible();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveCount(0);
+    expect(starts).toHaveLength(1);
+    await expect(page.locator("#drawer-approver-code")).toHaveValue("");
+    await expect(page.locator("#drawer-approver-pin")).toHaveValue("");
+
+    // Both are still picked, and each starts on its own till's float.
+    await approve(page, edge);
+    await start.click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText(
+      "Started: Counter till, Bar till.",
+    );
+    expect(starts.slice(1).map((sent) => sent.opening_float.amount_minor)).toEqual([500_000, 200_000]);
+    // This till's own drawer took no approver, and shows open at the top of the screen.
+    expect(starts[1]?.approver_pin).toBe(edge.staffPin);
+    expect(starts[2]?.approver_pin).toBeUndefined();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("two counted drawers close together, and each shows its figures", async ({ page }) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    // This till's drawer from the top of the screen, as every store opens one; the bar's from the
+    // list, with a manager's PIN.
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="startDrawers"]').click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText("Started: Bar till.");
+
+    // Counted blind, drawer by drawer: this till's at the top, the bar's from the list.
+    await page.locator("#count").fill("500000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await expect(page.getByText("should hold")).toHaveCount(0);
+    await page.locator("#drawer-count").fill("190000");
+    await approve(page, edge);
+    await page.locator('[data-step="countDrawer"]').click();
+    await expect(page.locator('[data-outcome="drawer-counted"]')).toHaveText(
+      "Bar till counted. Close it to reveal the variance.",
+    );
+    await expect(drawerRow(page, "Bar till")).toContainText("Counted, waiting to close");
+
+    const closes = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/shifts:")) {
+        closes.push(request.postDataJSON());
+      }
+    });
+    await drawerRow(page, "Counter till").click();
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="closeDrawers"]').click();
+    const closed = page.locator('[data-outcome="drawers-closed"]');
+    await expect(closed).toContainText("2 drawers closed");
+    const counter = closed.locator('[data-outcome="drawer-closed"]').nth(0);
+    const bar = closed.locator('[data-outcome="drawer-closed"]').nth(1);
+    await expect(counter).toContainText("Counter till");
+    await expect(counter).toContainText("Expected 500,000₫");
+    await expect(counter).toContainText("Variance 0₫");
+    await expect(bar).toContainText("Bar till");
+    await expect(bar).toContainText("Expected 200,000₫");
+    await expect(bar).toContainText("counted 190,000₫");
+    await expect(bar).toContainText("Variance -10,000₫");
+    // Each drawer's report prints where it is closed, and this store has no printer to print it.
+    await expect(counter).toContainText("No printer is set up for this store");
+    await expect(bar).toContainText("No printer is set up for this store");
+    expect(closes).toEqual([
+      {
+        shift_ids: [expect.any(String), expect.any(String)],
+        approver_code: edge.staffCode,
+        approver_pin: edge.staffPin,
+      },
+    ]);
+    // This till's own drawer shows its close at the top of the screen too.
+    await expect(page.locator('[data-outcome="shift-closed"]')).toBeVisible();
+    await expect(drawerRow(page, "Bar till")).toContainText("Closed");
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("every till's drawer is listed only for a person who may act on another till's", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    const granted = ["cash.shift.open", "cash.shift.close", "admin.device.manage"];
+    const withApproval = [];
+    await aSessionThatSays(page, true, () => granted, withApproval);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    // A cashier keeps to their own till's drawer.
+    await expect(page.locator('[data-outcome="own-drawer"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="drawers"]')).toHaveCount(0);
+
+    // With a manager's approval they may act on another till's, which asks for the manager there.
+    withApproval.push("cash.shift.manage_other_till");
+    await page.goto(`${edge.baseURL}/shift`);
+    await drawerRow(page, "Bar till").click();
+    await expect(page.locator("#drawer-approver-code")).toBeVisible();
+    // Their own till's drawer asks for nobody.
+    await drawerRow(page, "Counter till").click();
+    await drawerRow(page, "Bar till").click();
+    await expect(page.locator('[data-step="startDrawers"]')).toHaveText("Start this drawer");
+    await expect(page.locator("#drawer-approver-code")).toHaveCount(0);
+
+    // Held directly, another till's asks for nobody either.
+    granted.push("cash.shift.manage_other_till");
+    await page.goto(`${edge.baseURL}/shift`);
+    await drawerRow(page, "Bar till").click();
+    await expect(page.locator('[data-step="startDrawers"]')).toBeVisible();
+    await expect(page.locator("#drawer-approver-code")).toHaveCount(0);
   } finally {
     await edge.stop();
   }
@@ -3811,6 +4036,10 @@ test("a drawer open past its business day is flagged, and a change of model wait
     await expect(page.locator('[data-outcome="day-ended"]')).toHaveText(
       "This drawer's shift began on an earlier business day. Count and close it.",
     );
+    await expect(
+      drawerRow(page, "Counter till").locator('[data-outcome="drawer-day-ended"]'),
+    ).toHaveText("Past its business day: count and close it");
+    await expect(drawerRow(page, "Bar till").locator('[data-outcome="drawer-day-ended"]')).toHaveCount(0);
     await expect(page.locator('[data-outcome="model-waiting"]')).toHaveText(
       "The store changes to one drawer for the whole store once every till's drawer is closed.",
     );
@@ -3956,8 +4185,12 @@ test("a store that publishes no idle lock never locks", async ({ page }) => {
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
+      "Close two counted drawers together",
+      "Count another till's drawer, blind",
       "Open the cash drawer without a sale",
       "Settle a dine-in table in cash, typing the amount handed over",
+      "Start another till's drawer",
+      "Start two tills' drawers at once",
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",

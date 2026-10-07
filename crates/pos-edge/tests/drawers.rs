@@ -1704,6 +1704,30 @@ async fn the_drawers_read_names_the_till_the_device_asking_is() {
     );
 }
 
+/// A drawer whose shift is open says when it opened on the shop's wall clock, which a till's own
+/// clock may not keep, so the list of every till's drawer can show it as it is.
+#[tokio::test]
+async fn an_open_drawer_says_when_it_opened_on_the_shops_wall_clock() {
+    let tills = drawers_app(false).await;
+    let (app, bar, stranger) = (tills.app, tills.bar, tills.stranger);
+    let (_, _, read) = send(app.clone(), &stranger, "GET", "/api/shifts", None).await;
+    assert!(
+        read["drawers"][0].get("opened_clock").is_none(),
+        "a closed drawer opened at no time: {read}"
+    );
+    let open = json!({ "opening_float": vnd(500_000) });
+    let (status, _, _) = send(app.clone(), &bar, "POST", "/api/shifts", Some(open)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, read) = send(app.clone(), &stranger, "GET", "/api/shifts", None).await;
+    let clock = read["drawers"][0]["opened_clock"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        clock.len() == 5 && clock.chars().nth(2) == Some(':'),
+        "the shop's wall clock, HH:MM: {read}"
+    );
+}
+
 #[tokio::test]
 async fn a_binding_that_cannot_be_read_refuses_rather_than_guesses_the_till() {
     let tills = drawers_app(true).await;

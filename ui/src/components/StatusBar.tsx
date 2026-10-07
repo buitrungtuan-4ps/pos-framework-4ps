@@ -4,7 +4,7 @@ import { A, useLocation } from "@solidjs/router";
 import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { can, canAny, forgetPermissions } from "../state/permissions";
-import { kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
+import { drawerPerTill, kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
 
 // The screens a device sees before anyone is signed in on it.
 const BEFORE_SIGN_IN: ReadonlySet<string> = new Set(["/pair", "/signin", "/setup"]);
@@ -71,13 +71,16 @@ const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
   {
     href: "/shift",
     key: "nav.shift",
+    // For anybody who may do one of the screen's acts and, where the store keeps a drawer per till,
+    // for whoever may act on another till's (ADR-0167).
     needs: () =>
       canAny([
         "cash.shift.open",
         "cash.shift.close",
         "cash.movement.record",
         "cash.drawer.open_no_sale",
-      ]),
+      ]) ||
+      (drawerPerTill() && can("cash.shift.manage_other_till")),
   },
   { href: "/pair", key: "nav.pair" },
   // Retiring a lost till (ADR-0091, production-readiness O1). Beside pairing, because it is the same

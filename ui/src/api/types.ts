@@ -614,13 +614,18 @@ export interface LayoutResponse {
   categories: LayoutCategory[];
 }
 
-export interface OpenShiftRequest {
+/**
+ * Opening a shift with a float, on this device's own drawer or, where the store keeps a drawer per
+ * till, on the till `terminal_device_id` names (ADR-0167): another till's takes an approver where
+ * the person holds `cash.shift.manage_other_till` only with approval.
+ */
+export type OpenShiftRequest = {
   opening_float: Money;
-}
+  terminal_device_id?: string;
+} & Partial<ApproverRequest>;
 
-export interface CountShiftRequest {
-  counted_minor: number;
-}
+/** The blind count, with an approver for another till's drawer where the person needs one. */
+export type CountShiftRequest = { counted_minor: number } & Partial<ApproverRequest>;
 
 export interface ShiftResponse {
   shift_id: string;
@@ -659,6 +664,11 @@ export interface DrawerEntry {
   name?: string;
   /** What its shift opens on unless somebody types another float. */
   default_float: Money;
+  /**
+   * The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, which a till's
+   * own clock may not keep. Absent while the drawer is closed.
+   */
+  opened_clock?: string;
   /** Its shift, as blind as `GET /api/shifts/current`; `null` while the drawer is closed. */
   shift: ShiftResponse | null;
 }
@@ -672,6 +682,15 @@ export interface DrawersResponse {
   /** The till this device is, whose drawer is its own; absent for a device that is no till. */
   terminal_device_id?: string;
   drawers: DrawerEntry[];
+}
+
+/** Several counted drawers closed in one act, with one approver for every other till's among them. */
+export type BatchCloseRequest = { shift_ids: string[] } & Partial<ApproverRequest>;
+
+/** Each closed drawer's figures, and what came of the one slip a combined close report prints. */
+export interface BatchCloseResponse {
+  shifts: ShiftResponse[];
+  shift_report_print?: string;
 }
 
 /** A paid in or a paid out: how much, in minor units, and why (ADR-0165). */

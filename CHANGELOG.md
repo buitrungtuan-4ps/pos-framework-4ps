@@ -753,6 +753,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager starts, counts and closes every till's drawer from any till**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 10). Under
+  `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet, a person who may act on another till's
+  drawer, holding `cash.shift.manage_other_till` directly or with approval, sees every till's drawer
+  on the Shift screen, below this till's own, or beside it from a tablet up: its name, closed, open
+  since a time on the shop's clock, or counted, its default float, and a mark where it is past its
+  business day.
+  - They start one on its float, which they may change, or several, each on its own, one request
+    each, stopping at the first refusal and saying which started and which did not; count one,
+    blind; and close one, or several together in one batch close, every one or none, then see each
+    drawer's figures and what printed.
+  - A manager's code and PIN are asked where the person holds the permission only with approval,
+    and are dropped after the act.
+  - A refusal of an act on a drawer in the list names the drawer, not a table or a bill, in English
+    and Vietnamese.
+  - Under a drawer per till, the Shift destination is offered to a person whose only cash
+    permission is `cash.shift.manage_other_till`.
+  - `GET /api/shifts` says when each open drawer opened on the shop's wall clock (`opened_clock`).
+  - Four flows are declared (ADR-0109) and replayed on `POS_DEMO_PROFILE=drawers`.
+
+  **Upgrade note:** a store that keeps one drawer sees no change. `PROTOCOL_VERSION` is unchanged,
+  and no route, permission, event, setting or migration is added; `GET /api/shifts` gains one
+  optional field.
+
 - **A till's Shift screen shows its own drawer, where a store keeps one per till**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 6, 8 and 11). Under
   `DRAWER_MODEL_PER_TERMINAL`, which no store can choose yet:
