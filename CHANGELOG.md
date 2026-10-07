@@ -753,6 +753,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A shift's report lists its bills' tax by component**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5). Where the
+  bills settled on a drawer's shift recorded tax components, its report ends with **TAX BY
+  COMPONENT**: each component's name and rate, such as CGST 2.50%, with the tax their tax lines
+  recorded, summed, in order of name and then rate. On a combined slip the store's totals carry the
+  drawers' sum, and each drawer its own. A bill or line that recorded none adds nothing, a fee's tax
+  is already inside its tax line, and the section prints no total. A restart rebuilds the sums from
+  the log. The section prints whatever `printing.receipt_tax_components` says, since a shift report
+  is the store's paper. The labels are in English and Vietnamese.
+
+  **Upgrade note:** a store whose `tax` node names no components, as every Vietnamese and Japanese
+  store, prints its shift reports and combined slips byte for byte as before. `PROTOCOL_VERSION` is
+  unchanged, the close's response does not change, and no route, event, permission, setting or
+  migration is added.
+
 - **A store chooses whether its receipts print each tax's breakdown**
   ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 4). The
   `printing` node gains `receipt_tax_components`, a switch at the four scopes, on by default. On, a

@@ -143,7 +143,7 @@ pub(crate) fn variance_reasons_required(
 ) -> Response {
     let body = VarianceReasonsRequired {
         message,
-        shifts: shifts.iter().copied().map(ShiftResponse::from).collect(),
+        shifts: shifts.iter().cloned().map(ShiftResponse::from).collect(),
     };
     let token = [(ERROR_REASON_HEADER, HeaderValue::from_static(reason))];
     (StatusCode::CONFLICT, token, Json(body)).into_response()

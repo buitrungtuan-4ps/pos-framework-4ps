@@ -65,7 +65,7 @@ use printer_escpos::device::DeviceTransport;
 use printer_escpos::tcp::TcpTransport;
 use printer_escpos::{EscPosPrinter, Transport};
 
-use pos_core::billing::BillTotals;
+use pos_core::billing::{BillTotals, TaxComponentLine};
 use pos_ports::printer::{
     CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
     TextStyle,
@@ -785,6 +785,7 @@ pub fn shift_report_document(
         false,
     ));
     figure_blocks(&mut blocks, money, labels, &report.figures());
+    component_blocks(&mut blocks, money, labels, &report.tax_components);
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
 }
@@ -807,6 +808,7 @@ pub fn combined_shift_report_document(
     blocks.push(centred(labels.shift_report, true));
     blocks.push(centred(labels.store_totals, true));
     figure_blocks(&mut blocks, money, labels, &combined.totals);
+    component_blocks(&mut blocks, money, labels, &combined.tax_components);
     for (till, report) in &combined.drawers {
         if let Some(till) = till {
             blocks.push(centred(till.as_str(), true));
@@ -816,9 +818,37 @@ pub fn combined_shift_report_document(
             false,
         ));
         figure_blocks(&mut blocks, money, labels, &report.figures());
+        component_blocks(&mut blocks, money, labels, &report.tax_components);
     }
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
+}
+
+/// A shift's tax by component and rate under its heading, each as its tax line prints it on a
+/// receipt (ADR-0168 decision 5). Nothing at all where the shift's bills recorded none, so a store
+/// whose `tax` node names no components prints the report it always did; and no total, since a bill
+/// that recorded none is not in it.
+fn component_blocks(
+    blocks: &mut Vec<PrintBlock>,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    components: &[TaxComponentLine],
+) {
+    if components.is_empty() {
+        return;
+    }
+    blocks.push(centred(labels.tax_by_component, true));
+    blocks.extend(components.iter().map(|component| {
+        amount_line(
+            &format!(
+                "{} {}",
+                component.name,
+                percent(component.rate_basis_points)
+            ),
+            component.tax,
+            money,
+        )
+    }));
 }
 
 /// A drawer's figures, or several drawers' together, in the order a supervisor checks them: the
@@ -4117,6 +4147,7 @@ mod tests {
             expected_amount: vnd(1_750_000),
             counted_amount: vnd(counted),
             variance: vnd(counted - 1_750_000),
+            tax_components: Vec::new(),
         };
 
         let short = shift_report_document(
@@ -4168,6 +4199,7 @@ mod tests {
             expected_amount: vnd(float + 100_000),
             counted_amount: vnd(counted),
             variance: vnd(counted - float - 100_000),
+            tax_components: Vec::new(),
         };
         let bar = drawer(0xBA, 500_000, 590_000);
         let counter = drawer(0xC0, 300_000, 400_000);
@@ -4181,6 +4213,7 @@ mod tests {
                 counted_amount: vnd(990_000),
                 variance: vnd(-10_000),
             },
+            tax_components: Vec::new(),
             drawers: vec![
                 (Some(DisplayName::new("Bar")), bar),
                 (Some(DisplayName::new("Counter")), counter),
@@ -4236,6 +4269,7 @@ mod tests {
             expected_amount: vnd(1_800_000),
             counted_amount: vnd(1_800_000),
             variance: vnd(0),
+            tax_components: Vec::new(),
         };
         let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
         assert_eq!(
@@ -4256,7 +4290,7 @@ mod tests {
             paid_in: vnd(0),
             expected_amount: vnd(1_600_000),
             counted_amount: vnd(1_600_000),
-            ..report
+            ..report.clone()
         };
         let vietnamese = shift_report_document(
             &StoreProfile::default(),
@@ -4314,6 +4348,7 @@ mod tests {
             expected_amount: vnd(1_750_000),
             counted_amount: vnd(1_730_000),
             variance: vnd(-20_000),
+            tax_components: Vec::new(),
         };
         let drawer =
             shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);

@@ -1447,7 +1447,7 @@ pub struct PreBill {
 /// minus what was paid out, is what was expected, and the count minus the expectation is the
 /// variance ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
 /// decision 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShiftReport {
     /// The shift.
     pub shift_id: ShiftId,
@@ -1465,6 +1465,11 @@ pub struct ShiftReport {
     pub counted_amount: Money,
     /// Counted minus expected. Negative means short.
     pub variance: Money,
+    /// Its bills' tax by component and rate, in order of name and then rate: what the tax lines of
+    /// each bill settled on the shift recorded (ADR-0168 decision 5). Empty where none recorded any,
+    /// as in every store whose `tax` node names no components; a line that recorded none adds
+    /// nothing, so this lists what was recorded and claims no more.
+    pub tax_components: Vec<TaxComponentLine>,
 }
 
 impl ShiftReport {
@@ -1538,6 +1543,8 @@ impl DrawerFigures {
 pub struct CombinedReport {
     /// Each figure summed over the drawers below.
     pub totals: DrawerFigures,
+    /// The drawers' tax by component and rate summed, in their order (ADR-0168 decision 5).
+    pub tax_components: Vec<TaxComponentLine>,
     /// Each drawer's report, under its till's name, which the store's one drawer has none of.
     pub drawers: Vec<(Option<DisplayName>, ShiftReport)>,
 }
@@ -1916,7 +1923,7 @@ pub struct BillCheckView {
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2) is shown `expected_amount` before the close too, so the count can be made against
 /// it; `variance` stays the close's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShiftView {
     /// The shift.
     pub shift_id: ShiftId,
@@ -2307,7 +2314,7 @@ impl BillRecord {
 /// its settled bills have taken (the rollup the close compares against), the cash paid in and out
 /// outside a sale, and the blind count once entered. Keeping the count here but never revealing the
 /// expectation before close is what makes the close blind (§11.1).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ShiftRecord {
     /// The till whose drawer the shift counts, the `TERMINAL` entry's id, or `None` for the store's
     /// one drawer ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
@@ -2326,6 +2333,10 @@ struct ShiftRecord {
     paid_in: Money,
     paid_out: Money,
     counted: Option<Money>,
+    /// The tax by component and rate its settled bills recorded on their tax lines (ADR-0168
+    /// decision 5), one entry for each name and rate, and none for a line that recorded none.
+    /// Fee tax is inside the tax lines, so a fee's own components are not added again.
+    tax_components: Vec<TaxComponentLine>,
 }
 
 impl ShiftRecord {
@@ -2350,6 +2361,7 @@ impl ShiftRecord {
             paid_in: zero,
             paid_out: zero,
             counted: None,
+            tax_components: Vec::new(),
         }
     }
 
@@ -2363,6 +2375,13 @@ impl ShiftRecord {
             .checked_add(self.paid_in)?
             .checked_sub(self.paid_out)?)
     }
+}
+
+/// Puts components in the order a report lists them: by name, then by rate.
+fn by_name_and_rate(components: &mut [TaxComponentLine]) {
+    components.sort_by(|left, right| {
+        (&left.name, left.rate_basis_points).cmp(&(&right.name, right.rate_basis_points))
+    });
 }
 
 /// A closed drawer, every figure revealed, with its report and whether to print it.
@@ -3677,8 +3696,8 @@ impl Projection {
     }
 
     fn open_shift_record(&mut self, shift_id: ShiftId, record: ShiftRecord) {
-        self.shifts.insert(shift_id, record);
         self.open_shifts.insert(record.till, shift_id);
+        self.shifts.insert(shift_id, record);
     }
 
     /// Records that `shift_id`'s drawer was found open past its day's end on `today`, answering
@@ -3712,7 +3731,7 @@ impl Projection {
     }
 
     fn shift(&self, shift_id: ShiftId) -> Option<ShiftRecord> {
-        self.shifts.get(&shift_id).copied()
+        self.shifts.get(&shift_id).cloned()
     }
 
     fn record_shift_count(&mut self, shift_id: ShiftId, counted: Money, state: ShiftState) {
@@ -3745,6 +3764,49 @@ impl Projection {
                 CashMovement::PaidIn => record.paid_in = record.paid_in.checked_add(amount)?,
                 CashMovement::PaidOut => record.paid_out = record.paid_out.checked_add(amount)?,
             }
+        }
+        Ok(())
+    }
+
+    /// Folds a settle into the projection, live and replayed alike: the bill settles, its receipt is
+    /// kept to be copied (ADR-0164), and its tax by component joins `shift`, the shift its envelope
+    /// is stamped with ([`Self::collect_tax_components`]).
+    fn fold_settle(
+        &mut self,
+        settled: &BillingBillSettled,
+        shift: Option<ShiftId>,
+        business_date: BusinessDate,
+        settle_time: Timestamp,
+    ) -> Result<(), DomainError> {
+        self.settle_bill_record(settled.bill_id);
+        self.record_settled(
+            settled.bill_id,
+            SettledReceipt::of(settled, business_date, settle_time),
+        );
+        self.collect_tax_components(shift, settled)
+    }
+
+    /// Adds a settled bill's tax by component to `shift_id`'s record, if the settle was stamped with
+    /// a shift: each component its tax lines recorded, to the entry of its name and rate (ADR-0168
+    /// decision 5). Fee tax is inside the tax lines, so the fee lines' own components are not
+    /// added.
+    fn collect_tax_components(
+        &mut self,
+        shift_id: Option<ShiftId>,
+        settled: &BillingBillSettled,
+    ) -> Result<(), DomainError> {
+        let Some(record) = shift_id.and_then(|shift_id| self.shifts.get_mut(&shift_id)) else {
+            return Ok(());
+        };
+        for component in settled.tax_lines.iter().flat_map(|line| &line.components) {
+            billing::add_component(
+                &mut record.tax_components,
+                TaxComponentLine {
+                    name: component.name.clone(),
+                    rate_basis_points: component.rate_basis_points,
+                    tax: component.tax,
+                },
+            )?;
         }
         Ok(())
     }
@@ -7195,12 +7257,8 @@ impl<S: EventStore> Edge<S> {
 
         let table_state = {
             let mut projection = self.lock_projection();
-            projection.settle_bill_record(bill_id);
             // What the envelope carries, so a box that replays the log keeps the same record.
-            projection.record_settled(
-                bill_id,
-                SettledReceipt::of(&settled, ctx.business_date, ctx.now),
-            );
+            projection.fold_settle(&settled, shift, ctx.business_date, ctx.now)?;
             projection.collect_cash(shift, cash_taken)?;
             bill.table_id
                 .map(|table_id| projection.table_state(table_id))
@@ -7518,8 +7576,9 @@ impl<S: EventStore> Edge<S> {
 
         let currency = self.session().currency;
         let record = ShiftRecord::opened(opening_float, currency, till, ctx.now, ctx.business_date);
+        let view = self.shift_view(shift_id, &record);
         self.lock_projection().open_shift_record(shift_id, record);
-        Ok(self.shift_view(shift_id, &record))
+        Ok(view)
     }
 
     /// The shift trading now, as a device may see it: its id, its state and — once counted — the
@@ -7696,9 +7755,9 @@ impl<S: EventStore> Edge<S> {
                         .open_shift_of(till)
                         .and_then(|shift_id| Some((shift_id, projection.shift(shift_id)?)))
                 };
-                let shift = open.map(|(shift_id, record)| {
-                    let mut view = self.shift_view(shift_id, &record);
-                    if another_till(scope, &record) && !sees_others {
+                let shift = open.as_ref().map(|(shift_id, record)| {
+                    let mut view = self.shift_view(*shift_id, record);
+                    if another_till(scope, record) && !sees_others {
                         view.expected_amount = None;
                     }
                     view
@@ -7986,9 +8045,18 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::VarianceReasonRequired(owing));
         }
         let combined = if mode == CloseReport::Combined {
-            let reports: Vec<ShiftReport> = closed.iter().filter_map(|view| view.report).collect();
+            let reports: Vec<ShiftReport> = closed
+                .iter()
+                .filter_map(|view| view.report.clone())
+                .collect();
+            let mut tax_components = Vec::new();
+            for component in reports.iter().flat_map(|report| &report.tax_components) {
+                billing::add_component(&mut tax_components, component.clone())?;
+            }
+            by_name_and_rate(&mut tax_components);
             Some(CombinedReport {
                 totals: DrawerFigures::total(&reports, self.session().currency)?,
+                tax_components,
                 drawers: named
                     .iter()
                     .zip(reports)
@@ -8044,6 +8112,8 @@ impl<S: EventStore> Edge<S> {
             // Absent unless the variance owes a reason, which writes today's bytes (decision 12).
             reason_code_id: None,
         };
+        let mut tax_components = record.tax_components.clone();
+        by_name_and_rate(&mut tax_components);
         let report = ShiftReport {
             shift_id,
             opening_float: record.opening_float,
@@ -8053,6 +8123,7 @@ impl<S: EventStore> Edge<S> {
             expected_amount,
             counted_amount,
             variance,
+            tax_components,
         };
         Ok((payload, report))
     }
@@ -8182,6 +8253,7 @@ impl<S: EventStore> Edge<S> {
             let projection = self.lock_projection();
             let record = projection.shift(shift_id);
             let trading = record
+                .as_ref()
                 .is_some_and(|record| projection.open_shift_of(record.till) == Some(shift_id));
             (record, trading)
         };
@@ -8475,11 +8547,12 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.settle_bill_record(event.bill_id);
-                projection.record_settled(
-                    event.bill_id,
-                    SettledReceipt::of(&event, envelope.business_date, envelope.event_time),
-                );
+                projection.fold_settle(
+                    &event,
+                    envelope.shift_id,
+                    envelope.business_date,
+                    envelope.event_time,
+                )?;
             }
             EventType::BillingReceiptReprinted => {
                 let event: BillingReceiptReprinted =
