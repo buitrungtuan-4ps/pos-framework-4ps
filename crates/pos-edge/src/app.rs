@@ -1189,13 +1189,22 @@ pub enum AppError {
     /// would send an operator to the wrong row.
     #[error("that reason code is not valid for voiding")]
     VoidReasonNotValid,
-    /// A paid in, a paid out or a no-sale opening cited a reason the store's managed list does not
-    /// hold for that act ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+    /// A paid in, a paid out, a no-sale opening or a close's over or short cited a reason the store's
+    /// managed list does not hold for that act ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md),
+    /// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
     ///
-    /// One refusal for the three: they are all the drawer's acts, and the till offers each only the
+    /// One refusal for the four: they are all the drawer's acts, and the till offers each only the
     /// reasons listed for it, so a message naming the drawer sends an operator to the right rows.
-    #[error("that reason code is not valid for this cash movement")]
+    #[error("that reason code is not valid for this act on the drawer")]
     CashReasonNotValid,
+    /// A close of a counted drawer over or short by more than the store's
+    /// `shift.variance_reason_minor`, while the store's list offers a reason for that, without one
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
+    ///
+    /// Carries each such drawer as its close would show it. Its count is final, so these are the
+    /// figures the close reveals, shown to the person closing it, where the till asks the reason.
+    #[error("a drawer's over or short is beyond the store's limit; give a reason to close it")]
+    VarianceReasonRequired(Vec<ShiftView>),
     /// A paid in or a paid out named a shift that is not the one trading, or one already counted
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
     ///
@@ -7805,7 +7814,7 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         shift_id: ShiftId,
     ) -> Result<ShiftView, AppError> {
-        self.close_shift_at(actor, TillScope::default(), shift_id, None)
+        self.close_shift_at(actor, TillScope::default(), shift_id, None, None)
             .await
     }
 
@@ -7813,18 +7822,24 @@ impl<S: EventStore> Edge<S> {
     /// needs `cash.shift.manage_other_till`, held directly or approved with a holder's PIN
     /// (ADR-0167 decision 3). The report it asks for is that drawer's alone.
     ///
+    /// A drawer over or short by more than the store's `shift.variance_reason_minor` closes with
+    /// `reason`, which `cash.shift.closed` records, where the store's list offers a reason for that
+    /// (decision 12). Otherwise `reason` is not asked for, and is ignored.
+    ///
     /// # Errors
     ///
     /// [`AppError::UnknownShift`] for a shift the edge does not know, [`AppError::Domain`] if the
     /// shift has not been counted (a blind close cannot skip the count) or a permission is not held,
-    /// the approval refusals of [`Self::open_shift_at`], or [`AppError`] if the store cannot be
-    /// written.
+    /// the approval refusals of [`Self::open_shift_at`], [`AppError::VarianceReasonRequired`] for a
+    /// variance owed a reason and given none, [`AppError::CashReasonNotValid`] for a reason the
+    /// store's list does not hold for it, or [`AppError`] if the store cannot be written.
     pub async fn close_shift_at(
         &self,
         actor: Actor,
         scope: TillScope,
         shift_id: ShiftId,
         approval: Option<&Approval>,
+        reason: Option<ReasonCodeId>,
     ) -> Result<ShiftView, AppError> {
         let mut ctx = self.decision_ctx(actor)?;
         let record = self
@@ -7833,7 +7848,14 @@ impl<S: EventStore> Edge<S> {
             .ok_or(AppError::UnknownShift)?;
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
-        let (payload, report) = self.closing(shift_id, &record)?;
+        let (mut payload, report) = self.closing(shift_id, &record)?;
+        if self.owes_variance_reason(report.variance) {
+            let Some(reason) = reason else {
+                let owing = self.owing_view(shift_id, &record, &report);
+                return Err(AppError::VarianceReasonRequired(vec![owing]));
+            };
+            payload.reason_code_id = Some(self.variance_reason(reason)?);
+        }
         self.commit_approved(&ctx, &payload, Some(shift_id), approver)
             .await?;
         self.anchor_chain(&ctx).await?;
@@ -7860,18 +7882,23 @@ impl<S: EventStore> Edge<S> {
     /// [`ClosedDrawers::combined`]. Where it prints per drawer each prints its own report, and where
     /// it prints none none does.
     ///
+    /// A drawer whose over or short owes a reason closes with the one `reasons` gives its shift, as
+    /// [`Self::close_shift_at`] closes with one (ADR-0167 decision 12).
+    ///
     /// # Errors
     ///
     /// [`AppError::UnknownShift`] for a shift the edge does not know, [`AppError::Domain`] for one
     /// that is not counted or a permission not held, the approval refusals of
-    /// [`Self::open_shift_at`], or [`AppError`] if the store cannot be written. Nothing closes on
-    /// any of them.
+    /// [`Self::open_shift_at`], [`AppError::CashReasonNotValid`] for a reason the store's list does
+    /// not hold for a variance, [`AppError::VarianceReasonRequired`] naming every drawer still owed
+    /// one, or [`AppError`] if the store cannot be written. Nothing closes on any of them.
     pub async fn close_shifts_at(
         &self,
         actor: Actor,
         scope: TillScope,
         shift_ids: &[ShiftId],
         approval: Option<&Approval>,
+        reasons: &[(ShiftId, ReasonCodeId)],
     ) -> Result<ClosedDrawers, AppError> {
         let mut ctx = self.decision_ctx(actor)?;
         let mut named: Vec<(ShiftId, ShiftRecord)> = Vec::with_capacity(shift_ids.len());
@@ -7889,9 +7916,17 @@ impl<S: EventStore> Edge<S> {
         let mode = self.session().shift.close_report();
         let mut prepared = Vec::with_capacity(named.len());
         let mut closed = Vec::with_capacity(named.len());
+        let mut owing = Vec::new();
         for (shift_id, record) in &named {
             let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
-            let (payload, report) = self.closing(*shift_id, record)?;
+            let (mut payload, report) = self.closing(*shift_id, record)?;
+            if self.owes_variance_reason(report.variance) {
+                let Some((_, reason)) = reasons.iter().find(|(shift, _)| shift == shift_id) else {
+                    owing.push(self.owing_view(*shift_id, record, &report));
+                    continue;
+                };
+                payload.reason_code_id = Some(self.variance_reason(*reason)?);
+            }
             prepared.push(self.prepare_on(&ctx, &payload, Some(*shift_id))?);
             if let Some(approver) = approver.filter(|_| another_till(scope, record)) {
                 let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
@@ -7900,6 +7935,10 @@ impl<S: EventStore> Edge<S> {
             let print = decision.effects.contains(&Effect::PrintShiftReport)
                 && mode == CloseReport::PerDrawer;
             closed.push(closed_view(record.till, report, print));
+        }
+        // Every drawer or none: one still owed a reason closes none, and the refusal names each.
+        if !owing.is_empty() {
+            return Err(AppError::VarianceReasonRequired(owing));
         }
         let combined = if mode == CloseReport::Combined {
             let reports: Vec<ShiftReport> = closed.iter().filter_map(|view| view.report).collect();
@@ -7957,6 +7996,8 @@ impl<S: EventStore> Edge<S> {
             counted_amount,
             variance,
             terminal_device_id: record.till,
+            // Absent unless the variance owes a reason, which writes today's bytes (decision 12).
+            reason_code_id: None,
         };
         let report = ShiftReport {
             shift_id,
@@ -7969,6 +8010,53 @@ impl<S: EventStore> Edge<S> {
             variance,
         };
         Ok((payload, report))
+    }
+
+    /// Whether a close over or short by `variance` owes a reason (ADR-0167 decision 12): the store's
+    /// `shift.variance_reason_minor` is above 0, the variance is beyond it either way, and the
+    /// store's list offers a reason for a variance. A store whose list offers none still closes.
+    fn owes_variance_reason(&self, variance: Money) -> bool {
+        let session = self.session();
+        let limit = session.shift.variance_reason_minor();
+        limit > 0
+            && variance.amount_minor.unsigned_abs() > limit.unsigned_abs()
+            && session
+                .reason_codes
+                .for_action(ReasonAction::CashVariance)
+                .next()
+                .is_some()
+    }
+
+    /// `reason`, where the store's list holds it for a drawer's over or short.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CashReasonNotValid`] where it does not.
+    fn variance_reason(&self, reason: ReasonCodeId) -> Result<ReasonCodeId, AppError> {
+        if self
+            .session()
+            .reason_codes
+            .accepts(reason, ReasonAction::CashVariance)
+        {
+            Ok(reason)
+        } else {
+            Err(AppError::CashReasonNotValid)
+        }
+    }
+
+    /// `record`'s counted drawer as a close that owes a reason shows it: still counted, with the
+    /// close's expectation and variance, which its count has already fixed (ADR-0167 decision 12).
+    fn owing_view(
+        &self,
+        shift_id: ShiftId,
+        record: &ShiftRecord,
+        report: &ShiftReport,
+    ) -> ShiftView {
+        ShiftView {
+            expected_amount: Some(report.expected_amount),
+            variance: Some(report.variance),
+            ..self.shift_view(shift_id, record)
+        }
     }
 
     /// The name of `till`'s `TERMINAL` entry, which the store's one drawer, `None`, has none of.

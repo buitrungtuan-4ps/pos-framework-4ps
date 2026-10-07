@@ -12,7 +12,8 @@
 //! The drawer fields, `drawer_model`, `close_report` and `drawer_day_end`
 //! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)), each joined the register
 //! with the release whose edge honours them, `drawer_model` once the till's screens for a drawer per
-//! till had shipped (decision 7).
+//! till had shipped (decision 7). `variance_reason_minor` (decision 12) is read ahead of its entry,
+//! which joins the register with the till's step that gives the reason.
 
 use core::ops::RangeInclusive;
 
@@ -29,6 +30,15 @@ pub const OPENING_FLOAT_MINOR: RangeInclusive<i64> = 0..=1_000_000_000;
 /// The opening float when nothing sets one: `0`, which fills in nothing, as the Shift screen did
 /// before the setting.
 pub const DEFAULT_OPENING_FLOAT_MINOR: i64 = 0;
+
+/// The over or short a drawer may close with before its close asks a reason, in the store currency's
+/// minor unit, both bounds included
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). A billion at
+/// the most, as [`OPENING_FLOAT_MINOR`] bounds a float, so a stray digit is refused rather than read.
+pub const VARIANCE_REASON_MINOR: RangeInclusive<i64> = 0..=1_000_000_000;
+
+/// The limit when nothing sets one: `0`, which asks no close for a reason, as before the setting.
+pub const DEFAULT_VARIANCE_REASON_MINOR: i64 = 0;
 
 wire_enum! {
     /// Whether a store sells while no shift is open.
@@ -102,6 +112,10 @@ pub struct PublishedShift {
     /// [`PublishedShift::drawer_day_end`].
     #[serde(default, skip_serializing_if = "is_absent")]
     pub drawer_day_end: Open<DrawerDayEnd>,
+    /// The over or short beyond which a close asks a reason, in the store currency's minor unit.
+    /// Read it through [`PublishedShift::variance_reason_minor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variance_reason_minor: Option<i64>,
 }
 
 impl PublishedShift {
@@ -174,6 +188,17 @@ impl PublishedShift {
             DrawerDayEnd::RequireClose => DrawerDayEnd::RequireClose,
         }
     }
+
+    /// The over or short, either way, beyond which a close asks a reason, in the store currency's
+    /// minor unit (ADR-0167 decision 12): the node's number when it is within
+    /// [`VARIANCE_REASON_MINOR`], and [`DEFAULT_VARIANCE_REASON_MINOR`], which asks none,
+    /// otherwise.
+    #[must_use]
+    pub fn variance_reason_minor(&self) -> i64 {
+        self.variance_reason_minor
+            .filter(|minor| VARIANCE_REASON_MINOR.contains(minor))
+            .unwrap_or(DEFAULT_VARIANCE_REASON_MINOR)
+    }
 }
 
 #[cfg(test)]
@@ -213,6 +238,37 @@ mod tests {
                     .expect("the node parses");
             assert_eq!(node.opening_float_minor(), read, "{published}");
         }
+    }
+
+    #[test]
+    fn a_variance_limit_within_its_bounds_is_read_and_one_outside_them_asks_nothing() {
+        let node: PublishedShift = serde_json::from_str("{}").expect("an empty node parses");
+        assert_eq!(node.variance_reason_minor(), 0, "absent asks no reason");
+        for (published, read) in [
+            ("0", 0),
+            ("20000", 20_000),
+            ("1000000000", 1_000_000_000),
+            ("1000000001", 0),
+            ("-1", 0),
+        ] {
+            let node: PublishedShift =
+                serde_json::from_str(&format!(r#"{{ "variance_reason_minor": {published} }}"#))
+                    .expect("the node parses");
+            assert_eq!(node.variance_reason_minor(), read, "{published}");
+        }
+        let set = PublishedShift {
+            variance_reason_minor: Some(20_000),
+            ..PublishedShift::default()
+        };
+        let text = serde_json::to_string(&set).expect("serialise");
+        assert_eq!(
+            text,
+            r#"{"no_shift_selling":"NO_SHIFT_SELLING_UNSPECIFIED","variance_reason_minor":20000}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<PublishedShift>(&text).ok(),
+            Some(set)
+        );
     }
 
     #[test]

@@ -27910,6 +27910,11 @@ async fn publishing_reason_codes_writes_the_node_and_names_what_nothing_now_cove
         !uncovered.contains(&serde_json::json!("REASON_ACTION_UNSPECIFIED")),
         "the wire enum's zero value is not an act anyone performs, so it is not a gap"
     );
+    assert!(
+        !uncovered.contains(&serde_json::json!("REASON_ACTION_CASH_VARIANCE")),
+        "a list with no reason for a variance still lets every drawer close (ADR-0167 decision \
+         12), so it is not a gap either: {answered}"
+    );
 
     // And the node is on the store's Store layer (index 2), beside the other keys.
     let state = config_trees

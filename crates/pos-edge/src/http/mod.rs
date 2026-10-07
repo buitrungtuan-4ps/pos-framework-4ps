@@ -677,6 +677,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::CashReasonNotValid => "CASH_REASON_NOT_VALID",
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
+        AppError::VarianceReasonRequired(_) => "VARIANCE_REASON_REQUIRED",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -705,6 +706,11 @@ pub(crate) fn error_response(error: &AppError) -> Response {
             refusal(StatusCode::INTERNAL_SERVER_ERROR, reason, inner.to_string())
         }
         AppError::Domain(inner) => refusal(StatusCode::CONFLICT, reason, inner.to_string()),
+        // The one refusal with a body to read: the drawers still owed a reason, with the figures the
+        // till shows beside its reasons (ADR-0167 decision 12).
+        AppError::VarianceReasonRequired(shifts) => {
+            shifts::variance_reasons_required(reason, error.to_string(), shifts)
+        }
         AppError::NoOpenOrder
         | AppError::UnknownLine
         | AppError::UnroutableLine

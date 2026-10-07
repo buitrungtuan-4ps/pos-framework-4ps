@@ -685,6 +685,13 @@ event_catalogue! {
         /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal_device_id: Option<DeviceId>,
+        /// Why the drawer is over or short, where the variance is beyond the store's
+        /// `shift.variance_reason_minor` and the store's list offers a reason for it
+        /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12,
+        /// `REASON_ACTION_CASH_VARIANCE`). Absent otherwise, and left off the wire, so a close that
+        /// owes no reason writes the bytes it wrote before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason_code_id: Option<ReasonCodeId>,
     },
     /// The drawer opened.
     CashDrawerOpened => "cash.drawer.opened", version = 1 {
@@ -1631,6 +1638,7 @@ mod tests {
             counted_amount: vnd(1_600_000),
             variance: vnd(-50_000),
             terminal_device_id: None,
+            reason_code_id: None,
         };
         names_its_till_only_when_it_has_one(
             &closed,
@@ -1700,5 +1708,50 @@ mod tests {
             till,
             r#"{"amount":{"currency_code":"VND","amount_minor":50000},"reason_code_id":"00000000000000000000000009"}"#,
         );
+    }
+
+    #[test]
+    fn a_close_names_its_reason_only_where_its_variance_owed_one() {
+        // ADR-0167 decision 12: a close that owes no reason writes the bytes the test above holds,
+        // and one that does adds its reason after every field before it, the till's included.
+        use super::CashShiftClosed;
+        use crate::ids::{ReasonCodeId, ShiftId};
+        use crate::money::{CurrencyCode, Money};
+
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let reason = ReasonCodeId::new(Ulid::from_u128(9));
+        let till = DeviceId::new(Ulid::from_u128(0x7111));
+        let explained = CashShiftClosed {
+            closed_shift_id: ShiftId::new(Ulid::from_u128(7)),
+            expected_amount: vnd(1_650_000),
+            counted_amount: vnd(1_600_000),
+            variance: vnd(-50_000),
+            terminal_device_id: None,
+            reason_code_id: Some(reason),
+        };
+        let figures = r#""closed_shift_id":"00000000000000000000000007","expected_amount":{"currency_code":"VND","amount_minor":1650000},"counted_amount":{"currency_code":"VND","amount_minor":1600000},"variance":{"currency_code":"VND","amount_minor":-50000}"#;
+        let at_a_till = CashShiftClosed {
+            terminal_device_id: Some(till),
+            ..explained.clone()
+        };
+        for (closed, written) in [
+            (
+                &explained,
+                format!(r#"{{{figures},"reason_code_id":"{reason}"}}"#),
+            ),
+            (
+                &at_a_till,
+                format!(
+                    r#"{{{figures},"terminal_device_id":"{till}","reason_code_id":"{reason}"}}"#
+                ),
+            ),
+        ] {
+            let encoded = RawPayload::encode(closed).expect("encodes");
+            assert_eq!(encoded.as_json(), written);
+            assert_eq!(
+                &encoded.decode::<CashShiftClosed>().expect("decodes"),
+                closed
+            );
+        }
     }
 }

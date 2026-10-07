@@ -81,6 +81,7 @@ cash.drawer.paid_out	schema_version=1
 cash.shift.closed	field=closed_shift_id
 cash.shift.closed	field=counted_amount
 cash.shift.closed	field=expected_amount
+cash.shift.closed	field=reason_code_id
 cash.shift.closed	field=terminal_device_id
 cash.shift.closed	field=variance
 cash.shift.closed	schema_version=1
