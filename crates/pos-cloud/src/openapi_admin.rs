@@ -131,6 +131,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_revoke_device,
         crate::http::admin_set_printer_paper,
         crate::http::admin_set_terminal_receipt,
+        crate::http::admin_set_terminal_float,
         crate::http::admin_export_revenue_fees,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
@@ -220,12 +221,13 @@ pub(crate) struct ErrorResponse {
         (
             name = "printers",
             description = "What paper each approved printer takes and whether it cuts it \
-                           (ADR-0160 decision 2), and which printer a till's receipts go to and \
-                           the languages they print in (decision 4). The rest of the \
-                           device-onboarding surface is still coverage debt; these writes are \
-                           documented because a route new to this surface is, and because a \
-                           fork's own console needs to know that a printer nobody has set prints \
-                           as 80 mm paper with a cutter, that a till nobody has set prints as the \
+                           (ADR-0160 decision 2), which printer a till's receipts go to and the \
+                           languages they print in (decision 4), and the float a till's drawer \
+                           opens with (ADR-0167 decision 4). The rest of the device-onboarding \
+                           surface is still coverage debt; these writes are documented because a \
+                           route new to this surface is, and because a fork's own console needs \
+                           to know that a printer nobody has set prints as 80 mm paper with a \
+                           cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
         ),

@@ -3163,6 +3163,10 @@ where
             "/admin/devices/proposals/{id}/receipt",
             post(admin_set_terminal_receipt::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/float",
+            post(admin_set_terminal_float::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -4103,8 +4107,149 @@ fn till_receipt_refusal(
     }
 }
 
+/// An operator says what an approved terminal's drawer opens with by default.
+///
+/// The float is the till's whole float state, as the receipt fields are its receipt state: an absent
+/// or `null` float is the store's again.
+#[derive(Debug, Clone, Deserialize)]
+struct SetFloatRequest {
+    /// The tenant the terminal belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The float, a whole amount in the store currency's minor unit, or `null` for the store's
+    /// `shift.opening_float_minor`.
+    #[serde(default)]
+    opening_float_minor: Option<i64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/float",
+    params(
+        ("id" = String, Path, description = "The terminal's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the terminal was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; and `opening_float_minor`, a whole amount in the store \
+                       currency's minor unit from `0` to `1000000000`, the bounds of \
+                       `shift.opening_float_minor`, or `null` or absent for that setting's float. \
+                       It is the till's whole float state, so a float left out is the store's \
+                       again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`, and prefills the float the \
+                                      till's drawer is started on; an edge older than 0.14.1 \
+                                      ignores it and prefills the store's"),
+        (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), the \
+                                      float is outside its bounds (`opening_float_minor`, \
+                                      `OUT_OF_RANGE`), an id is not a ULID, or If-Match is \
+                                      absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The terminal changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says what a till's drawer opens with by default
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+///
+/// The receipts' guards, for the receipts' reasons: `ManageDevices`, an `If-Match`, and an audit
+/// entry, since the float is the cash the Shift screen proposes a till's drawer start with. The
+/// bounds are `shift.opening_float_minor`'s, which pos-proto holds, so a till is never given a
+/// float the store could not be; the edge reads one outside them as the store's anyway.
+async fn admin_set_terminal_float<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetFloatRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let bounds = pos_proto::shift::OPENING_FLOAT_MINOR;
+    if let Some(minor) = request.opening_float_minor
+        && !bounds.contains(&minor)
+    {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "opening_float_minor must be from {} to {}",
+                bounds.start(),
+                bounds.end()
+            ),
+            &[("opening_float_minor", "OUT_OF_RANGE")],
+        );
+    }
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let approved = match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Approved)
+        .await
+    {
+        Ok(approved) => approved,
+        Err(error) => return device_error_response(&error),
+    };
+    let terminal = id.to_string();
+    match approved.iter().find(|row| row.id == terminal) {
+        None => return not_found("device"),
+        Some(row) if row.kind != DeviceKind::Terminal.as_wire() => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "only a terminal has a drawer, and so a float, of its own",
+                &[("id", "WRONG_KIND")],
+            );
+        }
+        Some(_) => {}
+    }
+    let written = state
+        .devices
+        .set_float(
+            tenant_id,
+            id,
+            request.opening_float_minor,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_float",
+        serde_json::json!({ "opening_float_minor": request.opening_float_minor }),
+        written,
+    )
+    .await
+}
+
 /// The answer to a conditional write on an approved device: an agent pick, a drawer mark, a
-/// printer's paper or a till's receipts.
+/// printer's paper, a till's receipts or its float.
 ///
 /// A write that changed the row is audited as `action`, with what the device now says as the
 /// entry's `after`: each of them decides what a store does with real paper or real cash. A stale
@@ -12886,9 +13031,10 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                         .receipt_second_language
                         .as_deref()
                         .map_or_else(Open::default, Open::parse),
-                    // No column holds a till's own float until the console sets one (ADR-0167
-                    // decision 4), so every till runs the store's, as it did before.
-                    opening_float_minor: None,
+                    // Verbatim, as the receipts are, and absent where nobody has said: the edge
+                    // reads absent as the store's float (ADR-0167 decision 4), so a store that
+                    // sets none publishes the node it did before.
+                    opening_float_minor: row.opening_float_minor,
                 })
             })
             .collect(),
@@ -36245,7 +36391,8 @@ mod client_ip_tests {
 mod devices_compile_tests {
     //! What a till's receipts compile to ([`super::compile_devices`], ADR-0160 decision 4), and the
     //! rule for a till whose receipt printer leaves the store's approved devices: it is published
-    //! without the field, and prints at the store's receipt printer.
+    //! without the field, and prints at the store's receipt printer. And what a till's float compiles
+    //! to (ADR-0167 decision 4): the float where one is set, and not a byte where none is.
     use super::{DeviceProposalSummary, compile_devices};
     use pos_proto::devices::PublishedDevice;
     use pos_proto::ids::DeviceId;
@@ -36274,6 +36421,7 @@ mod devices_compile_tests {
             receipt_printer_id: None,
             receipt_language: None,
             receipt_second_language: None,
+            opening_float_minor: None,
             status: "approved".to_owned(),
             version: "1".to_owned(),
         }
@@ -36346,6 +36494,45 @@ mod devices_compile_tests {
                 Some(ReceiptSecondLanguage::Vietnamese)
             );
         }
+    }
+
+    #[test]
+    fn a_till_carries_its_own_float_and_one_nobody_set_carries_no_key() {
+        // `0` is a float, a drawer started empty, and not the store's.
+        let float = |id, minor| DeviceProposalSummary {
+            opening_float_minor: Some(minor),
+            ..row(id, "terminal", None, None)
+        };
+        let rows = [
+            float(7, 250_000),
+            float(8, 0),
+            row(9, "terminal", None, None),
+        ];
+        assert_eq!(compiled(&rows, 7).opening_float_minor(), Some(250_000));
+        assert_eq!(compiled(&rows, 8).opening_float_minor(), Some(0));
+        let door = serde_json::to_value(compiled(&rows, 9)).expect("json");
+        assert!(door.get("opening_float_minor").is_none(), "{door}");
+    }
+
+    #[test]
+    fn a_node_whose_tills_set_no_float_is_the_bytes_it_was_before_the_column() {
+        // Migration 0085 leaves every row's float null, so a store nobody has set a float for
+        // publishes the devices node it published before, byte for byte.
+        let rows = [
+            row(1, "printer", Some("network"), None),
+            row(7, "terminal", None, None),
+        ];
+        let json = serde_json::to_string(&compile_devices(&rows)).expect("json");
+        assert_eq!(
+            json,
+            concat!(
+                r#"{"devices":[{"device_id":"00000000000000000000000001","#,
+                r#""kind":"DEVICE_KIND_PRINTER","connection":"DEVICE_CONNECTION_NETWORK","#,
+                r#""address":"","name":"Device 1"},"#,
+                r#"{"device_id":"00000000000000000000000007","kind":"DEVICE_KIND_TERMINAL","#,
+                r#""connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Device 7"}]}"#,
+            )
+        );
     }
 }
 

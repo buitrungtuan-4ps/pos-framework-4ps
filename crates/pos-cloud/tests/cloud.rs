@@ -4379,6 +4379,8 @@ struct DeviceRow {
     receipt_printer_id: Option<DeviceProposalId>,
     receipt_language: Option<ReceiptLanguage>,
     receipt_second_language: Option<ReceiptSecondLanguage>,
+    /// A till's own float, set in the console (ADR-0167 decision 4). `None` is the store's.
+    opening_float_minor: Option<i64>,
     status: DeviceProposalStatus,
     /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
     /// reason about. Bumped by every write that changes the row.
@@ -4443,6 +4445,7 @@ impl DeviceProposalStore for FakeDevices {
             receipt_printer_id: None,
             receipt_language: None,
             receipt_second_language: None,
+            opening_float_minor: None,
             status: DeviceProposalStatus::Pending,
             version: self.mint(),
         });
@@ -4484,6 +4487,7 @@ impl DeviceProposalStore for FakeDevices {
                 receipt_second_language: row
                     .receipt_second_language
                     .map(|language| language.as_wire().to_owned()),
+                opening_float_minor: row.opening_float_minor,
                 status: row.status.as_wire().to_owned(),
                 version: row.version.to_string(),
             })
@@ -4537,6 +4541,7 @@ impl DeviceProposalStore for FakeDevices {
             receipt_printer_id: None,
             receipt_language: None,
             receipt_second_language: None,
+            opening_float_minor: None,
             // Created resolved. The console write by a named admin *is* the decision, because
             // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
             status: DeviceProposalStatus::Approved,
@@ -4596,6 +4601,18 @@ impl DeviceProposalStore for FakeDevices {
             row.receipt_printer_id = printer;
             row.receipt_language = language;
             row.receipt_second_language = second_language;
+        }))
+    }
+
+    async fn set_float(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        opening_float_minor: Option<i64>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.opening_float_minor = opening_float_minor;
         }))
     }
 }
@@ -4710,6 +4727,15 @@ async fn device_onboarding_propose_then_approve_then_appears_approved() {
 /// The propose+approve surface and the publish surface over one device store and one config tree —
 /// production's two `merge`s, in a test.
 fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
+    device_publish_app_audited(keys, trees, Arc::new(NoopAuditRecorder))
+}
+
+/// [`device_publish_app`], recording to `audit`.
+fn device_publish_app_audited(
+    keys: &FakeKeys,
+    trees: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let devices = FakeDevices::default();
     let admin = provisioned_admin();
     let app = app_all(
@@ -4726,14 +4752,14 @@ fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
             admin.clone(),
             keys.clone(),
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit.clone(),
         ))
         .merge(http::device_publish_router(
             devices,
             trees,
             admin,
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
         ))
 }
 
@@ -5726,6 +5752,172 @@ async fn a_tills_receipt_printer_and_languages_are_published_as_set_and_cleared_
     assert!(
         fields.iter().all(|field| cleared[*field].is_null()),
         "fields left out are the store's again: {cleared}"
+    );
+}
+
+/// Says what the terminal `id`'s drawer opens with, at `version`, and answers the status and the
+/// body, `null` for a `204`.
+async fn post_till_float(
+    router: &axum::Router,
+    cookie: &str,
+    id: &str,
+    version: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{id}/float"),
+            body,
+            cookie,
+            version,
+        ))
+        .await
+        .expect("route the till's float");
+    let status = response.status();
+    let body = body_bytes(response).await;
+    (
+        status,
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A till's float outside `shift.opening_float_minor`'s bounds, on a device that is not a
+/// terminal, or on one the tenant has not approved, is refused, and nothing is written
+/// (**ADR-0167** decision 4). The bounds themselves are floats.
+#[tokio::test]
+async fn a_tills_float_is_refused_outside_the_settings_bounds_and_off_a_terminal() {
+    let TillStore {
+        router,
+        cookie,
+        token,
+        tenant_ulid,
+        store_ulid,
+        counter,
+        pending,
+        bar,
+        ..
+    } = till_store().await;
+    let body = |minor: i64| serde_json::json!({ "tenant_id": tenant_ulid.clone(), "opening_float_minor": minor });
+    let refused_as = |refused: &serde_json::Value, field: &str, reason: &str| {
+        assert_eq!(refused["error"]["details"][0]["field"], field, "{refused}");
+        assert_eq!(
+            refused["error"]["details"][0]["reason"], reason,
+            "{refused}"
+        );
+    };
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+
+    for minor in [-1, 1_000_000_001, i64::MAX] {
+        let (status, refused) =
+            post_till_float(&router, &cookie, &bar, &version, &body(minor)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{minor}");
+        refused_as(&refused, "opening_float_minor", "OUT_OF_RANGE");
+    }
+    let at = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let (status, refused) = post_till_float(&router, &cookie, &counter, &at, &body(100_000)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a printer keeps no drawer");
+    refused_as(&refused, "id", "WRONG_KIND");
+    let unknown = DeviceId::new(Ulid::from_u128(0xDEAD)).to_string();
+    for id in [unknown.as_str(), pending.as_str()] {
+        let (status, _) = post_till_float(&router, &cookie, id, &version, &body(100_000)).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "not an approved device: {id}"
+        );
+    }
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        published.get("opening_float_minor").is_none(),
+        "nothing refused was written: {published}"
+    );
+
+    for minor in [0, 1_000_000_000] {
+        let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+        let (status, _) = post_till_float(&router, &cookie, &bar, &version, &body(minor)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{minor}");
+        let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+        assert_eq!(published["opening_float_minor"], minor, "{published}");
+    }
+}
+
+/// A till's float is saved under the receipts' conditional write, published as set, cleared back
+/// to the store's, and each save is audited (**ADR-0167** decision 4).
+///
+/// The default is asserted first, because a fleet upgrade rests on it: a terminal nobody set
+/// publishes no float at all, so every till's drawer opens on the store's.
+#[tokio::test]
+async fn a_tills_float_is_published_as_set_cleared_to_the_stores_and_audited() {
+    let keys = FakeKeys::default();
+    let audit = FakeAudit::default();
+    let router = device_publish_app_audited(
+        &keys,
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let bar = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Bar till").await;
+    let door = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Door till").await;
+
+    let unset = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        unset.get("opening_float_minor").is_none(),
+        "a terminal nobody set publishes no float: {unset}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    let float =
+        serde_json::json!({ "tenant_id": tenant_ulid.clone(), "opening_float_minor": 250_000 });
+    let (status, _) = post_till_float(&router, &cookie, &bar, &version, &float).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = post_till_float(&router, &cookie, &bar, &version, &float).await;
+    assert_eq!(
+        status,
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert_eq!(published["opening_float_minor"], 250_000, "{published}");
+    let other = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &door).await;
+    assert!(
+        other.get("opening_float_minor").is_none(),
+        "only the till that was set carries a float: {other}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    let cleared = serde_json::json!({ "tenant_id": tenant_ulid.clone() });
+    let (status, _) = post_till_float(&router, &cookie, &bar, &version, &cleared).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cleared = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        cleared.get("opening_float_minor").is_none(),
+        "a float left out is the store's again: {cleared}"
+    );
+
+    let recorded = audit.list(None, 50).await.expect("list audit entries");
+    let floats: Vec<_> = recorded
+        .iter()
+        .rev()
+        .filter(|entry| entry.action == "device_proposal.set_float")
+        .map(|entry| (entry.entity_id.as_str(), entry.after.clone()))
+        .collect();
+    assert_eq!(
+        floats,
+        [
+            (
+                bar.as_str(),
+                Some(serde_json::json!({ "opening_float_minor": 250_000 }))
+            ),
+            (
+                bar.as_str(),
+                Some(serde_json::json!({ "opening_float_minor": null }))
+            ),
+        ],
+        "each saved float is recorded with what the till now says, and the refused one is not"
     );
 }
 

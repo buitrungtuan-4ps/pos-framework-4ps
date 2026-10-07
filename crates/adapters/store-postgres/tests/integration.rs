@@ -8400,6 +8400,89 @@ mod device_proposals {
         });
     }
 
+    /// A till's own float is written and read back through the column migration 0085 adds, under
+    /// the receipts' conditional write, kept across the next boot, and cleared with a null
+    /// (ADR-0167 decision 4).
+    ///
+    /// The default is the claim a fleet upgrade rests on: a terminal nobody set reads no float,
+    /// which is published as nothing, so no till's drawer opens differently because the column
+    /// appeared.
+    #[test]
+    fn a_tills_float_round_trips_through_the_next_boot_and_a_terminal_nobody_set_has_none() {
+        async fn float(devices: &store_postgres::PostgresDeviceProposals) -> (Option<i64>, String) {
+            let till = devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "TILL1")
+                .expect("the terminal");
+            (till.opening_float_minor, till.version)
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create_terminal("TILL1", TENANT_A, "store-1", "Bar till")
+                .await
+                .expect("create the terminal");
+            let (unset, version) = float(&devices).await;
+            assert_eq!(unset, None, "a terminal nobody set has no float of its own");
+
+            let moved = devices
+                .set_float(TENANT_A, "TILL1", Some(250_000), &version)
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            assert!(
+                devices
+                    .set_float(TENANT_A, "TILL1", None, &version)
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the float"
+            );
+            assert!(
+                devices
+                    .set_float("tenant-b", "TILL1", None, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's float"
+            );
+
+            store.migrate().await.expect("the next boot");
+            let (kept, version) = float(&devices).await;
+            assert_eq!(
+                kept,
+                Some(250_000),
+                "the next boot applies 0085 again and keeps what was written"
+            );
+            devices
+                .set_float(TENANT_A, "TILL1", Some(0), &version)
+                .await
+                .expect("the zero write")
+                .expect("a matching version writes");
+            let (zero, version) = float(&devices).await;
+            assert_eq!(
+                zero,
+                Some(0),
+                "a drawer started empty is a float, not the store's"
+            );
+            devices
+                .set_float(TENANT_A, "TILL1", None, &version)
+                .await
+                .expect("the clearing write")
+                .expect("a matching version clears");
+            assert_eq!(
+                float(&devices).await.0,
+                None,
+                "a till cleared is the store's again"
+            );
+        });
+    }
+
     /// Migration 0055 repairs the rows a two-spelling seam already wrote.
     ///
     /// Typing the argument stops the mistake being made again; it does nothing for the approvals

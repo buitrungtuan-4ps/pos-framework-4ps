@@ -166,6 +166,11 @@ pub struct DeviceProposalSummary {
     /// On a `terminal`, the second language an operator says this till's receipts print in, as its
     /// wire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's.
     pub receipt_second_language: Option<String>,
+    /// On a `terminal`, the float an operator says this till's drawer opens with by default, in the
+    /// store currency's minor unit
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). `None`
+    /// until somebody says, which is the store's `shift.opening_float_minor`.
+    pub opening_float_minor: Option<i64>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -178,7 +183,8 @@ pub struct DeviceProposalSummary {
 /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), a drawer mark
 /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
 /// a printer's paper or a till's receipts
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+/// or a till's float ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceWriteOutcome {
     /// The row was changed, and now sits at this version.
@@ -355,6 +361,25 @@ pub trait DeviceProposalStore {
         printer: Option<DeviceProposalId>,
         language: Option<ReceiptLanguage>,
         second_language: Option<ReceiptSecondLanguage>,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Says what an approved terminal's drawer opens with by default, in the store currency's minor
+    /// unit, or `None` for the store's `shift.opening_float_minor`
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is, for the same reasons. Like
+    /// [`Self::set_receipt`], this seam does not check that the device is a terminal, nor the
+    /// bounds: the route checks both before it writes.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_float(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        opening_float_minor: Option<i64>,
         expected: &str,
     ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
 }

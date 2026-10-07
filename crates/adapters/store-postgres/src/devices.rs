@@ -54,6 +54,9 @@ pub struct DeviceProposalRow {
     /// On a `terminal` row, the second language its receipts print in, as its wire token. `None`
     /// until an operator says, which is the store's.
     pub receipt_second_language: Option<String>,
+    /// On a `terminal` row, the float its drawer opens with by default, in the store currency's
+    /// minor unit (ADR-0167 decision 4). `None` until an operator says, which is the store's.
+    pub opening_float_minor: Option<i64>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The row's `xmin`, as a string: the version a conditional write must match (ADR-0094).
@@ -115,7 +118,8 @@ impl PostgresDeviceProposals {
             .query(
                 "SELECT id, store_id, kind, name, address, connection, station_id, \
                         agent_device_id, drawer_attached, paper_width, cuts_paper, status, \
-                        xmin::text, receipt_printer_id, receipt_language, receipt_second_language \
+                        xmin::text, receipt_printer_id, receipt_language, receipt_second_language, \
+                        opening_float_minor \
                  FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
@@ -142,6 +146,7 @@ impl PostgresDeviceProposals {
                 receipt_printer_id: row.get(13),
                 receipt_language: row.get(14),
                 receipt_second_language: row.get(15),
+                opening_float_minor: row.get(16),
             })
             .collect())
     }
@@ -305,6 +310,36 @@ impl PostgresDeviceProposals {
                     &receipt_second_language,
                     &expected,
                 ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Says what an **approved** terminal's drawer opens with by default, or `None` for the store's
+    /// float, only if the row is still at `expected` (ADR-0094's conditional write, ADR-0167
+    /// decision 4's float for one till).
+    ///
+    /// The bounds are the route's to check, as the setting's are. Returns what [`Self::set_agent`]
+    /// returns, for the same reason.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_float(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        opening_float_minor: Option<i64>,
+        expected: &str,
+    ) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "UPDATE device_proposals SET opening_float_minor = $3 \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $4 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &id, &opening_float_minor, &expected],
             )
             .await
             .map_err(unavailable)?;

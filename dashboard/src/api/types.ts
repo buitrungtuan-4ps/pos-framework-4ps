@@ -140,6 +140,12 @@ export interface DeviceProposalSummary {
    * the store's.
    */
   readonly receipt_second_language: string | null;
+  /**
+   * On a terminal, the float an operator says its drawer opens with by default, in the store
+   * currency's minor unit (ADR-0167 decision 4). `null` until somebody says, which is the store's
+   * `shift.opening_float_minor`.
+   */
+  readonly opening_float_minor: number | null;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**
