@@ -1669,6 +1669,7 @@
   "readiness.unread": "Không đọc được các vai trò ở cửa hàng này: {reason}",
   "reasonCodes.action.cashPaidIn": "Thu tiền mặt",
   "reasonCodes.action.cashPaidOut": "Chi tiền mặt",
+  "reasonCodes.action.cashVariance": "Đóng két bị thừa hoặc thiếu tiền",
   "reasonCodes.action.comp": "Tặng món",
   "reasonCodes.action.discount": "Giảm giá",
   "reasonCodes.action.drawerOpen": "Mở két ngoài giao dịch",

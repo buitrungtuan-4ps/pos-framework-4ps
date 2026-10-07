@@ -3,16 +3,17 @@
 
 //! The published `reason_codes` config node ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)):
 //! the managed list every action that must give a reason draws from — a void, a discount, a comp,
-//! a refund, an out-of-sale drawer opening, and the six more the event catalogue names below.
+//! a refund, an out-of-sale drawer opening, and the seven more the event catalogue names below.
 //!
 //! `docs/pos-spec.md` §11 **Fraud controls**, item 2, requires *"mandatory reasons from a
-//! cloud-managed list"* for six actions. Twelve event fields in [`crate::events`] carry a
-//! [`ReasonCodeId`] — the spec's six plus six the event catalogue adds (`sales.order.rejected_by_staff`,
-//! `cash.drawer.paid_in`, `cash.drawer.paid_out`, `inventory.stock.adjusted`,
-//! `inventory.stock.wasted`, `billing.fee.waived`) — and until this node existed, every one of them
-//! named a list nothing produced. [`ReasonAction`] therefore has a variant for each of the twelve,
-//! not only the spec's six: an operator who cannot author a reason for a cash paid-in cannot record
-//! one, and the field on that event would stay unfillable.
+//! cloud-managed list"* for six actions. Thirteen event fields in [`crate::events`] carry a
+//! [`ReasonCodeId`] — the spec's six plus seven the event catalogue adds
+//! (`sales.order.rejected_by_staff`, `cash.drawer.paid_in`, `cash.drawer.paid_out`,
+//! `inventory.stock.adjusted`, `inventory.stock.wasted`, `billing.fee.waived`,
+//! `cash.shift.closed`) — and until this node existed, every one of them named a list nothing
+//! produced. [`ReasonAction`] therefore has a variant for each of the thirteen, not only the spec's
+//! six: an operator who cannot author a reason for a cash paid-in cannot record one, and the field
+//! on that event would stay unfillable.
 //!
 //! # Why the framework carries a default set
 //!
@@ -56,7 +57,7 @@ wire_enum! {
     ///
     /// One variant per event field that declares a `reason_code_id`, and the event is named on each
     /// so the two cannot drift: the first six are `docs/pos-spec.md` §11 item 2 verbatim, the last
-    /// six are actions whose events demand a reason that §11's sentence does not mention.
+    /// seven are actions whose events demand a reason that §11's sentence does not mention.
     /// Without them an entry could not be tagged for a cash movement or a stock correction, and
     /// those fields would have nothing valid to put in them.
     ///
@@ -97,6 +98,25 @@ wire_enum! {
     /// Waiving a fee on one bill — `billing.fee.waived`, which needs `billing.fee.waive`
     /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
     WaiveFee = "WAIVE_FEE",
+    /// Closing a drawer over or short by more than the store's `shift.variance_reason_minor` —
+    /// `cash.shift.closed` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+    /// decision 12).
+    CashVariance = "CASH_VARIANCE",
+}
+
+impl ReasonAction {
+    /// Whether a list that offers no reason for this action stops it being done, as an empty
+    /// picker stops every action but one.
+    ///
+    /// A drawer closed over or short ([`Self::CashVariance`]) closes all the same where the store's
+    /// list offers no reason for it, and records none
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so an
+    /// uncovered variance blocks nothing and nothing should say it does. `Unspecified` is no act
+    /// at all.
+    #[must_use]
+    pub const fn blocks_when_uncovered(self) -> bool {
+        !matches!(self, Self::Unspecified | Self::CashVariance)
+    }
 }
 
 /// A short, stable, language-independent handle for a reason — `"WASTE"`, `"STAFF_ERROR"`.
@@ -282,10 +302,14 @@ impl PublishedReasonCodes {
     /// is not a brick" true, and the one this module tests. The wording is deliberately minimal
     /// and generic; ADR-0115 records that which reasons a chain actually wants is a business
     /// decision, taken by publishing a node.
+    ///
+    /// A drawer's over or short has two: a mistake somebody owns, such as wrong change, is a staff
+    /// error, and a difference nobody can explain at the close is a counting difference, so nobody
+    /// is made to claim a cause they do not know.
     #[must_use]
     pub fn framework_default() -> Self {
         use ReasonAction::{
-            CashPaidIn, CashPaidOut, Comp, Discount, DrawerOpen, Refund, RejectOrder,
+            CashPaidIn, CashPaidOut, CashVariance, Comp, Discount, DrawerOpen, Refund, RejectOrder,
             StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
         };
 
@@ -324,6 +348,7 @@ impl PublishedReasonCodes {
                     Discount,
                     StockAdjustment,
                     WaiveFee,
+                    CashVariance,
                 ],
             )
             .with_name_translations(vi("Nhân viên nhập sai")),
@@ -355,6 +380,13 @@ impl PublishedReasonCodes {
                 vec![VoidLine, VoidBill],
             )
             .with_name_translations(vi("Giao dịch thử")),
+            PublishedReasonCode::new(
+                framework_id(9),
+                ReasonCode::new("COUNT_DIFFERENCE"),
+                DisplayName::new("Counting difference"),
+                vec![CashVariance],
+            )
+            .with_name_translations(vi("Chênh lệch khi đếm")),
         ])
     }
 
@@ -417,11 +449,11 @@ mod tests {
 
     #[test]
     fn there_is_one_action_per_event_field_that_demands_a_reason() {
-        // The reason this enum has twelve variants and not the specification's six. The catalogue
-        // is the authority on which actions need a reason, and it currently names twelve; a
-        // thirteenth event that declares a `reason_code_id` fails here until `ReasonAction` and the
-        // framework default set grow to cover it, rather than shipping a field the console cannot
-        // author a value for.
+        // The reason this enum has thirteen variants and not the specification's six. The
+        // catalogue is the authority on which actions need a reason, and it currently names
+        // thirteen; a fourteenth event that declares a `reason_code_id` fails here until
+        // `ReasonAction` and the framework default set grow to cover it, rather than shipping a
+        // field the console cannot author a value for.
         let demanded = crate::snapshot::render()
             .lines()
             .filter(|line| line.ends_with("\tfield=reason_code_id"))
@@ -450,6 +482,39 @@ mod tests {
                 "no framework-default reason applies to {action}"
             );
         }
+    }
+
+    #[test]
+    fn a_variance_is_put_down_to_a_mistake_somebody_owns_or_to_a_counting_difference() {
+        // ADR-0167 decision 12: the framework covers the new action, and neither of its reasons
+        // makes anybody claim a cause they do not know.
+        let node = PublishedReasonCodes::framework_default();
+        let codes: Vec<&str> = node
+            .for_action(ReasonAction::CashVariance)
+            .map(|code| code.code.as_str())
+            .collect();
+        assert_eq!(codes, ["STAFF_ERROR", "COUNT_DIFFERENCE"]);
+        let counted = node.find(framework_id(9)).expect("the counting difference");
+        assert_eq!(counted.localized_name("vi").as_str(), "Chênh lệch khi đếm");
+        assert_eq!(
+            ReasonAction::CashVariance.as_wire(),
+            "REASON_ACTION_CASH_VARIANCE"
+        );
+    }
+
+    #[test]
+    fn only_a_variance_goes_on_without_a_reason_to_cite() {
+        // ADR-0167 decision 12: a store whose list offers no reason for a variance still closes,
+        // so an uncovered variance is no gap. Every other action stops with an empty picker.
+        let blocking_nothing: Vec<ReasonAction> = ReasonAction::ALL
+            .iter()
+            .copied()
+            .filter(|action| !action.blocks_when_uncovered())
+            .collect();
+        assert_eq!(
+            blocking_nothing,
+            [ReasonAction::Unspecified, ReasonAction::CashVariance]
+        );
     }
 
     #[test]

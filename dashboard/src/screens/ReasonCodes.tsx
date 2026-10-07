@@ -62,6 +62,7 @@ const ACTION_LABEL: Record<ReasonAction, MessageKey> = {
   REASON_ACTION_STOCK_ADJUSTMENT: "reasonCodes.action.stockAdjustment",
   REASON_ACTION_STOCK_WASTE: "reasonCodes.action.stockWaste",
   REASON_ACTION_WAIVE_FEE: "reasonCodes.action.waiveFee",
+  REASON_ACTION_CASH_VARIANCE: "reasonCodes.action.cashVariance",
 };
 
 export function ReasonCodes() {

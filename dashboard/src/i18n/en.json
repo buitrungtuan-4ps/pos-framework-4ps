@@ -1669,6 +1669,7 @@
   "readiness.unread": "Could not read the roles at this store: {reason}",
   "reasonCodes.action.cashPaidIn": "Cash paid in",
   "reasonCodes.action.cashPaidOut": "Cash paid out",
+  "reasonCodes.action.cashVariance": "Close a drawer over or short",
   "reasonCodes.action.comp": "Comp an item",
   "reasonCodes.action.discount": "Apply a discount",
   "reasonCodes.action.drawerOpen": "Open the drawer out of sale",

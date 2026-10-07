@@ -13,6 +13,9 @@
 //! only somebody holding it alone reads what that drawer should hold. A change of model waits until
 //! no drawer is open, and the log rebuilds the same drawers. Where a store keeps one drawer nothing
 //! changes, and its events name no till.
+//!
+//! Drawers closed together are each asked the reason a close over or short by more than the store's
+//! `shift.variance_reason_minor` gives (decision 12), and close every one or none.
 
 use std::future::Future;
 use std::num::NonZeroU32;
@@ -417,7 +420,7 @@ fn two_tills_each_count_and_close_their_own_drawer() {
                 .await
                 .expect("counts its own");
             let closed = edge
-                .close_shift_at(person(CASHIER, device), at(own), shift, None)
+                .close_shift_at(person(CASHIER, device), at(own), shift, None, None)
                 .await
                 .expect("closes its own");
             assert_eq!(closed.till, Some(till(own)));
@@ -531,7 +534,7 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
         .await
         .expect("a supervisor counts another till's drawer alone");
         let close_refused = edge
-            .close_shift_at(person(CASHIER, 0xB1), at(BAR), counter.shift_id, None)
+            .close_shift_at(person(CASHIER, 0xB1), at(BAR), counter.shift_id, None, None)
             .await;
         assert!(
             matches!(
@@ -541,7 +544,13 @@ fn another_tills_drawer_takes_the_permission_held_directly_or_approved() {
             "{close_refused:?}"
         );
         let closed = edge
-            .close_shift_at(person(CASHIER, 0xC1), at(COUNTER), counter.shift_id, None)
+            .close_shift_at(
+                person(CASHIER, 0xC1),
+                at(COUNTER),
+                counter.shift_id,
+                None,
+                None,
+            )
             .await
             .expect("the counter's own cashier closes it");
         assert_eq!(closed.variance, Some(vnd(0)));
@@ -664,7 +673,7 @@ fn a_restart_rebuilds_every_tills_drawer_with_its_own_cash() {
             (counter, Some(vnd(300_000)))
         );
         let closed = restarted
-            .close_shift_at(person(CASHIER, 0xC1), at(COUNTER), counter, None)
+            .close_shift_at(person(CASHIER, 0xC1), at(COUNTER), counter, None, None)
             .await
             .expect("closes after the restart");
         assert_eq!(closed.expected_amount, Some(vnd(300_000)));
@@ -673,7 +682,7 @@ fn a_restart_rebuilds_every_tills_drawer_with_its_own_cash() {
             .await
             .expect("counted after the restart");
         let closed = restarted
-            .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None)
+            .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None, None)
             .await
             .expect("closes after the restart");
         assert_eq!(
@@ -1071,7 +1080,13 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
         }
 
         let closed = edge
-            .close_shifts_at(person(SUPERVISOR, 0xB1), at(BAR), &[bar, counter], None)
+            .close_shifts_at(
+                person(SUPERVISOR, 0xB1),
+                at(BAR),
+                &[bar, counter],
+                None,
+                &[],
+            )
             .await
             .expect("both close at once");
         assert!(
@@ -1125,7 +1140,13 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
             .expect("the bar's is counted");
 
         let uncounted = edge
-            .close_shifts_at(person(SUPERVISOR, 0xB1), at(BAR), &[bar, counter], None)
+            .close_shifts_at(
+                person(SUPERVISOR, 0xB1),
+                at(BAR),
+                &[bar, counter],
+                None,
+                &[],
+            )
             .await;
         assert!(
             matches!(uncounted, Err(AppError::Domain(_))),
@@ -1146,7 +1167,7 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
             .await
             .expect("the counter's is counted");
         let refused = edge
-            .close_shifts_at(person(CASHIER, 0xB1), at(BAR), &[bar, counter], None)
+            .close_shifts_at(person(CASHIER, 0xB1), at(BAR), &[bar, counter], None, &[])
             .await;
         assert!(
             matches!(
@@ -1157,7 +1178,7 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
             "{refused:?}"
         );
         let unapproved = edge
-            .close_shifts_at(person(ASKING, 0xB1), at(BAR), &[bar, counter], None)
+            .close_shifts_at(person(ASKING, 0xB1), at(BAR), &[bar, counter], None, &[])
             .await;
         assert!(
             matches!(unapproved, Err(AppError::ApprovalRequired)),
@@ -1169,6 +1190,7 @@ fn a_batch_close_closes_every_drawer_or_none_and_another_tills_takes_the_permiss
                 at(BAR),
                 &[bar, counter, bar],
                 Some(&manager()),
+                &[],
             )
             .await
             .expect("one approval covers the batch");
@@ -1334,13 +1356,112 @@ fn a_store_that_requires_it_takes_no_cash_into_a_drawer_past_its_day_until_it_cl
             .await
             .expect("counted");
         let closed = edge
-            .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None)
+            .close_shift_at(person(CASHIER, 0xB1), at(BAR), bar, None, None)
             .await
             .expect("closing is the way out");
         assert_eq!(
             closed.variance,
             Some(vnd(0)),
             "no cash went in after its day"
+        );
+    });
+}
+
+/// A reason for a drawer's over or short, as the framework's own "Counting difference" is.
+fn miscounted() -> ReasonCodeId {
+    ReasonCodeId::new(Ulid::from_u128(9_102))
+}
+
+/// The store of [`session`], keeping a drawer per till, asking a reason of a close over or short by
+/// more than 20,000, and listing [`miscounted`] for it.
+fn varying(enforced: bool) -> EdgeSession {
+    let mut session = session(DrawerModel::PerTerminal, enforced);
+    session.shift.variance_reason_minor = Some(20_000);
+    let mut codes = session.reason_codes.codes().to_vec();
+    codes.push(PublishedReasonCode::new(
+        miscounted(),
+        ReasonCode::new("COUNT_DIFFERENCE"),
+        DisplayName::new("Counting difference"),
+        vec![ReasonAction::CashVariance],
+    ));
+    session.reason_codes = PublishedReasonCodes::from_parts(codes);
+    session
+}
+
+#[test]
+fn drawers_closed_together_close_with_a_reason_for_each_one_owed_or_not_at_all() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), varying(true));
+        // The bar's is 50k short, beyond the limit; the counter's is 10k over, within it.
+        let mut shifts = Vec::new();
+        for (device, own, float, counted) in [
+            (0xB1, BAR, 500_000, 450_000),
+            (0xC1, COUNTER, 300_000, 310_000),
+        ] {
+            let shift = edge
+                .open_shift_at(person(CASHIER, device), at(own), vnd(float), None)
+                .await
+                .expect("starts")
+                .shift_id;
+            edge.count_shift_at(person(CASHIER, device), at(own), shift, counted, None)
+                .await
+                .expect("counted");
+            shifts.push(shift);
+        }
+        let (bar, counter) = (shifts[0], shifts[1]);
+        let supervisor = person(SUPERVISOR, 0xB1);
+
+        for given in [vec![], vec![(counter, miscounted())]] {
+            let asked = edge
+                .close_shifts_at(supervisor, at(BAR), &shifts, None, &given)
+                .await;
+            let Err(AppError::VarianceReasonRequired(owing)) = asked else {
+                panic!("the bar's is owed a reason: {asked:?}");
+            };
+            let named: Vec<_> = owing
+                .iter()
+                .map(|view| (view.shift_id, view.till, view.variance))
+                .collect();
+            assert_eq!(named, [(bar, Some(till(BAR)), Some(vnd(-50_000)))]);
+        }
+        let wrong = edge
+            .close_shifts_at(
+                supervisor,
+                at(BAR),
+                &shifts,
+                None,
+                &[(bar, making_change())],
+            )
+            .await;
+        assert!(
+            matches!(wrong, Err(AppError::CashReasonNotValid)),
+            "{wrong:?}"
+        );
+        assert!(
+            edge.current_shift_at(at(BAR)).is_some()
+                && edge.current_shift_at(at(COUNTER)).is_some(),
+            "every drawer or none"
+        );
+
+        let closed = edge
+            .close_shifts_at(supervisor, at(BAR), &shifts, None, &[(bar, miscounted())])
+            .await
+            .expect("each drawer owed a reason has one");
+        assert_eq!(closed.shifts.len(), 2);
+        let reasons: Vec<_> = logged(&store)
+            .await
+            .iter()
+            .filter(|envelope| envelope.event_type.as_str() == "cash.shift.closed")
+            .map(|envelope| {
+                let event: CashShiftClosed = envelope.data.decode().expect("decodes");
+                (event.closed_shift_id, event.reason_code_id)
+            })
+            .collect();
+        assert_eq!(
+            reasons,
+            [(bar, Some(miscounted())), (counter, None)],
+            "the counter's is within the limit and records none"
         );
     });
 }
@@ -2037,4 +2158,77 @@ async fn the_shift_reads_say_a_drawers_day_has_ended_and_its_cash_is_refused_by_
         (status, reason.as_deref()),
         (StatusCode::CONFLICT, Some("DRAWER_DAY_ENDED"))
     );
+}
+
+/// `body` posted to `uri` from the device holding `token`.
+async fn post(
+    tills: &Tills,
+    token: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Option<String>, Value) {
+    send(tills.app.clone(), token, "POST", uri, Some(body)).await
+}
+
+/// Counts `shift` at `counted` over the route from the device holding `token`.
+async fn count_at(tills: &Tills, token: &str, shift: &str, counted: i64) {
+    let uri = format!("/api/shifts/{shift}/count");
+    let (status, _, answered) = post(tills, token, &uri, json!({ "counted_minor": counted })).await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+}
+
+#[tokio::test]
+async fn a_close_owed_a_reason_answers_the_figures_to_show_and_closes_when_given_one() {
+    let tills = drawers_app(false).await;
+    tills.edge.apply_session(varying(false));
+    let owed = (StatusCode::CONFLICT, Some("VARIANCE_REASON_REQUIRED"));
+
+    // The bar's drawer, counted 50k short of the 500k float it opened on.
+    let bar = open_over(&tills, &tills.bar).await;
+    count_at(&tills, &tills.bar, &bar, 450_000).await;
+    let close = format!("/api/shifts/{bar}/close");
+    let (status, reason, asked) = post(&tills, &tills.bar, &close, json!({})).await;
+    assert_eq!((status, reason.as_deref()), owed);
+    assert!(asked["message"].is_string(), "{asked}");
+    let owing = &asked["shifts"][0];
+    assert_eq!(owing["shift_id"], bar.as_str());
+    assert_eq!(owing["terminal_device_id"], till(BAR).to_string());
+    assert_eq!(owing["state"], "SHIFT_STATE_COUNTED");
+    assert_eq!(owing["expected_amount"], json!(vnd(500_000)));
+    assert_eq!(owing["counted_amount"], json!(vnd(450_000)));
+    assert_eq!(owing["variance"], json!(vnd(-50_000)));
+    let wrong = json!({ "reason_code_id": making_change() });
+    let (status, reason, _) = post(&tills, &tills.bar, &close, wrong).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("CASH_REASON_NOT_VALID"))
+    );
+    let given = json!({ "reason_code_id": miscounted() });
+    let (status, _, closed) = post(&tills, &tills.bar, &close, given).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(closed["variance"], json!(vnd(-50_000)));
+
+    // Both drawers 30k short, closed together from the counter: the refusal names each, and one
+    // reason apiece closes them.
+    let bar = open_over(&tills, &tills.bar).await;
+    let counter = open_over(&tills, &tills.counter).await;
+    count_at(&tills, &tills.bar, &bar, 470_000).await;
+    count_at(&tills, &tills.counter, &counter, 470_000).await;
+    let mut batch = approver();
+    batch["shift_ids"] = json!([bar, counter]);
+    let uri = "/api/shifts:batch_close";
+    let (status, reason, asked) = post(&tills, &tills.counter, uri, batch.clone()).await;
+    assert_eq!((status, reason.as_deref()), owed);
+    let named: Vec<&Value> = asked["shifts"]
+        .as_array()
+        .map(|shifts| shifts.iter().map(|shift| &shift["shift_id"]).collect())
+        .unwrap_or_default();
+    assert_eq!(named, [&json!(bar), &json!(counter)], "{asked}");
+    batch["variance_reasons"] = json!([
+        { "shift_id": bar, "reason_code_id": miscounted() },
+        { "shift_id": counter, "reason_code_id": miscounted() },
+    ]);
+    let (status, _, closed) = post(&tills, &tills.counter, uri, batch).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(closed["shifts"][1]["state"], "SHIFT_STATE_CLOSED");
 }

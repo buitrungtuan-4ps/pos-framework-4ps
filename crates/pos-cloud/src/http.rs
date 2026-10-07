@@ -18313,7 +18313,8 @@ struct ReasonCodePublishSummary {
     published: usize,
     /// How many of those staff may actually pick.
     active: usize,
-    /// The actions no active entry covers, as wire tokens. Empty is the healthy answer.
+    /// The actions no active entry covers, and which that blocks, as wire tokens. Empty is the
+    /// healthy answer.
     uncovered_actions: Vec<String>,
 }
 
@@ -18327,13 +18328,18 @@ impl ReasonCodePublishSummary {
     }
 }
 
-/// The actions this node offers no active reason for, in `ReasonAction::ALL` order.
+/// The actions this node offers no active reason for, and which that blocks, in
+/// `ReasonAction::ALL` order.
 ///
-/// `Unspecified` is skipped: it is the wire enum's mandatory zero value, not an act anyone performs.
+/// Two are skipped ([`ReasonAction::blocks_when_uncovered`]). `Unspecified` is the wire enum's
+/// mandatory zero value, not an act anyone performs. And a drawer closed over or short still closes
+/// where the list offers no reason for it
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so the
+/// notice must not say staff can no longer record it.
 fn uncovered_actions(node: &PublishedReasonCodes) -> Vec<String> {
     ReasonAction::ALL
         .iter()
-        .filter(|action| **action != ReasonAction::Unspecified)
+        .filter(|action| action.blocks_when_uncovered())
         .filter(|action| node.for_action(**action).next().is_none())
         .map(|action| action.as_wire().to_owned())
         .collect()

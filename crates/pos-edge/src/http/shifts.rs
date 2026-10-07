@@ -23,12 +23,21 @@
 //!
 //! What prints at a close is the store's `shift.close_report`: each drawer's report where it is
 //! closed, one slip for several closed at once by `POST /api/shifts:batch_close`, or nothing.
+//!
+//! A close over or short by more than the store's `shift.variance_reason_minor` gives a reason
+//! (ADR-0167 decision 12): a single close its `reason_code_id`, a batch close one per drawer in
+//! `variance_reasons`. One still owed is refused `409 VARIANCE_REASON_REQUIRED` with a JSON body,
+//! the one refusal with one: the sentence, and in `shifts` each drawer still owed a reason as its
+//! close would show it, so the till can show the variance beside the reasons and send the close
+//! again. The count is final by then, so this reveals what the close reveals, to the person
+//! closing, and a blind close stays blind.
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Extension, Path, State};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
@@ -46,7 +55,7 @@ use crate::app::{
     AppError, Approval, CashMovement, DrawersView, Edge, EdgeSession, ShiftView, TillScope,
 };
 use crate::http::counter::wall_clock;
-use crate::http::{bad_request, error_response, parse_ulid};
+use crate::http::{ERROR_REASON_HEADER, bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers, TillPrinting, published_terminals};
 
 /// The code and PIN of somebody approving an act the person acting holds only with approval: both
@@ -84,17 +93,21 @@ pub(crate) struct CountRequest {
     approver_pin: Option<String>,
 }
 
-/// A close's optional body: the approver for another till's drawer.
+/// A close's optional body: the approver for another till's drawer, and the reason for an over or
+/// short the store asks one of (ADR-0167 decision 12).
 #[derive(Debug, Default, Deserialize)]
 struct CloseRequest {
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
     approver_pin: Option<String>,
+    #[serde(default)]
+    reason_code_id: Option<ReasonCodeId>,
 }
 
-/// Closing several counted drawers at once: their shifts, and one approver for those that are
-/// other tills' (ADR-0167 decision 10).
+/// Closing several counted drawers at once: their shifts, one approver for those that are other
+/// tills' (ADR-0167 decision 10), and a reason for each drawer whose over or short the store asks
+/// one of (decision 12).
 #[derive(Debug, Deserialize)]
 pub(crate) struct BatchCloseRequest {
     shift_ids: Vec<ShiftId>,
@@ -102,6 +115,38 @@ pub(crate) struct BatchCloseRequest {
     approver_code: Option<String>,
     #[serde(default)]
     approver_pin: Option<String>,
+    #[serde(default)]
+    variance_reasons: Vec<VarianceReason>,
+}
+
+/// The reason for one drawer's over or short, in a batch close.
+#[derive(Debug, Deserialize)]
+pub(crate) struct VarianceReason {
+    shift_id: ShiftId,
+    reason_code_id: ReasonCodeId,
+}
+
+/// What a close answers while a drawer it closes is still owed a reason for its over or short: the
+/// English sentence, and each such drawer as its close would show it (ADR-0167 decision 12).
+#[derive(Debug, Serialize)]
+struct VarianceReasonsRequired {
+    message: String,
+    shifts: Vec<ShiftResponse>,
+}
+
+/// The `409 VARIANCE_REASON_REQUIRED` for `shifts`, the drawers still owed a reason, under the token
+/// `reason` and the sentence `message`, with the JSON body only this refusal carries.
+pub(crate) fn variance_reasons_required(
+    reason: &'static str,
+    message: String,
+    shifts: &[ShiftView],
+) -> Response {
+    let body = VarianceReasonsRequired {
+        message,
+        shifts: shifts.iter().copied().map(ShiftResponse::from).collect(),
+    };
+    let token = [(ERROR_REASON_HEADER, HeaderValue::from_static(reason))];
+    (StatusCode::CONFLICT, token, Json(body)).into_response()
 }
 
 /// What a batch close answers: each drawer closed, and what came of the one slip for all of them
@@ -549,7 +594,9 @@ where
     } else {
         match serde_json::from_slice(&body) {
             Ok(request) => request,
-            Err(_) => return bad_request("a close's body is an approver's code and PIN"),
+            Err(_) => {
+                return bad_request("a close's body is an approver's code and PIN, and a reason");
+            }
         }
     };
     let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
@@ -561,7 +608,13 @@ where
         request.approver_pin.as_ref(),
     );
     let view = match edge
-        .close_shift_at(actor, scope, shift_id, approval.as_ref())
+        .close_shift_at(
+            actor,
+            scope,
+            shift_id,
+            approval.as_ref(),
+            request.reason_code_id,
+        )
         .await
     {
         Ok(view) => view,
@@ -597,8 +650,19 @@ where
         request.approver_code.as_ref(),
         request.approver_pin.as_ref(),
     );
+    let reasons: Vec<(ShiftId, ReasonCodeId)> = request
+        .variance_reasons
+        .iter()
+        .map(|given| (given.shift_id, given.reason_code_id))
+        .collect();
     let closed = match edge
-        .close_shifts_at(actor, scope, &request.shift_ids, approval.as_ref())
+        .close_shifts_at(
+            actor,
+            scope,
+            &request.shift_ids,
+            approval.as_ref(),
+            &reasons,
+        )
         .await
     {
         Ok(closed) => closed,

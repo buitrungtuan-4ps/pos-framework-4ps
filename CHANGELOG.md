@@ -753,6 +753,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A close over or short beyond a store's limit gives a reason**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). The `shift` node
+  gains `variance_reason_minor`, an amount in the store currency's minor unit, `0` to
+  `1000000000`, where `0`, the default, asks nothing.
+  - Where a counted drawer's over or short is beyond it, either way, and the store's reason list
+    offers a reason for the new action `REASON_ACTION_CASH_VARIANCE`, the close asks for one.
+    `cash.shift.closed` records it as `reason_code_id`.
+  - A close given none is refused `409 VARIANCE_REASON_REQUIRED`. Unlike every other refusal, its
+    body is JSON: the sentence as `message`, and each drawer still owed a reason as its close would
+    show it, in `shifts`. The count is final by then, so the figures are the ones the close
+    reveals, to the person closing, and a blind close stays blind.
+  - `POST /api/shifts/{shift_id}/close` takes `reason_code_id`. `POST /api/shifts:batch_close`
+    takes `variance_reasons`, one `shift_id` and `reason_code_id` per drawer, and closes every
+    drawer or none. A reason the list does not hold for a variance is refused
+    `409 CASH_REASON_NOT_VALID`.
+  - A store whose list offers no such reason still closes, and so does a close within the limit,
+    which writes the same bytes as before.
+  - The framework's own reasons cover the action: *Staff error* now applies to it, and a new
+    *Counting difference* (`COUNT_DIFFERENCE`, "Chênh lệch khi đếm") applies to it alone. The
+    console's reason editor offers the action in English and Vietnamese.
+
+  **Upgrade note:** no store asks yet: no register entry writes `shift.variance_reason_minor` until
+  the till can give the reason, which a later change adds. `PROTOCOL_VERSION` is unchanged.
+  `cash.shift.closed` gains an optional field, left out where no reason is owed
+  (`docs/snapshots/events.txt`). `ReasonAction` gains a value. A published list that offers no
+  reason for it blocks nothing, because such a store still closes, so the reason-code publish does
+  not name it among the acts the list leaves uncovered. The two close routes take optional fields,
+  and a request without them works as before. No route, permission, setting or migration is added.
+
 - **A manager may act on a drawer assigned to someone else**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). The catalogue gains
   `cash.drawer.override_assignment`: taking cash into, paying in or out of, opening, counting or

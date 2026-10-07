@@ -10,6 +10,11 @@
 //! variance the cashier did not cause. These cases hold what the till now relies on: a movement
 //! moves what the close expects, it needs a reason listed for its own act and a shift still open,
 //! a restart keeps it, and a no-sale opening needs a manager's PIN and is recorded as standalone.
+//!
+//! A close over or short by more than the store's `shift.variance_reason_minor` gives a reason its
+//! list holds for that, and `cash.shift.closed` records it
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). Within the
+//! limit, with none set, or with no such reason listed, a close is what it always was.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -20,13 +25,13 @@ use pos_core::error::DomainError;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
     AppError, Approval, CashMovement, Edge, EdgeSession, InMemoryReceipts, LineDraft, StaffAuth,
-    StaffRoster, StoreIdentity,
+    StaffRoster, StoreIdentity, TillScope,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::events::{CashDrawerOpened, CashDrawerPaidOut};
+use pos_proto::events::{CashDrawerOpened, CashDrawerPaidOut, CashShiftClosed};
 use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, ReasonCodeId, ShiftId, StoreId, TableId};
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
@@ -72,6 +77,11 @@ fn making_change() -> ReasonCodeId {
 /// Valid for a paid out only: a supplier is paid, never paid in.
 fn supplier() -> ReasonCodeId {
     ReasonCodeId::new(Ulid::from_u128(9_102))
+}
+
+/// Valid for a drawer's over or short alone, as the framework's own "Counting difference" is.
+fn miscounted() -> ReasonCodeId {
+    ReasonCodeId::new(Ulid::from_u128(9_103))
 }
 
 fn hash_of(pin: &str) -> String {
@@ -543,5 +553,197 @@ fn a_drawer_opened_without_a_sale_needs_a_manager_s_pin_and_a_reason_and_is_logg
                 .any(|envelope| envelope.event_type.as_str() == "security.permission.overridden"),
             "the manager's approval is its own record"
         );
+    });
+}
+
+/// The store of [`session`], asking a reason of a close over or short by more than `limit`, and
+/// listing [`miscounted`] for it where `listed`.
+fn varying(limit: i64, listed: bool) -> EdgeSession {
+    let mut session = session();
+    session.shift.variance_reason_minor = Some(limit);
+    if listed {
+        let mut codes = session.reason_codes.codes().to_vec();
+        codes.push(PublishedReasonCode::new(
+            miscounted(),
+            ReasonCode::new("COUNT_DIFFERENCE"),
+            DisplayName::new("Counting difference"),
+            vec![ReasonAction::CashVariance],
+        ));
+        session.reason_codes = PublishedReasonCodes::from_parts(codes);
+    }
+    session
+}
+
+/// A shift opened on 500k that took the 165k sale in cash and was counted at `counted`, so it is
+/// `counted - 665_000` over.
+async fn counted_at(edge: &Edge<FakeStore>, counted: i64) -> ShiftId {
+    let shift = open_with_float(edge, 500_000).await;
+    a_cash_sale(edge).await;
+    edge.count_shift(cashier(), shift, counted)
+        .await
+        .expect("counts");
+    shift
+}
+
+/// Each `cash.shift.closed` in `store`'s log, as written.
+async fn closings(store: &FakeStore) -> Vec<String> {
+    logged(store)
+        .await
+        .iter()
+        .filter(|envelope| envelope.event_type.as_str() == "cash.shift.closed")
+        .map(|envelope| envelope.data.as_json().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_close_beyond_the_limit_asks_its_reason_and_records_the_one_it_is_given() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), varying(50_000, true));
+        let shift = counted_at(&edge, 600_000).await;
+        let close =
+            |reason| edge.close_shift_at(cashier(), TillScope::default(), shift, None, reason);
+
+        let asked = close(None).await;
+        let Err(AppError::VarianceReasonRequired(owing)) = asked else {
+            panic!("65k short is beyond 50k: {asked:?}");
+        };
+        let figures: Vec<_> = owing
+            .iter()
+            .map(|view| {
+                (
+                    view.shift_id,
+                    view.state,
+                    view.expected_amount,
+                    view.counted_amount,
+                    view.variance,
+                )
+            })
+            .collect();
+        assert_eq!(
+            figures,
+            [(
+                shift,
+                ShiftState::Counted,
+                Some(vnd(665_000)),
+                Some(vnd(600_000)),
+                Some(vnd(-65_000))
+            )],
+            "the figures its count has fixed, still counted"
+        );
+        for wrong in [making_change(), ReasonCodeId::new(Ulid::from_u128(9_999))] {
+            let refused = close(Some(wrong)).await;
+            assert!(
+                matches!(refused, Err(AppError::CashReasonNotValid)),
+                "{refused:?}"
+            );
+        }
+        assert!(closings(&store).await.is_empty(), "nothing closed");
+        assert_eq!(
+            edge.current_shift().map(|view| view.state),
+            Some(ShiftState::Counted)
+        );
+
+        let closed = close(Some(miscounted()))
+            .await
+            .expect("closes with a reason");
+        assert_eq!(closed.variance, Some(vnd(-65_000)));
+        let event: CashShiftClosed = logged(&store)
+            .await
+            .iter()
+            .find(|envelope| envelope.event_type.as_str() == "cash.shift.closed")
+            .expect("the close is in the log")
+            .data
+            .decode()
+            .expect("decodes");
+        assert_eq!(event.reason_code_id, Some(miscounted()));
+    });
+}
+
+#[test]
+fn a_close_within_the_limit_or_with_none_set_writes_what_it_always_did() {
+    run_ready(async {
+        // 65k short against no limit, and exactly 50k short against a limit of 50k: neither is
+        // beyond, so neither asks, and a reason sent anyway is not recorded.
+        for (limit, counted) in [(0, 600_000), (50_000, 615_000)] {
+            let store = FakeStore::new();
+            let edge = edge_over(store.clone(), varying(limit, true));
+            let shift = counted_at(&edge, counted).await;
+            let closed = edge
+                .close_shift_at(
+                    cashier(),
+                    TillScope::default(),
+                    shift,
+                    None,
+                    Some(miscounted()),
+                )
+                .await
+                .expect("closes without being asked");
+            assert_eq!(closed.variance, Some(vnd(counted - 665_000)));
+            let written = closings(&store).await;
+            assert_eq!(written.len(), 1);
+            assert!(
+                written.iter().all(|json| !json.contains("reason_code_id")),
+                "{limit}: {written:?}"
+            );
+        }
+    });
+}
+
+#[test]
+fn a_store_whose_list_offers_no_reason_for_a_variance_still_closes() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), varying(50_000, false));
+        let shift = counted_at(&edge, 600_000).await;
+        let closed = edge
+            .close_shift(cashier(), shift)
+            .await
+            .expect("no reason to give, so none is asked");
+        assert_eq!(closed.variance, Some(vnd(-65_000)));
+        assert!(
+            closings(&store)
+                .await
+                .iter()
+                .all(|json| !json.contains("reason_code_id"))
+        );
+    });
+}
+
+#[test]
+fn a_restart_reads_a_closes_reason_back_and_the_drawer_stays_closed() {
+    run_ready(async {
+        let store = FakeStore::new();
+        let shift = {
+            let edge = edge_over(store.clone(), varying(50_000, true));
+            let shift = counted_at(&edge, 600_000).await;
+            edge.close_shift_at(
+                cashier(),
+                TillScope::default(),
+                shift,
+                None,
+                Some(miscounted()),
+            )
+            .await
+            .expect("closes with a reason");
+            shift
+        };
+        let restarted = edge_over(store.clone(), varying(50_000, true));
+        restarted.rebuild().await.expect("replays the log");
+        assert!(restarted.current_shift().is_none(), "the drawer is closed");
+        let event: CashShiftClosed = logged(&store)
+            .await
+            .iter()
+            .find(|envelope| envelope.event_type.as_str() == "cash.shift.closed")
+            .expect("the close is in the log")
+            .data
+            .decode()
+            .expect("decodes");
+        assert_eq!(
+            (event.closed_shift_id, event.reason_code_id),
+            (shift, Some(miscounted()))
+        );
+        let next = open_with_float(&restarted, 500_000).await;
+        assert_ne!(next, shift, "the next shift opens");
     });
 }
