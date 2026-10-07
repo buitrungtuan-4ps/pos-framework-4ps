@@ -108,7 +108,7 @@ use pos_proto::ids::{
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
-use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
+use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxComponentName, TaxRate};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
 use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
@@ -163,7 +163,7 @@ use crate::claim::{
     BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
     hash_claim_secret, hash_user_code,
 };
-use crate::cloud::{Cloud, DailyCash, DailyRollup, STORE_DRAWER};
+use crate::cloud::{Cloud, DailyCash, DailyRevenue, DailyRollup, STORE_DRAWER};
 use crate::config::InternalSecret;
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
@@ -769,6 +769,10 @@ where
         .route(
             "/admin/stores/{store_id}/revenue/fees/export",
             get(admin_export_revenue_fees::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/revenue/tax/export",
+            get(admin_export_revenue_tax::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/webhooks",
@@ -15884,6 +15888,17 @@ struct TaxRateView {
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty for a rate
     /// printed as one line, which is most of the world.
     components: Vec<TaxComponentView>,
+    /// `true` when one of `components` is named with anything but a [`TaxComponentName`]: two to
+    /// eight upper-case letters and digits, starting with a letter
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
+    ///
+    /// Only a row saved before the grid checked names can be so. It is kept as it was saved, and
+    /// its stores charge its rate without a breakdown. A save replaces the whole grid and refuses
+    /// such a name, so the next save is refused until it is changed, which is what the console
+    /// flags. Absent otherwise, so a sound table reads as it always did. Output only: a save
+    /// reads no such field.
+    #[serde(skip_serializing_if = "core::ops::Not::not")]
+    component_name_invalid: bool,
 }
 
 /// One named part of a rate, on the wire.
@@ -15961,6 +15976,10 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
                 rate_bps: component.rate.basis_points(),
             })
             .collect(),
+        component_name_invalid: entry
+            .components
+            .iter()
+            .any(|component| TaxComponentName::new(&component.name).is_err()),
     }
 }
 
@@ -15972,6 +15991,12 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
 /// lines do not add up to the tax charged — which is the one way this feature can produce a document
 /// an auditor rejects, and the refusal says which row and by how much so the operator can fix it
 /// rather than hunt for it.
+///
+/// A name, trimmed as it is stored, must be a [`TaxComponentName`], because a settled bill records
+/// and the reports sum a component under its name, and record nothing for a name that is not one
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
+/// The refusal names the row by its class and channel and states the rule, and never the name,
+/// which neither a response nor the log carries.
 ///
 /// An empty list always passes: it is "no breakdown", not "a breakdown summing to zero".
 #[expect(
@@ -15991,6 +16016,21 @@ fn checked_components(row: &TaxRateRowRequest) -> Result<Vec<TaxComponent>, Resp
             ErrorStatus::InvalidArgument,
             "a tax component has no name, and the name is what the invoice prints",
             &[("rates", "MISSING_FIELD")],
+        ));
+    }
+    if row
+        .components
+        .iter()
+        .any(|component| TaxComponentName::new(component.name.trim()).is_err())
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "a tax component of the rate for tax class {} on {} is not named with 2 to 8 \
+                 upper-case letters and digits, starting with a letter, such as CGST",
+                row.tax_class_id, row.sales_channel
+            ),
+            &[("rates", "INVALID_FORMAT")],
         ));
     }
     let total: u64 = row
@@ -16026,8 +16066,9 @@ fn checked_components(row: &TaxRateRowRequest) -> Result<Vec<TaxComponent>, Resp
 ///
 /// Every check is on the row rather than on the table: an unknown class or channel, a rate above
 /// 100 %, a `(class, channel)` pair submitted twice, and a breakdown that does not sum to its own
-/// rate. The first failure returns, because a partly-applied grid is not a state this resource has —
-/// a save replaces the tenant's whole table or none of it.
+/// rate or names a component with anything but a [`TaxComponentName`]. The first failure returns,
+/// because a partly-applied grid is not a state this resource has — a save replaces the tenant's
+/// whole table or none of it.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
@@ -16129,8 +16170,10 @@ where
 /// A super-admin replaces a tenant's whole tax-rate table.
 ///
 /// Every row is validated before the write: its class must be one the tenant has authored, its channel
-/// a token this build knows, its rate no more than 100%, and no `(class, channel)` pair repeated —
-/// each a `400` naming the fault, so a bad grid never reaches the store as a `500`.
+/// a token this build knows, its rate no more than 100%, no `(class, channel)` pair repeated, and
+/// each component named with a [`TaxComponentName`] — each a `400` naming the fault, so a bad grid
+/// never reaches the store as a `500`. A stored row named otherwise is no exception: a save sends
+/// the whole grid, so it is refused until that name is changed.
 async fn admin_set_tax_rates<Tax, Cat, A, C>(
     State(state): State<TaxRateState<Tax, Cat, A, C>>,
     headers: HeaderMap,
@@ -34070,8 +34113,87 @@ where
     csv_download_response("rollups.csv", body)
 }
 
-/// Exports a store's daily revenue rollups as a CSV download, windowed like the read (ADR-0081, Track
-/// O4). Prices are **T2**, so `console.reports.revenue`; audited by row count only — never contents.
+/// What sets one of a store's revenue exports apart from the others: its file, how it is written,
+/// and what its audit entry calls it and counts.
+///
+/// The exports are one rule, which [`export_revenue`] keeps: revenue is **T2**, so each needs
+/// `console.reports.revenue`, reads the window the revenue read does, and is audited by how many
+/// rows it held, never what they held.
+struct RevenueExport {
+    /// The file the download is saved as, such as `revenue-tax.csv`.
+    name: &'static str,
+    /// The audit entry's action, such as `reports.export_revenue_tax`.
+    action: &'static str,
+    /// The audit entry's `domain`, such as `revenue_tax`.
+    domain: &'static str,
+    /// Writes the window's days as the file.
+    write: fn(&[DailyRevenue]) -> Result<Vec<u8>, csv::Error>,
+    /// How many rows the file holds under its header.
+    rows: fn(&[DailyRevenue]) -> usize,
+}
+
+/// Downloads a store's daily revenue rollups as `file` writes them, windowed like the read
+/// (ADR-0081, Track O4).
+async fn export_revenue<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    headers: &HeaderMap,
+    store_id: &str,
+    query: AdminRollupWindowQuery,
+    file: &RevenueExport,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &app.admin,
+        &app.clock,
+        headers,
+        ConsolePermission::ReadRevenue,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    let window = match RollupWindow::new(query.from, query.to, query.limit) {
+        Ok(window) => window,
+        Err(error) => return window_refusal(error),
+    };
+    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
+        Ok(days) => days,
+        Err(error) => return rollup_error_response(&error),
+    };
+    let Ok(body) = (file.write)(&days) else {
+        return api_error(ErrorStatus::Internal, "could not build the CSV");
+    };
+    audit_action(
+        &app.audit,
+        &app.clock,
+        &context,
+        Some(tenant_id),
+        file.action,
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({ "domain": file.domain, "rows": (file.rows)(&days) })),
+    )
+    .await;
+    csv_download_response(file.name, body)
+}
+
+/// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
+/// Track O4).
 async fn admin_export_revenue<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
@@ -34087,46 +34209,14 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
+    let file = RevenueExport {
+        name: "revenue.csv",
+        action: "reports.export_revenue",
+        domain: "revenue",
+        write: export::revenue_csv,
+        rows: <[DailyRevenue]>::len,
     };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = export::revenue_csv(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        "reports.export_revenue",
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": "revenue", "rows": days.len() })),
-    )
-    .await;
-    csv_download_response("revenue.csv", body)
+    export_revenue(&app, &headers, &store_id, query, &file).await
 }
 
 #[utoipa::path(
@@ -34185,47 +34275,84 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
+    let file = RevenueExport {
+        name: "revenue-fees.csv",
+        action: "reports.export_revenue_fees",
+        domain: "revenue_fees",
+        write: export::revenue_fees_csv,
+        rows: |days| days.iter().map(|day| day.by_fee.len()).sum(),
     };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
+    export_revenue(&app, &headers, &store_id, query, &file).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/tax/export",
+    params(
+        ("store_id" = String, Path, description = "The store whose tax to export (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
+                                      is `business_date,currency_code,component_name,\
+                                      rate_basis_points,tax`, then one row per trading day per \
+                                      tax component name and rate the day's settled bills \
+                                      recorded, oldest day first and then by name and rate: the \
+                                      tax their tax lines recorded under it, in the store's \
+                                      currency's minor units. A fee's tax is inside its tax \
+                                      line, so it adds no row of its own. Nothing is invented: a \
+                                      bill that recorded no components, settled before its store \
+                                      recorded them or taxed at rates with none, is in \
+                                      `revenue.csv`'s `tax` and in no row here, so a day's rows \
+                                      can sum to less than its tax and no row stands for the \
+                                      difference. Only the header for a window with no \
+                                      components, as for a store whose tax table names none, and \
+                                      for a store whose rollup has not been projected yet"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "reports",
+)]
+/// A store's tax by component as a CSV download, one row per trading day per component name and
+/// rate ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+/// decision 5).
+///
+/// A file of its own beside `revenue-fees.csv`, and the same in every way that matters: windowed
+/// as the revenue read is, behind `console.reports.revenue`, and audited by how many rows were
+/// exported, never what they held.
+async fn admin_export_revenue_tax<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<AdminRollupWindowQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let file = RevenueExport {
+        name: "revenue-tax.csv",
+        action: "reports.export_revenue_tax",
+        domain: "revenue_tax",
+        write: export::revenue_tax_csv,
+        rows: |days| days.iter().map(|day| day.by_tax_component.len()).sum(),
     };
-    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = export::revenue_fees_csv(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    let rows: usize = days.iter().map(|day| day.by_fee.len()).sum();
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        "reports.export_revenue_fees",
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": "revenue_fees", "rows": rows })),
-    )
-    .await;
-    csv_download_response("revenue-fees.csv", body)
+    export_revenue(&app, &headers, &store_id, query, &file).await
 }
 
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log

@@ -188,7 +188,8 @@ pub fn rollups_csv(days: &[DailyRollup]) -> Result<Vec<u8>, csv::Error> {
 /// totals (ADR-0081, Track O4). Amounts are the store's currency's minor units. Revenue is **T2**,
 /// so the route gates this on `console.reports.revenue` and audits only the row count. The product
 /// mix (`by_item`) is two-dimensional and not flattened here — the daily totals are the export —
-/// and the fees by code (`by_fee`) are an export of their own, [`revenue_fees_csv`].
+/// and the fees by code (`by_fee`) and the tax by component (`by_tax_component`) are exports of
+/// their own, [`revenue_fees_csv`] and [`revenue_tax_csv`].
 ///
 /// # Errors
 ///
@@ -262,16 +263,56 @@ pub fn revenue_fees_csv(days: &[DailyRevenue]) -> Result<Vec<u8>, csv::Error> {
     finish(writer)
 }
 
+/// Serialises a store's daily tax by component to CSV, long-format: one row per trading day per
+/// component name and rate the day's settled bills recorded, with the tax their tax lines recorded
+/// under it ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+/// decision 5). Days oldest-first as `days` holds them, and by name and then rate within a day; a
+/// day that recorded none has no row, so a store whose tax table names no components, as in
+/// Vietnam and Japan, exports only the header. Amounts are the store's currency's minor units, and
+/// T2 like [`revenue_csv`].
+///
+/// Nothing is invented: a bill that recorded no components is in `revenue.csv`'s `tax` and in no
+/// row here, so a day's rows may sum to less than its tax ([`DailyRevenue::by_tax_component`]).
+///
+/// A component's name is a token, which cannot start a formula, and it is written through
+/// [`escape_formula`] all the same, as every text cell of an export is.
+///
+/// # Errors
+///
+/// A `csv::Error` if serialisation fails.
+pub fn revenue_tax_csv(days: &[DailyRevenue]) -> Result<Vec<u8>, csv::Error> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record([
+        "business_date",
+        "currency_code",
+        "component_name",
+        "rate_basis_points",
+        "tax",
+    ])?;
+    for day in days {
+        for total in &day.by_tax_component {
+            writer.write_record([
+                day.business_date.clone(),
+                day.currency_code.clone(),
+                escape_formula(&total.component_name).into_owned(),
+                total.rate_basis_points.to_string(),
+                total.tax.to_string(),
+            ])?;
+        }
+    }
+    finish(writer)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        escape_formula, items_csv, revenue_csv, revenue_fees_csv, rollups_csv, translations_csv,
-        unescape_formula,
+        escape_formula, items_csv, revenue_csv, revenue_fees_csv, revenue_tax_csv, rollups_csv,
+        translations_csv, unescape_formula,
     };
     use crate::catalog::{CatalogItem, ItemCategoryId};
-    use crate::cloud::{DailyRevenue, FeeTotal};
+    use crate::cloud::{DailyRevenue, FeeTotal, TaxComponentTotal};
     use crate::registry::EntityStatus;
     use crate::translations::TranslationGrid;
     use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
@@ -556,6 +597,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            by_tax_component: Vec::new(),
         }
     }
 
@@ -610,6 +652,84 @@ mod tests {
         assert_eq!(
             csv,
             "business_date,currency_code,fee_code,fee_name,bills,amount,tax\n"
+        );
+    }
+
+    /// An Indian day: three bills that recorded `components` as (name, rate, tax), in the order the
+    /// rollup keeps them.
+    fn split_day(date: &str, components: &[(&str, u32, i64)]) -> DailyRevenue {
+        DailyRevenue {
+            currency_code: "INR".to_owned(),
+            by_tax_component: components
+                .iter()
+                .map(|&(name, rate_basis_points, tax)| TaxComponentTotal {
+                    component_name: name.to_owned(),
+                    rate_basis_points,
+                    tax,
+                })
+                .collect(),
+            ..revenue_day(date, &[])
+        }
+    }
+
+    #[test]
+    fn revenue_tax_csv_has_a_row_per_day_per_component_and_rate() {
+        let days = [
+            split_day(
+                "2026-03-15",
+                &[
+                    ("CGST", 250, 5_000),
+                    ("CGST", 900, 1_800),
+                    ("SGST", 250, 5_000),
+                    ("SGST", 900, 1_800),
+                ],
+            ),
+            // A day that recorded none has no row.
+            revenue_day("2026-03-16", &[]),
+            split_day("2026-03-17", &[("CGST", 250, 2_500), ("SGST", 250, 2_500)]),
+        ];
+        let csv = as_string(revenue_tax_csv(&days).expect("serialise"));
+        assert_eq!(
+            csv.lines().collect::<Vec<_>>(),
+            [
+                "business_date,currency_code,component_name,rate_basis_points,tax",
+                // Oldest day first, then as the day keeps them: by name, then by rate.
+                "2026-03-15,INR,CGST,250,5000",
+                "2026-03-15,INR,CGST,900,1800",
+                "2026-03-15,INR,SGST,250,5000",
+                "2026-03-15,INR,SGST,900,1800",
+                "2026-03-17,INR,CGST,250,2500",
+                "2026-03-17,INR,SGST,250,2500",
+            ]
+        );
+    }
+
+    #[test]
+    fn revenue_tax_csv_writes_a_name_as_text_and_a_negative_tax_as_a_number() {
+        // No token starts with a formula character, and the file does not rest on that.
+        let day = split_day("2026-03-15", &[("=CGST", 250, -1_250)]);
+        let rows = records(&revenue_tax_csv(&[day]).expect("serialise"));
+        assert_eq!(
+            rows.get(1..),
+            Some(
+                &[["2026-03-15", "INR", "'=CGST", "250", "-1250"]
+                    .map(str::to_owned)
+                    .to_vec()][..]
+            )
+        );
+    }
+
+    #[test]
+    fn revenue_tax_csv_of_a_window_with_no_components_is_its_header() {
+        // Every Vietnamese and Japanese day: their tax lines record no components.
+        let days = [
+            revenue_day("2026-03-15", &[]),
+            revenue_day("2026-03-16", &[]),
+        ];
+        let csv = as_string(revenue_tax_csv(&days).expect("serialise"));
+        assert_eq!(
+            csv,
+            "business_date,currency_code,component_name,rate_basis_points,tax\n"
         );
     }
 }

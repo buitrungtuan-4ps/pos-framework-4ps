@@ -753,6 +753,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud reports tax by component, and the tax grid names each component with a code**
+  ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decisions 2 and 5).
+  - The daily revenue rollup gains `by_tax_component`: the tax the day's settled bills' tax lines
+    recorded under each component name and rate, such as CGST at 2.5%, in order of name and then
+    rate. A fee's tax is already inside its tax line, so a fee line's components are not added
+    again. A bill that recorded none adds to the day's `tax` and to no component, and no entry
+    stands for the difference.
+  - `GET /admin/stores/{store_id}/revenue/tax/export` downloads `revenue-tax.csv`, with the header
+    `business_date,currency_code,component_name,rate_basis_points,tax` and one row per day per
+    component name and rate, over the revenue export's window and behind `console.reports.revenue`.
+    The audit trail records it as `reports.export_revenue_tax`, with its row count only. A store
+    whose tax table names no components downloads only the header. The console's OpenAPI document
+    lists the route.
+  - `PUT /admin/catalog/tax-rates` refuses a component named with anything but two to eight
+    upper-case letters and digits, starting with a letter, such as `CGST`: `400`, `INVALID_FORMAT`
+    on `rates`, naming the row's tax class and channel. `GET` marks a row saved before this with
+    `component_name_invalid: true` and keeps it as it was saved.
+
+  **Upgrade note:** additive, with no migration and no permission. A day gains its components only
+  from the rollup's cursor forward, so the days before the upgrade show none until the store's
+  rollup is reset, which re-folds every settled bill on the log; a day that straddles the upgrade
+  shows only the components its bills recorded. A day with none, as every Vietnamese and Japanese
+  day, is stored byte for byte as before, and `revenue.csv` does not change. **A tenant whose tax
+  grid names a component with anything but such a code cannot save its grid again until it
+  renames that component.** It sees the row marked, and its stores keep charging that row's rate,
+  without a breakdown, meanwhile. `PROTOCOL_VERSION` is unchanged, and no event or setting is
+  added.
+
 - **A shift's report lists its bills' tax by component**
   ([ADR-0168](docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5). Where the
   bills settled on a drawer's shift recorded tax components, its report ends with **TAX BY

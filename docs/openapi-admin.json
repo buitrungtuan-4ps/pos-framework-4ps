@@ -4262,6 +4262,119 @@
         }
       }
     },
+    "/admin/stores/{store_id}/revenue/tax/export": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A store's tax by component as a CSV download, one row per trading day per component name and\nrate ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)\ndecision 5).",
+        "description": "A file of its own beside `revenue-fees.csv`, and the same in every way that matters: windowed\nas the revenue read is, behind `console.reports.revenue`, and audited by how many rows were\nexported, never what they held.",
+        "operationId": "admin_export_revenue_tax",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store whose tax to export (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`revenue-tax.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,component_name,rate_basis_points,tax`, then one row per trading day per tax component name and rate the day's settled bills recorded, oldest day first and then by name and rate: the tax their tax lines recorded under it, in the store's currency's minor units. A fee's tax is inside its tax line, so it adds no row of its own. Nothing is invented: a bill that recorded no components, settled before its store recorded them or taxed at rates with none, is in `revenue.csv`'s `tax` and in no row here, so a day's rows can sum to less than its tax and no row stands for the difference. Only the header for a window with no components, as for a store whose tax table names none, and for a store whose rollup has not been projected yet"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/totp": {
       "post": {
         "tags": [
@@ -4456,7 +4569,7 @@
     },
     {
       "name": "reports",
-      "description": "A store's takings over a window of its trading days, read from the materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route here needs `console.reports.revenue`. The daily reads and the revenue export are still coverage debt; the export of fees by code (ADR-0159) is documented because a route new to this surface is."
+      "description": "A store's takings over a window of its trading days, read from the materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route here needs `console.reports.revenue`. The daily reads and the revenue export are still coverage debt; the exports of fees by code (ADR-0159) and of tax by component (ADR-0168) are documented because a route new to this surface is."
     },
     {
       "name": "fleet",

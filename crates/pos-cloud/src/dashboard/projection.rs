@@ -335,7 +335,7 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use crate::cloud::Cloud;
+    use crate::cloud::{Cloud, DailyRevenue};
 
     fn store_id() -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
@@ -389,6 +389,34 @@ mod tests {
             "service_charge": vnd(service_charge), "tax_total": vnd(8_000),
             "rounding_adjustment": vnd(0), "total_due": vnd(108_000 + service_charge),
             "fee_lines": fee_lines,
+        }))
+        .expect("encode the settled bill");
+        event
+    }
+
+    /// An Indian bill settled on 2026-03-15, taxed 5 % on 100,000 paise, whose tax line records its
+    /// CGST and SGST where `split`, and records none otherwise, as from an edge before them. Its
+    /// event id sorts by `seed`.
+    fn indian(seed: u32, split: bool) -> EventEnvelope<RawPayload> {
+        let inr = |minor: i64| json!({ "currency_code": "INR", "amount_minor": minor });
+        let id = Ulid::from_u128(u128::from(seed)).to_string();
+        let mut line = json!({
+            "tax_class_id": id, "taxable_base": inr(100_000),
+            "rate_basis_points": 500, "tax": inr(5_000),
+        });
+        if split {
+            line["components"] = json!([
+                { "name": "CGST", "rate_basis_points": 250, "tax": inr(2_500) },
+                { "name": "SGST", "rate_basis_points": 250, "tax": inr(2_500) },
+            ]);
+        }
+        let mut event = dated(seed, 1, 2026, 3, 15).remove(0);
+        event.event_type = EventTypeRef::from_known(EventType::BillingBillSettled);
+        event.data = RawPayload::encode(&json!({
+            "bill_id": id, "receipt_number": seed,
+            "subtotal": inr(100_000), "reduction_total": inr(0), "service_charge": inr(0),
+            "tax_total": inr(5_000), "rounding_adjustment": inr(0), "total_due": inr(105_000),
+            "tax_lines": [line],
         }))
         .expect("encode the settled bill");
         event
@@ -502,6 +530,83 @@ mod tests {
         assert_eq!(
             [charged(0, "SVC"), charged(0, "PACK"), charged(1, "PACK")],
             [10_000, 2_000, 2_000]
+        );
+    }
+
+    #[tokio::test]
+    async fn tax_components_accrue_from_the_cursor_and_a_reset_refolds_every_recorded_one() {
+        let components = |days: &[DailyRevenue]| -> Vec<(String, u32, i64)> {
+            days[0]
+                .by_tax_component
+                .iter()
+                .map(|total| {
+                    let name = total.component_name.clone();
+                    (name, total.rate_basis_points, total.tax)
+                })
+                .collect()
+        };
+        let split = |tax: i64| [("CGST".to_owned(), 250, tax), ("SGST".to_owned(), 250, tax)];
+        let events = FakeStore::new();
+        // One bill from an edge before components, and one after.
+        append(&events, &[indian(200, false), indian(201, true)]).await;
+        let rollups = FakeRollups::default();
+        project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("project");
+
+        // The day as a rollup stored before the field holds it: with no such key at all.
+        let stored = rollups.load(tenant(), store_id()).await.expect("load");
+        let mut older = serde_json::to_value(&stored).expect("json");
+        let day = older["revenue"]["2026-03-15"]
+            .as_object_mut()
+            .expect("the day");
+        assert!(day.remove("by_tax_component").is_some());
+        let older: StoredRollups = serde_json::from_value(older).expect("an older rollup loads");
+        rollups
+            .save(tenant(), store_id(), &older)
+            .await
+            .expect("save");
+
+        // After the upgrade the day gains only what the cursor folds from there.
+        append(&events, &[indian(300, true)]).await;
+        project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("project again");
+        let window = RollupWindow::default();
+        let read = revenue(&rollups, tenant(), store_id(), &window)
+            .await
+            .expect("revenue");
+        assert_eq!(components(&read), split(2_500));
+        assert_eq!(read[0].tax, 15_000, "while its tax counted every bill");
+
+        // The ADR-0036 lever: reset the rollup, and the next pass folds the whole log again.
+        rollups
+            .save(tenant(), store_id(), &StoredRollups::default())
+            .await
+            .expect("reset");
+        project(&events, &rollups, tenant(), store_id())
+            .await
+            .expect("project from the start");
+        let rebuilt = revenue(&rollups, tenant(), store_id(), &window)
+            .await
+            .expect("revenue");
+        assert_eq!(
+            (components(&rebuilt), rebuilt[0].tax),
+            (split(5_000).to_vec(), 15_000),
+            "both bills that recorded components, and nothing for the one that did not"
+        );
+        let mut rescanned = BTreeMap::new();
+        let log = events
+            .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
+            .await
+            .expect("read the whole log");
+        for event in &log {
+            fold_revenue(&mut rescanned, event);
+        }
+        assert_eq!(
+            rebuilt,
+            render_revenue_window(rescanned, &window),
+            "the replayed rollup is the fold of the log"
         );
     }
 
