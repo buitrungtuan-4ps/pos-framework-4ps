@@ -29,10 +29,10 @@ use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use pos_proto::ids::{DeviceId, EventId};
 
-use crate::app::{Approval, BillView, BuyerDetails, Edge};
+use crate::app::{Approval, BillView, BuyerDetails, Edge, TillScope};
 use crate::http::check::{CheckFeeLine, CheckResponse, check_fee_lines};
-use crate::http::{bad_request, error_response, parse_ulid};
-use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
+use crate::http::{bad_request, error_response, parse_ulid, shifts};
+use crate::printing::{PrintOutcome, Printers};
 
 /// One payment a device applies to a bill: how it was paid, what the guest handed over, what was put
 /// against the total, and what they left. Change is what is left of `tendered` once
@@ -251,8 +251,22 @@ where
         return bad_request("that is not a well-formed tax code for this country");
     }
 
+    // Which till took the money decides the drawer it goes into (ADR-0167 decision 6). A binding
+    // that cannot be read refuses cash rather than guess, as a till's paper is refused; any other
+    // tender is then no till's.
+    let takes_cash = payments
+        .iter()
+        .any(|payment| payment.method == PaymentMethod::Cash);
+    let scope = match shifts::till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) if takes_cash => return error_response(&error),
+        Err(error) => {
+            tracing::warn!(%error, "the till a device is could not be read; its tender is no till's");
+            TillScope::default()
+        }
+    };
     let outcome = edge
-        .settle_bill(actor, bill_id, payments, buyer.as_ref())
+        .settle_bill_at(actor, scope, bill_id, payments, buyer.as_ref())
         .await;
     let Ok(view) = outcome else {
         return respond(outcome);
@@ -263,14 +277,8 @@ where
     let mut response = BillResponse::from(view.clone());
     // The drawer before the paper: the cashier needs the change before the guest needs the receipt.
     if view.open_drawer {
-        let opened = match printers.as_deref() {
-            Some(printers) => {
-                printers
-                    .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id())
-                    .await
-            }
-            None => DrawerOutcome::NoDrawer,
-        };
+        let opened =
+            shifts::open_drawer_through(printers.as_deref(), &edge, view.drawer_till).await;
         response.drawer_open = Some(opened.as_wire().to_owned());
     }
     if view.print_receipt {
@@ -377,7 +385,7 @@ where
         return PrintOutcome::NoPrinter;
     };
     // The till's own receipt printer and languages, where its terminal names them (ADR-0160
-    // decision 4). The drawer above is the store's whichever till this is.
+    // decision 4). The drawer above is the store's unless the store keeps a drawer per till.
     let session = edge.session();
     let till = printers.till_for(&session, device).await;
     printers

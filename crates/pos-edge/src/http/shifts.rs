@@ -18,7 +18,8 @@
 //! A store that keeps a drawer per till ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
 //! on each. The till a device is comes from its print-agent binding, read only then; a request may
 //! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
-//! /api/shifts` lists every drawer.
+//! /api/shifts` lists every drawer. A paid in, a paid out and a no-sale opening are made at a till,
+//! in its own drawer, and that drawer is the one that opens.
 
 use std::sync::Arc;
 
@@ -199,12 +200,20 @@ where
 
 /// `GET /api/shifts` — every drawer the store keeps: its till, its default float, and its shift
 /// while one is open, as blind as the shift's own read; and the model, with the one the store has
-/// published while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8).
-pub(crate) async fn drawers<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+/// published while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8). Another
+/// till's expectation shows only to a person whose own role grants `cash.shift.manage_other_till`.
+pub(crate) async fn drawers<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
-    Json(DrawersResponse::from(edge.drawers())).into_response()
+    match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => Json(DrawersResponse::from(edge.drawers(actor, scope))).into_response(),
+        Err(error) => error_response(&error),
+    }
 }
 
 /// What `GET /api/shifts` answers.
@@ -257,7 +266,7 @@ impl From<DrawersView> for DrawersResponse {
 /// only where the edge keeps a drawer per till; where it keeps one, every device's drawer is the
 /// store's. One that cannot be read refuses the act, `503`, rather than guess, as a till's paper is
 /// refused.
-async fn till_scope<S>(
+pub(crate) async fn till_scope<S>(
     edge: &Edge<S>,
     printers: Option<&Arc<Printers>>,
     actor: Actor,
@@ -393,14 +402,25 @@ where
         return bad_request("an amount paid in or out is greater than zero");
     }
     let amount = Money::new(edge.session().currency, request.amount_minor);
+    let scope = match till_scope(edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
     let view = match edge
-        .record_cash_movement(actor, shift_id, movement, amount, request.reason_code_id)
+        .record_cash_movement_at(
+            actor,
+            scope,
+            shift_id,
+            movement,
+            amount,
+            request.reason_code_id,
+        )
         .await
     {
         Ok(view) => view,
         Err(error) => return error_response(&error),
     };
-    let opened = open_drawer_through(printers.as_deref(), edge).await;
+    let opened = open_drawer_through(printers.as_deref(), edge, view.till).await;
     let mut response = ShiftResponse::from(view);
     response.drawer_open = Some(opened.as_wire().to_owned());
     Json(response).into_response()
@@ -418,24 +438,31 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     let approval = request.approval();
-    if let Err(error) = edge
-        .open_drawer_no_sale(actor, request.reason_code_id, approval.as_ref())
+    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let till = match edge
+        .open_drawer_no_sale_at(actor, scope, request.reason_code_id, approval.as_ref())
         .await
     {
-        return error_response(&error);
-    }
-    let opened = open_drawer_through(printers.as_deref(), &edge).await;
+        Ok(till) => till,
+        Err(error) => return error_response(&error),
+    };
+    let opened = open_drawer_through(printers.as_deref(), &edge, till).await;
     Json(OpenDrawerResponse {
         drawer_open: opened.as_wire(),
     })
     .into_response()
 }
 
-/// Opens the drawer through the composition's dispatcher. A composition with none layered in — the
-/// fakes-backed example, a route test that does not care — has no drawer to open, and says so.
-async fn open_drawer_through<S>(
+/// Opens `till`'s drawer, or the store's one drawer for `None`, through the composition's
+/// dispatcher. A composition with none layered in — the fakes-backed example, a route test that
+/// does not care — has no drawer to open, and says so.
+pub(crate) async fn open_drawer_through<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
+    till: Option<DeviceId>,
 ) -> DrawerOutcome
 where
     S: EventStore + Send + Sync + 'static,
@@ -443,7 +470,7 @@ where
     match printers {
         Some(printers) => {
             printers
-                .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id())
+                .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id(), till)
                 .await
         }
         None => DrawerOutcome::NoDrawer,
