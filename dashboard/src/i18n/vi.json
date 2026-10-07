@@ -1616,6 +1616,7 @@
   "permission.billing.receipt.reprint": "In lại hóa đơn",
   "permission.billing.refund.issue": "Hoàn tiền hóa đơn đã thanh toán",
   "permission.cash.drawer.open_no_sale": "Mở ngăn kéo tiền khi không bán hàng",
+  "permission.cash.drawer.override_assignment": "Thao tác một lần trên ngăn kéo tiền đã giao cho người khác",
   "permission.cash.movement.record": "Ghi tiền nộp vào hoặc rút ra",
   "permission.cash.shift.close": "Đóng ca",
   "permission.cash.shift.manage_other_till": "Mở, đếm hoặc đóng ngăn kéo tiền của máy POS khác",

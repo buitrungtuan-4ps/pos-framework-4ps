@@ -100,6 +100,13 @@ cash.drawer.open_no_sale	default_role=SUPERVISOR
 cash.drawer.open_no_sale	group=CASH_AND_SHIFTS
 cash.drawer.open_no_sale	pin_required=true
 cash.drawer.open_no_sale	risk=HIGH
+cash.drawer.override_assignment
+cash.drawer.override_assignment	default_role=MANAGER
+cash.drawer.override_assignment	default_role=OWNER
+cash.drawer.override_assignment	default_role=SUPERVISOR
+cash.drawer.override_assignment	group=CASH_AND_SHIFTS
+cash.drawer.override_assignment	pin_required=true
+cash.drawer.override_assignment	risk=HIGH
 cash.movement.record
 cash.movement.record	default_role=CASHIER
 cash.movement.record	default_role=MANAGER

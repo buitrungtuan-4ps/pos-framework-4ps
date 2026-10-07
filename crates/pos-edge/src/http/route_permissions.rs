@@ -262,6 +262,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         "refunds are not built yet (ADR-0028)",
     ),
     (
+        Permission::OverrideDrawerAssignment,
+        "no drawer belongs to one person yet, so nothing asks for it (ADR-0167 decision 9)",
+    ),
+    (
         Permission::PerformStocktake,
         "stocktakes are not built at the store yet",
     ),

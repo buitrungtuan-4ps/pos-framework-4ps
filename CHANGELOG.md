@@ -753,6 +753,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager may act on a drawer assigned to someone else**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). The catalogue gains
+  `cash.drawer.override_assignment`: taking cash into, paying in or out of, opening, counting or
+  closing, for one act, a drawer assigned to another person. It is in CASH_AND_SHIFTS, HIGH, and
+  PIN-flagged, and its default roles are `cash.drawer.open_no_sale`'s: the supervisor, the manager
+  and the owner. It does nothing yet: no drawer belongs to one person until a store assigns its
+  drawers, which a later change adds, so the edge lists it as on no route. The console's role
+  editor names it in English and Vietnamese.
+
+  **Upgrade note:** migration `0086_roles_can_override_an_assigned_drawer` grants it once, behind a
+  `data_migrations` marker: directly to every role that grants `cash.drawer.open_no_sale`
+  directly, and with approval to every other role, archived ones included. Nothing else in a
+  role's lists changes. In the same statement it queues every store whose people have been
+  published for the cloud to publish them again, with the migration's name as the reason. A later
+  boot grants nothing again, so an owner who takes it off a role keeps it off. The migration is
+  additive. `docs/snapshots/permissions.txt` and `docs/permissions.md` gain the permission;
+  `PROTOCOL_VERSION` is unchanged, and no route, event or setting is added.
+
 - **The console sees each drawer's cash in the X/Z report**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13). Where a
   store keeps a drawer for each till, the X / Z card on the Reports screen lists each drawer under
