@@ -63,8 +63,10 @@ fn encode_block(out: &mut Vec<u8>, block: &PrintBlock) {
         }
         // `PrintBlock` is `#[non_exhaustive]`. A block type added after this adapter was built is
         // omitted rather than turned into bytes that might mean something else on the wire; a
-        // rebuild against the newer `pos-ports` adds real handling.
-        _ => {}
+        // rebuild against the newer `pos-ports` adds real handling. `OpenDrawer` is omitted on
+        // purpose: a drawer opens only through `open_drawer_blocking`, whose USB-only check a
+        // document's bytes would walk straight past (ADR-0167 decision 6).
+        PrintBlock::OpenDrawer | _ => {}
     }
 }
 
@@ -143,6 +145,19 @@ mod tests {
         let bytes = encode(&document);
         assert!(bytes.starts_with(&INIT));
         assert!(!bytes.starts_with(&DRAWER_KICK));
+    }
+
+    #[test]
+    fn a_kick_in_a_document_is_never_written_as_the_pulse() {
+        // Only `open_drawer_blocking` writes the pulse, after the USB check; a document carrying
+        // the block, to any printer, carries none of its bytes.
+        let bytes = encode(&PrintDocument::kick());
+        assert_eq!(bytes, INIT.to_vec());
+        assert!(
+            !bytes
+                .windows(DRAWER_KICK.len())
+                .any(|window| window == DRAWER_KICK)
+        );
     }
 
     #[test]

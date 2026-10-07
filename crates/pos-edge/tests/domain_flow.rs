@@ -2070,3 +2070,272 @@ async fn a_till_bound_to_no_terminal_prints_at_the_stores_receipt_printer() {
         "another till's receipt prints where every receipt did"
     );
 }
+
+// --- A drawer behind a print agent (ADR-0167 decision 6) ----------------------------------------
+
+/// The terminal whose print agent writes the counter printer's bytes.
+const AGENT_TILL: u128 = 0x7112;
+/// The claim of an agent that carries the kick, as `pos_print_agent` makes it.
+const KICKING_CLAIM: &str = "/api/print/jobs?kicks_drawer=true";
+/// The claim of an agent built before kicks.
+const PLAIN_CLAIM: &str = "/api/print/jobs";
+
+/// A store whose receipt printer is behind a print agent: on USB at the counter, its bytes written
+/// by the agent answering for [`AGENT_TILL`], marked as having the drawer when `drawer_attached`.
+/// Answers the router, a till signed in by somebody whose PIN may open the drawer without a sale,
+/// the token the agent's machine claims with, bound as a manager binds it, and what the edge
+/// itself wrote to any printer.
+async fn drawer_agent_app(drawer_attached: bool) -> (Router, String, String, Arc<Recorder>) {
+    let agent_till = DeviceId::new(Ulid::from_u128(AGENT_TILL));
+    let devices = PublishedDevices::new(vec![PublishedDevice {
+        connection: DeviceConnection::Usb.into(),
+        address: COUNTER_PRINTER.to_owned(),
+        agent_device_id: Some(agent_till),
+        drawer_attached,
+        ..counter_printer()
+    }]);
+    let mut roster = StaffRoster::new();
+    roster.insert(
+        STAFF_CODE,
+        StaffAuth {
+            employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+            permissions: PermissionSet::EMPTY.with(Permission::OpenDrawerNoSale),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: Some(hash_of(STAFF_PIN)),
+        },
+    );
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7))),
+            EdgeSession {
+                devices,
+                ..EdgeSession::bootstrap().with_staff(roster)
+            },
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed"),
+    );
+    let agents = Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new());
+    let queue = Arc::new(pos_edge::print_queue::InMemoryPrintQueue::new());
+    let wake = pos_edge::print_wake::SharedPrintWake::new();
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(
+        Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))).with_agents(Arc::new(
+            AgentLane::new(Arc::clone(&agents), Arc::clone(&queue), wake.clone()),
+        )),
+    );
+    let pairing = Arc::new(Pairing::new());
+    let now = SystemClock.now();
+    let mut paired = Vec::new();
+    for _ in 0..2 {
+        let (code, _) = pairing
+            .mint(now, Minter::Boot)
+            .expect("mint a pairing code");
+        let token = pairing
+            .redeem(&code, now)
+            .await
+            .expect("redeem")
+            .token()
+            .expect("a fresh code pairs a device");
+        let device = pairing
+            .device_for(&token)
+            .expect("a freshly issued token resolves");
+        paired.push((device, token.as_str().to_owned()));
+    }
+    let (machine, agent_token) = paired.pop().expect("the agent's machine");
+    let (_, till) = paired.pop().expect("the till");
+    pos_edge::print_agent::PrintAgents::claim(
+        agents.as_ref(),
+        agent_till,
+        machine,
+        now.as_milliseconds_since_epoch(),
+    )
+    .await
+    .expect("the manager's binding is recorded");
+    let service = pos_edge::http::domain_router(
+        edge,
+        InMemoryQueueNumbers::new(),
+        agents,
+        queue,
+        wake,
+        pairing,
+        Arc::new(Sessions::new()),
+        &Arc::new(pos_edge::origins::Origins::new()),
+    )
+    .layer(axum::Extension(printers));
+    let (status, _) = send(
+        service.clone(),
+        &till,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": STAFF_CODE, "pin": STAFF_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the till signs in");
+    (service, till, agent_token, recorder)
+}
+
+/// What a fake agent was handed: each job's blocks, in the order it was handed them.
+type Handed = Arc<std::sync::Mutex<Vec<Value>>>;
+
+/// The agent's machine, faked over the shipped routes: it claims with `claim`, records each job's
+/// blocks, and acknowledges it, as `pos_print_agent` does once the bytes are written. Started, then
+/// given long enough for its first claim to have said what it carries and parked.
+async fn a_fake_agent(
+    app: &Router,
+    token: &str,
+    claim: &'static str,
+) -> (tokio::task::JoinHandle<()>, Handed) {
+    let handed: Handed = Arc::default();
+    let machine = tokio::spawn({
+        let (app, token, handed) = (app.clone(), token.to_owned(), Arc::clone(&handed));
+        async move {
+            loop {
+                let (status, leased) = send(app.clone(), &token, "GET", claim, None).await;
+                if status != StatusCode::OK {
+                    return;
+                }
+                for job in leased["jobs"].as_array().into_iter().flatten() {
+                    handed
+                        .lock()
+                        .expect("the record")
+                        .push(job["job"]["document"]["blocks"].clone());
+                    let job_id = job["job"]["job_id"].as_str().unwrap_or_default();
+                    let ack = format!("/api/print/jobs/{job_id}/ack");
+                    send(app.clone(), &token, "POST", &ack, None).await;
+                }
+            }
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    (machine, handed)
+}
+
+/// The kicks among what an agent was handed.
+fn kicks_in(handed: &Handed) -> usize {
+    handed
+        .lock()
+        .expect("the record")
+        .iter()
+        .filter(|blocks| **blocks == json!(["OpenDrawer"]))
+        .count()
+}
+
+#[tokio::test]
+async fn a_drawer_behind_an_agent_that_carries_the_kick_opens_for_each_act_that_opens_it() {
+    // ADR-0167 decision 6 over the shipped routes: a cash payment, a paid in, a paid out and a
+    // no-sale opening each put one kick on the agent's queue, inside a job of its own, and the till
+    // hears `OPENED` once the agent acknowledges it.
+    let (app, till, agent, recorder) = drawer_agent_app(true).await;
+    let (machine, handed) = a_fake_agent(&app, &agent, KICKING_CLAIM).await;
+
+    let (status, shift) = send(
+        app.clone(),
+        &till,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shift}");
+    assert_eq!(kicks_in(&handed), 0, "opening a shift opens no drawer");
+    let shift_id = shift["shift_id"].as_str().expect("a shift id").to_owned();
+
+    let cash = settle_a_table_with(
+        &app,
+        &till,
+        TableId::new(Ulid::from_u128(740)),
+        "PAYMENT_METHOD_CASH",
+    )
+    .await;
+    assert_eq!(cash["drawer_open"], "OPENED", "{cash}");
+    assert_eq!(cash["receipt_print"], "QUEUED_TO_AGENT", "{cash}");
+    assert_eq!(kicks_in(&handed), 1, "the cash payment's kick");
+
+    // "Making change" is listed for all three of the drawer's acts.
+    let reason = pos_proto::reason_codes::PublishedReasonCodes::framework_default()
+        .for_action(pos_proto::reason_codes::ReasonAction::DrawerOpen)
+        .next()
+        .expect("a framework reason for opening the drawer")
+        .id
+        .to_string();
+    for (n, act) in [(2, "paid-in"), (3, "paid-out")] {
+        let (status, moved) = send(
+            app.clone(),
+            &till,
+            "POST",
+            &format!("/api/shifts/{shift_id}/{act}"),
+            Some(json!({ "amount_minor": 50_000, "reason_code_id": reason })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{act}: {moved}");
+        assert_eq!(moved["drawer_open"], "OPENED", "{act}: {moved}");
+        assert_eq!(kicks_in(&handed), n, "the {act}'s kick");
+    }
+
+    let (status, no_sale) = send(
+        app.clone(),
+        &till,
+        "POST",
+        "/api/drawer/open",
+        Some(json!({
+            "reason_code_id": reason,
+            "approver_code": STAFF_CODE,
+            "approver_pin": STAFF_PIN,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{no_sale}");
+    assert_eq!(no_sale["drawer_open"], "OPENED", "{no_sale}");
+    assert_eq!(kicks_in(&handed), 4, "one kick for each act, and no more");
+
+    machine.abort();
+    assert!(
+        recorder.written.lock().expect("the recorder").is_empty(),
+        "the edge never dials a printer its agent owns"
+    );
+}
+
+#[tokio::test]
+async fn no_kick_goes_to_an_agent_built_before_kicks_or_for_a_printer_with_no_drawer() {
+    // ADR-0165's answer stands for both: `NO_DRAWER`, which the till reads as "open it with its
+    // key", and nothing on the agent's queue it could not read or should not act on.
+    for (claim, drawer_attached, why) in [
+        (PLAIN_CLAIM, true, "an agent built before kicks"),
+        (
+            KICKING_CLAIM,
+            false,
+            "a printer not marked as having the drawer",
+        ),
+    ] {
+        let (app, till, agent, recorder) = drawer_agent_app(drawer_attached).await;
+        let (machine, handed) = a_fake_agent(&app, &agent, claim).await;
+
+        let cash = settle_a_table_with(
+            &app,
+            &till,
+            TableId::new(Ulid::from_u128(741)),
+            "PAYMENT_METHOD_CASH",
+        )
+        .await;
+        assert_eq!(cash["drawer_open"], "NO_DRAWER", "{why}: {cash}");
+        assert_eq!(cash["receipt_print"], "QUEUED_TO_AGENT", "{why}: {cash}");
+
+        // The receipt reaches the agent, and nothing went ahead of it.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while handed.lock().expect("the record").is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the agent is handed the receipt");
+        machine.abort();
+        assert_eq!(kicks_in(&handed), 0, "{why}");
+        assert!(
+            recorder.written.lock().expect("the recorder").is_empty(),
+            "{why}"
+        );
+    }
+}

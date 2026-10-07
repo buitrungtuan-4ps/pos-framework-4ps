@@ -130,6 +130,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A cash drawer behind POS Station's print agent opens by itself**
+  ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A drawer wired to a USB
+  receipt printer that a print agent writes stayed shut, and the till said to open it with its key,
+  because the agent carried print jobs and not the kick (ADR-0165).
+  - The agent now says it carries the kick when it asks for work,
+    `GET /api/print/jobs?kicks_drawer=true`. A cash payment, a paid in, a paid out and a no-sale
+    opening send such an agent the kick as a job of its own, on the same authenticated queue as its
+    receipts, and the agent writes the drawer pulse to its printer and acknowledges the job.
+  - The till hears `OPENED` once the agent acknowledges within five seconds, and
+    `DRAWER_UNAVAILABLE` when the agent is silent, its queue is full or no acknowledgement comes. The
+    act stands either way, and only the no-sale opening writes `cash.drawer.opened`, as before. A
+    kick nobody waits for any more is never delivered, so a drawer does not spring after the
+    cashier was told to use the key.
+  - The agent opens a drawer only for a job addressed to a printer its terminal owns, reached over
+    USB and marked **Cash drawer attached**; any other kick is refused unwritten. A drawer the edge
+    writes to itself opens exactly as before, and a cash payment at any till still opens the store's
+    drawer until each till has its own (ADR-0167's slice 3).
+
+  **Upgrade note:** the drawer behind POS Station opens by itself once both the edge and POS Station
+  run this release. An older POS Station does not say it carries the kick, is sent none, and its till
+  keeps saying to open the drawer with its key (`NO_DRAWER`, as before); an older edge sends no kick,
+  and a new POS Station prints for it as before. `pos-ports`' `PrintBlock` gains `OpenDrawer`
+  (additive), and the agent's claim an optional query parameter. No migration, route, event,
+  permission or setting changes, and `PROTOCOL_VERSION` is unchanged.
+
 - **The cloud publishes a store's people again by itself after a migration changes what roles
   grant** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). A store's
   `permissions` node is compiled when its people are published, so a grant a migration made, as

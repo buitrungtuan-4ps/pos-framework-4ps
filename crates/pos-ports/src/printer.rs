@@ -299,6 +299,15 @@ pub enum PrintBlock {
     },
     /// Cut the paper. Ignored by a printer that cannot.
     Cut,
+    /// Open the cash drawer wired to this printer: the kick
+    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    ///
+    /// A kick travels to a print agent as a job of its own, this block alone
+    /// ([`PrintDocument::kick`]), and the agent opens the drawer through
+    /// [`PrinterDriver::open_drawer`], under its USB-only rule. It is never encoded into a
+    /// document's bytes, so anywhere else it opens nothing. An agent built before it cannot read it,
+    /// which is why the edge sends one only to an agent that says it carries a kick.
+    OpenDrawer,
 }
 
 /// A document to print.
@@ -306,6 +315,23 @@ pub enum PrintBlock {
 pub struct PrintDocument {
     /// The blocks, in order.
     pub blocks: Vec<PrintBlock>,
+}
+
+impl PrintDocument {
+    /// The document a kick travels as: [`PrintBlock::OpenDrawer`] and nothing else.
+    #[must_use]
+    pub fn kick() -> Self {
+        Self {
+            blocks: vec![PrintBlock::OpenDrawer],
+        }
+    }
+
+    /// Whether this document is a kick, [`PrintBlock::OpenDrawer`] alone. The one test the edge
+    /// and the agent both apply, so the two cannot disagree about which job opens a drawer.
+    #[must_use]
+    pub fn is_kick(&self) -> bool {
+        matches!(self.blocks.as_slice(), [PrintBlock::OpenDrawer])
+    }
 }
 
 /// A print job.
@@ -560,6 +586,24 @@ mod tests {
         );
         let back: PrintJob = serde_json::from_str(&json).expect("and comes back");
         assert_eq!(back, job);
+    }
+
+    #[test]
+    fn a_kick_is_the_open_drawer_block_alone_and_survives_the_queue() {
+        // The queue stores a job as JSON, and an agent reads it back from the claim.
+        let kick = PrintDocument::kick();
+        assert!(kick.is_kick());
+        let json = serde_json::to_string(&kick).expect("a kick serialises");
+        assert_eq!(json, r#"{"blocks":["OpenDrawer"]}"#);
+        let back: PrintDocument = serde_json::from_str(&json).expect("and comes back");
+        assert!(back.is_kick());
+
+        // Beside anything else it is not a kick, and nothing is one by accident.
+        let mixed = PrintDocument {
+            blocks: vec![PrintBlock::OpenDrawer, PrintBlock::Cut],
+        };
+        assert!(!mixed.is_kick());
+        assert!(!PrintDocument { blocks: Vec::new() }.is_kick());
     }
 
     #[test]

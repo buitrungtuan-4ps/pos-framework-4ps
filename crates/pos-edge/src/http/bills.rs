@@ -264,7 +264,11 @@ where
     // The drawer before the paper: the cashier needs the change before the guest needs the receipt.
     if view.open_drawer {
         let opened = match printers.as_deref() {
-            Some(printers) => printers.open_drawer(&edge.session()).await,
+            Some(printers) => {
+                printers
+                    .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id())
+                    .await
+            }
             None => DrawerOutcome::NoDrawer,
         };
         response.drawer_open = Some(opened.as_wire().to_owned());

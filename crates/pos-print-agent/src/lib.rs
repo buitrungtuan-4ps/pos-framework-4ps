@@ -36,6 +36,15 @@
 //! The reverse order would leave a job deleted with no record of it, which is survivable, and the
 //! order chosen is strictly better. A write that *fails* is never acknowledged at all: the lease
 //! lapses and the job returns to the queue, which is what a jammed printer needs.
+//!
+//! # A kick is a job too
+//!
+//! A job whose document is [`PrintDocument::kick`](pos_ports::printer::PrintDocument::kick) alone
+//! opens the cash drawer wired to the printer it names, and prints nothing
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). It is taken
+//! only for a USB printer the edge says has a drawer ([`printers`]), and it is written, recorded and
+//! acknowledged like any other job, so a redelivered kick opens the drawer once. The claim says this
+//! agent carries kicks ([`CLAIM_PATH`]); an edge sends none to an agent that does not.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -62,6 +71,14 @@ pub const RECONNECT_BACKOFF: Duration = Duration::from_secs(5);
 
 /// The version this binary reports in its user agent, for a log an operator reads.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The claim, saying what this agent carries beyond print jobs: `kicks_drawer=true`, a kick
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+///
+/// A capability rather than [`VERSION`], which is this crate's and not the release's, so it says
+/// nothing about what a binary carries. An agent built before kicks claims without it, and its
+/// edge sends it none.
+pub const CLAIM_PATH: &str = "/api/print/jobs?kicks_drawer=true";
 
 /// Anything that stops a cycle.
 #[derive(Debug, thiserror::Error)]
@@ -388,7 +405,11 @@ where
                     continue;
                 }
                 // The job's identifier and its printer, never its content (`pos_ports::printer`).
-                tracing::info!(%job_id, printer = %job.printer_device_id, "printed");
+                if job.job.document.is_kick() {
+                    tracing::info!(%job_id, printer = %job.printer_device_id, "opened the cash drawer");
+                } else {
+                    tracing::info!(%job_id, printer = %job.printer_device_id, "printed");
+                }
                 acknowledge(edge, job_id).await;
                 handled = handled.saturating_add(1);
             }

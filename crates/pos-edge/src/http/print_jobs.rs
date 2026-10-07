@@ -21,6 +21,15 @@
 //! A job whose printer is no longer published is skipped rather than handed over: there is nowhere
 //! to send it, and it expires at its TTL like any other undeliverable job.
 //!
+//! # A kick goes only to an agent that says it carries one
+//!
+//! A claim says what the agent carries, `?kicks_drawer=true`
+//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), and the claim
+//! records it on [`Printers`], where opening a drawer reads it. An agent built before kicks says
+//! nothing, so no kick is queued for it, and one queued before it said otherwise is never handed to
+//! it: it could not read the answer, and would print nothing at all. The acknowledgement of a kick
+//! is what tells the till waiting on it that the drawer was kicked.
+//!
 //! # The paired gate, and no second one
 //!
 //! Both routes carry the paired-device gate **alone**. An agent is an unattended process: nobody is
@@ -51,7 +60,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -183,17 +192,24 @@ impl Drop for ParkedOnce<'_> {
     }
 }
 
+/// Whether a claim's query says the agent carries a kick: `kicks_drawer=true`, and nothing else
+/// reads as yes.
+fn carries_kick(query: Option<&str>) -> bool {
+    query.is_some_and(|query| query.split('&').any(|pair| pair == "kicks_drawer=true"))
+}
+
 /// Renders a claim's result, or the `503` a failed claim gets.
 ///
 /// `can_rasterise` is the dispatching [`Printers`]', so the capabilities handed to the agent are
 /// the ones the document was prepared under. A composition with no dispatcher — a route test — is
-/// `false`, which is the truth for it.
+/// `false`, which is the truth for it. `carries_kick` is what this claim said; a kick is never
+/// handed to an agent that did not say it.
 async fn claim_now<S, Q: PrintQueue>(
     edge: &Edge<S>,
     queue: &Q,
     agent: DeviceId,
     now_ms: i64,
-    can_rasterise: bool,
+    (can_rasterise, carries_kick): (bool, bool),
 ) -> Result<Vec<LeasedJob>, Response>
 where
     S: EventStore + Send + Sync,
@@ -214,6 +230,11 @@ where
     Ok(claimed
         .into_iter()
         .filter_map(|job| {
+            if job.job.document.is_kick() && !carries_kick {
+                // Leased by the queue, never handed over: it expires at its short TTL.
+                tracing::warn!(%agent, "a kick was withheld from an agent that does not carry one");
+                return None;
+            }
             let Some(printer) = session
                 .devices
                 .devices()
@@ -245,6 +266,7 @@ where
 async fn claim<S, A, Q, W>(
     State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
+    RawQuery(query): RawQuery,
     printers: Option<Extension<Arc<Printers>>>,
 ) -> Response
 where
@@ -253,7 +275,13 @@ where
     Q: PrintQueue,
     W: PrintWake,
 {
-    let can_rasterise = printers.is_some_and(|Extension(printers)| printers.can_rasterise());
+    let printers = printers.map(|Extension(printers)| printers);
+    let said = (
+        printers
+            .as_ref()
+            .is_some_and(|printers| printers.can_rasterise()),
+        carries_kick(query.as_deref()),
+    );
     let agent = match resolve(&deps.agents, device).await {
         Some(Ok(agent)) => agent,
         Some(Err(response)) => return response,
@@ -277,10 +305,15 @@ where
             return store_unavailable("the store could not record the agent");
         }
     }
+    // What the agent carries, recorded by the same act as its liveness, once the binding has said
+    // which terminal it is.
+    if let Some(printers) = printers.as_ref() {
+        printers.heard_from_agent(agent, said.1);
+    }
 
     // One park per agent. A second concurrent request reads once and answers, held socket or not.
     let Some(_parked) = ParkedOnce::take(&deps.parked, agent) else {
-        return match claim_now(&deps.edge, &deps.queue, agent, now_ms, can_rasterise).await {
+        return match claim_now(&deps.edge, &deps.queue, agent, now_ms, said).await {
             Ok(jobs) => (StatusCode::OK, Json(LeasedJobs { jobs })).into_response(),
             Err(response) => response,
         };
@@ -298,7 +331,7 @@ where
             &deps.queue,
             agent,
             SystemClock.now().as_milliseconds_since_epoch(),
-            can_rasterise,
+            said,
         )
         .await
         {
@@ -322,6 +355,7 @@ async fn acknowledge<S, A, Q, W>(
     State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
     Path(job_id): Path<String>,
+    printers: Option<Extension<Arc<Printers>>>,
 ) -> Response
 where
     S: EventStore + Send + Sync,
@@ -342,6 +376,10 @@ where
             // The job's identifier and its fate, never its content: a document may carry a buyer's
             // name and tax code (`pos_ports::printer`).
             tracing::info!(%job, %agent, deleted, "a print agent acknowledged a job");
+            // A kick a till is waiting on is answered by this: the agent wrote it.
+            if deleted && let Some(Extension(printers)) = printers.as_ref() {
+                printers.acknowledged(job);
+            }
             // `204` either way. `false` is an acknowledgement that arrived after the job expired,
             // or a second time after a lost reply, and the agent's next move is the same in all
             // three cases — telling it which would only enumerate what the queue holds.
