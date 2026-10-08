@@ -60,7 +60,7 @@ export function CodePad(props: {
   const press = (character: string) => props.onChange(props.value + character);
 
   const key =
-    "min-h-touch rounded-token border border-line bg-surface-raised text-lg font-semibold text-ink active:bg-surface";
+    "min-h-touch rounded-token border border-line bg-surface-raised text-lg font-semibold text-ink active:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
 
   // Pressing a key must not take the caret out of the field it is filling. `pointerdown` is where a
   // button steals focus, so that is where it is refused — `click` still fires and still types.
