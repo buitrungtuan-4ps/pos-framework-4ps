@@ -115,6 +115,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects SIIT IPv4-translated interface identifiers (`<prefix>:ffff:0:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via SIIT translated addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
 
+- **Refuse IPv4 AMT (192.52.193.0/24) and AS112 (192.175.48.0/24, 198.31.0.0/24) ranges in webhook SSRF filter.**
+  `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 7450 AMT (`192.52.193.0/24`) and RFC 7535 AS112 (`192.175.48.0/24`, `198.31.0.0/24`) IPv4 special-purpose ranges as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
+
 - **Refuse IPv4 special-purpose ranges 192.0.0.0/24 and 192.88.99.0/24 in webhook SSRF filter.**
   `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 6890 IETF Protocol Assignments / DS-Lite (`192.0.0.0/24`) and 6to4 Relay Anycast (`192.88.99.0/24`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
 
