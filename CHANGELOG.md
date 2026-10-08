@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **CodePad & IdleLock focus-visible indicators.** Added focus-visible focus outline styles to CodePad keys and IdleLock action buttons for keyboard navigation accessibility.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
