@@ -887,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn v6_tunneling_and_benchmarking_prefixes_are_refused() {
+    fn v6_tunneling_prefixes_are_refused() {
         // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
         assert_eq!(
             classify_ip(ip("2001:1234:5678:9abc::127.0.0.1")),
@@ -932,6 +932,10 @@ mod tests {
                 ForbiddenReason::LinkLocal
             ))
         );
+    }
+
+    #[test]
+    fn v6_benchmarking_and_reserved_prefixes_are_refused() {
         // Benchmarking IPv6 range (2001:2::/48).
         assert_eq!(
             classify_ip(ip("2001:2::1")),
