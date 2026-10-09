@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Memoize SVG chart bounds, drawer rows, and settings filtering in dashboard.**
+  `BarChart`'s `max` and `count` calculations, `DrawerTable`'s drawer rows in `dashboard/src/screens/Reports.tsx`, and `visibleSettings` / `hiddenLines` in `dashboard/src/screens/Settings.tsx` are now memoized using SolidJS `createMemo` to eliminate redundant $O(N^2)$ SVG render calculations and $O(N \cdot S)$ semver matrix evaluations.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a

@@ -988,7 +988,9 @@ export function Settings() {
   };
 
   /** The settings hidden for the chosen store, each with the one line that says why. */
-  const hiddenLines = () =>
+  // Optimization: Memoize hiddenLines and visibleSettings with createMemo to avoid repeating
+  // O(N * S) semver standingOf checks across all settings and stores on every render.
+  const hiddenLines = createMemo(() =>
     catalogue()
       .filter(hiddenHere)
       .map((setting) =>
@@ -998,7 +1000,12 @@ export function Settings() {
           installed: releaseOf(target()) ?? "",
           since: setting.since,
         }),
-      );
+      ),
+  );
+
+  const visibleSettings = createMemo(() =>
+    catalogue().filter((setting) => !hiddenHere(setting)),
+  );
 
   // The fleet read is waited for but not required: until it settles every store reads as unknown,
   // and a setting shown for a moment and then hidden from an old store is a flicker that says the
@@ -1156,7 +1163,7 @@ export function Settings() {
                   <EmptyState title={t("settings.empty")} description={t("settings.emptyHint")} />
                 }
               >
-                <For each={catalogue().filter((setting) => !hiddenHere(setting))}>
+                <For each={visibleSettings()}>
                   {(setting) => <SettingCard setting={setting} />}
                 </For>
               </Show>
