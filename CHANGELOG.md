@@ -128,6 +128,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **SSRF protection in webhook URL classification now checks the AMT (`2001:3::/32`, RFC 7450) and AS112 (`2001:4:112::/48`, RFC 7535) IPv6 ranges.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies both as `ForbiddenReason::Reserved`. They are globally reachable, but their anycast addresses reach multicast-tunnel relays and the AS112 reverse-DNS sinks, never a webhook receiver. **Upgrade note:** none.
 
+- **SSRF protection in webhook URL classification now checks BGP-4 Anycast IPv6 range (`2001:5::/32`, RFC 8969) and IPv4 special-purpose ranges `192.31.196.0/24`, `192.52.193.0/24`, and `192.175.48.0/24`.**
+  `classify_v6` and `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classify `2001:5::/32` (RFC 8969), `192.31.196.0/24` (RFC 7534), `192.52.193.0/24` (RFC 7450), and `192.175.48.0/24` (RFC 7535) as `ForbiddenReason::Reserved`, preventing SSRF bypasses via Anycast and special-purpose infrastructure ranges. **Upgrade note:** none.
+
 ### Changed
 
 - **A cash drawer behind POS Station's print agent opens by itself**
