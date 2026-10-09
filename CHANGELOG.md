@@ -189,6 +189,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     older cloud does not read the table, and what it leaves queued is drained by the next upgrade.
     No route, event, permission or protocol version change.
 
+- **CodePad keys show focus rings during keyboard navigation.** Added `focus-visible` ring indicators to letter, digit, clear, and backspace buttons in `CodePad` (`ui/src/components/CodePad.tsx`), aligning with `Keypad`'s keyboard accessibility posture. No upgrade note: nothing on the wire or in the database changes.
+
 - **The till's number pad names itself to a screen reader and keeps focus where it was.** The keypad
   on the Pay, Takeaway and Shift screens is now a group named "Numeric keypad" (*Bàn phím số*), a key
   reached from a keyboard shows a focus ring, and pressing a key no longer pulls focus away from where
