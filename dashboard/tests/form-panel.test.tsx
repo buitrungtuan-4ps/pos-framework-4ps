@@ -63,7 +63,7 @@ describe("the form shell", () => {
     const crud = useEntityCrud<Store>();
     mount({ crud, onSubmit: () => {} });
     crud.create();
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Add store" })).toBeTruthy();
     expect(screen.getByText("Add store")).toBeTruthy();
   });
 
@@ -71,6 +71,7 @@ describe("the form shell", () => {
     const crud = useEntityCrud<Store>();
     mount({ crud, onSubmit: () => {} });
     crud.edit(LTT);
+    expect(screen.getByRole("dialog", { name: "Edit store" })).toBeTruthy();
     expect(screen.getByText("Edit store")).toBeTruthy();
   });
 

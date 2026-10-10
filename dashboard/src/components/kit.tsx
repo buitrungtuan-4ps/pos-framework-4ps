@@ -9,6 +9,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createUniqueId,
   For,
   type JSX,
   onCleanup,
@@ -19,6 +20,7 @@ import {
 import type { NodePreview } from "../api/types";
 import { t } from "../i18n";
 import type { EntityCrud } from "../lib/entity-crud";
+import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
 import { Banner, Button, TextField } from "./ui";
 
@@ -488,6 +490,7 @@ export function Modal(
     footer?: JSX.Element;
   }>,
 ) {
+  const titleId = createUniqueId();
   useEscape(
     () => props.open,
     () => props.onClose(),
@@ -501,11 +504,12 @@ export function Modal(
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby={titleId}
           class="w-full max-w-lg rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
-            <h2 class="text-lg font-semibold text-ink">{props.title}</h2>
+            <h2 id={titleId} class="text-lg font-semibold text-ink">{props.title}</h2>
             <button
               type="button"
               aria-label={props.closeLabel}
@@ -537,6 +541,7 @@ export function Drawer(
     footer?: JSX.Element;
   }>,
 ) {
+  const titleId = createUniqueId();
   useEscape(
     () => props.open,
     () => props.onClose(),
@@ -547,11 +552,12 @@ export function Drawer(
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby={titleId}
           class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
-            <h2 class="text-lg font-semibold text-ink">{props.title}</h2>
+            <h2 id={titleId} class="text-lg font-semibold text-ink">{props.title}</h2>
             <button
               type="button"
               aria-label={props.closeLabel}
@@ -1055,19 +1061,7 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
   let container: HTMLDivElement | undefined;
 
   useEscape(open, () => setOpen(false));
-
-  createEffect(() => {
-    if (!open()) {
-      return;
-    }
-    const dismiss = (event: MouseEvent) => {
-      if (container && !container.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", dismiss);
-    onCleanup(() => document.removeEventListener("mousedown", dismiss));
-  });
+  useClickOutside(open, () => container, () => setOpen(false));
 
   return (
     <div class="relative" ref={container}>

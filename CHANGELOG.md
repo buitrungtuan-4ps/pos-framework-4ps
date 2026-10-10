@@ -478,6 +478,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Modal and Drawer accessibility via aria-labelledby.** Added `aria-labelledby` linking `role="dialog"` to the `<h2>` header title across all `Modal` and `Drawer` dialog components in `dashboard/src/components/kit.tsx`, enabling screen readers to announce the dialog's title upon opening. **Upgrade note:** none.
+
 - **A menu publish brings the store's fees along, so a fee naming a category charges on the items
   it adds.** A fee rule's categories were compiled into each store's items only by a fee publish,
   so after a menu publish added an item to a category a fee names, the store charged no fee on it
