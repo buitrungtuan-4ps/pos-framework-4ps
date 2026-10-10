@@ -476,6 +476,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize coveredLines and isPart on the Pay screen.**
   `coveredLines` and `isPart` in `ui/src/screens/Pay.tsx` are now memoized with `createMemo` to avoid redundant $O(N \log N)$ array filtering and string sorting passes on re-renders.
 
+- **Memoize active items, categories, and tax classes in Fees screen.**
+  `activeItems`, `activeCategories`, and `activeTaxClasses` in `dashboard/src/screens/Fees.tsx` are now memoized with `createMemo` to avoid redundant $O(N)$ array filtering on input strokes and re-renders.
+
 ### Fixed
 
 - **A menu publish brings the store's fees along, so a fee naming a category charges on the items

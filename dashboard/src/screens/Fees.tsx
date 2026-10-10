@@ -339,11 +339,16 @@ export function Fees() {
   const stores = () => layout.value()?.stores ?? [];
   const brands = () => layout.value()?.brands ?? [];
   const rules = () => written.value() ?? [];
-  const activeItems = () => (layout.value()?.items ?? []).filter((row) => row.status === "active");
-  const activeCategories = () =>
-    (layout.value()?.categories ?? []).filter((row) => row.status === "active");
-  const activeTaxClasses = () =>
-    (layout.value()?.taxClasses ?? []).filter((row) => row.status === "active");
+  // Memoize active items, categories, and tax classes using createMemo to avoid redundant O(N) array filtering on input strokes / re-renders.
+  const activeItems = createMemo(() =>
+    (layout.value()?.items ?? []).filter((row) => row.status === "active"),
+  );
+  const activeCategories = createMemo(() =>
+    (layout.value()?.categories ?? []).filter((row) => row.status === "active"),
+  );
+  const activeTaxClasses = createMemo(() =>
+    (layout.value()?.taxClasses ?? []).filter((row) => row.status === "active"),
+  );
 
   const storeName = (id: string) => stores().find((row) => sameId(row.store_id, id))?.name ?? id;
   const brandName = (id: string) => brands().find((row) => sameId(row.brand_id, id))?.name ?? id;
