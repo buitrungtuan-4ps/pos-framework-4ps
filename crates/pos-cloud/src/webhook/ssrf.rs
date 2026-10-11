@@ -940,6 +940,10 @@ mod tests {
                 ForbiddenReason::Benchmarking
             ))
         );
+    }
+
+    #[test]
+    fn v6_anycast_and_special_purpose_prefixes_are_refused() {
         // Discard-Only IPv6 range (100::/64, RFC 6666).
         assert_eq!(
             classify_ip(ip("100::1")),
