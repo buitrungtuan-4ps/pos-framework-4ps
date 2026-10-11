@@ -130,6 +130,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **DataTable column header accessibility with aria-sort and focus rings.**
+  Added dynamic `aria-sort` ("ascending", "descending", or "none") to sortable table column headers (`<th>`) in `DataTable`, wrapped `Pager` in a semantic `<nav aria-label="...">` element, and added `focus-visible` styling to header buttons and `<summary>` elements in `dashboard/src/components/kit.tsx`.
+
 - **A cash drawer behind POS Station's print agent opens by itself**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A drawer wired to a USB
   receipt printer that a print agent writes stayed shut, and the till said to open it with its key,
