@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-04 - [SSRF IPv4 and IPv6 Anycast and Infrastructure Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check IPv4 special-purpose ranges `192.31.196.0/24` (AS112-v4, RFC 7535), `192.52.193.0/24` (AMT, RFC 7450), and `192.175.48.0/24` (Direct Delegation AS112 Service, RFC 7534), or IPv6 special-purpose range `2001:5::/32` (BGP Router-ID, RFC 7526). Destinations in these ranges fell through `classify_v4` and `classify_v6` as public unicast addresses.
+**Learning:** Infrastructure and anycast ranges such as AS112, AMT, Direct Delegation AS112, and BGP Router-ID serve specialized network routing/sinkhole services and must not be permitted as outbound webhook receivers.
+**Prevention:** Include octet matches for `192.31.196.0/24`, `192.52.193.0/24`, and `192.175.48.0/24` in `classify_v4` alongside `2001:5::/32` in `classify_v6` to reject non-target network infrastructure destinations as `ForbiddenReason::Reserved`.
