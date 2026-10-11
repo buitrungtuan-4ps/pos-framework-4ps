@@ -4,7 +4,7 @@
 // is no longer reachable. The chosen ids are what every screen reads (state/session); the names are
 // shown, and the ULID sits underneath, muted, for reference only.
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
@@ -214,13 +214,23 @@ export function ContextPicker() {
     }
   };
 
-  // The org switcher's search: filter each list by name as the operator types.
-  const matchesSearch = (name: string, needle: string) =>
-    name.toLowerCase().includes(needle.trim().toLowerCase());
-  const shownTenants = (all: Tenant[]) =>
-    tenantSearch().trim() ? all.filter((tenant) => matchesSearch(tenant.name, tenantSearch())) : all;
-  const shownStores = (all: Store[]) =>
-    storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
+  // Optimization: Memoize tenant and store search filter results with createMemo to avoid O(N) re-filtering
+  // and redundant query lowercasing on every render/keystroke or multiple JSX evaluations.
+  const shownTenants = createMemo(() => {
+    const all = tenants();
+    if (!all) return [];
+    const needle = tenantSearch().trim().toLowerCase();
+    if (!needle) return all;
+    return all.filter((tenant) => tenant.name.toLowerCase().includes(needle));
+  });
+
+  const shownStores = createMemo(() => {
+    const all = stores();
+    if (!all) return [];
+    const needle = storeSearch().trim().toLowerCase();
+    if (!needle) return all;
+    return all.filter((store) => store.name.toLowerCase().includes(needle));
+  });
 
   return (
     <div class="relative" ref={container}>
@@ -287,7 +297,7 @@ export function ContextPicker() {
                     class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
                   />
                   <ul>
-                    <For each={shownTenants(loaded())}>
+                    <For each={shownTenants()}>
                       {(tenant) => (
                         <li>
                           <button
@@ -304,7 +314,7 @@ export function ContextPicker() {
                       )}
                     </For>
                   </ul>
-                  <Show when={shownTenants(loaded()).length === 0}>
+                  <Show when={shownTenants().length === 0}>
                     <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
                   </Show>
                 </Show>
@@ -362,7 +372,7 @@ export function ContextPicker() {
                       class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
                     />
                     <ul>
-                      <For each={shownStores(loaded())}>
+                      <For each={shownStores()}>
                         {(store) => (
                           <li>
                             <button
@@ -379,7 +389,7 @@ export function ContextPicker() {
                         )}
                       </For>
                     </ul>
-                    <Show when={shownStores(loaded()).length === 0}>
+                    <Show when={shownStores().length === 0}>
                       <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
                     </Show>
                   </Show>
