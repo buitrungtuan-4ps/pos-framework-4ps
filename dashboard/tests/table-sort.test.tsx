@@ -39,15 +39,24 @@ afterEach(cleanup);
 describe("sorting a text column", () => {
   it("puts numbers in order and keeps names that read the same together", () => {
     render(() => <DataTable columns={COLUMNS} rows={ROWS} empty={<p>none</p>} />);
+    const th = screen.getByRole("columnheader", { name: /Name/ });
+    expect(th.getAttribute("aria-sort")).toBe("none");
+
     fireEvent.click(screen.getByRole("button", { name: /Name/ }));
     expect(drawnNames()).toEqual(["Phở", "pho", "Table 2", "table 3", "Table 10"]);
+    expect(th.getAttribute("aria-sort")).toBe("ascending");
   });
 
   it("reverses the same order on a second press", () => {
     render(() => <DataTable columns={COLUMNS} rows={ROWS} empty={<p>none</p>} />);
     const header = screen.getByRole("button", { name: /Name/ });
+    const th = screen.getByRole("columnheader", { name: /Name/ });
+
     fireEvent.click(header);
+    expect(th.getAttribute("aria-sort")).toBe("ascending");
+
     fireEvent.click(header);
     expect(drawnNames()).toEqual(["Table 10", "table 3", "Table 2", "Phở", "pho"]);
+    expect(th.getAttribute("aria-sort")).toBe("descending");
   });
 });

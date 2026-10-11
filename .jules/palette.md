@@ -1,3 +1,8 @@
+## 2026-10-11 - Accessible Table Column Headers with Dynamic aria-sort and Focus Ring
+
+**Learning:** Sortable table column headers require `aria-sort` ("ascending", "descending", or "none") on the `<th>` cell so screen readers announce sorting states as users toggle column order. Additionally, custom column header buttons and disclosure `<summary>` controls need explicit `focus-visible` styling to preserve keyboard focus clarity.
+**Action:** Always set `aria-sort` on sortable `<th>` elements based on column sort state and apply `focus-visible` outline styles to header buttons and disclosure summaries.
+
 ## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
 
 **Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.

@@ -53,7 +53,10 @@ export function Pager(props: {
 
   return (
     <Show when={props.limit > 0 && props.total > props.limit}>
-      <div class="flex items-center justify-between gap-2 text-sm text-ink-muted">
+      <nav
+        aria-label={t("table.range", { from: from(), to: to(), total: props.total })}
+        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+      >
         <span>{t("table.range", { from: from(), to: to(), total: props.total })}</span>
         <div class="flex gap-2">
           <Button
@@ -71,7 +74,7 @@ export function Pager(props: {
             {t("table.next")}
           </Button>
         </div>
-      </div>
+      </nav>
     </Show>
   );
 }
@@ -421,11 +424,22 @@ export function DataTable<T>(props: {
                   <tr class="border-b border-line text-ink-muted">
                     <For each={props.columns}>
                       {(column) => (
-                        <th class={`${rowPadding()} pr-4 font-medium ${column.class ?? ""}`}>
+                        <th
+                          class={`${rowPadding()} pr-4 font-medium ${column.class ?? ""}`}
+                          aria-sort={
+                            sortable(column)
+                              ? sortKey() === column.key
+                                ? ascending()
+                                  ? "ascending"
+                                  : "descending"
+                                : "none"
+                              : undefined
+                          }
+                        >
                           <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                             <button
                               type="button"
-                              class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
+                              class="inline-flex items-center gap-1 rounded-token font-medium transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                               onClick={() => toggleSort(column)}
                             >
                               <span>{column.header}</span>
@@ -800,7 +814,9 @@ export function EmptyState(props: { title: string; description?: string; action?
 export function TechnicalDetails(props: ParentProps<{ label: string }>) {
   return (
     <details class="text-xs text-ink-muted">
-      <summary class="cursor-pointer select-none">{props.label}</summary>
+      <summary class="cursor-pointer select-none rounded-token focus-visible:outline-2 focus-visible:outline-accent">
+        {props.label}
+      </summary>
       <div class="mt-1 break-all font-mono">{props.children}</div>
     </details>
   );
