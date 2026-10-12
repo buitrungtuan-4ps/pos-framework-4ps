@@ -337,6 +337,7 @@ fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
 }
 
 /// The forbidden class of an IPv6 address, or `None` if it is public unicast.
+#[expect(clippy::too_many_lines, reason = "Comprehensive IPv6 range classification logic")]
 fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     if ip.is_unspecified() {
         return Some(ForbiddenReason::Unspecified);
@@ -882,6 +883,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::too_many_lines, reason = "Comprehensive test assertions for IPv6 prefixes")]
     fn v6_tunneling_and_benchmarking_prefixes_are_refused() {
         // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
         assert_eq!(
