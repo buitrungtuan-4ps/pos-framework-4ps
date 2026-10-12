@@ -105,6 +105,13 @@ describe("the account menu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
   });
+
+  it("includes focus-visible ring styles on trigger button for keyboard navigation", () => {
+    mount();
+    const trigger = screen.getByRole("button", { name: "Your account" });
+    expect(trigger.className).toContain("focus-visible:outline-2");
+    expect(trigger.className).toContain("focus-visible:outline-accent");
+  });
 });
 
 describe("the theme switcher", () => {
