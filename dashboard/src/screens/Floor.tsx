@@ -120,8 +120,12 @@ export function Floor() {
     toast.error(message);
   };
 
-  const areaName = (id: string) =>
-    areas()?.find((area) => area.area_id === id)?.name ?? id;
+  // Optimization: Map area_id to name in O(A) pass using createMemo for O(1) lookups instead of O(A) array searches per table row / search query.
+  // Declared below `areas` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
+  const areaMap = createMemo(
+    () => new Map((areas() ?? []).map((area) => [area.area_id, area.name])),
+  );
+  const areaName = (id: string) => areaMap().get(id) ?? id;
   // Memoize active areas array filtering to prevent O(N) re-filtering on every component re-render/signal read.
   // Declared below `areas` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
   const activeAreas = createMemo(() => areas()?.filter((area) => area.status === "active") ?? []);
