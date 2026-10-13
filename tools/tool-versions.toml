@@ -11,6 +11,13 @@ version     = "8.30.1"
 url_linux   = "https://github.com/gitleaks/gitleaks/releases/download/v{v}/gitleaks_{v}_linux_x64.tar.gz"
 sha256_linux = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
 
+[mold]
+# The linker the Linux CI jobs use (ADR-0171 decision 1), installed by
+# .github/actions/rust-setup when a workflow sets the mold rustflags.
+version      = "2.42.1"
+url_linux    = "https://github.com/rui314/mold/releases/download/v{v}/mold-{v}-x86_64-linux.tar.gz"
+sha256_linux = "6ff270c9bf07d2bec5c98aa324eb7c4daf6a1a4d815c05ff1708049616047855"
+
 [cargo-deny]
 # Installed from source with `--locked` rather than downloaded. It is a Rust tool,
 # the toolchain is already present, and the build is cached — which avoids both a
