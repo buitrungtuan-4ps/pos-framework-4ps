@@ -22,7 +22,8 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 
 - `src/main.rs`: the binary
 - `src/cloud.rs`: `Cloud`: ingest and the read model
-- `src/http.rs`: `router`, every handler
+- `src/http.rs`: `router`, and every handler but the reports'
+- `src/reports/`: the reporting routes: the daily rollups, revenue and its CSV exports, the X/Z report
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
 - `src/config_tree/`: the configuration tree
 - `src/auth/`: console login, sessions, `ConsolePermission`, API keys
