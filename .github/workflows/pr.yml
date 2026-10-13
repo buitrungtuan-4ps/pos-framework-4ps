@@ -72,6 +72,20 @@ jobs:
         run: cargo run -q -p xtask -- crates --check
       - name: docs/generated is what the tree generates
         run: cargo run -q -p xtask -- gen-docs --check
+      # On a pull request the baseline may only shrink against the merge base, unless the body
+      # says `size-baseline: grow <reason>`. On a push to main it is compared with the parent
+      # commit and growth only warns, since the pull request already passed.
+      - name: no file or function grows past the size rules (ADR-0170)
+        env:
+          POS_PR_BODY: ${{ github.event.pull_request.body }}
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            cargo run -q -p xtask -- code-stats --check --base "origin/$BASE"
+          else
+            cargo run -q -p xtask -- code-stats --check --base HEAD^ --baseline-growth warn
+          fi
       - name: files mirrored across the front-end build roots stay identical
         run: cargo run -q -p xtask -- mirrored-files
       - name: no vendor brand name in pos-core / pos-proto production code

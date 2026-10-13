@@ -13,6 +13,7 @@
 //! - each workspace crate's lines and whether it has a `README.md`;
 //! - each front-end root's files and lines.
 
+pub mod ratchet;
 pub mod scan;
 
 use std::fs;
@@ -70,6 +71,9 @@ pub struct FunctionStat {
     pub path: String,
     /// Its name.
     pub name: String,
+    /// Its name inside what encloses it ([`scan::FunctionSpan::qualified`]), with `#2`, `#3` …
+    /// after a name the file already used, so it is unique within the file.
+    pub qualified: String,
     /// The line its `fn` is on.
     pub line: usize,
     /// Its length in lines.
@@ -141,10 +145,19 @@ pub fn collect(root: &Path) -> Result<Stats, Error> {
             .lines()
             .position(|line| line.trim() == "#[cfg(test)]")
             .map_or(usize::MAX, |index| index + 1);
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for span in scan::functions(&source) {
+            let count = seen.entry(span.qualified.clone()).or_default();
+            *count += 1;
+            let qualified = if *count == 1 {
+                span.qualified
+            } else {
+                format!("{}#{count}", span.qualified)
+            };
             functions.push(FunctionStat {
                 path: relative.clone(),
                 test: test || span.line > test_from,
+                qualified,
                 name: span.name,
                 line: span.line,
                 lines: span.lines,

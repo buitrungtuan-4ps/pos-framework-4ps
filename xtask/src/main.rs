@@ -43,6 +43,11 @@ cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 cargo xtask code-stats [--json] [--root <dir>]
 
   a report, not a check: file, function, parameter, crate README and front-end figures (ADR-0170)
+
+cargo xtask code-stats --check [--base <ref>] | --write-baseline
+
+  the size ratchet: files, functions and parameters over ADR-0170's limits fail unless
+  tools/code-size-baseline.toml lists them, and a listed item may not grow; warns in changed files
 ";
 
 fn main() -> ExitCode {
@@ -53,7 +58,10 @@ fn main() -> ExitCode {
     };
     let rest: Vec<String> = args.collect();
 
-    if check == "code-stats" {
+    let gate = rest
+        .iter()
+        .any(|argument| argument == "--check" || argument == "--write-baseline");
+    if check == "code-stats" && !gate {
         return match code_stats::run(&rest) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
@@ -68,6 +76,7 @@ fn main() -> ExitCode {
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
         "changelog" => checks::changelog::run(&rest),
+        "code-stats" => code_stats::ratchet::run(&rest),
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
