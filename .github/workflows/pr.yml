@@ -476,7 +476,7 @@ jobs:
         # licence key for organisations, and this way needs no third party at all.
         run: |
           set -euo pipefail
-          section="$(sed -n '/^\[gitleaks\]/,/^\[cargo-deny\]/p' tools/tool-versions.toml)"
+          section="$(sed -n '/^\[gitleaks\]/,/^\[/p' tools/tool-versions.toml)"
           version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' <<<"$section")"
           expected="$(sed -n 's/^sha256_linux *= *"\(.*\)"/\1/p' <<<"$section")"
           url="$(sed -n 's/^url_linux *= *"\(.*\)"/\1/p' <<<"$section" | sed "s/{v}/$version/g")"
