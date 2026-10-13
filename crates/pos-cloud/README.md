@@ -14,15 +14,15 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-cloud-reports`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
 - **Used by** (workspace crates): no workspace crate.
 
 ## Entry points
 
 - `src/main.rs`: the binary
 - `src/cloud.rs`: `Cloud`: ingest and the read model
-- `src/http.rs`: `router`, and every handler but the reports'
-- `src/reports/`: the reporting routes: the daily rollups, revenue and its CSV exports, the X/Z report
+- `src/http.rs`: `router`, and every handler but the reports'; `FromRef` builds the reports' state
+- `pos-cloud-reports` (re-exported as `dashboard::{rollup, projection}`, the report types in `cloud`, the CSV writers in `export`): the reports and their routes; `src/dashboard/projector.rs` keeps them current
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
 - `src/config_tree/`: the configuration tree
 - `pos-cloud-api` (re-exported as `auth`, `audit`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail and the error envelope

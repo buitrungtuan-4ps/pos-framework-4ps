@@ -12,13 +12,15 @@ What every cloud route module stands on, whichever business area it serves: who 
 - API keys and device credentials, and the bearer check that reads them
 - The audit trail's types and store trait
 - Page requests and pages
-- The AIP-193 error envelope, the field-level refusals built on it, and the CSV download response
+- The AIP-193 error envelope, the field-level refusals built on it, its schema for the API documents, and the CSV download response
+- What a console route does around its work: the permission check, the tenant query, the audit entry
+- The formula rule every CSV file keeps
 - Its stores over PostgreSQL: the admin, API-key and audit tables, through `store-postgres`
 
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`, `store-postgres`; in tests, `pos-fakes`.
-- **Used by** (workspace crates): `pos-cloud`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-reports`.
 
 ## Entry points
 
@@ -26,6 +28,9 @@ What every cloud route module stands on, whichever business area it serves: who 
 - `src/audit.rs`: `AuditRecorder`, `AuditStore`, `AuditEntry`
 - `src/paging.rs`: `PageRequest`, `Page`
 - `src/response.rs`: `api_error`, `parse_ulid_fields`, `csv_download_response`
+- `src/console.rs`: `require_permission`, `audit_action`, `ConfigTenantQuery`
+- `src/csv_file.rs`: `escape_formula`, `unescape_formula`
+- `src/error_schema.rs`: the `ErrorResponse` schema
 
 ## Rules
 
