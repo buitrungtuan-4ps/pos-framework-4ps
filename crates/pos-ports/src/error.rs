@@ -3,7 +3,7 @@
 
 //! The one failure type every port returns.
 //!
-//! One type rather than seventeen, because the framework asks the same three questions
+//! One type rather than one per port, because the framework asks the same three questions
 //! of every adapter failure — retry or not, park it or not, what to tell the operator
 //! — and per-port enums would each need that classification bolted on separately. See
 //! [ADR-0026](../../../docs/adr/0026-port-shapes.md) §1 for the alternatives that were
@@ -267,8 +267,8 @@ impl PortError {
 
     /// Whether a caller should try again.
     ///
-    /// Delegates to the status rather than living at the call site, because seventeen
-    /// call sites would eventually disagree about whether `FailedPrecondition` is
+    /// Delegates to the status rather than living at the call site, because a call site per
+    /// port would eventually disagree about whether `FailedPrecondition` is
     /// worth retrying. It is not.
     #[must_use]
     pub fn is_retryable(&self) -> bool {

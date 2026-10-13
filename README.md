@@ -56,29 +56,37 @@ pos-framework/
 │   ├── pos-ports/             Trait definitions (the framework's boundaries)
 │   ├── pos-proto/             Wire types, events, PROTOCOL_VERSION
 │   ├── adapters/             Twelve today; the port list is docs/architecture.md §5
-│   │   ├── store-sqlite/      EventStore, ConfigStore, DeviceRegistry, IntakeLedger (edge)
+│   │   ├── store-sqlite/      EventStore, ConfigStore, DeviceRegistry, IntakeLedger, SubjectStore (edge)
 │   │   ├── store-postgres/    EventStore + the cloud's own stores
 │   │   ├── link-nats/         MessageLink          cloud-sync-http/  CloudSync
 │   │   ├── printer-escpos/    PrinterDriver        key-vault-keyring/ KeyVault
 │   │   ├── blob-garage/       BlobStore            updater-minisign/  Signer
 │   │   ├── metrics-vm/        MetricsSink          erp-sap/           ErpSink
 │   │   └── shipping-ahamove/, shipping-grabexpress/   ShippingDispatch
-│   │                          (the last three are reference adapters: complete and
-│   │                           contract-tested, in no binary's graph until v1.2)
+│   │                          (the last three are vendors in the cloud's provider
+│   │                           catalogue, ADR-0153)
 │   ├── pos-country/           What a country module is; the feature-selected registry
+│   ├── pos-providers/         The vendor catalogue: each vendor adapter's descriptor
+│   ├── pos-render/            Text in any script to the raster a thermal printer prints
+│   ├── pos-print-agent/       Writes rendered jobs to a printer this machine reaches
 │   ├── pos-contract-tests/    The suite every implementation of every port must pass
 │   ├── pos-fakes/             In-memory implementations; passes every suite
 │   ├── pos-edge/              Store binary: wires adapters into core
 │   ├── pos-cloud/             Cloud binary: wires adapters into core
 │   └── pos-simulator/         Virtual fleet for load and OTA testing
 ├── countries/                 One directory per country. Add or remove yours here.
-│   └── zz/                    Reference module — copy this to start a country.
-│                              Vietnam is not here yet (roadmap-v3 B·W10)
+│   ├── zz/                    Reference module — copy this to start a country.
+│   └── vn/, jp/, in/          Vietnam, Japan, India
 ├── ui/                        The till: SolidJS + Tailwind, embedded into pos_edge
 ├── dashboard/                 The cloud console: SolidJS + Tailwind, embedded into pos_cloud
-├── deploy/                    compose.yml, Caddyfile.d/, bootstrap.sh, k8s/
+├── deploy/                    compose.yml, Caddyfile.d/, bootstrap.sh
+├── k8s/                       The optional Kubernetes lane
+├── apps/pos-station/          The store's desktop shell (Tauri)
 ├── examples/                  Runnable examples (built by CI)
 ├── templates/adapter-template/   Extracted at the *third* adapter, not before (rule of three)
+├── xtask/                     The repository's own checks (cargo xtask <check>)
+├── tools/                     Allow-lists and baselines the checks read
+├── changes/                   One change file per pull request, folded into CHANGELOG.md
 └── docs/                      See map below
 ```
 
@@ -122,7 +130,7 @@ Every document is indexed by purpose in [docs/README.md](docs/README.md), and [d
 | [docs/capacity-and-reliability.md](docs/capacity-and-reliability.md) | Sizing numbers, load limits, failure and recovery matrix |
 | [docs/design-principles.md](docs/design-principles.md) | SOLID, KISS, DRY, YAGNI as checkable rules for this codebase |
 | [docs/glossary.md](docs/glossary.md) | Restaurant and framework vocabulary (86, fire, bump, comp, business date) |
-| [docs/adr/](docs/adr/) | Every architecture decision and its reasoning — 101 records, numbered in the order they were taken |
+| [docs/adr/](docs/adr/) | Every architecture decision and its reasoning — numbered in the order they were taken; the [index](docs/adr/README.md) lists them |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Workflow: orientation, verification, pull requests, changelog |
 | [CHANGELOG.md](CHANGELOG.md) | What changed, when, and what to do about it when upgrading |
 
@@ -130,7 +138,7 @@ Every document is indexed by purpose in [docs/README.md](docs/README.md), and [d
 
 ### Also in the repository
 
-[`CONTRIBUTING.md`](CONTRIBUTING.md) — orientation, build and verify commands, PR rules · [`docs/design-principles.md`](docs/design-principles.md) — SOLID/KISS/DRY/YAGNI as concrete rules · [`docs/glossary.md`](docs/glossary.md) — vocabulary · [`docs/adr/`](docs/adr/) — 101 architecture decision records · [`CHANGELOG.md`](CHANGELOG.md) — version history.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — orientation, build and verify commands, PR rules · [`docs/design-principles.md`](docs/design-principles.md) — SOLID/KISS/DRY/YAGNI as concrete rules · [`docs/glossary.md`](docs/glossary.md) — vocabulary · [`docs/adr/`](docs/adr/) — the architecture decision records · [`CHANGELOG.md`](CHANGELOG.md) — version history.
 
 ## Non-goals
 

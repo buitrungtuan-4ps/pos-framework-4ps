@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! In-memory implementations of all seventeen ports.
+//! In-memory implementations of all twenty ports (`pos_ports::PortName::ALL`).
 //!
 //! # What this crate is for
 //!
@@ -14,7 +14,7 @@
 //! the suites are what make *swappable* a verified fact — but there is a circularity in that claim
 //! if the fakes are exempt: the domain suite runs against the fakes, so a fake that disagrees with
 //! the real store makes every domain test a test of the wrong thing. So these are held to exactly
-//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all seventeen.
+//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all twenty.
 //!
 //! # Fixed capacities, on purpose
 //!
