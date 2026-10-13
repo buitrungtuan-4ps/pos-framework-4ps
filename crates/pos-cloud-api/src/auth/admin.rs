@@ -21,7 +21,7 @@
 //!
 //! Like the rest of [`crate::auth`], the module is **pure and deterministic**: the clock is a
 //! [`ClockSource`] parameter and the session token is minted from a CSPRNG at the binary edge
-//! ([`crate::http`]) and passed in, so every rule here is unit-tested with no clock and no entropy.
+//! (`pos_cloud::http`) and passed in, so every rule here is unit-tested with no clock and no entropy.
 
 use core::fmt;
 use core::future::Future;
@@ -804,7 +804,7 @@ impl IntoResponse for SessionDenied {
 /// ([`authenticated_admin`]).
 #[derive(Debug, Clone)]
 pub struct SessionMint<'a> {
-    /// The 256-bit CSPRNG session token, minted by the caller ([`crate::http`]); only its hash is
+    /// The 256-bit CSPRNG session token, minted by the caller (`pos_cloud::http`); only its hash is
     /// stored, and the same token goes into the [`session`](super::session) cookie.
     pub token: &'a str,
     /// The idle window, in seconds: a session left idle longer than this expires.
@@ -832,7 +832,7 @@ pub struct SessionMint<'a> {
 /// ADR-0034: both factors are checked before any verdict
 /// ([`SuperAdminCredential::authenticate`]), the matched TOTP step is burned *before* the session is
 /// written, and the session is stored as `SHA-256(mint.token)` — never the token itself.
-/// `mint.token` is minted from a CSPRNG by the caller ([`crate::http`]); the same token goes into the
+/// `mint.token` is minted from a CSPRNG by the caller (`pos_cloud::http`); the same token goes into the
 /// [`session`](super::session) cookie so the browser can present it, and its hash is what this
 /// stores. The session carries a sliding idle TTL (`mint.idle_ttl_secs`) bounded by an absolute cap
 /// (`mint.absolute_ttl_secs`).

@@ -6,7 +6,7 @@
 //! The pure half of the `/admin/setup` route: the request/response shapes, a constant-time token
 //! compare, and the TOTP enrolment rendering — RFC 4648 base32 and the `otpauth://` URI an
 //! authenticator app imports. Generating the secret and the password salt is I/O (OS entropy) and
-//! lives at the HTTP edge ([`crate::http`]); everything here is deterministic and unit-tested.
+//! lives at the HTTP edge (`pos_cloud::http`); everything here is deterministic and unit-tested.
 //!
 //! The enrolment carries the freshly-minted TOTP secret, so it is sensitive: it is serialized to the
 //! token-bearing caller once, over TLS, and never re-emitted. Both this and the request redact their
