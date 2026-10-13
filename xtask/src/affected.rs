@@ -183,7 +183,11 @@ pub fn render(classes: &BTreeSet<&str>) -> String {
 }
 
 /// The files changed between the merge base of `base` and `HEAD`, and `HEAD`.
-fn changed_files(base: &str) -> Result<Vec<String>, Error> {
+///
+/// # Errors
+///
+/// [`Error`] when git cannot find the merge base or list the diff.
+pub fn changed_files(base: &str) -> Result<Vec<String>, Error> {
     let root = repo_root();
     let git = |args: &[&str]| -> Result<String, Error> {
         let output = std::process::Command::new("git")

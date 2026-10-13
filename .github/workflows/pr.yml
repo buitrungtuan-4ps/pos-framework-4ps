@@ -875,3 +875,57 @@ jobs:
           cache-key: rules
       - name: every change file is well-formed
         run: cargo run -q -p xtask --locked -- changelog --check
+
+  # ---------------------------------------------------------------------------
+  # What this change affects, as one comment on the pull request (ADR-0171
+  # decision 2): the path classes, the affected crates, the snapshots and
+  # generated docs, and which jobs run or skip. `cargo xtask impact` writes it,
+  # and its tests hold its job list to this file.
+  #
+  # Informational: no check requires it, and posting the comment never fails
+  # the run. A fork's token cannot write, so a fork gets the step summary only.
+  # The pull request's own text never reaches a script: the report goes through
+  # a file, and the comment body is read from that file.
+  # ---------------------------------------------------------------------------
+  impact:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge base with the base branch, to diff against.
+          fetch-depth: 0
+      # The rules job's cache: it builds the same xtask, and this job never runs on main.
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: rules
+      - name: work out what the change affects
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          cargo run -q -p xtask --locked -- impact --base "origin/$BASE" > "$RUNNER_TEMP/impact.md"
+          cat "$RUNNER_TEMP/impact.md" >> "$GITHUB_STEP_SUMMARY"
+      # Edits this job's earlier comment, found by the marker the report starts with, rather
+      # than adding one per push.
+      - name: post it on the pull request, or update the earlier comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- xtask-impact -->"))) | .id' \
+            | head -n 1)"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/impact.md" > /dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/impact.md" > /dev/null
+          fi
