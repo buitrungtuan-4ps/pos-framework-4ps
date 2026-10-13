@@ -76,10 +76,12 @@ A change is complete when all of these are true:
 | New boundary to the outside world | `crates/pos-ports/` (+ ADR) |
 | Wire type or event definition | `crates/pos-proto/` (+ check `PROTOCOL_VERSION`) |
 | Talking to a real database, broker, device, or vendor | `crates/adapters/<name>/` |
-| Country-specific legal behaviour | `crates/adapters/fiscal-<cc>/` |
-| Screen or component | `ui/` |
+| Country-specific legal behaviour | `countries/<cc>/` |
+| Screen or component | `ui/` (till) or `dashboard/` (console) |
 | Deployment, compose, bootstrap | `deploy/` |
 | Explaining *why* a decision was made | `docs/adr/NNNN-title.md` |
+
+The full "to do X, edit these files" map, with the gate that checks each file, is [`docs/repository-map.md`](docs/repository-map.md). Every document is indexed in [`docs/README.md`](docs/README.md).
 
 ## 5b. Three artifacts, three jobs
 

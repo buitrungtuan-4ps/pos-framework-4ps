@@ -100,6 +100,8 @@ New here, or picking a task? The four short [**guides**](docs/guides/) each fini
 
 ## Documentation map
 
+Every document is indexed by purpose in [docs/README.md](docs/README.md), and [docs/repository-map.md](docs/repository-map.md) lists the files each kind of change touches. The table below is the short list.
+
 | Document | Read it when you need to know |
 |---|---|
 | [docs/guides/](docs/guides/) | Task-shaped how-tos: start from zero, write an adapter, add a country, run the simulator |
