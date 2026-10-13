@@ -1,6 +1,6 @@
 // The WCAG-AA contrast gate for the design tokens (P6 exit criterion, docs/wcag-contrast-audit.md).
 //
-// Parses `src/styles/tokens.css` for the oklch colour tokens in all three palettes — light
+// Parses `packages/shared/styles/tokens.css`, which both front ends import, for the oklch colour tokens in all three palettes — light
 // (`:root`), system-dark (the `prefers-color-scheme` block) and explicit-dark
 // (`:root[data-theme="dark"]`) — converts each to sRGB (the standard Oklab matrix), and
 // computes the WCAG 2.1 contrast ratio for every meaningful foreground/background pair. Text pairs
@@ -25,7 +25,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const TOKENS = fileURLToPath(new URL("../src/styles/tokens.css", import.meta.url));
+const TOKENS = fileURLToPath(new URL("../styles/tokens.css", import.meta.url));
 
 // --- oklch → sRGB → WCAG relative luminance → contrast ratio -------------------------------------
 

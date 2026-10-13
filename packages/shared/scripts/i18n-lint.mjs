@@ -7,11 +7,13 @@
 // `pnpm i18n:lint`, which the `ui` CI job invokes.
 
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import ts from "typescript";
 
-const SRC = fileURLToPath(new URL("../src", import.meta.url));
+// Shared by `ui/` and `dashboard/` from `packages/shared/`, and run from the front end's own root,
+// so the tree it reads and the `typescript` it parses with are that front end's.
+const SRC = join(process.cwd(), "src");
+const ts = createRequire(join(process.cwd(), "package.json"))("typescript");
 const VISIBLE_ATTRS = new Set(["placeholder", "title", "aria-label", "alt"]);
 const HAS_LETTER = /\p{L}/u;
 

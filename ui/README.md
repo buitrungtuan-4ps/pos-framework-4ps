@@ -40,8 +40,9 @@ pnpm lint             # the size rules: ESLint, then the baseline check (ADR-017
 fails deeper than 4. Warnings start at 500 lines, 50-line functions, complexity 10 and 5
 parameters. Files that already broke a fail level are listed in `eslint-baseline.json` with their
 figures and may not grow. When one is back within the limit, `pnpm lint` fails until its entry is
-removed (`node scripts/eslint-baseline.mjs --write`, then check the diff only removes).
-`eslint-disable` comments have no effect. The config and the script are mirrored in `dashboard/`.
+removed (`node ../packages/shared/scripts/eslint-baseline.mjs --write`, then check the diff only
+removes). `eslint-disable` comments have no effect. The rules and the script are shared with
+`dashboard/` from [`packages/shared/`](../packages/shared/README.md).
 
 `pnpm build` writes `ui/dist/`, which the default `pos-edge` build embeds. For a live UI against a
 running store, `pnpm dev` (Vite) serves the app and proxies the API and the WebSocket to
@@ -67,8 +68,9 @@ launcher at it.
 
 ## Layout
 
-- `src/styles/tokens.css` — the design tokens (spacing, type, touch, radius, motion, colour), the one
-  source the interface is built from; light and dark, KDS defaulting to dark.
+- `../packages/shared/styles/tokens.css` — the design tokens (spacing, type, touch, radius, motion,
+  colour), the one source the interface is built from, shared with the console; light and dark, KDS
+  defaulting to dark. `src/app.css` imports it.
 - `src/lib/` — money (integer minor units, never a float) and the stand-in menu.
 - `src/api/` — the typed client for the edge's routes and the reconnecting `/ws` live link.
 - `src/state/` — the client projection folded from the fan-out.

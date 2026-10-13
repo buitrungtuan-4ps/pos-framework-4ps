@@ -86,7 +86,7 @@ jobs:
           else
             cargo run -q -p xtask -- code-stats --check --base HEAD^ --baseline-growth warn
           fi
-      - name: files mirrored across the front-end build roots stay identical
+      - name: the files both front ends share live once, in packages/shared
         run: cargo run -q -p xtask -- mirrored-files
       - name: no vendor brand name in pos-core / pos-proto production code
         run: cargo run -q -p xtask -- vendor-neutral-core
@@ -448,16 +448,18 @@ jobs:
       # This reproduces the image's condition exactly and cheaply: the same tree the Dockerfile
       # copies, nothing above it, node_modules reused so there is no second install. It fails on
       # any future script that reaches outside `dashboard/`, not just the two that already have.
-      - name: the image condition — pnpm build with only dashboard/ on disk
+      - name: the image condition — pnpm build with only dashboard/ and packages/shared/ on disk
         working-directory: .
         run: |
           set -euo pipefail
           isolated="$(mktemp -d)"
           cp -r dashboard "$isolated/dashboard"
+          mkdir -p "$isolated/packages"
+          cp -r packages/shared "$isolated/packages/shared"
           test ! -e "$isolated/deploy" # the whole point: deploy/ is out of reach
           cd "$isolated/dashboard"
           pnpm build
-          echo "ok: the dashboard builds with nothing above it, so the cloud image will too"
+          echo "ok: the dashboard builds with only packages/shared beside it, so the cloud image will too"
 
   # ---------------------------------------------------------------------------
   # Licences and advisories. The other check that turns architecture into law:

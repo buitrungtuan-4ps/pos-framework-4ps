@@ -1,5 +1,5 @@
 @import "tailwindcss";
-@import "./styles/tokens.css";
+@import "../../packages/shared/styles/tokens.css";
 
 /*
  * The console's typeface, self-hosted (Wave 4 · PR-2, decision D2).
