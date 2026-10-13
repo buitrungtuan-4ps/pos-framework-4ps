@@ -15,6 +15,7 @@ use pos_proto::{ErrorResponse, ErrorStatus};
 /// A CSV download response ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5): the
 /// bytes with `text/csv` and a `content-disposition` naming the file so the browser saves it. `filename`
 /// is a fixed, server-chosen literal per domain — never tenant-supplied — so it needs no escaping.
+#[must_use]
 pub fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
     (
         [
@@ -88,6 +89,10 @@ pub fn api_error_with_details(
 /// Returning an array rather than a slice is what keeps the ids typed at the call site — a caller
 /// destructures positionally, `Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store))`,
 /// so nothing is indexed and the newtype stays where it belongs, in the handler.
+///
+/// # Errors
+///
+/// The `400` naming each field that is not a ULID, ready to return.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
@@ -116,6 +121,7 @@ pub fn parse_ulid_fields<const N: usize>(fields: [(&str, &str); N]) -> Result<[U
 /// A single bad field reads `"tenant_id is not a ULID"` — the wording 51 of these sites already
 /// used — so for the common case only the `details` array is new, and no client that was reading
 /// the message sees it change.
+#[must_use]
 pub fn ulid_refusal(bad: &[&str]) -> Response {
     let details: Vec<(&str, &str)> = bad.iter().map(|field| (*field, "NOT_A_ULID")).collect();
     let message = match bad {
@@ -133,6 +139,7 @@ pub fn ulid_refusal(bad: &[&str]) -> Response {
 /// from [`ErrorStatus::http_code`] exists to keep: this refusal is **retryable** and the caller's
 /// request was fine. A client that reads it as its own fault stops retrying something that would
 /// have succeeded.
+#[must_use]
 pub fn service_unavailable(service: &str) -> Response {
     api_error(
         ErrorStatus::Unavailable,
@@ -145,6 +152,7 @@ pub fn service_unavailable(service: &str) -> Response {
 /// The fallback is unreachable — every code [`ErrorStatus::http_code`] returns is a valid status,
 /// and `every_status_maps_to_a_valid_code` holds it to that — but an unmappable code would be a
 /// server-side fault by elimination, which is what `500` says.
+#[must_use]
 pub fn http_status(status: ErrorStatus) -> StatusCode {
     StatusCode::from_u16(status.http_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
