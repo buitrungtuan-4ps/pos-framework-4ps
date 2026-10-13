@@ -32,7 +32,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::{FileStat, FunctionStat, Stats, collect};
+use super::{FileStat, FunctionStat, Stats, collect, eslint_baseline};
 use crate::Finding;
 use crate::checks::{Error, base_ref, read_at_ref, repo_root};
 
@@ -46,7 +46,7 @@ pub const BASELINE: &str = "tools/code-size-baseline.toml";
 /// larger has to go in a new module, or shrink something first. Parameters get no slack.
 pub const SLACK_LINES: usize = 10;
 
-const RULE: &str = "code-size";
+pub(super) const RULE: &str = "code-size";
 
 /// The limits for one kind of item: (warn above, fail above).
 struct Limits {
@@ -84,7 +84,8 @@ pub struct Recorded {
     pub params: usize,
 }
 
-/// `--check`, `--write-baseline` and `--base <ref>`.
+/// `--check`, `--write-baseline` and `--base <ref>`. With `--base`, the front ends'
+/// `eslint-baseline.json` files are held to the same may-only-shrink rule ([`eslint_baseline`]).
 ///
 /// # Errors
 ///
@@ -125,10 +126,12 @@ fn baseline_growth(root: &Path, args: &[String], now: &Baseline) -> Result<Vec<F
         return Err(format!("no merge base between `{base}` and HEAD; fetch it first").into());
     }
     let merge_base = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let Some(text) = read_at_ref(root, &merge_base, BASELINE)? else {
-        return Ok(Vec::new()); // the pull request that introduces the baseline
-    };
-    let grown = grown_entries(&toml::from_str(&text)?, now);
+    let mut grown = Vec::new();
+    // Absent at the merge base: the pull request that introduces the baseline.
+    if let Some(text) = read_at_ref(root, &merge_base, BASELINE)? {
+        grown = grown_entries(&toml::from_str(&text)?, now);
+    }
+    grown.extend(eslint_baseline::grown_in(root, &merge_base)?);
     if grown.is_empty() {
         return Ok(Vec::new());
     }
@@ -146,8 +149,8 @@ fn baseline_growth(root: &Path, args: &[String], now: &Baseline) -> Result<Vec<F
     if warn_only {
         for finding in &grown {
             println!(
-                "::warning file={BASELINE},title={RULE}::{}",
-                finding.message
+                "::warning file={},title={RULE}::{}",
+                finding.file, finding.message
             );
         }
         return Ok(Vec::new());
@@ -173,8 +176,7 @@ pub fn growth_allowed(body: &str) -> Option<&str> {
 /// One finding per baseline entry that is new since `base`, or whose figure grew.
 #[must_use]
 pub fn grown_entries(base: &Baseline, now: &Baseline) -> Vec<Finding> {
-    let hint = "the baseline may only shrink: split the code instead, or write \
-                `size-baseline: grow <reason>` in the pull-request body for the owner to see";
+    let hint = HINT_GROW;
     let mut findings = Vec::new();
     for (path, lines) in &now.files {
         match base.files.get(path) {
@@ -236,6 +238,10 @@ fn breaks(function: &FunctionStat) -> bool {
 fn key(function: &FunctionStat) -> String {
     format!("{}::{}", function.path, function.qualified)
 }
+
+/// The hint on every finding that a baseline grew.
+pub(super) const HINT_GROW: &str = "the baseline may only shrink: split the code instead, or write \
+     `size-baseline: grow <reason>` in the pull-request body for the owner to see";
 
 const HINT_SPLIT: &str = "split it by meaning (ADR-0170 decision 3); only code the baseline already lists may break the rule";
 const HINT_GREW: &str =

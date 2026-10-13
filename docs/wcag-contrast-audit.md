@@ -5,14 +5,14 @@
 This is the numeric backing for the "WCAG AA contrast" exit criterion of P6 (`docs/roadmap.md`) and
 the semantic-colour rule in `docs/ui-ux.md` §1. It records the measured contrast ratio of every
 colour pair the interface actually renders, in both themes, so "AA contrast" is a checked number
-rather than a claim. The palette lives in `ui/src/styles/tokens.css` and (identically, pending the
-dedup in WS-E) `dashboard/src/styles/tokens.css`.
+rather than a claim. The palette lives once, in `packages/shared/styles/tokens.css`, which both
+the till and the console import.
 
 ## How the numbers are produced
 
 The tokens are authored in `oklch(L C H)`. The audit converts each to sRGB with the standard Oklab
 matrix, then applies the WCAG 2.1 relative-luminance and contrast-ratio formulae. It is not a
-hand-estimate: `ui/scripts/wcag-contrast.mjs` (and its copy in `dashboard/scripts/`) parses the
+hand-estimate: `packages/shared/scripts/wcag-contrast.mjs`, which both front ends run, parses the
 `:root` (light) and `:root[data-theme="dark"]` (explicit dark) blocks straight out of `tokens.css`,
 so the check tracks the tokens and cannot drift. Run it with `pnpm contrast`; the `build` script and
 the `ui`/`dashboard` CI jobs invoke it, and it **exits non-zero if any text pair falls below AA

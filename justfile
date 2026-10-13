@@ -126,8 +126,8 @@ gen-docs-check:
 code-size base="origin/main":
     cargo run -q -p xtask -- code-stats --check --base {{base}}
 
-# Files duplicated across the ui/ and dashboard/ front-end build roots (design tokens, the contrast
-# gate) must stay byte-identical — the substitute for a shared module they cannot import.
+# The files ui/ and dashboard/ share (design tokens, the contrast, i18n and ESLint scripts) live once,
+# in packages/shared/, and a copy in either front end fails.
 mirrored-files:
     cargo run -q -p xtask -- mirrored-files
 

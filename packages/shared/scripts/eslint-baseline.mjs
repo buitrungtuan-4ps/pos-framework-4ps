@@ -1,27 +1,30 @@
 // The ESLint size baseline (ADR-0172): code that broke a fail level when the ratchet began, with
 // its figures, so `eslint.config.mjs` holds each listed file to them.
 //
-//   node scripts/eslint-baseline.mjs --write   measure the tree and write eslint-baseline.json
-//   node scripts/eslint-baseline.mjs --check   fail if an entry is no longer needed
+//   node ../packages/shared/scripts/eslint-baseline.mjs --write   measure, write eslint-baseline.json
+//   node ../packages/shared/scripts/eslint-baseline.mjs --check   fail if an entry is no longer needed
+//
+// Run it from the front end's root (`ui/` or `dashboard/`): that is the tree it measures, and the
+// `eslint` it measures with.
 //
 // A file is listed per rule with the largest figure it has for that rule: its line count, its
 // longest function, or its deepest nesting. `pnpm lint` runs `--check` after ESLint, so an entry
 // whose file is back within the limit, or is gone, must be removed, and the list only shrinks.
 //
-// This file is the same in `ui/` and `dashboard/`.
-
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join, relative } from "node:path";
+import { createRequire } from "node:module";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const root = process.cwd();
 const BASELINE = join(root, "eslint-baseline.json");
 const RULES = ["max-lines", "max-lines-per-function", "max-depth"];
 
 /** Every fail-level violation in the tree with no baseline applied: { file: { rule: figure } }. */
 async function measure() {
   process.env.ESLINT_BASELINE = "off";
-  const { ESLint } = await import("eslint");
+  const eslintPath = createRequire(join(root, "package.json")).resolve("eslint");
+  const { ESLint } = await import(pathToFileURL(eslintPath).href);
   const eslint = new ESLint({ cwd: root });
   const results = await eslint.lintFiles(["."]);
   const found = {};
@@ -61,12 +64,12 @@ if (mode === "--write") {
   }
   if (stale.length > 0) {
     console.error("eslint-baseline: these entries are within the limits now, or gone; remove them");
-    console.error("(or run `node scripts/eslint-baseline.mjs --write` and check it only removes):");
+    console.error("(or run `node ../packages/shared/scripts/eslint-baseline.mjs --write` and check it only removes):");
     for (const entry of stale) console.error(`  ${entry}`);
     process.exit(1);
   }
   console.log(`eslint-baseline: ok, ${Object.keys(listed).length} file(s) listed`);
 } else {
-  console.error("usage: node scripts/eslint-baseline.mjs --write | --check");
+  console.error("usage: node ../packages/shared/scripts/eslint-baseline.mjs --write | --check");
   process.exit(2);
 }

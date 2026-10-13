@@ -13,6 +13,7 @@
 //! - each workspace crate's lines and whether it has a `README.md`;
 //! - each front-end root's files and lines.
 
+pub mod eslint_baseline;
 pub mod ratchet;
 pub mod scan;
 
@@ -35,7 +36,7 @@ const SKIPPED_DIRS: [&str; 7] = [
 ];
 
 /// The front-end build roots, each measured on its own.
-const FRONTEND_ROOTS: [&str; 3] = ["ui", "dashboard", "apps/pos-station/ui"];
+const FRONTEND_ROOTS: [&str; 4] = ["ui", "dashboard", "apps/pos-station/ui", "packages/shared"];
 
 /// The source extensions a front-end root is measured by.
 const FRONTEND_EXTENSIONS: [&str; 6] = ["ts", "tsx", "mjs", "js", "css", "html"];

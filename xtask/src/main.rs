@@ -30,7 +30,7 @@ cargo xtask <check>
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
-  mirrored-files  files duplicated across the ui/ and dashboard/ build roots stay identical
+  mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code

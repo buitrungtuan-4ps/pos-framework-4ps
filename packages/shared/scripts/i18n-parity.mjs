@@ -23,9 +23,9 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-const I18N = fileURLToPath(new URL("../src/i18n", import.meta.url));
+// Shared by `ui/` and `dashboard/` from `packages/shared/`, and run from the front end's own root.
+const I18N = join(process.cwd(), "src", "i18n");
 const FLOOR = "en";
 
 function catalogue(locale) {
