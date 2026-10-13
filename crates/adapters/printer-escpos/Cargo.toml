@@ -21,3 +21,9 @@ pos-fakes = { path = "../../pos-fakes" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The ESC/POS thermal-printer adapter for the PrinterDriver port."
+adrs = [26, 100, 103]
+owners = ["@maintainers-architecture"]

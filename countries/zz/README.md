@@ -1,5 +1,7 @@
 # `countries/zz` — the reference country module
 
+**Layer** `country` · **Owners** @maintainers-architecture
+
 `ZZ` is CLDR's code for an unknown region, so it can never collide with a real country. This
 directory exists to be **copied**.
 
@@ -61,3 +63,8 @@ this module supplies is the one thing only it knows: how a `ZZ` invoice number i
 A real module replaces the **format**, not the allocator, and keeps the suite. A country with a live
 authority wraps the allocator and adds the submission — keeping the offline path, because the
 alternative is a till that stops selling when the line drops.
+
+## Depends on / used by
+
+- **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`.

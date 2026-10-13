@@ -8,7 +8,7 @@ The repository's own checks, run as `cargo run -q -p xtask -- <name>`, which is 
 
 ## Owns
 
-- The `rules` CI job's checks: deps-rule, lint-config, actions-pinned, links, countries, mirrored-files, vendor-neutral-core, print-agent-deps, tls-modes, snapshot, migrations
+- The `rules` CI job's checks: deps-rule, lint-config, actions-pinned, links, countries, crates, mirrored-files, vendor-neutral-core, print-agent-deps, tls-modes, snapshot, migrations
 - `changelog`: checks and folds `changes/`
 - `code-stats`: measures file, function and parameter sizes
 

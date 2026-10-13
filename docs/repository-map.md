@@ -121,13 +121,22 @@ feeds the router, nav, breadcrumbs and command palette ([ADR-0060](adr/0060-clou
 Add the screen file, its `SCREENS` entry, its strings, and a vitest test. Rules for any screen are in
 [`ui-ux.md`](ui-ux.md).
 
+## New crate
+
+| Step | Files | Checked by |
+|---|---|---|
+| Workspace | `members` in the root `Cargo.toml` | build |
+| Contract card | `[package.metadata.pos]` in its `Cargo.toml`: `layer`, `purpose`, `adrs`, `owners` | `xtask crates` |
+| README | `README.md` with the six headings, as `crates/pos-core/README.md` has them. Its Layer, Owners, Depends on and Used by lines are checked | `xtask crates` |
+| Its neighbours | the Depends on or Used by line in the README of every workspace crate it depends on or that depends on it | `xtask crates` |
+
 ## Adapter (and a new port)
 
 | Step | Files | Checked by |
 |---|---|---|
 | A new port, if one is needed | `crates/pos-ports/src/<port>.rs`, with an ADR first | `xtask deps-rule`, review |
 | The adapter | `crates/adapters/<name>/`, copied from [`templates/adapter-template`](../templates/adapter-template/README.md) | its own tests |
-| Workspace | `members` in the root `Cargo.toml` | build |
+| Workspace, card and README | `members` in the root `Cargo.toml`, then the [new crate](#new-crate) rows | build, `xtask crates` |
 | Contract suite | the port's suite in `crates/pos-contract-tests/src/<port>.rs`, run from the adapter's tests. In-memory fakes are in `crates/pos-fakes` | `test`; the `contract` job in `main.yml` |
 | Dependencies | `deny.toml`. A new dependency needs an ADR | `deny` job |
 

@@ -44,3 +44,9 @@ pos-contract-tests = { path = "../../pos-contract-tests" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The SAP ErpSink adapter: nightly whole-day revenue and consumption posting over HTTPS."
+adrs = [58, 59, 153]
+owners = ["@maintainers-architecture"]

@@ -40,3 +40,9 @@ pos-contract-tests = { path = "../../pos-contract-tests" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The edge's CloudSync and MessageLink over HTTPS to the cloud: activation, OTA fetch, and event delivery."
+adrs = [50, 54, 143]
+owners = ["@maintainers-architecture"]

@@ -30,3 +30,9 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The smallest runnable store: pos_edge on the in-memory fakes, with no database, hardware or network."
+adrs = [109]
+owners = ["@maintainers-architecture"]

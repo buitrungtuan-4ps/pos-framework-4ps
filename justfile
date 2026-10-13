@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -107,6 +107,11 @@ changelog-check:
 links:
     cargo run -q -p xtask -- links
     cargo run -q -p xtask -- countries
+
+# Every workspace crate has a README and a [package.metadata.pos] contract card, and both agree with
+# cargo metadata and CODEOWNERS (ADR-0170 decisions 1 and 5).
+crates:
+    cargo run -q -p xtask -- crates --check
 
 # Files duplicated across the ui/ and dashboard/ front-end build roots (design tokens, the contrast
 # gate) must stay byte-identical — the substitute for a shared module they cannot import.

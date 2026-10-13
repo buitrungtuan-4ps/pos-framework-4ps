@@ -214,3 +214,9 @@ dbg_macro    = "deny"
 
 allow_attributes                = "deny"
 allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The store binary, pos_edge: serves the till, applies each decision in one transaction, and syncs with the cloud."
+adrs = [2, 13, 18, 84, 91, 111, 158]
+owners = ["@maintainers-architecture"]

@@ -21,3 +21,9 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "testing"
+purpose = "The shared suite every implementation of every port must pass."
+adrs = [26, 131]
+owners = ["@maintainers-architecture"]

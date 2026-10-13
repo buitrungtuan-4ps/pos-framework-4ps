@@ -71,3 +71,9 @@ dbg_macro    = "deny"
 
 allow_attributes                = "deny"
 allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The print agent: claims rendered jobs from a store's edge and writes them to a printer this machine reaches."
+adrs = [112, 113]
+owners = ["@maintainers-architecture"]

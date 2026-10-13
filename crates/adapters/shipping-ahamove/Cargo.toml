@@ -44,3 +44,9 @@ pos-contract-tests = { path = "../../pos-contract-tests" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The Ahamove ShippingDispatch adapter: book, cancel and track a courier job over HTTPS."
+adrs = [58, 153]
+owners = ["@maintainers-architecture"]
