@@ -45,6 +45,10 @@ pub fn unescape_formula(text: &str) -> &str {
 
 /// Turns a finished `csv::Writer<Vec<u8>>` into its byte buffer, mapping the flush failure a writer's
 /// `into_inner` can surface into a `csv::Error` so the caller has one error type.
+///
+/// # Errors
+///
+/// A `csv::Error` if the writer's last flush fails.
 pub fn finish(writer: csv::Writer<Vec<u8>>) -> Result<Vec<u8>, csv::Error> {
     writer
         .into_inner()

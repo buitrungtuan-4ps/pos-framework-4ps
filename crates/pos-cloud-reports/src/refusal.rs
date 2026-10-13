@@ -17,6 +17,7 @@ use crate::dashboard::rollup::WindowError;
 /// names. `Inverted` carries **no** `details`: neither `from` nor `to` is wrong on its own, and the
 /// standing rule is to name only the field that actually was — attributing it to `from` would send
 /// a caller who mistyped `to` to the wrong input. The message already names both.
+#[must_use]
 pub fn window_refusal(error: WindowError) -> Response {
     match error {
         WindowError::MalformedFrom => api_error_with_details(

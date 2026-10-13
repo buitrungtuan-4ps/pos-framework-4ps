@@ -5,7 +5,7 @@
 
 /// One reason a request failed, tied to the field responsible — the schema mirror of
 /// [`pos_proto::error::ErrorDetail`].
-#[derive(utoipa::ToSchema)]
+#[derive(Debug, utoipa::ToSchema)]
 #[expect(
     dead_code,
     reason = "a schema-only mirror: utoipa reads the field names and types to build the document, \
@@ -21,7 +21,7 @@ pub struct ErrorDetail {
 }
 
 /// The error body — the schema mirror of [`pos_proto::error::ErrorBody`].
-#[derive(utoipa::ToSchema)]
+#[derive(Debug, utoipa::ToSchema)]
 #[expect(dead_code, reason = "a schema-only mirror, as `ErrorDetail` explains")]
 pub struct ErrorBody {
     /// The HTTP status code, repeated here so a body is self-describing once logged.
@@ -39,7 +39,7 @@ pub struct ErrorBody {
 ///
 /// One level of nesting so a response is unambiguous at the top level: a success body is the record,
 /// a failure body is `{"error": …}`.
-#[derive(utoipa::ToSchema)]
+#[derive(Debug, utoipa::ToSchema)]
 #[expect(dead_code, reason = "a schema-only mirror, as `ErrorDetail` explains")]
 pub struct ErrorResponse {
     /// The error.

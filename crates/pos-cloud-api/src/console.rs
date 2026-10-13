@@ -27,6 +27,10 @@ use crate::response::api_error;
 /// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
 /// session, or the store down), or a `403` when the session is valid but the role lacks the
 /// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
+///
+/// # Errors
+///
+/// The `401`, `403` or `503` response above, ready to return.
 pub async fn require_permission<A, C>(
     admin_store: &A,
     clock: &C,
@@ -112,6 +116,7 @@ pub struct ConfigTenantQuery {
 
 /// A fresh ULID: `now_ms` as the timestamp and 80 CSPRNG bits as the randomness, or `None` if the OS
 /// entropy source is unavailable (the caller then fails closed rather than mint a guessable id).
+#[must_use]
 pub fn mint_ulid(now_ms: i64) -> Option<Ulid> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).ok()?;

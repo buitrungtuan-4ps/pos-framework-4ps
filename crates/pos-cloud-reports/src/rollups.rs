@@ -154,11 +154,15 @@ where
 /// shared [`RollupWindowQuery`] date range and cap (ADR-0081, Track O4).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRollupWindowQuery {
+    /// The tenant the store belongs to (a 26-character ULID).
     pub tenant_id: String,
+    /// The first trading day, `YYYY-MM-DD`, inclusive.
     #[serde(default)]
     pub from: Option<String>,
+    /// The last trading day, `YYYY-MM-DD`, inclusive.
     #[serde(default)]
     pub to: Option<String>,
+    /// The most trading days to cover.
     #[serde(default)]
     pub limit: Option<usize>,
 }
