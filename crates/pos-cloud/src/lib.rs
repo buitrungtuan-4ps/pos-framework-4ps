@@ -109,7 +109,6 @@ pub mod registry;
 pub mod relay;
 pub mod release_source;
 pub mod releases;
-mod reports;
 pub mod retention;
 pub mod scheduling;
 pub mod settings;

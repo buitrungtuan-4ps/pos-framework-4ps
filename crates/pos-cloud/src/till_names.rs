@@ -9,7 +9,7 @@ use pos_proto::ids::{StoreId, TenantId};
 use crate::cloud::{DailyCash, STORE_DRAWER};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::strip_tree_version;
-use crate::reports::till_names::TillNames;
+use pos_cloud_reports::till_names::TillNames;
 
 /// The reports' [`TillNames`] over the stores' configuration trees.
 #[derive(Debug, Clone)]

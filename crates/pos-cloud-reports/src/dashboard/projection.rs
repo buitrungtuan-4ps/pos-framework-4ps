@@ -24,7 +24,7 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
+use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
 use super::rollup::{
     RollupWindow, fold_cash, fold_devices, fold_event, fold_revenue, render_devices,
@@ -82,7 +82,7 @@ pub struct StoredRollups {
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
 ///
 /// Every row is keyed by `(tenant, store)`, and the tenant is never a request parameter: a `/v1`
-/// caller's tenant comes from its authenticated [`Grant`](crate::auth::apikey::Grant), so a caller
+/// caller's tenant comes from its authenticated [`Grant`](pos_cloud_api::auth::apikey::Grant), so a caller
 /// can only ever read the rollups of a store within its own tenant. Guessing another tenant's
 /// `store_id` yields the default (empty) rollup, not that tenant's data — the isolation is a fact of
 /// the key, not of a check a handler might forget.
@@ -335,8 +335,8 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use crate::cloud::DailyRevenue;
     use crate::dashboard::rollup::daily_rollups_from_log;
+    use crate::types::DailyRevenue;
 
     fn store_id() -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))

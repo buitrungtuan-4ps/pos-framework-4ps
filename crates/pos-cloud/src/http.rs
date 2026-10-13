@@ -133,14 +133,12 @@ use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
 use crate::archive::{
     ArchiveSecret, ArchiveStore, StoreArchive, StoreArchiveKey, archive_object_key,
 };
-use crate::audit::{
-    AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder,
-};
+use crate::audit::{AuditEntry, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder};
 use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
-    LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
-    SessionSummary, authenticate_session, authenticated_admin, current_session_token_hash,
-    hash_recovery_code, hash_session_token, login, logout, system_actor,
+    LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionMint, SessionSummary,
+    authenticate_session, authenticated_admin, current_session_token_hash, hash_recovery_code,
+    hash_session_token, login, logout, system_actor,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
 use crate::auth::bearer::{authenticate, require_scope, require_store};
@@ -170,8 +168,7 @@ use crate::config_tree::{
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
-use crate::dashboard::rollup::WindowError;
-use crate::dashboard::{RollupError, RollupStore, admitted_devices};
+use crate::dashboard::{RollupStore, admitted_devices};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     DeviceWriteOutcome, PersistedDeviceProposal,
@@ -203,20 +200,26 @@ use crate::openapi::ApiDoc;
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
-use crate::reports::revenue::{
+use pos_cloud_reports::revenue::{
     admin_export_revenue, admin_export_revenue_fees, admin_export_revenue_tax, admin_revenue_daily,
 };
-use crate::reports::rollups::{
+use pos_cloud_reports::rollups::{
     admin_daily_rollups, admin_export_rollups, admin_rollups_reset, daily_rollups,
 };
-use crate::reports::state::ReportsState;
-use crate::reports::xz::admin_xz_report;
+use pos_cloud_reports::state::ReportsState;
+// The console's permission check, tenant query and audit entry live in pos-cloud-api, and the
+// rollup refusals in pos-cloud-reports; `crate::http::require_permission` and the rest still work.
 use crate::till_names::PublishedTillNames;
 use base64::Engine as _;
+pub(crate) use pos_cloud_api::console::{
+    ConfigTenantQuery, audit_action, mint_ulid, require_permission,
+};
 pub(crate) use pos_cloud_api::response::{
     api_error, api_error_with_details, csv_download_response, parse_ulid_fields,
     service_unavailable, ulid_refusal,
 };
+pub(crate) use pos_cloud_reports::refusal::rollup_error_response;
+use pos_cloud_reports::xz::admin_xz_report;
 use pos_core::lease::LeaseGeneration;
 
 use crate::anchor::{AnchorConflict, AnchorLedger};
@@ -31404,37 +31407,6 @@ where
     }
 }
 
-/// The role-aware `/admin` guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)):
-/// authenticates the session, resolves the acting admin, and checks that their role grants
-/// `permission`. Every permission-gated `/admin` route calls this in place of the bare session check.
-///
-/// On success the acting [`AdminContext`] is returned (routes that only gate can ignore it). On
-/// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
-/// session, or the store down), or a `403` when the session is valid but the role lacks the
-/// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
-pub(crate) async fn require_permission<A, C>(
-    admin_store: &A,
-    clock: &C,
-    headers: &HeaderMap,
-    permission: ConsolePermission,
-) -> Result<AdminContext, Response>
-where
-    A: AdminStore,
-    C: ClockSource,
-{
-    let context = authenticated_admin(admin_store, clock, headers)
-        .await
-        .map_err(|denied: SessionDenied| denied.into_response())?;
-    if role_grants(context.admin.role, permission) {
-        Ok(context)
-    } else {
-        Err(api_error(
-            ErrorStatus::PermissionDenied,
-            "insufficient permissions",
-        ))
-    }
-}
-
 // --- Console audit read (`GET /admin/audit`, ADR-0069 slice 4) ----------------------------------
 
 /// The collaborators the audit read needs, stated independently of [`CloudApp`]: the concrete audit
@@ -31776,58 +31748,6 @@ fn parse_audit_page(
         Err(PageRequestError::LimitOutOfRange) => Err(page_bound_refusal("limit")),
         Err(PageRequestError::OffsetOutOfRange) => Err(page_bound_refusal("offset")),
     })
-}
-
-/// Records one console mutation to the audit trail ([ADR-0069](../../../docs/adr/0069-audit-trail.md)),
-/// best-effort and after the mutation has already succeeded: mints the entry id from `clock`, snapshots
-/// the acting admin from `actor`, and hands the entry to the recorder (which logs, never propagates, a
-/// store failure). A mint failure is logged and the entry dropped rather than failing the caller's
-/// completed mutation. `before` is the entity's prior value (`None` for a create), `after` its new
-/// value (`None` for a delete); `tenant` scopes the entry (`None` for a tenant-global action).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one audit entry is genuinely this many independent facts — recorder, clock, actor, \
-              tenant scope, action, entity type+id, and the before/after values; bundling them into \
-              a struct at every one of the many call sites would only add ceremony, not clarity"
-)]
-pub(crate) async fn audit_action<C>(
-    audit: &Arc<dyn AuditRecorder>,
-    clock: &C,
-    actor: &AdminContext,
-    tenant: Option<TenantId>,
-    action: &str,
-    entity_type: &str,
-    entity_id: &str,
-    before: Option<serde_json::Value>,
-    after: Option<serde_json::Value>,
-) where
-    C: ClockSource,
-{
-    let now = clock.now();
-    let Some(ulid) = mint_ulid(now.as_milliseconds_since_epoch()) else {
-        tracing::error!(
-            action,
-            "could not mint an audit id; this action is not recorded"
-        );
-        return;
-    };
-    let entry = AuditEntry {
-        id: AuditId::new(ulid),
-        tenant_id: tenant,
-        actor: AuditActor {
-            admin_id: actor.admin.id.clone(),
-            email: actor.admin.email.clone(),
-            role: actor.admin.role,
-        },
-        action: action.to_owned(),
-        entity_type: entity_type.to_owned(),
-        entity_id: entity_id.to_owned(),
-        before,
-        after,
-        request_id: None,
-        at: now,
-    };
-    audit.record(entry).await;
 }
 
 /// A super-admin request to provision a new API key for a tenant.
@@ -33073,14 +32993,6 @@ where
     }
 }
 
-/// The tenant a config request is scoped to. The super-admin is global, so it names the tenant on
-/// the query string, exactly as API-key provisioning does.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct ConfigTenantQuery {
-    /// The tenant whose store's config tree to author or read (a 26-character ULID).
-    pub(crate) tenant_id: String,
-}
-
 /// The version id a successful publish produced.
 #[derive(Debug, Clone, serde::Serialize)]
 struct PublishedConfig {
@@ -34121,16 +34033,6 @@ fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
     mint_ulid(now_ms).map(ConfigVersionId::new)
 }
 
-/// A fresh ULID: `now_ms` as the timestamp and 80 CSPRNG bits as the randomness, or `None` if the OS
-/// entropy source is unavailable (the caller then fails closed rather than mint a guessable id).
-fn mint_ulid(now_ms: i64) -> Option<Ulid> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).ok()?;
-    let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
-    // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
-    Some(Ulid::from_parts(ms, u128::from_le_bytes(bytes)))
-}
-
 /// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid
 /// header value, so a failure to parse it is impossible; the `unwrap_or_else` keeps a fabricated
 /// bad value from taking the process down rather than papering over a real one.
@@ -34189,35 +34091,6 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
 /// the translation grid's — ended up with no reader in the console at all.
 fn unprocessable_violations(violations: &[String]) -> Response {
     api_error(ErrorStatus::Unprocessable, violations.join("; "))
-}
-
-/// The `400` a malformed rollup window earns, naming the query parameter at fault.
-///
-/// The mapping lives here rather than in `dashboard::rollup` because only the route knows the wire
-/// names. `Inverted` carries **no** `details`: neither `from` nor `to` is wrong on its own, and the
-/// standing rule is to name only the field that actually was — attributing it to `from` would send
-/// a caller who mistyped `to` to the wrong input. The message already names both.
-pub(crate) fn window_refusal(error: WindowError) -> Response {
-    match error {
-        WindowError::MalformedFrom => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "from must be a YYYY-MM-DD business date",
-            &[("from", "INVALID_FORMAT")],
-        ),
-        WindowError::MalformedTo => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "to must be a YYYY-MM-DD business date",
-            &[("to", "INVALID_FORMAT")],
-        ),
-        WindowError::Inverted => {
-            api_error(ErrorStatus::InvalidArgument, "from must not be after to")
-        }
-        WindowError::LimitTooSmall => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "limit must be at least 1",
-            &[("limit", "OUT_OF_RANGE")],
-        ),
-    }
 }
 
 /// Why a request-to-record builder refused, and which field to send the caller to.
@@ -34659,17 +34532,6 @@ where
 /// the point of deriving the code is that the next caller cannot inherit the trap.
 fn error_response(error: &PortError) -> Response {
     api_error(error.status(), error.to_string())
-}
-
-/// Maps a rollup-read failure to a `503`, logging the detail rather than returning it — a dashboard
-/// read only fails when the store itself is unreachable, which is transient and the caller's cue to
-/// retry, and the internal reason is not the client's business.
-pub(crate) fn rollup_error_response(error: &RollupError) -> Response {
-    tracing::error!(%error, "a dashboard rollup read failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the dashboard is temporarily unavailable",
-    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -37025,12 +36887,14 @@ mod error_envelope_tests {
 
     use super::{
         CampaignRequest, FieldRefusal, IngredientRequest, RecipeRequest, SalesChannel,
-        SupplierRequest, WindowError, api_error, build_campaign, build_ingredient, build_recipe,
-        build_supplier, error_response, parse_known_tokens, window_refusal,
+        SupplierRequest, api_error, build_campaign, build_ingredient, build_recipe, build_supplier,
+        error_response, parse_known_tokens,
     };
     use axum::http::StatusCode;
     use axum::response::Response;
     use pos_cloud_api::response::http_status;
+    use pos_cloud_reports::dashboard::rollup::WindowError;
+    use pos_cloud_reports::refusal::window_refusal;
     use pos_ports::{PortError, PortName};
     use pos_proto::error::ErrorBody;
     use pos_proto::ulid::Ulid;
@@ -37578,9 +37442,8 @@ mod audit_read_redaction_tests {
     //! What a role without `console.people.read` reads of the audit trail (ADR-0158 decision 9): an
     //! entry about an employee without the person's staff code, and everything else as written.
 
-    use super::{
-        AdminRole, AuditActor, AuditEntry, AuditId, audit_views, without_audited_staff_identity,
-    };
+    use super::{AdminRole, AuditEntry, audit_views, without_audited_staff_identity};
+    use pos_cloud_api::audit::{AuditActor, AuditId};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
     use serde_json::json;

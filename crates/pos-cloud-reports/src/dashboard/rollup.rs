@@ -4,7 +4,7 @@
 //! The one fold that turns events into a per-trading-day rollup
 //! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 //!
-//! Both the from-log computation ([`Cloud::daily_rollups`](crate::cloud::Cloud::daily_rollups)) and
+//! Both the from-log computation ([`Cloud::daily_rollups`](crate::types::Cloud::daily_rollups)) and
 //! the incrementally-**materialised** projection ([`super::projection`]) run *this* function over
 //! their events, so the two paths cannot drift: whatever a full re-scan would compute is exactly what
 //! the maintained rollup holds. The fold uses only envelope fields (`business_date`, `event_type`),
@@ -24,7 +24,7 @@ use pos_proto::events::{
 };
 use pos_proto::ids::StoreId;
 
-use crate::cloud::{
+use crate::types::{
     AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
     TaxComponentTotal,
 };
@@ -573,7 +573,7 @@ fn is_business_date(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, RollupWindow, WindowError, render_window};
-    use crate::cloud::DailyRollup;
+    use crate::types::DailyRollup;
     use std::collections::BTreeMap;
 
     fn days(dates: &[&str]) -> BTreeMap<String, DailyRollup> {
@@ -678,7 +678,7 @@ mod tests {
     // --- revenue fold ---
 
     use super::fold_revenue;
-    use crate::cloud::FeeTotal;
+    use crate::types::FeeTotal;
     use pos_contract_tests::fixtures;
     use pos_proto::BusinessDate;
     use pos_proto::envelope::{EventEnvelope, EventTypeRef, RawPayload};
@@ -848,7 +848,7 @@ mod tests {
     // --- the admitted-device roster (ADR-0118 §4) ---
 
     use super::{fold_devices, render_devices};
-    use crate::cloud::AdmittedDevice;
+    use crate::types::AdmittedDevice;
     use pos_proto::ids::DeviceId;
     use pos_proto::time::Timestamp;
 
@@ -990,7 +990,7 @@ mod tests {
     // --- cash fold, by drawer (ADR-0167 decisions 10 and 13) ---
 
     use super::fold_cash;
-    use crate::cloud::{CashTotals, DailyCash, STORE_DRAWER};
+    use crate::types::{CashTotals, DailyCash, STORE_DRAWER};
 
     /// A cash event on 2026-03-15 at the till `till`, or at the store's drawer for `None`.
     fn cash_event(
@@ -1196,7 +1196,7 @@ mod tests {
 
     // --- tax by component (ADR-0168 decision 5) ---
 
-    use crate::cloud::{DailyRevenue, TaxComponentTotal};
+    use crate::types::{DailyRevenue, TaxComponentTotal};
 
     /// An amount of `currency`, in its minor units.
     fn minor(currency: &str, amount: i64) -> serde_json::Value {

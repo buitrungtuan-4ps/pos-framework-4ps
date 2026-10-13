@@ -6,7 +6,7 @@
 use core::fmt;
 use std::sync::Arc;
 
-use crate::audit::AuditRecorder;
+use pos_cloud_api::audit::AuditRecorder;
 
 /// What a reporting route reads: the rollup store, the API keys and the console sessions that
 /// authorise it, the clock, the audit trail an export writes to, and the till names the X/Z report
@@ -16,19 +16,19 @@ use crate::audit::AuditRecorder;
 /// report handler takes this instead, built from that state by axum's `FromRef` (implemented beside
 /// the application state), so a handler's signature names only what it reads.
 #[derive(Clone)]
-pub(crate) struct ReportsState<R, K, C, A, T> {
+pub struct ReportsState<R, K, C, A, T> {
     /// The materialised rollups.
-    pub(crate) rollups: R,
+    pub rollups: R,
     /// The API keys a `/v1` read authenticates with.
-    pub(crate) keys: K,
+    pub keys: K,
     /// The clock sessions and audit entries are timed by.
-    pub(crate) clock: C,
+    pub clock: C,
     /// The console's admins and sessions.
-    pub(crate) admin: A,
+    pub admin: A,
     /// Where an export is recorded.
-    pub(crate) audit: Arc<dyn AuditRecorder>,
+    pub audit: Arc<dyn AuditRecorder>,
     /// The names the stores' configuration gives their tills.
-    pub(crate) till_names: T,
+    pub till_names: T,
 }
 
 impl<R, K, C, A, T> fmt::Debug for ReportsState<R, K, C, A, T> {

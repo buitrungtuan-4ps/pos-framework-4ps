@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::cloud::DailyCash;
+use crate::types::DailyCash;
 
 /// The names a store's published configuration gives the tills among a day's cash drawers, by
 /// `terminal_device_id` ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
@@ -21,7 +21,7 @@ use crate::cloud::DailyCash;
 ///
 /// A till the configuration does not name is left out, and so is every till when the configuration
 /// cannot be read: the report's figures stand without the names.
-pub(crate) trait TillNames {
+pub trait TillNames {
     /// The names of the tills among `cash`'s drawers that the store's configuration names.
     fn till_names(
         &self,

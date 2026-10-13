@@ -14,19 +14,21 @@ use serde::Deserialize;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::auth::admin::AdminStore;
-use crate::auth::console_rbac::ConsolePermission;
 use crate::dashboard::{RollupStore, xz_report};
-use crate::http::{parse_ulid_fields, require_permission, rollup_error_response};
-use crate::reports::state::ReportsState;
-use crate::reports::till_names::TillNames;
+use crate::refusal::rollup_error_response;
+use crate::state::ReportsState;
+use crate::till_names::TillNames;
+use pos_cloud_api::auth::admin::AdminStore;
+use pos_cloud_api::auth::console_rbac::ConsolePermission;
+use pos_cloud_api::console::require_permission;
+use pos_cloud_api::response::parse_ulid_fields;
 
 /// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
 /// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
 /// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the
 /// day's drawers is named from the store's published `devices` node as the report is served
 /// ([`TillNames`]).
-pub(crate) async fn admin_xz_report<R, K, C, A, T>(
+pub async fn admin_xz_report<R, K, C, A, T>(
     State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
@@ -69,7 +71,7 @@ where
 /// The X/Z report query: the explicit `tenant_id` plus an optional `business_date` (`YYYY-MM-DD`);
 /// absent, the current day is reported.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct XzReportQuery {
+pub struct XzReportQuery {
     tenant_id: String,
     #[serde(default)]
     business_date: Option<String>,
