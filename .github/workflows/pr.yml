@@ -8,20 +8,39 @@ name: pr
 # surfaces first. A contributor with a naming mistake should not wait for a full
 # clippy pass to hear about it.
 
+# A push to `main` runs it too. That is what saves the caches pull requests restore,
+# since a cache is saved only from `main` and only matches the job that wrote it
+# (ADR-0171 decision 1), and it is ADR-0171's "main always runs everything". The jobs
+# that read the pull request itself (`secrets`, `docs-gate`) run on pull requests only.
 on:
   pull_request:
     branches: [main, "release/**"]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
+# A pull request's newer push cancels its older run; runs on `main` queue instead,
+# so each one gets to save its caches.
 concurrency:
-  group: pr-${{ github.head_ref }}
-  cancel-in-progress: true
+  group: pr-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The build environment is part of every cache key (ADR-0171 decision 1), so these
+# values are the same in pr.yml and main.yml; a difference is a full cache miss.
+#   No incremental build and no debug info: CI compiles each crate once and reads no
+#   debugger symbols, and both make `target/` larger and slower to restore. Developers
+#   keep theirs: Cargo.toml's profiles are untouched.
+#   mold on Linux, through the target's own rustflags so the Windows build keeps its
+#   linker. A RUSTFLAGS variable, if one is ever set, takes precedence over these, so it
+#   must then carry the mold flag too.
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -36,6 +55,8 @@ jobs:
           # The changed-file gates need the base branch.
           fetch-depth: 0
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: rules
 
       - name: dependency rule
         run: cargo run -q -p xtask -- deps-rule
@@ -56,9 +77,9 @@ jobs:
       - name: every accepted TLS_MODE has its Caddyfile and imports the shared block
         run: cargo run -q -p xtask -- tls-modes
       - name: nothing removed from a committed snapshot
-        run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref }}
+        run: cargo run -q -p xtask -- snapshot --base origin/${{ github.base_ref || 'main' }}
       - name: migrations are additive-only
-        run: cargo run -q -p xtask -- migrations --base origin/${{ github.base_ref }}
+        run: cargo run -q -p xtask -- migrations --base origin/${{ github.base_ref || 'main' }}
 
       # The dependency rule is the check that turns the architecture into law, so
       # prove it still fires rather than trusting that it would. Runs against a
@@ -75,6 +96,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: lints
 
       - run: cargo fmt --all -- --check
 
@@ -116,6 +139,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: test
       - run: cargo test --workspace --locked
       - name: doc examples compile
         run: cargo test --workspace --doc
@@ -133,6 +158,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: build
       - run: cargo build --workspace --locked
 
       # The only runner in the estate with a PowerShell parser, so it is where the Windows
@@ -241,6 +268,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: replay
       - uses: ./.github/actions/node-setup
       - name: install dependencies
         working-directory: ui
@@ -315,6 +344,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: console-replay
       - uses: ./.github/actions/node-setup
       - name: install dependencies
         working-directory: dashboard
@@ -417,6 +448,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: deny
       - name: install cargo-deny
         run: |
           set -euo pipefail
@@ -430,6 +463,7 @@ jobs:
   # retroactively.
   # ---------------------------------------------------------------------------
   secrets:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -511,6 +545,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: postgres
       - name: store-postgres against a real PostgreSQL
         # Single-threaded: every case shares the one database and truncates
         # between cases (see the crate's tests/integration.rs).
@@ -521,6 +557,7 @@ jobs:
   # goal is a conscious decision, not a bureaucratic block.
   # ---------------------------------------------------------------------------
   docs-gate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -558,6 +595,10 @@ jobs:
           fi
           echo "::error::This pull request changes crates/, ui/ or dashboard/ but adds no change file. Add changes/<topic>.md (see changes/README.md), or write 'changelog: none <reason>' in the pull-request body."
           exit 1
+      # The rules job's cache: it builds the same xtask, and docs-gate never runs on
+      # main to save one of its own.
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: rules
       - name: every change file is well-formed
         run: cargo run -q -p xtask --locked -- changelog --check

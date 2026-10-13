@@ -1,8 +1,18 @@
 name: rust-setup
 description: >
-  Install the pinned toolchain and restore the cargo cache. A local composite
-  action rather than a third-party one: it travels with the commit under review,
-  so it cannot be changed underneath us the way a mutable tag can.
+  Install the pinned toolchain, restore this job's own cargo cache, and install mold
+  when the workflow links with it. A local composite action rather than a third-party
+  one: it travels with the commit under review, so it cannot be changed underneath us
+  the way a mutable tag can.
+
+inputs:
+  cache-key:
+    description: >
+      The cache this job restores, usually the job's name. Empty uses the job's id,
+      which is what a job that passes nothing gets. Jobs that compile different things
+      must not share one, or each restores what the other built (ADR-0171).
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -15,12 +25,36 @@ runs:
         rustup show active-toolchain || rustup toolchain install
         rustc --version && cargo --version
 
-    - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+    # One cache per job, saved only by a run on `main` and restored by every pull
+    # request (ADR-0171 decision 1). Before this, every job of every pull request
+    # saved `target/` under one key, so whichever finished first decided what all the
+    # others restored, and a pull request's build could poison `main`'s.
+    #
+    # The key is the job (or `cache-key`), the runner's OS and architecture, the
+    # rustc version, a hash of every CARGO*/RUST* variable, and the lockfile. So a
+    # pull request matches `main` only when it runs the same job with the same
+    # environment, which is why `pr.yml` also runs on a push to `main`. A changed
+    # Cargo.lock still restores `main`'s cache for the same job and environment.
+    # Workspace crates are not stored: the dependencies are what is worth keeping.
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
-        path: |
-          ~/.cargo/registry/index
-          ~/.cargo/registry/cache
-          ~/.cargo/git/db
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
-        restore-keys: ${{ runner.os }}-cargo-
+        shared-key: ${{ inputs.cache-key }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    # mold links several times faster than the default linker, which matters
+    # because every test target is a binary to link. Installed only where the
+    # workflow asks for it through the target-specific rustflags, and verified against
+    # the sha256 in tools/tool-versions.toml, as gitleaks is.
+    - name: install mold
+      if: runner.os == 'Linux' && contains(env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS, 'mold')
+      shell: bash
+      run: |
+        set -euo pipefail
+        section="$(sed -n '/^\[mold\]/,/^\[/p' tools/tool-versions.toml)"
+        version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' <<<"$section")"
+        expected="$(sed -n 's/^sha256_linux *= *"\(.*\)"/\1/p' <<<"$section")"
+        url="$(sed -n 's/^url_linux *= *"\(.*\)"/\1/p' <<<"$section" | sed "s/{v}/$version/g")"
+        curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/mold.tar.gz"
+        echo "$expected  $RUNNER_TEMP/mold.tar.gz" | sha256sum -c -
+        sudo tar -C /usr/local --strip-components=1 --no-overwrite-dir -xzf "$RUNNER_TEMP/mold.tar.gz"
+        mold --version

@@ -44,9 +44,20 @@ concurrency:
   group: main-${{ github.ref }}
   cancel-in-progress: false
 
+# The build environment is part of every cache key (ADR-0171 decision 1), so these
+# values are the same in pr.yml and main.yml; a difference is a full cache miss.
+#   No incremental build and no debug info: CI compiles each crate once and reads no
+#   debugger symbols, and both make `target/` larger and slower to restore. Developers
+#   keep theirs: Cargo.toml's profiles are untouched.
+#   mold on Linux, through the target's own rustflags so the Windows build keeps its
+#   linker. A RUSTFLAGS variable, if one is ever set, takes precedence over these, so it
+#   must then carry the mold flag too.
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -82,6 +93,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: integration
       - name: store-postgres against a real PostgreSQL
         # Single-threaded: every case shares the one database and truncates between
         # cases (see the crate's tests/integration.rs).
@@ -228,6 +241,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: contract
       # Every adapter's `tests/contract.rs` runs the shared suite for its port
       # (`pos-contract-tests`), so `--test contract` runs them all and skips the
       # crates that have no such target. The suites here need no service — the
