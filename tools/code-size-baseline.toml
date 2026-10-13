@@ -14,7 +14,7 @@
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 37698
+"crates/pos-cloud/src/http.rs" = 37531
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
@@ -75,7 +75,6 @@
 "crates/pos-cloud/src/http.rs::admin_publish_menu" = { lines = 107, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_store_profile" = { lines = 102, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_to_store_group" = { lines = 116, params = 4 }
-"crates/pos-cloud/src/http.rs::admin_schedule_release" = { lines = 229, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_set_store_group_members" = { lines = 106, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_update_employee" = { lines = 111, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_upload_media" = { lines = 105, params = 4 }

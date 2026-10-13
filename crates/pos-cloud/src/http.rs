@@ -197,6 +197,8 @@ use crate::lease::{
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
+
+mod release_schedule;
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
@@ -253,7 +255,7 @@ use crate::retention::{RetentionError, SubjectStore};
 // is gone and the reader no longer has to hold two meanings of one word at once.
 use crate::releases::{
     NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
-    ResolveRefusal, TargetStore, resolve_for_stores,
+    ResolveRefusal, TargetStore,
 };
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
@@ -34999,7 +35001,7 @@ where
 /// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
-/// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
+/// release needs no timezone at all, and only [`resolve_for_stores`](crate::releases::resolve_for_stores) knows whether this release is
 /// one. The refusal, when it comes, names the store.
 async fn release_target_timezones<Cfg>(
     config_trees: &Cfg,
@@ -35071,19 +35073,12 @@ fn unresolvable_moment(refusals: &[(StoreId, ResolveRefusal)]) -> Response {
 /// Nothing is written until everything has resolved. A store that cannot be timed, a node that will
 /// not compile, a prerequisite a store is missing — each refuses the whole release, because a
 /// half-written release is exactly the half-published Tết this record exists to prevent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one ordered gauntlet, and the order is the record's: settle the instruction, expand \
-              the target, resolve every instant, check every prerequisite, compile every node — and \
-              only then write. Splitting it into helpers would let a future edit move a write above \
-              a check, which is the half-published Tết ADR-0125 exists to prevent"
-)]
 async fn admin_schedule_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Path(release_id): Path<String>,
     Json(request): Json<ScheduleReleaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
@@ -35093,219 +35088,57 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    // The gauntlet, in the record's order (ADR-0125): settle the instruction, expand the target,
+    // resolve every instant, check every prerequisite, compile every node — and only then write.
+    // Each step refuses with the response to send, so nothing after a refusal runs.
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::PublishConfig,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
-        Ok([tenant_id]) => TenantId::new(tenant_id),
-        Err(refusal) => return refusal,
-    };
-    let release = match state.releases.fetch_one(tenant_id, &release_id).await {
-        Ok(Some(release)) => release,
-        Ok(None) => return not_found("release"),
-        Err(error) => return release_error_response(&error),
-    };
-    if release.status != ReleaseStatus::Draft {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has already been scheduled; cancel it and make another",
-        );
-    }
-    let Some(moment) = release.moment.clone() else {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has no moment; give it a wall-clock time or an instant before scheduling",
-        );
-    };
-    if request.nodes.is_empty() {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release carries no nodes, so scheduling it would publish nothing",
-        );
-    }
-
-    // Settle the instruction before anything is read per store: an unknown node is the request's own
-    // mistake and would be the same answer at every shop.
-    let mut carried: Vec<(Arc<dyn BatchNode>, &serde_json::Value)> =
-        Vec::with_capacity(request.nodes.len());
-    for asked in &request.nodes {
-        let Some(node) = state
-            .nodes
-            .iter()
-            .find(|candidate| candidate.key() == asked.node)
-        else {
-            return unknown_batch_node(&state.nodes, &asked.node);
-        };
-        carried.push((Arc::clone(node), &asked.arguments));
-    }
-
-    let stores = match release_target_stores(
-        &state.groups,
-        &state.registry,
+    .await?;
+    let [tenant_id] = parse_ulid_fields([("tenant_id", &request.tenant_id)])?;
+    let tenant_id = TenantId::new(tenant_id);
+    let (release, moment) =
+        release_schedule::draft_to_schedule(&state.releases, tenant_id, &release_id, &request)
+            .await?;
+    let carried = release_schedule::settle_nodes(&state.nodes, &request.nodes)?;
+    let (stores, targets) = release_schedule::target_stores(
+        (&state.groups, &state.registry, &state.config_trees),
         tenant_id,
-        release.target_group_id.as_deref(),
-        request.store_ids.as_deref(),
+        &release,
+        &request,
     )
-    .await
-    {
-        Ok(stores) => stores,
-        Err(refusal) => return refusal,
-    };
-    let targets = match release_target_timezones(&state.config_trees, tenant_id, &stores).await {
-        Ok(targets) => targets,
-        Err(refusal) => return refusal,
-    };
-
-    // One wall-clock time is one instant per timezone: a fleet spanning Ho Chi Minh City and Tokyo
-    // has a two-hour spread, and this is where it is written down (ADR-0125 §2).
-    let resolved = resolve_for_stores(&moment, &targets);
-    let refusals: Vec<(StoreId, ResolveRefusal)> = resolved
-        .iter()
-        .filter_map(|store| match &store.outcome {
-            Err(refusal) => Some((store.store_id, refusal.clone())),
-            Ok(_) => None,
-        })
-        .collect();
-    if !refusals.is_empty() {
-        return unresolvable_moment(&refusals);
-    }
-
-    // The schedule-time half of ADR-0125 §6. A prerequisite the release carries itself is satisfied
-    // by the release — the activator applies them in dependency order — so only the ones it does not
-    // carry are read from the store.
+    .await?;
+    let resolved = release_schedule::resolve_instants(&moment, &targets)?;
     let carried_keys: Vec<&str> = carried.iter().map(|(node, _)| node.key()).collect();
-    for (node, _) in &carried {
-        for needed in prerequisites_for(node.key()) {
-            if carried_keys.contains(needed) {
-                continue;
-            }
-            for store_id in &stores {
-                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
-                    .await
-                {
-                    Ok(serde_json::Value::Null) => {
-                        return api_error(
-                            ErrorStatus::Unprocessable,
-                            format!(
-                                "store {store_id} has no `{needed}` node, which `{}` needs; publish \
-                                 one to it or carry `{needed}` in this release",
-                                node.key()
-                            ),
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(refusal) => return refusal,
-                }
-            }
-        }
-    }
-
-    // Compile each node once for the tenant, then once per store. A refusal here is the
-    // instruction's own — a menu that will not compile — and refuses the release rather than being
-    // recorded at every shop. What a write composes on a store's tree when it lands — a menu's
-    // `fees` — is not snapshotted: it is read from the tree when the write lands, and a snapshot
-    // of it would publish over whatever fee rules are written before the moment arrives.
-    let mut pairs: Vec<(StoreId, String, serde_json::Value)> = Vec::new();
-    for (node, arguments) in &carried {
-        let plan = match node.plan(tenant_id, arguments).await {
-            Ok(plan) => plan,
-            Err(refusal) => return refusal,
-        };
-        for store_id in &stores {
-            match plan.compile_for(*store_id).await {
-                Ok(compiled) => {
-                    for (key, value) in compiled {
-                        pairs.push((*store_id, key, value));
-                    }
-                }
-                Err(refusal) => return refusal,
-            }
-        }
-    }
-
-    let instants: std::collections::BTreeMap<StoreId, i64> = resolved
-        .iter()
-        .filter_map(|store| store.outcome.as_ref().ok().map(|at| (store.store_id, *at)))
-        .collect();
-    // The clock each instant was read in, written down beside it. Without this the report can print
-    // the moment but not the sentence an operator approved — "04:00 at Ginza" and the same instant
-    // read in Ho Chi Minh City are one number and two different reviews (ADR-0125 §26).
-    let zones: std::collections::BTreeMap<StoreId, String> = resolved
-        .iter()
-        .filter_map(|store| {
-            store
-                .timezone
-                .as_ref()
-                .map(|zone| (store.store_id, zone.clone()))
-        })
-        .collect();
-    let now_ms = state.clock.now().as_milliseconds_since_epoch();
-    let mut written = 0_usize;
-    for (store_id, node_key, node_value) in pairs {
-        let Some(effective_at_ms) = instants.get(&store_id).copied() else {
-            // Unreachable: every store resolved above or the release was refused. Recorded rather
-            // than unwrapped, because the alternative is a panic in a request handler.
-            tracing::error!(%store_id, release = %release_id, "a release pair has no instant");
-            return service_unavailable("releases");
-        };
-        let Some(pair_id) = mint_ulid(now_ms) else {
-            return service_unavailable("releases");
-        };
-        let publish = NewScheduledPublish {
-            id: pair_id.to_string(),
-            tenant_id,
-            store_id,
-            node_key,
-            node_value,
-            effective_at_ms,
-            created_by: context.admin.id.clone(),
-            release_id: Some(release_id.clone()),
-            resolved_timezone: zones.get(&store_id).cloned(),
-        };
-        if let Err(error) = state.scheduled.schedule(&publish).await {
-            // Some pairs are already written. They are visible in the report and the release stays
-            // `draft`, which is the honest state for a set that never fully landed — and cancelling
-            // it withdraws what did get written.
-            tracing::error!(%error, release = %release_id, written, "a release pair could not be scheduled");
-            return scheduled_error_response(&error);
-        }
-        written += 1;
-    }
-
-    if let Err(error) = state
-        .releases
-        .set_status(tenant_id, &release_id, ReleaseStatus::Scheduled)
-        .await
-    {
-        return release_error_response(&error);
-    }
-    // One audit row for the decision, beside the per-publish rows the activator's writes will add:
-    // "who decided to ship Tết" has one answer and "when did Ginza get it" has forty (ADR-0125 §7).
-    audit_action(
-        &state.audit,
-        &state.clock,
-        &context,
-        Some(tenant_id),
-        "release.scheduled",
-        "release",
-        &release_id,
-        None,
-        Some(serde_json::json!({
-            "nodes": carried_keys,
-            "stores": stores.len(),
-            "pairs": written,
-        })),
+    release_schedule::check_prerequisites(
+        &state.config_trees,
+        tenant_id,
+        &stores,
+        &carried,
+        &carried_keys,
     )
-    .await;
-    release_report_response(&state, tenant_id, &release_id).await
+    .await?;
+    let pairs = release_schedule::compile_pairs(tenant_id, &stores, &carried).await?;
+
+    // Only now, with every check passed, is anything written.
+    let written = release_schedule::schedule_pairs(
+        &state.scheduled,
+        (tenant_id, &release_id),
+        &context.admin.id,
+        state.clock.now().as_milliseconds_since_epoch(),
+        &resolved,
+        pairs,
+    )
+    .await?;
+    let summary = serde_json::json!({
+        "nodes": carried_keys,
+        "stores": stores.len(),
+        "pairs": written,
+    });
+    Ok(release_schedule::mark_scheduled(&state, &context, (tenant_id, &release_id), summary).await)
 }
 
 #[utoipa::path(
