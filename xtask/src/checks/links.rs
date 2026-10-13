@@ -79,18 +79,16 @@ fn link_targets(line: &str) -> Vec<&str> {
     out
 }
 
+/// The frozen Vietnamese design archive (ADR-0170 decision 1), whose links are not checked.
+const ARCHIVE: &str = "docs/archive/vi";
+
 fn markdown_files(root: &std::path::Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let skip: BTreeSet<&str> = ["target", ".git", "vendor", "node_modules"]
+        .into_iter()
+        .collect();
     // The Vietnamese archive is frozen and unmaintained by design, so its internal
     // links are not this check's business.
-    let skip: BTreeSet<&str> = [
-        "target",
-        ".git",
-        "vendor",
-        "node_modules",
-        "vietnamese-design-archive",
-    ]
-    .into_iter()
-    .collect();
+    let archive = root.join(ARCHIVE);
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
 
@@ -99,7 +97,7 @@ fn markdown_files(root: &std::path::Path) -> std::io::Result<Vec<std::path::Path
             let path = entry?.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if path.is_dir() {
-                if !skip.contains(name) {
+                if !skip.contains(name) && path != archive {
                     stack.push(path);
                 }
             } else if path.extension().is_some_and(|e| e == "md") {
