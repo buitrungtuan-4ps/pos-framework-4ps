@@ -595,13 +595,13 @@ impl<S: EventStore> Cloud<S> {
     }
 
     /// The per-day activity rollup for one store, oldest day first, computed from the log every call:
-    /// [`daily_rollups_from_log`](crate::dashboard::rollup::daily_rollups_from_log) over this cloud's
+    /// [`daily_rollups_from_log`](crate::dashboard::from_log::daily_rollups_from_log) over this cloud's
     /// event store.
     ///
     /// # Errors
     ///
     /// [`PortError`] if the store cannot be reached.
     pub async fn daily_rollups(&self, store_id: StoreId) -> Result<Vec<DailyRollup>, PortError> {
-        crate::dashboard::rollup::daily_rollups_from_log(&self.store, store_id).await
+        crate::dashboard::from_log::daily_rollups_from_log(&self.store, store_id).await
     }
 }

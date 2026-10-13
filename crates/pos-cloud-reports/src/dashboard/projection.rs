@@ -335,7 +335,7 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use crate::dashboard::rollup::daily_rollups_from_log;
+    use crate::dashboard::from_log::daily_rollups_from_log;
     use crate::types::DailyRevenue;
 
     fn store_id() -> StoreId {

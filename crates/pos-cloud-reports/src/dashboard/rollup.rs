@@ -4,17 +4,13 @@
 //! The one fold that turns events into a per-trading-day rollup
 //! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 //!
-//! Both the from-log computation ([`daily_rollups_from_log`], behind
+//! Both the from-log computation ([`super::from_log`], behind
 //! `pos_cloud::cloud::Cloud::daily_rollups`) and the incrementally-**materialised** projection
 //! ([`super::projection`]) run *this* function over their events, so the two paths cannot drift:
 //! whatever a full re-scan would compute is exactly what the maintained rollup holds. The fold uses
 //! only envelope fields (`business_date`, `event_type`), so it needs no per-event-type decoding.
 
-use core::num::NonZeroU32;
 use std::collections::BTreeMap;
-
-use pos_ports::PortError;
-use pos_ports::event_store::{EventQuery, EventStore};
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
@@ -22,7 +18,6 @@ use pos_proto::events::{
     CashShiftClosed, CashShiftOpened, DeviceAdmissionGranted, DeviceAdmissionRevoked,
     SalesOrderLineAdded,
 };
-use pos_proto::ids::StoreId;
 
 use crate::types::{
     AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
@@ -129,48 +124,6 @@ pub fn fold_event(days: &mut BTreeMap<String, DailyRollup>, event: &EventEnvelop
 #[must_use]
 pub fn render(days: BTreeMap<String, DailyRollup>) -> Vec<DailyRollup> {
     days.into_values().collect()
-}
-
-/// How many events a rollup pass reads per page from the log.
-const ROLLUP_PAGE: u32 = 512;
-
-/// The per-day activity rollup for one store, oldest day first, from `events`' log.
-///
-/// Reads the store's log in pages and folds each event into its trading day with [`fold_event`].
-/// This computes the rollup from the log every call — correct but O(events); the dashboard read path
-/// materialises the *same* fold and answers in O(days) ([`crate::dashboard`],
-/// [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
-///
-/// # Errors
-///
-/// [`PortError`] if the store cannot be reached.
-pub async fn daily_rollups_from_log<E: EventStore>(
-    events: &E,
-    store_id: StoreId,
-) -> Result<Vec<DailyRollup>, PortError> {
-    let page = NonZeroU32::new(ROLLUP_PAGE).unwrap_or(NonZeroU32::MIN);
-    let page_len = usize::try_from(ROLLUP_PAGE).unwrap_or(usize::MAX);
-    let mut days: BTreeMap<String, DailyRollup> = BTreeMap::new();
-    let mut cursor = None;
-    loop {
-        let mut query = EventQuery::first(store_id, page);
-        if let Some(after) = cursor {
-            query = query.after(after);
-        }
-        let batch = events.read(&query).await?;
-        if batch.is_empty() {
-            break;
-        }
-        for event in &batch {
-            fold_event(&mut days, event);
-        }
-        let short = batch.len() < page_len;
-        cursor = batch.last().map(|event| event.event_id);
-        if short {
-            break;
-        }
-    }
-    Ok(render(days))
 }
 
 /// Folds one event's **money** into `revenue` (ADR-0081, Track O4): `billing.bill.settled` into the

@@ -23,7 +23,7 @@
 
 // The fold and the projection moved to pos-cloud-reports (ADR-0170 decision 4); re-exported so
 // `crate::dashboard::rollup` and the rest still name them. The projector loop stays here.
-pub use pos_cloud_reports::dashboard::{projection, rollup};
+pub use pos_cloud_reports::dashboard::{from_log, projection, rollup};
 pub mod projector;
 
 pub use projection::{

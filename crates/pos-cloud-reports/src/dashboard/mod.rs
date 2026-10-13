@@ -7,6 +7,7 @@
 //! answers from the stored rollup with no log scan. `pos-cloud`'s projector runs [`project`] for
 //! every store.
 
+pub mod from_log;
 pub mod projection;
 pub mod rollup;
 
