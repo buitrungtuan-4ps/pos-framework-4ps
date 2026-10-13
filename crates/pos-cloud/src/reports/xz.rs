@@ -2,7 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The X or Z report for one store's trading day, with each till named from the store's published
-//! `devices` node ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 13).
+//! `devices` node
+//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 13).
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
