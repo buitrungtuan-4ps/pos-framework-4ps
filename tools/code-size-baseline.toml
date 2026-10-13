@@ -9,16 +9,16 @@
 "crates/adapters/store-sqlite/src/store.rs" = 1184
 "crates/adapters/store-sqlite/src/writer.rs" = 2521
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
+"crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud/src/catalog.rs" = 2018
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
-"crates/pos-cloud/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 37810
+"crates/pos-cloud/src/http.rs" = 37698
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
-"crates/pos-cloud/src/persistence.rs" = 5786
+"crates/pos-cloud/src/persistence.rs" = 5750
 "crates/pos-cloud/src/scheduling.rs" = 1290
 "crates/pos-cloud/src/webhook/ssrf.rs" = 1060
 "crates/pos-cloud/tests/cloud.rs" = 36890
@@ -59,6 +59,7 @@
 "crates/adapters/store-postgres/src/store.rs::PostgresStore::migrate" = { lines = 347, params = 1 }
 "crates/adapters/store-sqlite/src/writer.rs::run" = { lines = 252, params = 2 }
 "crates/adapters/store-sqlite/src/writer.rs::verify_chain_chunk" = { lines = 125, params = 4 }
+"crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
 "crates/pos-cloud/src/catalog_compiler.rs::compile_layout_book" = { lines = 118, params = 3 }
@@ -79,7 +80,6 @@
 "crates/pos-cloud/src/http.rs::admin_set_store_group_members" = { lines = 106, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_update_employee" = { lines = 111, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_upload_media" = { lines = 105, params = 4 }
-"crates/pos-cloud/src/http.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/http.rs::batch_nodes" = { lines = 42, params = 9 }
 "crates/pos-cloud/src/http.rs::catalog_router" = { lines = 135, params = 4 }
 "crates/pos-cloud/src/http.rs::checked_locale_node" = { lines = 142, params = 2 }

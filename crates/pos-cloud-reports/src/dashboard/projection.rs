@@ -24,7 +24,7 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
+use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
 use super::rollup::{
     RollupWindow, fold_cash, fold_devices, fold_event, fold_revenue, render_devices,
@@ -82,7 +82,7 @@ pub struct StoredRollups {
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
 ///
 /// Every row is keyed by `(tenant, store)`, and the tenant is never a request parameter: a `/v1`
-/// caller's tenant comes from its authenticated [`Grant`](crate::auth::apikey::Grant), so a caller
+/// caller's tenant comes from its authenticated [`Grant`](pos_cloud_api::auth::apikey::Grant), so a caller
 /// can only ever read the rollups of a store within its own tenant. Guessing another tenant's
 /// `store_id` yields the default (empty) rollup, not that tenant's data — the isolation is a fact of
 /// the key, not of a check a handler might forget.
@@ -335,7 +335,8 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use crate::cloud::{Cloud, DailyRevenue};
+    use crate::dashboard::from_log::daily_rollups_from_log;
+    use crate::types::DailyRevenue;
 
     fn store_id() -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
@@ -502,8 +503,7 @@ mod tests {
                 .await
                 .expect("revenue");
 
-        // The authoritative answer is the full from-log fold. `project` only borrowed `events`, so it
-        // can be moved into a Cloud now.
+        // The authoritative answer is the full from-log fold.
         let mut rescanned = BTreeMap::new();
         let log = events
             .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
@@ -513,8 +513,7 @@ mod tests {
             fold_revenue(&mut rescanned, event);
         }
         let authoritative_revenue = render_revenue_window(rescanned, &RollupWindow::default());
-        let authoritative = Cloud::new(events)
-            .daily_rollups(store_id())
+        let authoritative = daily_rollups_from_log(&events, store_id())
             .await
             .expect("from-log rollups");
         assert_eq!(

@@ -28,6 +28,7 @@ members = [
     "crates/pos-edge",
     "crates/pos-print-agent",
     "crates/pos-cloud-api",
+    "crates/pos-cloud-reports",
     "crates/pos-cloud",
     "crates/pos-simulator",
     "examples/minimal-edge",

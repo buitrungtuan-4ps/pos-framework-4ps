@@ -16,6 +16,9 @@
 
 pub mod audit;
 pub mod auth;
+pub mod console;
+pub mod csv_file;
+pub mod error_schema;
 pub mod paging;
 mod persistence;
 pub mod response;

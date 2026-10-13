@@ -15,36 +15,37 @@ use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::auth::admin::AdminStore;
-use crate::auth::console_rbac::ConsolePermission;
-use crate::cloud::DailyRevenue;
 use crate::dashboard::{RollupStore, RollupWindow, revenue};
 use crate::export;
-use crate::http::{
-    CloudApp, parse_ulid_fields, require_permission, rollup_error_response, window_refusal,
-};
-use crate::http::{api_error, audit_action, csv_download_response};
-use crate::reports::rollups::AdminRollupWindowQuery;
+use crate::refusal::{rollup_error_response, window_refusal};
+use crate::rollups::AdminRollupWindowQuery;
+use crate::state::ReportsState;
+use crate::types::DailyRevenue;
+use pos_cloud_api::auth::admin::AdminStore;
+use pos_cloud_api::auth::console_rbac::ConsolePermission;
+use pos_cloud_api::console::audit_action;
+use pos_cloud_api::console::require_permission;
+use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::response::{api_error, csv_download_response};
 
-/// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].
+/// The materialised **revenue** rollup for one store, windowed exactly as
+/// [`admin_daily_rollups`](crate::rollups::admin_daily_rollups).
 ///
 /// Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —
 /// narrower than the counts read's `console.data.read`. The rollup carries no customer or employee
 /// identifier; the tenant is named explicitly (the console admin is global).
-pub(crate) async fn admin_revenue_daily<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub async fn admin_revenue_daily<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &app.admin,
@@ -92,21 +93,19 @@ struct RevenueExport {
 
 /// Downloads a store's daily revenue rollups as `file` writes them, windowed like the read
 /// (ADR-0081, Track O4).
-async fn export_revenue<S, R, K, C, A, T, W>(
-    app: &CloudApp<S, R, K, C, A, T, W>,
+async fn export_revenue<R, K, C, A, T>(
+    app: &ReportsState<R, K, C, A, T>,
     headers: &HeaderMap,
     store_id: &str,
     query: AdminRollupWindowQuery,
     file: &RevenueExport,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &app.admin,
@@ -152,20 +151,18 @@ where
 
 /// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
 /// Track O4).
-pub(crate) async fn admin_export_revenue<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub async fn admin_export_revenue<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     let file = RevenueExport {
         name: "revenue.csv",
@@ -203,11 +200,11 @@ where
                                       whose rollup has not been projected yet"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
                                       not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "reports",
 )]
@@ -218,20 +215,18 @@ where
 /// `revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,
 /// so it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,
 /// and the audit trail records how many rows were exported, never what they held.
-pub(crate) async fn admin_export_revenue_fees<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub async fn admin_export_revenue_fees<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     let file = RevenueExport {
         name: "revenue-fees.csv",
@@ -273,11 +268,11 @@ where
                                       for a store whose rollup has not been projected yet"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
                                       not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "reports",
 )]
@@ -288,20 +283,18 @@ where
 /// A file of its own beside `revenue-fees.csv`, and the same in every way that matters: windowed
 /// as the revenue read is, behind `console.reports.revenue`, and audited by how many rows were
 /// exported, never what they held.
-pub(crate) async fn admin_export_revenue_tax<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub async fn admin_export_revenue_tax<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     let file = RevenueExport {
         name: "revenue-tax.csv",

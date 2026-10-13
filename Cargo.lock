@@ -1727,6 +1727,7 @@ dependencies = [
  "link-nats",
  "metrics-vm",
  "pos-cloud-api",
+ "pos-cloud-reports",
  "pos-contract-tests",
  "pos-core",
  "pos-country",
@@ -1766,6 +1767,8 @@ version = "0.0.0"
 dependencies = [
  "argon2",
  "axum",
+ "csv",
+ "getrandom 0.4.3",
  "hmac",
  "pos-fakes",
  "pos-ports",
@@ -1774,6 +1777,26 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-reports"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "csv",
+ "pos-cloud-api",
+ "pos-contract-tests",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
  "store-postgres",
  "thiserror",
  "tokio",

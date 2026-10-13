@@ -32,11 +32,11 @@ use store_postgres::{
     PostgresArtifacts, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
     PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
     PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile, PostgresRegistry,
-    PostgresRollups, PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers,
-    PostgresWebhooks, ReasonCodeRow, ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow,
-    RowUpdate, ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow,
-    TenantRow, VoucherRow,
+    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
+    ReasonCodeRow, ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate,
+    ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    VoucherRow,
 };
 use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 use store_postgres::{ConnectionRow, PostgresConnections};
@@ -94,7 +94,6 @@ use crate::catalog::{
 use crate::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
 use crate::cloud::{StoreOwner, StoreOwners};
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
-use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
 use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
@@ -168,41 +167,6 @@ use crate::webhook::sign::SigningSecret;
 use crate::webhook::store::{
     PersistedWebhook, WebhookEndpointId, WebhookEndpointStore, WebhookStoreError, WebhookSummary,
 };
-
-impl RollupStore for PostgresRollups {
-    async fn load(
-        &self,
-        tenant: TenantId,
-        store_id: StoreId,
-    ) -> Result<StoredRollups, RollupError> {
-        match self
-            .load_state(tenant, store_id)
-            .await
-            .map_err(|error| RollupError::store(error.to_string()))?
-        {
-            Some(json) => serde_json::from_str(&json).map_err(|error| {
-                RollupError::store(format!("decoding the stored rollup state failed: {error}"))
-            }),
-            // A store with no row yet reads as an empty, cursor-less rollup — the same default the
-            // projector starts from, so a first read and a first projection agree.
-            None => Ok(StoredRollups::default()),
-        }
-    }
-
-    async fn save(
-        &self,
-        tenant: TenantId,
-        store_id: StoreId,
-        rollups: &StoredRollups,
-    ) -> Result<(), RollupError> {
-        let json = serde_json::to_string(rollups).map_err(|error| {
-            RollupError::store(format!("encoding the rollup state failed: {error}"))
-        })?;
-        self.save_state(tenant, store_id, &json)
-            .await
-            .map_err(|error| RollupError::store(error.to_string()))
-    }
-}
 
 impl StoreCatalog for PostgresStore {
     async fn active_stores(&self) -> Result<Vec<(TenantId, StoreId)>, PortError> {

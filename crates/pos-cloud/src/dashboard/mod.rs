@@ -21,9 +21,10 @@
 //! Pure and I/O-free behind the [`RollupStore`] and [`StoreCatalog`] seams; `store-postgres` provides
 //! the rollup table and the fleet listing, and [`crate::http`] points `/v1` at [`dashboard`].
 
-pub mod projection;
+// The fold and the projection moved to pos-cloud-reports (ADR-0170 decision 4); re-exported so
+// `crate::dashboard::rollup` and the rest still name them. The projector loop stays here.
+pub use pos_cloud_reports::dashboard::{from_log, projection, rollup};
 pub mod projector;
-pub mod rollup;
 
 pub use projection::{
     ProjectReport, RollupError, RollupStore, StoredRollups, admitted_devices, dashboard, project,
