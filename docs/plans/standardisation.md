@@ -22,7 +22,7 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 | 4. Pilot | Reporting split into modules, then `pos-cloud-reports` on a `pos-cloud-api` base; the five longest functions split; build, token and review time measured | Done; **decision gate 1** open (owner). A report is now changed in one crate that builds in 2.4 s; `pos-cloud` still takes about 81 s ([figures](../metrics/pilot-2026-10.md)) | #727, #728, #730, #732 |
 | 5. Module split | `http.rs`, `app.rs`, `persistence.rs`, `printing.rs` and the large test files into modules of ≤ 500 lines by business area and role; a route declared in one place | Not started; needs 4, and the open Jules and Dependabot pull requests cleared first | |
 | 6. Crate split | 14 crates (9 cloud, 5 edge) under `crates/core`, `crates/edge`, `crates/cloud` | Not started; needs 5. **Decision gate 2** after the first 2–3 crates | |
-| 7. Long functions | The 55 functions over 100 lines down to ≤ 60, 3–5 per PR with tests and a mutation check | Not started; needs 5; may run beside 6 | |
+| 7. Long functions | The functions over 100 lines (64 in the size baseline after the pilot; the roadmap survey counted 55) down to ≤ 60, 3–5 per PR with tests and a mutation check | Not started; needs 5; may run beside 6 | |
 | 8. Generate and self-register | TypeScript types from 100% OpenAPI; one screen registry; map, graph and CODEOWNERS from the contract cards; `cargo xtask new crate\|route\|setting\|screen\|adapter\|country` | Not started; needs 6 | |
 | 9. Framework guides | Add a country, write an adapter, add a setting, add a business area, each with a runnable example; optionally a merge queue and larger runners | Not started; needs 8 | |
 
