@@ -116,6 +116,7 @@ pub mod settings;
 pub mod starting_roles;
 pub mod store_groups;
 pub mod tax;
+mod till_names;
 pub mod translations;
 pub mod version;
 pub mod vouchers;

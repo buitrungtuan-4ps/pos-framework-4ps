@@ -9,8 +9,8 @@ use std::sync::Arc;
 use crate::audit::AuditRecorder;
 
 /// What a reporting route reads: the rollup store, the API keys and the console sessions that
-/// authorise it, the clock, the audit trail an export writes to, and the configuration trees the
-/// X/Z report names tills from.
+/// authorise it, the clock, the audit trail an export writes to, and the till names the X/Z report
+/// shows.
 ///
 /// The router's state is the whole application, which composes every store the cloud runs. A
 /// report handler takes this instead, built from that state by axum's `FromRef` (implemented beside
@@ -27,8 +27,8 @@ pub(crate) struct ReportsState<R, K, C, A, T> {
     pub(crate) admin: A,
     /// Where an export is recorded.
     pub(crate) audit: Arc<dyn AuditRecorder>,
-    /// The stores' configuration trees.
-    pub(crate) config_trees: T,
+    /// The names the stores' configuration gives their tills.
+    pub(crate) till_names: T,
 }
 
 impl<R, K, C, A, T> fmt::Debug for ReportsState<R, K, C, A, T> {

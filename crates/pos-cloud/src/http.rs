@@ -211,6 +211,7 @@ use crate::reports::rollups::{
 };
 use crate::reports::state::ReportsState;
 use crate::reports::xz::admin_xz_report;
+use crate::till_names::PublishedTillNames;
 use base64::Engine as _;
 pub(crate) use pos_cloud_api::response::{
     api_error, api_error_with_details, csv_download_response, parse_ulid_fields,
@@ -618,7 +619,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
 /// The reporting routes' part of the application state (ADR-0170 decision 4): what a report handler
 /// reads, cloned out of the whole application per request, as axum clones the application itself.
 impl<S, R, K, C, A, T, W> axum::extract::FromRef<CloudApp<S, R, K, C, A, T, W>>
-    for ReportsState<R, K, C, A, T>
+    for ReportsState<R, K, C, A, PublishedTillNames<T>>
 where
     R: Clone,
     K: Clone,
@@ -633,7 +634,7 @@ where
             clock: app.clock.clone(),
             admin: app.admin.clone(),
             audit: Arc::clone(&app.audit),
-            config_trees: app.config_trees.clone(),
+            till_names: PublishedTillNames(app.config_trees.clone()),
         }
     }
 }
@@ -660,7 +661,7 @@ where
         .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
         .route(
             "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<R, K, C, A, T>),
+            get(daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route("/v1/openapi.json", get(openapi))
         .route("/admin/openapi.json", get(admin_openapi))
@@ -768,11 +769,11 @@ where
         )
         .route(
             "/admin/stores/{store_id}/rollups/reset",
-            post(admin_rollups_reset::<R, K, C, A, T>),
+            post(admin_rollups_reset::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/rollups/daily",
-            get(admin_daily_rollups::<R, K, C, A, T>),
+            get(admin_daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         // Beside the other rollup reads, and on **this** router, because the roster is folded into
         // the same materialised blob the reads above answer from — the state that answers it lives
@@ -786,27 +787,27 @@ where
         )
         .route(
             "/admin/stores/{store_id}/revenue/daily",
-            get(admin_revenue_daily::<R, K, C, A, T>),
+            get(admin_revenue_daily::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/reports/xz",
-            get(admin_xz_report::<R, K, C, A, T>),
+            get(admin_xz_report::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/rollups/export",
-            get(admin_export_rollups::<R, K, C, A, T>),
+            get(admin_export_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/export",
-            get(admin_export_revenue::<R, K, C, A, T>),
+            get(admin_export_revenue::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/fees/export",
-            get(admin_export_revenue_fees::<R, K, C, A, T>),
+            get(admin_export_revenue_fees::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/tax/export",
-            get(admin_export_revenue_tax::<R, K, C, A, T>),
+            get(admin_export_revenue_tax::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/webhooks",
