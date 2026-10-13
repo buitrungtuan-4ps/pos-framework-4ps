@@ -19,3 +19,9 @@ proptest = "1"
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "core"
+purpose = "Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION."
+adrs = [10, 13, 24, 160]
+owners = ["@maintainers-architecture"]

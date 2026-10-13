@@ -21,3 +21,9 @@ unsafe_code  = "deny"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
+
+[package.metadata.pos]
+layer = "tool"
+purpose = "Repository checks run by just preflight and CI: dependency rule, snapshots, migrations, links, changelog, code size."
+adrs = [17, 111, 170]
+owners = ["@maintainers-architecture"]

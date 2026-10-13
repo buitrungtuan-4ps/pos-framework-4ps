@@ -32,3 +32,9 @@ tempfile = "3"
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The edge store over SQLite: event, config, device, subject and intake stores on one single-writer thread."
+adrs = [15, 17, 26, 131]
+owners = ["@maintainers-architecture"]

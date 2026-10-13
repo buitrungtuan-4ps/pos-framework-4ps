@@ -10,6 +10,7 @@
 pub mod actions_pinned;
 pub mod changelog;
 pub mod countries;
+pub mod crates;
 pub mod deps_rule;
 pub mod links;
 pub mod lint_config;

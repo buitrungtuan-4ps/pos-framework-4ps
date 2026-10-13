@@ -47,3 +47,9 @@ cast_precision_loss = "deny"
 
 allow_attributes                = "deny"
 allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "testing"
+purpose = "The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios."
+adrs = [48]
+owners = ["@maintainers-architecture"]

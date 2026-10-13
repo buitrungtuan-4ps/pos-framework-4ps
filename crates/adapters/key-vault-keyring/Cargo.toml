@@ -56,3 +56,9 @@ tokio    = { version = "1", features = ["rt"] }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "The edge's KeyVault: device credentials in the OS credential store, sealed with systemd-creds on headless Linux."
+adrs = [3, 86, 151]
+owners = ["@maintainers-architecture"]

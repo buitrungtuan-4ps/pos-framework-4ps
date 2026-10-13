@@ -14,3 +14,9 @@ pos-proto = { path = "../pos-proto" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "country"
+purpose = "What a country module is, and the feature-selected registry a binary builds from the ones it carries."
+adrs = [11, 27, 105]
+owners = ["@maintainers-architecture"]

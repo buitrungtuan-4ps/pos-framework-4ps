@@ -20,3 +20,9 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "port"
+purpose = "The twenty traits between the framework and the outside world."
+adrs = [6, 13, 21, 26]
+owners = ["@maintainers-architecture"]

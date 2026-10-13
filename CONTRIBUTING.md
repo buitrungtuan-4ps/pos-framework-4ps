@@ -58,6 +58,9 @@ If `just preflight` fails, fix that before anything else. Do not invent alternat
 | Workflow, CI, release process | `docs/engineering-guide.md` |
 | Capacity, limits, failure behaviour | `docs/capacity-and-reliability.md` |
 | A term a newcomer would not know | `docs/glossary.md` |
+| A crate's dependencies, or a new crate | its `README.md` and its `[package.metadata.pos]` card, and the `README.md` of each crate on the other end of a changed dependency |
+
+**Every workspace crate has a `README.md` and a contract card**, `[package.metadata.pos]` in its `Cargo.toml`: its layer, a one-line purpose, its ADRs and its owners ([ADR-0170](docs/adr/0170-repository-layout-code-naming-and-size-rules.md)). `cargo xtask crates --check`, which `just preflight` and CI run, holds them to the workspace. The README's Layer and Owners line must match the card. Its Depends on and Used by lines must list exactly what `cargo metadata` reports. The owners must be the team `CODEOWNERS` routes the directory to. Each failure prints the line to paste.
 
 Generated documents — OpenAPI, the permission matrix, the event catalogue — are **never** hand-edited. Regenerate them. `.gitattributes` marks every generated file `linguist-generated`, with the command that rewrites it, so a pull request's diff collapses them.
 

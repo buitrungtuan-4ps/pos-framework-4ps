@@ -8,6 +8,8 @@
 *.key
 *.pem
 config.toml
+# The one config.toml that holds no secret: Cargo's, which carries only the `cargo xtask` alias.
+!/.cargo/config.toml
 /deploy/secrets/
 
 # Database backups hold T1/T2 data and must never be committed (ADR-0046); backup.sh writes

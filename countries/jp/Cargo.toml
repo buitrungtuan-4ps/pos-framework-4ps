@@ -19,3 +19,9 @@ pos-fakes          = { path = "../../crates/pos-fakes" }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "country"
+purpose = "The country module for Japan."
+adrs = [27, 105]
+owners = ["@maintainers-architecture"]

@@ -1,5 +1,7 @@
 # `countries/in` — India
 
+**Layer** `country` · **Owners** @maintainers-architecture
+
 Everything in `src/lib.rs` is a constant, per
 [ADR-0105](../../docs/adr/0105-a-country-pack-is-values.md).
 
@@ -51,3 +53,8 @@ consequences, deliberately not bundled into the packs.
    offline allocator this pack ships rather than replacing it. Rule 46(b) lets the seller choose its
    own number below the threshold, which is what `fiscalization()` writes.
 3. **A state VAT rate for alcohol**, if the store sells any. See above.
+
+## Depends on / used by
+
+- **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`.

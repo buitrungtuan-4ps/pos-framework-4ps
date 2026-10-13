@@ -28,6 +28,7 @@ cargo xtask <check>
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
+  crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
   mirrored-files  files duplicated across the ui/ and dashboard/ build roots stay identical
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
@@ -62,6 +63,7 @@ fn main() -> ExitCode {
         "actions-pinned" => checks::actions_pinned::run(&rest),
         "changelog" => checks::changelog::run(&rest),
         "countries" => checks::countries::run(&rest),
+        "crates" => checks::crates::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),

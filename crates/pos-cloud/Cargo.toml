@@ -201,3 +201,9 @@ dbg_macro    = "deny"
 
 allow_attributes                = "deny"
 allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The cloud binary, pos_cloud: event ingest, rollups, configuration, the /v1 API and the /admin console API."
+adrs = [16, 19, 22, 33, 34, 37, 67]
+owners = ["@maintainers-cloud"]

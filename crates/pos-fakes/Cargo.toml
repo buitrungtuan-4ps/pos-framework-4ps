@@ -22,3 +22,9 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "testing"
+purpose = "In-memory implementations of every port, held to the same contract suites as the real adapters."
+adrs = [26]
+owners = ["@maintainers-architecture"]

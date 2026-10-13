@@ -17,3 +17,9 @@ serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.pos]
+layer = "port"
+purpose = "The vendor catalogue: the descriptor each vendor adapter exports, and the registry built from them."
+adrs = [153]
+owners = ["@maintainers-architecture"]

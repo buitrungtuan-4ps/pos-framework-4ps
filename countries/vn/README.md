@@ -1,5 +1,7 @@
 # `countries/vn` — Vietnam
 
+**Layer** `country` · **Owners** @maintainers-architecture
+
 Everything in `src/lib.rs` is a constant. That is the point:
 [ADR-0105](../../docs/adr/0105-a-country-pack-is-values.md) is the claim that a market is
 **supplied**, and this directory is what supplying one looks like.
@@ -42,3 +44,8 @@ The line is [ADR-0027](../../docs/adr/0027-country-modules.md): **this module sh
 says; the configuration tree overrides it.** The store's timezone is not here (it is a store's
 fact), and neither is whether a tax code is *registered* (that is a network call, and keeping it out
 is what lets a cashier take a corporate customer's code offline).
+
+## Depends on / used by
+
+- **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`.
