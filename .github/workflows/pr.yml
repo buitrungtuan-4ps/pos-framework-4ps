@@ -109,7 +109,10 @@ jobs:
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # 15, not 10: the suite alone now takes 8–9 minutes and a slow runner start
+    # pushed it past 10 on #680 with every test already passed. The cache and
+    # selective-run work (ADR-0171) brings it back under the ten-minute target.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
