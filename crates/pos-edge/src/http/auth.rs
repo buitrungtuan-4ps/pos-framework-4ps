@@ -136,16 +136,18 @@ pub(crate) async fn require_signed_in(
     let Some(device_id) = request.extensions().get::<DeviceId>().copied() else {
         return not_paired();
     };
-    let now = SystemClock.now();
-    let Some(employee_id) = sessions.employee_for(device_id, now) else {
+    // Checked and touched in one step, with the clock read inside it, so concurrent requests from
+    // one device cannot see each other's instant as the clock going backwards (`Sessions::admit`).
+    let Some(admission) = sessions.admit(device_id, || SystemClock.now()) else {
         // Nobody signed in, or the device has sat idle past the window (ADR-0091). The same `403`
         // either way, so the UI shows the sign-in screen without having to distinguish them.
         return (StatusCode::FORBIDDEN, "sign in to act on this device").into_response();
     };
+    let employee_id = admission.employee_id;
     // The device is in use, so it is not idle. Memory always; the durable value is flushed only
     // when it has fallen a minute behind, so this gate does not put a write on every request.
-    if sessions.touch(device_id, now)
-        && let Err(error) = sessions.flush_last_seen(device_id, now).await
+    if admission.flush_due
+        && let Err(error) = sessions.flush_last_seen(device_id, admission.now).await
     {
         // Not fatal: the in-memory instant has already moved, so the device keeps working and the
         // only cost is a slightly stale row if the box restarts in the next minute.
@@ -402,7 +404,7 @@ where
     let permissions_enforced = session.permissions_enforced;
     let idle_lock_seconds = session.session_settings.idle_lock_seconds();
     let opening_float_minor = session.shift.opening_float_minor();
-    let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
+    let state = match deps.sessions.employee_now(device_id, || SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
             employee_id: Some(employee_id.to_string()),

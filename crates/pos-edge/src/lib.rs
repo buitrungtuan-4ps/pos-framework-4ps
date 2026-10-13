@@ -93,8 +93,8 @@ pub use app::{
     TableView, TillScope, TransferView,
 };
 pub use auth::{
-    DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, LockoutPolicy, SessionSettingsSource, Sessions, SignIn,
-    has_gone_idle,
+    Admission, DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, LockoutPolicy, SessionSettingsSource,
+    Sessions, SignIn, has_gone_idle,
 };
 pub use backup::{ArchiveError, ArchiveKey};
 pub use clock::SystemClock;
