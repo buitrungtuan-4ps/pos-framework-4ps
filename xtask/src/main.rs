@@ -8,6 +8,7 @@
 
 use std::process::ExitCode;
 
+mod affected;
 mod checks;
 mod code_stats;
 mod finding;
@@ -39,6 +40,11 @@ cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 
   write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
   ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+
+cargo xtask affected --classes [--base <ref>] [--all]
+
+  which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,
+  workflows, deploy), one `class=true|false` line each, for $GITHUB_OUTPUT (ADR-0171)
 
 cargo xtask code-stats [--json] [--root <dir>]
 
@@ -72,6 +78,7 @@ fn main() -> ExitCode {
     }
 
     let findings = match check.as_str() {
+        "affected" => affected::run(&rest),
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
