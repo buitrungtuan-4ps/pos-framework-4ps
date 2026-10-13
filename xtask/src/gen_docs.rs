@@ -493,6 +493,7 @@ mod tests {
             dev: dev.iter().map(|n| (*n).to_owned()).collect(),
             card: Some(serde_json::json!({"layer": layer, "purpose": "Does a | b."})),
             readme: None,
+            lib: true,
         };
         let crates = vec![
             krate("pos-core", "core", &[], &[]),

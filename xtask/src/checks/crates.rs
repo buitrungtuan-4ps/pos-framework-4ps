@@ -56,6 +56,8 @@ pub struct Crate {
     pub card: Option<serde_json::Value>,
     /// The README's text, if there is one.
     pub readme: Option<String>,
+    /// Whether it has a library target, which is what doc tests run against.
+    pub lib: bool,
 }
 
 /// Runs the check. `--check` is accepted, and is also what it does without it.
@@ -137,6 +139,15 @@ fn crates_from(root: &Path, metadata: &serde_json::Value) -> Vec<Crate> {
             dev,
             card: package["metadata"].get("pos").cloned(),
             readme: std::fs::read_to_string(dir.join("README.md")).ok(),
+            lib: package["targets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|target| {
+                    target["kind"].as_array().into_iter().flatten().any(|kind| {
+                        matches!(kind.as_str(), Some("lib" | "rlib" | "dylib" | "proc-macro"))
+                    })
+                }),
         });
     }
     crates.sort_by(|a, b| a.dir.cmp(&b.dir));

@@ -25,6 +25,7 @@
 use std::collections::BTreeSet;
 
 use crate::Finding;
+use crate::checks::crates::{Crate, dependents, load};
 use crate::checks::{Error, base_ref, repo_root};
 
 /// Every class, in the order they are printed.
@@ -69,6 +70,33 @@ const DOCS: [&str; 9] = [
     "README.md",
 ];
 
+/// Files outside a crate that the crate compiles in, or its tests read, with that crate. A change
+/// to one is a change to the crate: it sets `rust` beside its own class, and puts the crate in the
+/// affected set. A test in this module scans the crates for such reads and fails on one missing
+/// here.
+pub const READ_BY: [(&str, &str); 12] = [
+    ("docs/snapshots/events.txt", "pos-proto"),
+    ("docs/snapshots/settings.txt", "pos-proto"),
+    ("docs/configuration.md", "pos-proto"),
+    ("docs/snapshots/permissions.txt", "pos-core"),
+    ("docs/snapshots/capabilities.txt", "pos-core"),
+    ("docs/permissions.md", "pos-core"),
+    ("docs/state-machines.md", "pos-core"),
+    ("docs/snapshots/routes.txt", "pos-edge"),
+    ("deploy/edge/install-pos-edge.ps1", "pos-edge"),
+    ("docs/openapi.json", "pos-cloud"),
+    ("docs/openapi-admin.json", "pos-cloud"),
+    ("dashboard/src/i18n/", "pos-cloud"),
+];
+
+/// The crates in [`READ_BY`] that read `path`.
+fn readers(path: &str) -> impl Iterator<Item = &'static str> + '_ {
+    READ_BY
+        .iter()
+        .filter(move |(file, _)| under(path, file))
+        .map(|(_, krate)| *krate)
+}
+
 /// True when `path` is `prefix`, or sits under it when `prefix` ends in `/`.
 fn under(path: &str, prefix: &str) -> bool {
     if prefix.ends_with('/') {
@@ -89,6 +117,10 @@ pub fn classify<S: AsRef<str>>(paths: &[S]) -> BTreeSet<&'static str> {
         };
         if path.starts_with(".github/") {
             add("workflows");
+        }
+        if readers(path).next().is_some() {
+            add("rust"); // and its own class below, unless it is documentation
+            only_docs = false;
         }
         if RUST_ALL.iter().any(|prefix| under(path, prefix)) {
             add("rust_all");
@@ -175,24 +207,129 @@ fn changed_files(base: &str) -> Result<Vec<String>, Error> {
         .collect())
 }
 
-/// `--classes [--base <ref>] [--all]`.
+/// The crates a change can affect.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Packages {
+    /// Every crate: a run-everything path changed, or a Rust file belongs to no crate.
+    Workspace,
+    /// These crates, the changed ones and every crate that depends on one, tests included.
+    Some(BTreeSet<String>),
+}
+
+impl Packages {
+    /// The cargo arguments: `--workspace`, `-p a -p b`, or nothing.
+    #[must_use]
+    pub fn args(&self) -> String {
+        match self {
+            Self::Workspace => "--workspace".to_owned(),
+            Self::Some(names) => names
+                .iter()
+                .map(|name| format!("-p {name}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    /// The arguments for `cargo test --doc`: only crates with a library, since `--doc` on a
+    /// binary-only crate is an error; `none` when no affected crate has one.
+    #[must_use]
+    pub fn doc_args(&self, crates: &[Crate]) -> String {
+        match self {
+            Self::Workspace => "--workspace".to_owned(),
+            Self::Some(names) => {
+                let with_lib: BTreeSet<String> = names
+                    .iter()
+                    .filter(|name| crates.iter().any(|krate| &krate.name == *name && krate.lib))
+                    .cloned()
+                    .collect();
+                if with_lib.is_empty() {
+                    "none".to_owned()
+                } else {
+                    Self::Some(with_lib).args()
+                }
+            }
+        }
+    }
+}
+
+/// The crate whose directory holds `path`: the deepest one, since crates nest.
+fn owner<'a>(path: &str, crates: &'a [Crate]) -> Option<&'a Crate> {
+    crates
+        .iter()
+        .filter(|krate| path.starts_with(&format!("{}/", krate.dir)))
+        .max_by_key(|krate| krate.dir.len())
+}
+
+/// The crates the changed `paths` belong to or are read by, and every crate that depends on one
+/// of them, through normal, build or dev dependencies, transitively.
+#[must_use]
+pub fn affected_packages<S: AsRef<str>>(paths: &[S], crates: &[Crate]) -> Packages {
+    if classify(paths).contains("rust_all") {
+        return Packages::Workspace;
+    }
+    let mut affected = BTreeSet::new();
+    for path in paths.iter().map(AsRef::as_ref) {
+        let read_by: Vec<&str> = readers(path).collect();
+        if !read_by.is_empty() {
+            affected.extend(read_by.into_iter().map(str::to_owned));
+        } else if classify(&[path]).contains("rust") {
+            match owner(path, crates) {
+                Some(krate) => {
+                    affected.insert(krate.name.clone());
+                }
+                None => return Packages::Workspace, // unsure: a Rust file outside every crate
+            }
+        }
+    }
+    let mut frontier: Vec<String> = affected.iter().cloned().collect();
+    while let Some(name) = frontier.pop() {
+        let (normal, dev) = dependents(crates, &name);
+        for dependent in normal.into_iter().chain(dev) {
+            if affected.insert(dependent.clone()) {
+                frontier.push(dependent);
+            }
+        }
+    }
+    Packages::Some(affected)
+}
+
+/// `--classes` and/or `--crates`, with `[--base <ref>] [--all]`.
 ///
 /// # Errors
 ///
-/// [`Error`] for an unknown argument, or when git cannot name the changed files. CI treats a
+/// [`Error`] for an unknown argument, or when git or `cargo metadata` cannot be read. CI treats a
 /// failure here as "run everything".
 pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
-    if !args.iter().any(|argument| argument == "--classes") {
-        return Err("usage: cargo xtask affected --classes [--base <ref>] [--all]".into());
+    let want_classes = args.iter().any(|argument| argument == "--classes");
+    let want_crates = args.iter().any(|argument| argument == "--crates");
+    if !want_classes && !want_crates {
+        return Err("usage: cargo xtask affected --classes|--crates [--base <ref>] [--all]".into());
     }
-    let classes = if args.iter().any(|argument| argument == "--all") {
-        all()
+    let everything = args.iter().any(|argument| argument == "--all");
+    let files = if everything {
+        Vec::new()
     } else {
-        let files = changed_files(&base_ref(args))?;
-        eprintln!("xtask affected: {} changed file(s)", files.len());
-        classify(&files)
+        changed_files(&base_ref(args))?
     };
-    print!("{}", render(&classes));
+    if !everything {
+        eprintln!("xtask affected: {} changed file(s)", files.len());
+    }
+    if want_classes {
+        print!(
+            "{}",
+            render(&if everything { all() } else { classify(&files) })
+        );
+    }
+    if want_crates {
+        let crates = load(&repo_root())?;
+        let packages = if everything {
+            Packages::Workspace
+        } else {
+            affected_packages(&files, &crates)
+        };
+        println!("packages={}", packages.args());
+        println!("doc_packages={}", packages.doc_args(&crates));
+    }
     Ok(Vec::new())
 }
 
@@ -200,7 +337,8 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{all, classify, render};
+    use super::{Packages, affected_packages, all, classify, render};
+    use crate::checks::crates::Crate;
 
     fn classes(paths: &[&str]) -> Vec<&'static str> {
         classify(paths).into_iter().collect()
@@ -263,6 +401,236 @@ mod tests {
             classes(&["deploy/compose.yml", "k8s/pos-cloud.yaml"]),
             ["deploy"]
         );
+    }
+
+    #[test]
+    fn a_file_a_crate_reads_is_rust_too() {
+        assert_eq!(classes(&["docs/snapshots/routes.txt"]), ["rust"]);
+        assert_eq!(
+            classes(&["dashboard/src/i18n/vi.json"]),
+            ["dashboard", "rust"]
+        );
+        assert_eq!(
+            classes(&["deploy/edge/install-pos-edge.ps1"]),
+            ["deploy", "rust"]
+        );
+        assert_eq!(classes(&["docs/pos-spec.md"]), ["docs_only"]);
+    }
+
+    fn krate(name: &str, dir: &str, normal: &[&str], dev: &[&str]) -> Crate {
+        Crate {
+            name: name.into(),
+            dir: dir.into(),
+            normal: normal.iter().map(|n| (*n).to_owned()).collect(),
+            dev: dev.iter().map(|n| (*n).to_owned()).collect(),
+            ..Crate::default()
+        }
+    }
+
+    /// pos-proto ← pos-core ← pos-edge ← minimal-edge; store-sqlite ← pos-edge; fakes tests store-sqlite.
+    fn workspace() -> Vec<Crate> {
+        vec![
+            krate("pos-proto", "crates/pos-proto", &[], &[]),
+            krate("pos-core", "crates/pos-core", &["pos-proto"], &[]),
+            krate(
+                "store-sqlite",
+                "crates/adapters/store-sqlite",
+                &["pos-proto"],
+                &["pos-fakes"],
+            ),
+            krate("pos-fakes", "crates/pos-fakes", &["pos-proto"], &[]),
+            krate(
+                "pos-edge",
+                "crates/pos-edge",
+                &["pos-core", "store-sqlite"],
+                &["pos-fakes"],
+            ),
+            krate("minimal-edge", "examples/minimal-edge", &["pos-edge"], &[]),
+            krate("pos-cloud", "crates/pos-cloud", &["pos-core"], &[]),
+        ]
+    }
+
+    fn names(packages: Packages) -> Vec<String> {
+        match packages {
+            Packages::Workspace => vec!["--workspace".into()],
+            Packages::Some(set) => set.into_iter().collect(),
+        }
+    }
+
+    #[test]
+    fn a_leaf_change_affects_it_and_its_dependents_tests_included() {
+        let ws = workspace();
+        assert_eq!(
+            names(affected_packages(
+                &["crates/adapters/store-sqlite/src/store.rs"],
+                &ws
+            )),
+            ["minimal-edge", "pos-edge", "store-sqlite"]
+        );
+        assert_eq!(
+            names(affected_packages(&["crates/pos-fakes/src/lib.rs"], &ws)),
+            ["minimal-edge", "pos-edge", "pos-fakes", "store-sqlite"],
+            "a dev-dependency's change reaches the crates whose tests use it"
+        );
+        assert_eq!(
+            names(affected_packages(
+                &["examples/minimal-edge/src/main.rs"],
+                &ws
+            )),
+            ["minimal-edge"]
+        );
+    }
+
+    #[test]
+    fn a_core_change_is_the_workspace_and_a_non_rust_change_is_nothing() {
+        let ws = workspace();
+        assert_eq!(
+            names(affected_packages(&["crates/pos-proto/src/lib.rs"], &ws)),
+            ["--workspace"]
+        );
+        assert_eq!(
+            names(affected_packages(&["Cargo.lock"], &ws)),
+            ["--workspace"]
+        );
+        assert!(
+            names(affected_packages(
+                &["ui/src/App.tsx", "docs/pos-spec.md"],
+                &ws
+            ))
+            .is_empty()
+        );
+        assert_eq!(
+            names(affected_packages(&["justfile"], &ws)),
+            ["--workspace"],
+            "unsure runs everything"
+        );
+        assert_eq!(
+            names(affected_packages(&["dashboard/src/i18n/en.json"], &ws)),
+            ["pos-cloud"],
+            "a file a crate reads affects that crate"
+        );
+        assert_eq!(
+            Packages::Some(["a".to_owned(), "b".to_owned()].into()).args(),
+            "-p a -p b"
+        );
+        let mut ws = ws;
+        ws[0].lib = true; // pos-proto has a library; minimal-edge does not
+        let binary_only = Packages::Some(["minimal-edge".to_owned()].into());
+        assert_eq!(binary_only.doc_args(&ws), "none");
+        let mixed = Packages::Some(["minimal-edge".to_owned(), "pos-proto".to_owned()].into());
+        assert_eq!(mixed.doc_args(&ws), "-p pos-proto");
+    }
+
+    /// Every path a crate compiles in, or a test reads, from outside its own directory is in
+    /// [`READ_BY`] against that crate. Reads `include_str!`/`include_bytes!` paths and `"docs/…"`
+    /// literals in the real tree.
+    #[test]
+    fn every_file_a_crate_reads_from_outside_is_mapped() {
+        let root = crate::checks::repo_root();
+        let crates = crate::checks::crates::load(&root).expect("cargo metadata");
+        let mut missing = Vec::new();
+        // xtask reads the whole tree by design, and any change to it runs everything anyway.
+        for krate in crates.iter().filter(|k| k.name != "xtask") {
+            for file in rust_files(&root.join(&krate.dir)) {
+                let text = std::fs::read_to_string(&file).unwrap_or_default();
+                let dir = file.parent().unwrap_or(&root).to_path_buf();
+                for (target, from_manifest) in outside_reads(&text) {
+                    let resolved = if target.starts_with("docs/") {
+                        target.clone()
+                    } else {
+                        // `include_str!` is relative to the file, `CARGO_MANIFEST_DIR.join` to the crate.
+                        let base = if from_manifest {
+                            root.join(&krate.dir)
+                        } else {
+                            dir.clone()
+                        };
+                        let joined = normalise(&base.join(&target));
+                        match joined.strip_prefix(&root) {
+                            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+                            Err(_) => continue,
+                        }
+                    };
+                    // Only real files: a directory, a built output or a formatted path is not one.
+                    if !root.join(&resolved).is_file() || resolved.contains("/dist/") {
+                        continue;
+                    }
+                    let covered = match affected_packages(&[resolved.as_str()], &crates) {
+                        Packages::Workspace => true,
+                        Packages::Some(names) => names.contains(&krate.name),
+                    };
+                    if !covered {
+                        missing.push(format!("{} reads {resolved}", krate.name));
+                    }
+                }
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "add these to READ_BY: {missing:#?}");
+    }
+
+    fn rust_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(rust_files(&path));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// `include_str!`/`include_bytes!` arguments, `.join("…")` arguments that climb with `../`
+    /// (marked as relative to the crate), and paths that start `docs/` in string literals,
+    /// outside comments.
+    fn outside_reads(text: &str) -> Vec<(String, bool)> {
+        let mut found = Vec::new();
+        for line in text
+            .lines()
+            .map(str::trim_start)
+            .filter(|l| !l.starts_with("//"))
+        {
+            for marker in [
+                "include_str!(\"",
+                "include_bytes!(\"",
+                ".join(\"../",
+                "\"docs/",
+            ] {
+                let mut rest = line;
+                while let Some(at) = rest.find(marker) {
+                    let start = at + marker.len();
+                    let tail = &rest[start..];
+                    let end = tail
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || "_./-".contains(c)))
+                        .unwrap_or(tail.len());
+                    let (literal, from_manifest) = match marker {
+                        ".join(\"../" => (format!("../{}", &tail[..end]), true),
+                        "\"docs/" => (format!("docs/{}", &tail[..end]), false),
+                        _ => (tail[..end].to_owned(), false),
+                    };
+                    if literal.starts_with("../") || literal.starts_with("docs/") {
+                        found.push((literal, from_manifest));
+                    }
+                    rest = &tail[end..];
+                }
+            }
+        }
+        found
+    }
+
+    fn normalise(path: &std::path::Path) -> std::path::PathBuf {
+        let mut out = std::path::PathBuf::new();
+        for part in path.components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                other => out.push(other),
+            }
+        }
+        out
     }
 
     #[test]

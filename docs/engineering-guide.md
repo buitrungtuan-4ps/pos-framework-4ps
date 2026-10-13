@@ -68,7 +68,9 @@ fmt → clippy -D warnings → unit tests (core: no database, no network)
 | `dashboard` | `dashboard/`, `packages/shared/`, Rust or `deploy/` |
 | `console-replay` | `dashboard/`, `packages/shared/` or Rust |
 
-`crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, the toolchain and lint configs, `.cargo/`, `.github/`, `xtask/` and `tools/` count as all of Rust, and a file no rule names counts as everything. A push to `main` runs everything. A job skipped this way reports success to a required check. Every job is written to run anyway if `changes` itself fails, so a broken classifier runs more, never less. Run `cargo xtask affected --classes` locally to see what a branch would run.
+`crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, the toolchain and lint configs, `.cargo/`, `.github/`, `xtask/` and `tools/` count as all of Rust, and a file no rule names counts as everything. A push to `main` runs everything. A job skipped this way reports success to a required check. Every job is written to run anyway if `changes` itself fails, so a broken classifier runs more, never less. Run `cargo xtask affected --classes --crates` locally to see what a branch would run.
+
+Within those jobs, `test`, `lints` (clippy) and `build` work on the **affected crates** only. These are the crates holding a changed file, plus every crate that depends on one of them, through normal, build or dev dependencies, transitively. The list is `--workspace` when a run-everything path changed. `cargo test --doc` runs on the affected crates that have a library. A file outside a crate that a crate compiles in or its tests read (a snapshot, a generated document, the console's i18n catalogue, the edge's installer script) counts as that crate. `READ_BY` in `xtask/src/affected.rs` lists them, and a test there fails on a read it does not list.
 
 **On merge to main**
 

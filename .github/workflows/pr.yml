@@ -66,6 +66,12 @@ jobs:
       docs_only: ${{ steps.classes.outputs.docs_only }}
       workflows: ${{ steps.classes.outputs.workflows }}
       deploy: ${{ steps.classes.outputs.deploy }}
+      # The crates a change can affect, as cargo arguments: `--workspace`, `-p a -p b`, or
+      # empty when no Rust is affected.
+      packages: ${{ steps.classes.outputs.packages }}
+      # The same for `cargo test --doc`, which only crates with a library take; `none` if no
+      # affected crate has one.
+      doc_packages: ${{ steps.classes.outputs.doc_packages }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,9 +88,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "pull_request" ]; then
-            cargo run -q -p xtask -- affected --classes --base "origin/$BASE" | tee -a "$GITHUB_OUTPUT"
+            cargo run -q -p xtask -- affected --classes --crates --base "origin/$BASE" | tee -a "$GITHUB_OUTPUT"
           else
-            cargo run -q -p xtask -- affected --classes --all | tee -a "$GITHUB_OUTPUT"
+            cargo run -q -p xtask -- affected --classes --crates --all | tee -a "$GITHUB_OUTPUT"
           fi
 
   # ---------------------------------------------------------------------------
@@ -157,23 +163,35 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.deploy == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      # The affected crates (`cargo xtask affected --crates`); everything when `changes` failed.
+      PACKAGES: ${{ needs.changes.outputs.packages || '--workspace' }}
+      RUN_RUST: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
+        if: env.RUN_RUST == 'true'
         with:
           cache-key: lints
 
       - run: cargo fmt --all -- --check
+        if: env.RUN_RUST == 'true'
 
-      - name: clippy (workspace)
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: clippy (affected crates)
+        if: env.RUN_RUST == 'true'
+        # PACKAGES is `--workspace` or `-p name …` from xtask, split into arguments.
+        run: |
+          read -ra args <<<"$PACKAGES"
+          cargo clippy "${args[@]}" --all-targets --all-features -- -D warnings
 
       # Not redundant with the pass above. A source-level `#![allow]` overrides a
       # `deny` inherited from [workspace.lints], so that table is not a floor.
       # `--forbid` cannot be overridden — `allow` against `forbid` is E0453 — and
       # this pass is the only thing making the backbone's no-panic and no-float
       # rules unescapable rather than conventional.
+      # The backbone changes only through a run-everything path, so `--workspace` is when it can.
       - name: clippy (backbone, unescapable)
+        if: env.RUN_RUST == 'true' && env.PACKAGES == '--workspace'
         run: |
           for crate in pos-core pos-ports pos-proto; do
             cargo clippy -p "$crate" --all-targets -- \
@@ -198,6 +216,9 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
+    env:
+      PACKAGES: ${{ needs.changes.outputs.packages || '--workspace' }}
+      DOC_PACKAGES: ${{ needs.changes.outputs.doc_packages || '--workspace' }}
     # 15, not 10: the suite alone now takes 8–9 minutes and a slow runner start
     # pushed it past 10 on #680 with every test already passed. The cache and
     # selective-run work (ADR-0171) brings it back under the ten-minute target.
@@ -207,9 +228,15 @@ jobs:
       - uses: ./.github/actions/rust-setup
         with:
           cache-key: test
-      - run: cargo test --workspace --locked
+      # PACKAGES is `--workspace` or `-p name …` from xtask, split into arguments.
+      - run: |
+          read -ra args <<<"$PACKAGES"
+          cargo test "${args[@]}" --locked
       - name: doc examples compile
-        run: cargo test --workspace --doc
+        if: env.DOC_PACKAGES != 'none'
+        run: |
+          read -ra args <<<"$DOC_PACKAGES"
+          cargo test "${args[@]}" --doc
 
   # ---------------------------------------------------------------------------
   # Both target platforms, because the store binary runs on Windows.
@@ -223,6 +250,7 @@ jobs:
     if: ${{ !cancelled() }}
     env:
       RUN_RUST: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
+      PACKAGES: ${{ needs.changes.outputs.packages || '--workspace' }}
       RUN_INSTALLERS: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.deploy == 'true' || needs.changes.outputs.dashboard == 'true' }}
     strategy:
       fail-fast: false
@@ -237,8 +265,13 @@ jobs:
         if: env.RUN_RUST == 'true'
         with:
           cache-key: build
-      - run: cargo build --workspace --locked
+      # PACKAGES is `--workspace` or `-p name …` from xtask, split into arguments. Bash on
+      # Windows too, where the default shell would not read `$PACKAGES`.
+      - run: |
+          read -ra args <<<"$PACKAGES"
+          cargo build "${args[@]}" --locked
         if: env.RUN_RUST == 'true'
+        shell: bash
 
       # The only runner in the estate with a PowerShell parser, so it is where the Windows
       # installer gets checked (issue #182). `dashboard/src/installers.mjs` emits both the
