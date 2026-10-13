@@ -56,6 +56,20 @@ fmt → clippy -D warnings → unit tests (core: no database, no network)
     → UI build
 ```
 
+**A pull request runs what it can affect** ([ADR-0171](adr/0171-ci-runs-what-a-change-affects.md)). The first job, `changes`, runs `cargo xtask affected --classes` over the files changed since the merge base. It sorts them into `rust`, `rust_all`, `ui`, `dashboard`, `shared`, `deploy`, `workflows` and `docs_only`, and each job runs only for the classes that can affect it:
+
+| Job | Runs when the change touches |
+|---|---|
+| `rules`, `secrets`, `docs-gate` | anything (they do not wait for `changes`) |
+| `test`, `deny`, `postgres` | Rust |
+| `lints` | Rust or `deploy/` |
+| `build` | Rust (the build), or Rust, `deploy/` or `dashboard/` (the Windows installer checks); its steps skip rather than the job, so each matrix check still reports |
+| `ui`, `replay` | `ui/`, `packages/shared/` or Rust |
+| `dashboard` | `dashboard/`, `packages/shared/`, Rust or `deploy/` |
+| `console-replay` | `dashboard/`, `packages/shared/` or Rust |
+
+`crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, the toolchain and lint configs, `.cargo/`, `.github/`, `xtask/` and `tools/` count as all of Rust, and a file no rule names counts as everything. A push to `main` runs everything. A job skipped this way reports success to a required check. Every job is written to run anyway if `changes` itself fails, so a broken classifier runs more, never less. Run `cargo xtask affected --classes` locally to see what a branch would run.
+
 **On merge to main**
 
 ```

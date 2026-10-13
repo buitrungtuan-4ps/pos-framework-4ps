@@ -44,6 +44,50 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # What this change touches (ADR-0171 decision 2). The other jobs read these
+  # classes to decide whether they can be affected; `cargo xtask affected` holds
+  # the rules, and its tests say what each class means.
+  #
+  # Every job that reads it is written so a failure here runs it anyway:
+  # `!cancelled() && (needs.changes.result != 'success' || <class>)`. Without
+  # that, a broken classifier would skip every job, and a skipped job passes a
+  # required check. A push to `main` or a schedule passes `--all`, so it runs
+  # everything. The `rules`, `secrets` and `docs-gate` jobs never wait on this.
+  # ---------------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      rust: ${{ steps.classes.outputs.rust }}
+      rust_all: ${{ steps.classes.outputs.rust_all }}
+      ui: ${{ steps.classes.outputs.ui }}
+      dashboard: ${{ steps.classes.outputs.dashboard }}
+      shared: ${{ steps.classes.outputs.shared }}
+      docs_only: ${{ steps.classes.outputs.docs_only }}
+      workflows: ${{ steps.classes.outputs.workflows }}
+      deploy: ${{ steps.classes.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge base with the base branch, to diff against.
+          fetch-depth: 0
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: changes
+      - id: classes
+        name: classify the changed paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            cargo run -q -p xtask -- affected --classes --base "origin/$BASE" | tee -a "$GITHUB_OUTPUT"
+          else
+            cargo run -q -p xtask -- affected --classes --all | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
   # Repository rules. No heavy compilation, so this is the fastest signal.
   # ---------------------------------------------------------------------------
   rules:
@@ -109,6 +153,8 @@ jobs:
   # Formatting and lints, including the backbone pass that cannot be escaped.
   # ---------------------------------------------------------------------------
   lints:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.deploy == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -149,6 +195,8 @@ jobs:
   # no services here — that is the point of the sans-I/O core.
   # ---------------------------------------------------------------------------
   test:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     # 15, not 10: the suite alone now takes 8–9 minutes and a slow runner start
     # pushed it past 10 on #680 with every test already passed. The cache and
@@ -166,7 +214,16 @@ jobs:
   # ---------------------------------------------------------------------------
   # Both target platforms, because the store binary runs on Windows.
   # ---------------------------------------------------------------------------
+  # A matrix job skipped as a whole reports one check named `build`, not one per
+  # matrix entry, so a required `build (…)` check would wait forever. So this job
+  # always runs, and its steps decide: they skip, and the job passes, when nothing
+  # it checks has changed.
   build:
+    needs: changes
+    if: ${{ !cancelled() }}
+    env:
+      RUN_RUST: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
+      RUN_INSTALLERS: ${{ needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.deploy == 'true' || needs.changes.outputs.dashboard == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -175,10 +232,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN_RUST == 'true' || env.RUN_INSTALLERS == 'true'
       - uses: ./.github/actions/rust-setup
+        if: env.RUN_RUST == 'true'
         with:
           cache-key: build
       - run: cargo build --workspace --locked
+        if: env.RUN_RUST == 'true'
 
       # The only runner in the estate with a PowerShell parser, so it is where the Windows
       # installer gets checked (issue #182). `dashboard/src/installers.mjs` emits both the
@@ -198,12 +258,12 @@ jobs:
       # the edition that cannot see it. The BOM is the fix (`PS_BOM` in `src/installers.mjs`);
       # asking 5.1 is what proves it, and what stops the next one.
       - name: emit the Windows installers
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && env.RUN_INSTALLERS == 'true'
         shell: pwsh
         run: node dashboard/scripts/installer-syntax.mjs --emit "$env:RUNNER_TEMP/installers"
 
       - name: the Windows installers parse (PowerShell 7)
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && env.RUN_INSTALLERS == 'true'
         shell: pwsh
         run: |
           $bad = 0
@@ -227,7 +287,7 @@ jobs:
       # nothing here can add one: the fix that works for a file we generate is unavailable for a
       # file the runner generates for us. So: no non-ASCII below this line.
       - name: the Windows installers parse (Windows PowerShell 5.1, what a shop runs)
-        if: matrix.os == 'windows-2022'
+        if: matrix.os == 'windows-2022' && env.RUN_INSTALLERS == 'true'
         shell: powershell
         run: |
           $bad = 0
@@ -252,6 +312,8 @@ jobs:
   # from landing broken even though CI does not embed the real bundle.
   # ---------------------------------------------------------------------------
   ui:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -283,6 +345,8 @@ jobs:
   # the browser drives a placeholder page.
   # ---------------------------------------------------------------------------
   replay:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -338,6 +402,8 @@ jobs:
   # binary second, or the browser drives a placeholder page.
   # ---------------------------------------------------------------------------
   console-replay:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
@@ -421,6 +487,8 @@ jobs:
   # landing broken even though CI does not embed the real bundle.
   # ---------------------------------------------------------------------------
   dashboard:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.dashboard == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.deploy == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
@@ -465,6 +533,8 @@ jobs:
   # not an engineering one.
   # ---------------------------------------------------------------------------
   deny:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -536,6 +606,8 @@ jobs:
   # assigned before it answers — which is a different cost.
   # ---------------------------------------------------------------------------
   postgres:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:

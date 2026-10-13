@@ -168,6 +168,7 @@ Guide: [add a country module](guides/add-a-country-module.md). Law-specific beha
 |---|---|---|
 | Job | `.github/workflows/pr.yml` (every pull request), `main.yml`, `nightly.yml`. Shared setup is in `.github/actions/rust-setup` and `node-setup` | owner review (CODEOWNERS) |
 | Pinning | every `uses:` pinned to a commit SHA | `xtask actions-pinned` |
+| When it runs | `needs: changes` and an `if:` on the path classes it depends on, failing toward running ([engineering guide §4](engineering-guide.md#4-continuous-integration)); a new class is a rule in `xtask/src/affected.rs` | `cargo test -p xtask` |
 | Caches and scope | [ADR-0171](adr/0171-ci-runs-what-a-change-affects.md) | review |
 | A new gate | `xtask/src/checks/<gate>.rs`, wired in `xtask/src/main.rs`, the `justfile` (`preflight`) and the `rules` job | `cargo test -p xtask` |
 
