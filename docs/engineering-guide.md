@@ -117,15 +117,15 @@ Nothing ships without a written trail, because the people who need it most — a
 | Artefact | Rule |
 |---|---|
 | **Commit** | Conventional Commits with a crate scope. This is what generates the changelog |
-| **`CHANGELOG.md`** | Every user-visible change lands under `[Unreleased]` in the correct category, with the issue number, **in the same pull request** as the code |
+| **`CHANGELOG.md`** | Every user-visible change adds a `changes/` file naming its category, with the issue number, **in the same pull request** as the code; `cargo xtask changelog` folds them under `[Unreleased]` before a release (`changes/README.md`) |
 | **Upgrade note** | Mandatory whenever `PROTOCOL_VERSION`, a migration, a permission identifier, or a default value changes. It states what breaks, what is safe, and whether rollback is safe |
 | **Release notes** | Assembled per tag from the changelog plus upgrade notes. Header states product version, protocol version, MSRV. Includes one plain sentence describing what changes **for restaurant staff** |
 | **Deprecations** | Listed in every release from the first announcement until removal, never fewer than two releases |
 | **Hotfix** | Branches from `release/x.y`, is cherry-picked back to `main`, and appears in both release notes |
 
-CI enforces the mechanical part: a pull request that changes `crates/**` or `ui/**` must also touch `CHANGELOG.md` or state `changelog: none` with a reason in the body; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
+CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**` or `dashboard/**` must also add a `changes/` file (or touch `CHANGELOG.md`) or state `changelog: none` with a reason in the body, and every change file must pass `cargo xtask changelog --check`; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
 
-**Pre-tag checklist:** CI green · changelog generated · protocol backwards-compatible for two versions · migrations additive · simulator soak passed · rollback runbook re-read.
+**Pre-tag checklist:** CI green · change files folded with `cargo xtask changelog` · protocol backwards-compatible for two versions · migrations additive · simulator soak passed · rollback runbook re-read.
 
 ## 7. Testing strategy
 
@@ -339,7 +339,7 @@ Documentation lives in the repository and moves with the code that it describes.
 
 **Every version is traceable by anyone, without reading diffs.**
 
-- `CHANGELOG.md` follows Keep a Changelog (Added / Changed / Deprecated / Removed / Fixed / Security). Entries are generated from Conventional Commits, then curated: one line per user-visible change, written for the reader.
+- `CHANGELOG.md` follows Keep a Changelog (Added / Changed / Deprecated / Removed / Fixed / Security). Each pull request writes its entries as `changes/` files, folded in before a release by `cargo xtask changelog`: one entry per user-visible change, written for the reader.
 - **Every tag ships release notes** containing: Highlights · **Upgrade notes** (database migrations, `PROTOCOL_VERSION` change, new or changed default configuration, required manual steps) · Breaking changes · Fixed · Known issues · the artifact hashes and signature.
 - **Mandatory entries:** anything touching the wire protocol, a migration, a permission identifier, a default configuration value, or fiscal behaviour.
 - **Hotfixes** cut from `release/x.y` carry their own notes and are cherry-picked back to `main` in the same pull request that documents them.

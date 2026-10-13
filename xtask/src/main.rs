@@ -22,6 +22,7 @@ cargo xtask <check>
   snapshot        nothing has been removed from a committed snapshot
   migrations      migrations within a release only add
   docs-gate       a code change touches CHANGELOG.md, or says why not
+  changelog       fold changes/*.md into CHANGELOG.md [Unreleased]; --check validates them
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
@@ -44,6 +45,7 @@ fn main() -> ExitCode {
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
+        "changelog" => checks::changelog::run(&rest),
         "countries" => checks::countries::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),

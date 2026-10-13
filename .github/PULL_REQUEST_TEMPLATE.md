@@ -15,7 +15,7 @@
 - [ ] `just preflight` passes
 - [ ] Tests cover the new behaviour; new adapters pass their port's contract tests
 - [ ] Documentation updated **in this PR** — which file(s): 
-- [ ] `CHANGELOG.md` entry added under `[Unreleased]`
+- [ ] A `changes/<topic>.md` file added (`changes/README.md`), or `changelog: none <reason>` below
 - [ ] Snapshots regenerated if a public API, event, or permission changed
 - [ ] Schema and protocol changes are additive (nothing renamed or removed)
 - [ ] No PII in logs or event payloads; no secrets committed
@@ -26,7 +26,7 @@
 - **Protocol version:** unchanged / bumped to N
 - **Migrations:** none / additive (`NNNN_name`) — rollback safe: yes/no
 - **Defaults or permissions changed:** none / describe
-- **Upgrade note for the changelog:** none / describe
+- **Upgrade note for the changelog:** none / in the change file's `upgrade_note`
 
 ## Provenance
 

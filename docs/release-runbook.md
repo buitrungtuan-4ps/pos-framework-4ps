@@ -72,7 +72,9 @@ person decides which key the fleet trusts. Do the one-time setup below before th
 
 ## Cutting a release
 
-1. Make sure `main` is green and the `CHANGELOG.md` `[Unreleased]` section describes what ships.
+1. Fold the pending change files into `CHANGELOG.md` with `cargo xtask changelog`, merge that
+   through a pull request, and make sure `main` is green and the `[Unreleased]` section describes
+   what ships (`changes/README.md`).
 2. Tag and push:
 
    ```

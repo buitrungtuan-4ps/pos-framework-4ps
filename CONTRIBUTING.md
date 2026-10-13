@@ -63,15 +63,17 @@ Generated documents — OpenAPI, the permission matrix, the event catalogue — 
 
 ## 6. Changelog and release notes
 
-Every user-visible change adds an entry to [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`, in the correct category, written for the person who will read it later:
+Every user-visible change adds **a change file** under [`changes/`](changes/README.md), one per pull request, rather than editing `CHANGELOG.md`, whose `[Unreleased]` section conflicted between any two open pull requests ([ADR-0170](docs/adr/0170-repository-layout-code-naming-and-size-rules.md) decision 5). Its front matter names the category, and its body is the entry, written for the person who will read it later:
 
 ```markdown
-### Fixed
+---
+kind: fixed
+---
 - Split bills now reconcile to the original total when the amount does not divide evenly;
   the rounding remainder is assigned to the final split. (#231)
 ```
 
-Add an **Upgrade note** in the same entry whenever a change affects `PROTOCOL_VERSION`, a database migration, a permission identifier, or a default value. Release notes are assembled from the changelog plus those upgrade notes, so an omission here becomes an omission in the release.
+Add an `upgrade_note:` to the front matter whenever a change affects `PROTOCOL_VERSION`, a database migration, a permission identifier, or a default value. Release notes are assembled from the changelog plus those upgrade notes, so an omission here becomes an omission in the release. `cargo xtask changelog --check` validates the files, as CI does, and `cargo xtask changelog` folds them into `CHANGELOG.md` `[Unreleased]` before a release is tagged.
 
 Every fix references its issue number. Every release states its SemVer, its `PROTOCOL_VERSION`, its MSRV, and — in one plain sentence — what changes for restaurant staff.
 

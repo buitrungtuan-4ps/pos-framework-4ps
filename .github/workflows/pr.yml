@@ -538,6 +538,14 @@ jobs:
             echo "no change under crates/, ui/ or dashboard/; gate not applicable"
             exit 0
           fi
+          # A change file under changes/ (ADR-0170 decision 5), added or edited,
+          # is the entry; so is an edit to CHANGELOG.md itself.
+          entries="$(git diff --name-only --diff-filter=AM "origin/$BASE"...HEAD -- 'changes/*.md')"
+          others="$(grep -vx 'changes/README.md' <<<"$entries" || true)"
+          if [ -n "$others" ]; then
+            echo "change file added"
+            exit 0
+          fi
           if grep -qx 'CHANGELOG.md' <<<"$changed"; then
             echo "changelog updated"
             exit 0
@@ -548,5 +556,8 @@ jobs:
             echo "changelog deliberately skipped, with a stated reason"
             exit 0
           fi
-          echo "::error::This pull request changes crates/, ui/ or dashboard/ but does not touch CHANGELOG.md. Add an entry under [Unreleased], or write 'changelog: none <reason>' in the pull-request body."
+          echo "::error::This pull request changes crates/, ui/ or dashboard/ but adds no change file. Add changes/<topic>.md (see changes/README.md), or write 'changelog: none <reason>' in the pull-request body."
           exit 1
+      - uses: ./.github/actions/rust-setup
+      - name: every change file is well-formed
+        run: cargo run -q -p xtask --locked -- changelog --check
