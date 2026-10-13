@@ -13,6 +13,10 @@
 pub struct FunctionSpan {
     /// The function's name.
     pub name: String,
+    /// Its name inside what encloses it: `Edge::open_bill` for a method, `<Bill as Display>::fmt`
+    /// for a trait method, `tests::helper` inside a module, `outer::inner` for a nested function.
+    /// Stable when code above it moves, unlike a line number.
+    pub qualified: String,
     /// The 1-based line its `fn` keyword is on.
     pub line: usize,
     /// Lines from the `fn` keyword to the closing brace, both included.
@@ -156,15 +160,134 @@ pub fn functions(source: &str) -> Vec<FunctionSpan> {
         .enumerate()
         .filter_map(|(index, byte)| (*byte == b'\n').then_some(index))
         .collect();
+    let mut scopes = scopes(&code);
     let mut found = Vec::new();
+    let mut bodies = Vec::new();
     let mut at = 0;
     while let Some(offset) = find_keyword(&code, at, b"fn") {
         at = offset + 2;
-        if let Some(span) = function_at(&code, &newlines, offset) {
-            found.push(span);
+        if let Some((span, body)) = function_at(&code, &newlines, offset) {
+            bodies.push((offset, body, span.name.clone()));
+            found.push((offset, span));
         }
     }
+    scopes.extend(bodies);
+    scopes.sort_by_key(|(start, _, _)| *start);
     found
+        .into_iter()
+        .map(|(offset, mut span)| {
+            let mut path: Vec<&str> = scopes
+                .iter()
+                .filter(|(start, end, _)| *start < offset && offset < *end)
+                .map(|(_, _, label)| label.as_str())
+                .collect();
+            path.push(&span.name);
+            span.qualified = path.join("::");
+            span
+        })
+        .collect()
+}
+
+/// Every `impl`, `trait` and inline `mod` block: where it starts and ends, and its label.
+fn scopes(code: &[u8]) -> Vec<(usize, usize, String)> {
+    let mut scopes = Vec::new();
+    for keyword in [&b"impl"[..], b"trait", b"mod"] {
+        let mut at = 0;
+        while let Some(offset) = find_keyword(code, at, keyword) {
+            at = offset + keyword.len();
+            if keyword == b"impl" && !at_item_start(code, offset) {
+                continue; // `-> impl Trait`, `x: impl Fn()`: a type, not a block
+            }
+            let Some(open) = block_open(code, at) else {
+                continue;
+            };
+            let Some(close) = matching(code, open, b'{', b'}') else {
+                continue;
+            };
+            let header = String::from_utf8_lossy(&code[at..open]).into_owned();
+            let label = if keyword == b"impl" {
+                impl_label(&header)
+            } else {
+                header
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            scopes.push((open, close, label));
+        }
+    }
+    scopes
+}
+
+/// Whether the keyword at `offset` starts an item: nothing but whitespace, `unsafe` or an
+/// attribute's `]` since the previous item or block boundary.
+fn at_item_start(code: &[u8], offset: usize) -> bool {
+    let before = code[..offset].trim_ascii_end();
+    before.is_empty()
+        || matches!(before.last(), Some(b'}' | b';' | b'{' | b']'))
+        || before.ends_with(b"unsafe")
+}
+
+/// The `{` opening the block whose header starts at `from`, or `None` if a `;` ends it first.
+fn block_open(code: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (index, byte) in code.iter().enumerate().skip(from) {
+        match byte {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'{' if depth == 0 => return Some(index),
+            b';' if depth == 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `Type` for an inherent impl and `<Type as Trait>` for a trait impl, without generic arguments,
+/// lifetimes or references.
+fn impl_label(header: &str) -> String {
+    let mut text = header.trim();
+    if text.starts_with('<')
+        && let Some(close) = closing_angle(text.as_bytes(), 0)
+    {
+        text = &text[close + 1..];
+    }
+    if let Some(at) = find_word(text, "where") {
+        text = &text[..at];
+    }
+    match find_word(text, "for") {
+        Some(at) => format!(
+            "<{} as {}>",
+            simple_type(&text[at + 3..]),
+            simple_type(&text[..at])
+        ),
+        None => simple_type(text),
+    }
+}
+
+/// `text` without generic arguments, lifetimes, `&`, `mut` or `dyn`, and with single spaces.
+fn simple_type(text: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace('&', " ")
+        .split_whitespace()
+        .filter(|word| !word.starts_with('\'') && !matches!(*word, "mut" | "dyn"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where `word` stands as a whole word in `text`.
+fn find_word(text: &str, word: &str) -> Option<usize> {
+    find_keyword(text.as_bytes(), 0, word.as_bytes())
 }
 
 /// The next `keyword` at or after `from` that stands as a whole word.
@@ -184,9 +307,9 @@ fn find_keyword(code: &[u8], from: usize, keyword: &[u8]) -> Option<usize> {
     None
 }
 
-/// The function whose `fn` keyword is at `offset`, or `None` for a pointer type (`fn(u8)`), a
-/// macro pattern (`fn $name`) or a declaration without a body.
-fn function_at(code: &[u8], newlines: &[usize], offset: usize) -> Option<FunctionSpan> {
+/// The function whose `fn` keyword is at `offset` and the end of its body, or `None` for a pointer
+/// type (`fn(u8)`), a macro pattern (`fn $name`) or a declaration without a body.
+fn function_at(code: &[u8], newlines: &[usize], offset: usize) -> Option<(FunctionSpan, usize)> {
     let mut index = skip_space(code, offset + 2);
     let name_start = index;
     while index < code.len() && is_ident(code[index]) {
@@ -216,12 +339,14 @@ fn function_at(code: &[u8], newlines: &[usize], offset: usize) -> Option<Functio
     }
     let end = matching(code, body, b'{', b'}')?;
     let line = line_of(newlines, offset);
-    Some(FunctionSpan {
+    let span = FunctionSpan {
+        qualified: name.clone(),
         name,
         line,
         lines: line_of(newlines, end) - line + 1,
         params,
-    })
+    };
+    Some((span, end))
 }
 
 fn skip_space(code: &[u8], from: usize) -> usize {
@@ -309,6 +434,7 @@ mod tests {
                      line,
                      lines,
                      params,
+                     ..
                  }| (name, line, lines, params),
             )
             .collect()
@@ -342,6 +468,26 @@ mod tests {
     fn declarations_pointer_types_and_macro_patterns_are_not_functions() {
         let source = "trait T { fn decl(&self); }\ntype P = fn(u8) -> u8;\nmacro_rules! m { ($n:ident) => { fn $n() {} } }\n";
         assert!(spans(source).is_empty());
+    }
+
+    #[test]
+    fn a_function_is_named_inside_its_impl_trait_module_and_parent() {
+        let source = "impl<S: Store> Edge<S> where S: Send {\n    fn open(&self) -> impl Iterator<Item = u8> { inner() }\n}\n\
+            impl<'a, T> fmt::Display for &'a Bill<T> {\n    fn fmt(&self) {}\n}\n\
+            trait Port { fn ready(&self) -> bool { true } }\n\
+            mod tests {\n    fn helper() {\n        fn deep() {}\n    }\n}\nmod other;\nfn free() {}\n";
+        let names: Vec<String> = functions(source).into_iter().map(|f| f.qualified).collect();
+        assert_eq!(
+            names,
+            [
+                "Edge::open",
+                "<Bill as fmt::Display>::fmt",
+                "Port::ready",
+                "tests::helper",
+                "tests::helper::deep",
+                "free",
+            ]
+        );
     }
 
     #[test]

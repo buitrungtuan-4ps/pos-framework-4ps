@@ -24,10 +24,25 @@ pub mod vendor_neutral_core;
 /// Anything that stopped a check from running.
 pub type Error = Box<dyn std::error::Error>;
 
-/// Repository root, resolved from this crate's manifest directory.
+/// The repository root: the checkout the command runs in, by `git rev-parse --show-toplevel`,
+/// when that checkout has an `xtask/` crate; otherwise the parent of this crate's manifest
+/// directory.
+///
+/// Run time first, because `CARGO_MANIFEST_DIR` is fixed at compile time. Several worktrees sharing
+/// one target directory can reuse one `xtask` binary, and a path compiled into it would check
+/// whichever worktree built it last.
 pub fn repo_root() -> std::path::PathBuf {
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest.parent().unwrap_or(manifest).to_path_buf()
+    let checkout = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+        .filter(|top| top.join("xtask/Cargo.toml").is_file());
+    checkout.unwrap_or_else(|| {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        manifest.parent().unwrap_or(manifest).to_path_buf()
+    })
 }
 
 /// The base ref to diff against, from a `--base <ref>` argument or `origin/main` by default.

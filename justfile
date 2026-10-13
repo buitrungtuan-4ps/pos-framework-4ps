@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates gen-docs-check mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates gen-docs-check code-size mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -120,6 +120,11 @@ gen-docs:
 
 gen-docs-check:
     cargo run -q -p xtask -- gen-docs --check
+
+# The size ratchet (ADR-0170 decision 3): no new file, function or parameter list over the limits,
+# and nothing tools/code-size-baseline.toml lists may grow. Warns about changed files near a limit.
+code-size base="origin/main":
+    cargo run -q -p xtask -- code-stats --check --base {{base}}
 
 # Files duplicated across the ui/ and dashboard/ front-end build roots (design tokens, the contrast
 # gate) must stay byte-identical — the substitute for a shared module they cannot import.
