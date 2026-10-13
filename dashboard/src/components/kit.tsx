@@ -148,6 +148,12 @@ export type Column<T> = {
  */
 export const CLIENT_PAGE_SIZE = 25;
 
+/**
+ * Reusable collator instance for client-side table sorting.
+ * Defined at module level to eliminate repeated Intl.Collator instantiation overhead during sorting.
+ */
+const tableCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 /** The `md` breakpoint, in the one place the table needs to know about it. */
 const WIDE_QUERY = "(min-width: 768px)";
 
@@ -287,7 +293,6 @@ export function DataTable<T>(props: {
     // Each row's value is read once rather than on every comparison, and text compares the way it
     // is read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that
     // tie keep the order they came in, because the sort is stable.
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
     const decorated = base.map((row) => ({ row, val: value(row) }));
     decorated.sort((a, b) => {
       const av = a.val;
@@ -295,7 +300,7 @@ export function DataTable<T>(props: {
       if (typeof av === "number" && typeof bv === "number") {
         return (av - bv) * direction;
       }
-      return collator.compare(String(av), String(bv)) * direction;
+      return tableCollator.compare(String(av), String(bv)) * direction;
     });
     return decorated.map((entry) => entry.row);
   });
