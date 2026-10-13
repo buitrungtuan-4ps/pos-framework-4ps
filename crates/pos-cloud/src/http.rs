@@ -95,7 +95,7 @@ use pos_proto::channels::{
 use pos_proto::determinism::ClockSource;
 use pos_proto::devices::{DeviceConnection, PaperWidth, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
-use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
+use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::fees::{
     FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees,
@@ -189,7 +189,7 @@ use crate::images::{self, ImagePipelineError, RenderError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
-    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
+    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError,
     RegionAcknowledgement, RegionAcknowledgementStore, RegionAgreement, RegionRefusal,
     RetireOutcome, SettleOutcome, handover_state, lease_node, region_agreement, resolve_region,
     standing_acknowledgement,
@@ -197,6 +197,7 @@ use crate::lease::{
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 
+mod lease_bump;
 mod locale_node;
 mod release_schedule;
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
@@ -23913,57 +23914,35 @@ async fn admin_bump_lease<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<BumpLeaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::ManageStores,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let (tenant_id, store_id) = match parse_ulid_fields([
+    .await?;
+    let [tenant_id, store_id] = parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
-    ]) {
-        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-        Err(refusal) => return refusal,
-    };
-    let requested_placement = match request.edge_placement.as_deref() {
-        None => None,
-        Some(token) => match EdgePlacement::from_wire(token) {
-            Some(EdgePlacement::Unspecified) | None => {
-                return api_error_with_details(
-                    ErrorStatus::InvalidArgument,
-                    "edge_placement must be one of EDGE_PLACEMENT_IN_STORE, \
-                     EDGE_PLACEMENT_HOSTED_BY_OPERATOR, EDGE_PLACEMENT_HOSTED_BY_PLATFORM — \
-                     omit the field to keep the store where it is",
-                    &[("edge_placement", "UNKNOWN_VALUE")],
-                );
-            }
-            Some(placement) => Some(placement),
-        },
-    };
+    ])?;
+    let (tenant_id, store_id) = (TenantId::new(tenant_id), StoreId::new(store_id));
+    let requested_placement = lease_bump::requested_placement(request.edge_placement.as_deref())?;
     // Where the store's data will rest, decided by the same request that decides which machine
     // holds it (ADR-0114). The rule is a pure function so it can be tested without an HTTP stack;
     // here it is only turned into an envelope.
-    let region = match resolve_region(
+    let region = resolve_region(
         requested_placement,
         request.region_country.as_deref(),
         request.region_label.as_deref(),
-    ) {
-        Ok(region) => region,
-        Err(refusal) => return region_refusal_response(refusal),
-    };
+    )
+    .map_err(region_refusal_response)?;
     // The counter moves first. If the publish then fails the store is on a generation no till has
     // been told about, which is the safe half of the split: every box keeps the generation it holds
     // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
@@ -23971,10 +23950,7 @@ where
     //
     // The placement rides inside that same write rather than following it, so there is no interval
     // in which the store record and the lease disagree (ADR-0110).
-    let expected_generation = match if_match_lease(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
-    };
+    let expected_generation = if_match_lease(&headers)?;
     let acknowledged = request.acknowledge_undrained.map(LeaseGeneration::new);
     let bump = match state
         .config_trees
@@ -23994,12 +23970,12 @@ where
         // the point: the comment above explains why the counter moves before the publish, and a
         // request that issued no generation must not reach a publish that would have to name one.
         Ok(LeaseBumpOutcome::VersionMismatch { current }) => {
-            return lease_moved_response(current);
+            return Err(lease_moved_response(current));
         }
         Ok(LeaseBumpOutcome::Undrained { superseded }) => {
-            return lease_undrained_response(superseded);
+            return Err(lease_undrained_response(superseded));
         }
-        Err(error) => return lease_store_error_response(&error),
+        Err(error) => return Err(lease_store_error_response(&error)),
     };
     let node = lease_node(bump.generation);
     let receipt_floor = receipt_floor(&state.config_trees, tenant_id, store_id).await;
@@ -24007,7 +23983,7 @@ where
         .map(|number| ("receipt_floor", serde_json::json!({ "number": number })))
         .into_iter()
         .collect();
-    publish_ota_node(
+    let response = publish_ota_node(
         &state,
         &context,
         tenant_id,
@@ -24021,34 +23997,17 @@ where
             // bump chose it. Without the second flag the trail cannot tell a store that was moved
             // to a hosted machine from one whose already-hosted box was swapped — the same row
             // either way, and only one of them is a change of what the store can promise.
-            detail: serde_json::json!({
-                "generation": bump.generation.value(),
-                "edge_placement": bump.edge_placement.as_wire(),
-                "edge_placement_moved": requested_placement.is_some(),
-                // Where the store's data now rests, and the place a person would recognise
-                // (ADR-0114). Both read from what the write returned rather than echoed from the
-                // request, so a swap in place records the region the store *has* rather than the
-                // nothing this body said. A country code is business metadata and goes in whole;
-                // the label is free text and goes in whole too, because an entry whose payload is
-                // redacted does not record what was chosen, which is the only thing this entry
-                // exists to record (ADR-0069's redaction rule is about personal data, and the
-                // console's field asks for a place).
-                "region_country": bump.region.as_ref().map(Region::country_str),
-                "region_label": bump.region.as_ref().map(Region::label),
-                // The generation whose events this bump knowingly abandoned, or `null`. It has to
-                // be here because it is nowhere else: an acknowledged bump does not *clear*
-                // `superseded_generation`, it rolls it forward to the machine it is displacing now.
-                // The trail is the only record that an earlier machine's sales were written off,
-                // and by whom.
-                "abandoned_generation": acknowledged.map(LeaseGeneration::value),
-                // What the replacement numbers its receipts above, or `null` when no floor went
-                // out (ADR-0149).
-                "receipt_floor": receipt_floor,
-            }),
+            detail: lease_bump::bump_audit_detail(
+                &bump,
+                requested_placement,
+                acknowledged,
+                receipt_floor,
+            ),
             companions,
         },
     )
-    .await
+    .await;
+    Ok(response)
 }
 
 /// The receipt floor a lease bump publishes beside the lease (ADR-0149): the highest receipt number

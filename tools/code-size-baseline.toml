@@ -14,7 +14,7 @@
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 37424
+"crates/pos-cloud/src/http.rs" = 37383
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
@@ -65,7 +65,6 @@
 "crates/pos-cloud/src/catalog_compiler.rs::compile_menu" = { lines = 125, params = 6 }
 "crates/pos-cloud/src/config.rs::CloudConfig::validate" = { lines = 118, params = 1 }
 "crates/pos-cloud/src/http.rs::admin_acknowledge_region" = { lines = 117, params = 4 }
-"crates/pos-cloud/src/http.rs::admin_bump_lease" = { lines = 141, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_create_role" = { lines = 105, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_create_routing" = { lines = 123, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
