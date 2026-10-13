@@ -1,0 +1,174 @@
+{
+  "scripts/installer-syntax.mjs": {
+    "max-depth": 5
+  },
+  "src/api/client.ts": {
+    "max-lines": 2081
+  },
+  "src/api/types.ts": {
+    "max-lines": 1203
+  },
+  "src/components/AccountMenu.tsx": {
+    "max-lines-per-function": 154
+  },
+  "src/components/CommandPalette.tsx": {
+    "max-lines-per-function": 191
+  },
+  "src/components/ContextPicker.tsx": {
+    "max-lines-per-function": 295
+  },
+  "src/components/GetStarted.tsx": {
+    "max-lines-per-function": 125
+  },
+  "src/components/ImagePicker.tsx": {
+    "max-lines-per-function": 115
+  },
+  "src/components/PermissionsReadiness.tsx": {
+    "max-lines-per-function": 107
+  },
+  "src/components/ProviderFields.tsx": {
+    "max-lines-per-function": 108
+  },
+  "src/components/Shell.tsx": {
+    "max-lines-per-function": 229
+  },
+  "src/components/Toast.tsx": {
+    "max-lines-per-function": 101
+  },
+  "src/components/kit.tsx": {
+    "max-lines-per-function": 199
+  },
+  "src/components/ui.tsx": {
+    "max-lines-per-function": 156
+  },
+  "src/installers.mjs": {
+    "max-lines": 1184,
+    "max-lines-per-function": 430
+  },
+  "src/screens/Activation.tsx": {
+    "max-lines-per-function": 350
+  },
+  "src/screens/Admins.tsx": {
+    "max-lines-per-function": 316
+  },
+  "src/screens/Alerts.tsx": {
+    "max-lines-per-function": 285
+  },
+  "src/screens/ApiKeys.tsx": {
+    "max-lines-per-function": 220
+  },
+  "src/screens/Audit.tsx": {
+    "max-lines-per-function": 172
+  },
+  "src/screens/Campaigns.tsx": {
+    "max-lines-per-function": 752
+  },
+  "src/screens/ChainFindings.tsx": {
+    "max-lines-per-function": 113
+  },
+  "src/screens/Channels.tsx": {
+    "max-lines-per-function": 536
+  },
+  "src/screens/Config.tsx": {
+    "max-lines-per-function": 546
+  },
+  "src/screens/Devices.tsx": {
+    "max-lines-per-function": 840
+  },
+  "src/screens/Fees.tsx": {
+    "max-lines": 1646,
+    "max-lines-per-function": 1437
+  },
+  "src/screens/Fleet.tsx": {
+    "max-lines-per-function": 699
+  },
+  "src/screens/Floor.tsx": {
+    "max-lines-per-function": 649
+  },
+  "src/screens/Integrations.tsx": {
+    "max-lines-per-function": 391
+  },
+  "src/screens/Inventory.tsx": {
+    "max-lines-per-function": 675
+  },
+  "src/screens/Layout.tsx": {
+    "max-lines-per-function": 938
+  },
+  "src/screens/Media.tsx": {
+    "max-lines-per-function": 152
+  },
+  "src/screens/MySecurity.tsx": {
+    "max-lines-per-function": 159
+  },
+  "src/screens/MySessions.tsx": {
+    "max-lines-per-function": 144
+  },
+  "src/screens/NewStore.tsx": {
+    "max-lines-per-function": 397
+  },
+  "src/screens/Ota.tsx": {
+    "max-lines-per-function": 559
+  },
+  "src/screens/People.tsx": {
+    "max-lines": 1068,
+    "max-lines-per-function": 1004
+  },
+  "src/screens/ReasonCodes.tsx": {
+    "max-lines-per-function": 344
+  },
+  "src/screens/Reconcile.tsx": {
+    "max-lines-per-function": 143
+  },
+  "src/screens/Releases.tsx": {
+    "max-lines-per-function": 450
+  },
+  "src/screens/Reports.tsx": {
+    "max-lines-per-function": 477
+  },
+  "src/screens/Settings.tsx": {
+    "max-lines-per-function": 811
+  },
+  "src/screens/Stations.tsx": {
+    "max-lines-per-function": 557
+  },
+  "src/screens/StoreGroups.tsx": {
+    "max-lines-per-function": 502
+  },
+  "src/screens/StoreHub.tsx": {
+    "max-lines-per-function": 285
+  },
+  "src/screens/StoreSettings.tsx": {
+    "max-lines-per-function": 436
+  },
+  "src/screens/Stores.tsx": {
+    "max-lines-per-function": 745
+  },
+  "src/screens/Subjects.tsx": {
+    "max-lines-per-function": 211
+  },
+  "src/screens/TaxRates.tsx": {
+    "max-lines-per-function": 265
+  },
+  "src/screens/Translations.tsx": {
+    "max-lines-per-function": 290
+  },
+  "src/screens/Webhooks.tsx": {
+    "max-lines-per-function": 196
+  },
+  "src/screens/catalog/Items.tsx": {
+    "max-lines-per-function": 548
+  },
+  "src/screens/catalog/Menus.tsx": {
+    "max-lines": 1012,
+    "max-lines-per-function": 973
+  },
+  "src/screens/catalog/Modifiers.tsx": {
+    "max-lines-per-function": 276
+  },
+  "src/screens/catalog/TaxClasses.tsx": {
+    "max-lines-per-function": 183
+  },
+  "src/screens/catalog/Taxonomy.tsx": {
+    "max-lines-per-function": 398
+  }
+}

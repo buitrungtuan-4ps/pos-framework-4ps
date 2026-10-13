@@ -37,6 +37,13 @@ const MIRRORED: &[(&str, &str)] = &[
         "ui/scripts/i18n-parity.mjs",
         "dashboard/scripts/i18n-parity.mjs",
     ),
+    // ESLint's config and its baseline script (ADR-0172). Each root's `eslint-baseline.json` is its
+    // own, and differs.
+    ("ui/eslint.config.mjs", "dashboard/eslint.config.mjs"),
+    (
+        "ui/scripts/eslint-baseline.mjs",
+        "dashboard/scripts/eslint-baseline.mjs",
+    ),
 ];
 
 /// Compares each mirrored pair and reports any that differ or are missing.

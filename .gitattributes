@@ -20,6 +20,7 @@ deploy/release/*.ps1             text eol=lf
 #   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-edge      docs/snapshots/routes.txt
 #   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-cloud     docs/openapi.json, docs/openapi-admin.json
 #   cargo xtask gen-docs                               docs/generated/*
+#   node scripts/eslint-baseline.mjs --write           ui/ and dashboard/ eslint-baseline.json
 #   dashboard/src/installers.mjs                       the two installer templates below
 #   cargo and pnpm                                     the lockfiles
 docs/snapshots/*                         linguist-generated=true
@@ -28,6 +29,7 @@ docs/configuration.md                    linguist-generated=true
 docs/permissions.md                      linguist-generated=true
 docs/state-machines.md                   linguist-generated=true
 docs/generated/*                         linguist-generated=true
+*/eslint-baseline.json                   linguist-generated=true
 deploy/edge/install-pos-edge.ps1         linguist-generated=true
 deploy/edge/install-pos-print-agent.ps1  linguist-generated=true
 Cargo.lock                               linguist-generated=true

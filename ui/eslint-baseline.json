@@ -1,0 +1,45 @@
+{
+  "src/components/IdleLock.tsx": {
+    "max-lines-per-function": 201
+  },
+  "src/components/StatusBar.tsx": {
+    "max-lines-per-function": 156
+  },
+  "src/screens/Confirm.tsx": {
+    "max-lines-per-function": 144
+  },
+  "src/screens/Devices.tsx": {
+    "max-lines-per-function": 316
+  },
+  "src/screens/Floor.tsx": {
+    "max-lines-per-function": 114
+  },
+  "src/screens/Kds.tsx": {
+    "max-lines-per-function": 363
+  },
+  "src/screens/Order.tsx": {
+    "max-lines": 1197,
+    "max-lines-per-function": 1140
+  },
+  "src/screens/Pay.tsx": {
+    "max-lines": 1252,
+    "max-lines-per-function": 1180
+  },
+  "src/screens/Shift.tsx": {
+    "max-lines": 1038,
+    "max-lines-per-function": 974
+  },
+  "src/screens/SignIn.tsx": {
+    "max-lines-per-function": 129
+  },
+  "src/screens/Takeaway.tsx": {
+    "max-lines-per-function": 459
+  },
+  "src/screens/Today.tsx": {
+    "max-lines-per-function": 166
+  },
+  "src/state/store.ts": {
+    "max-lines": 1619,
+    "max-lines-per-function": 311
+  }
+}
