@@ -62,7 +62,10 @@ against the bundle that was compiled in last time. Run
 pnpm build && cargo build -p minimal-edge && pnpm replay
 ```
 
-or use `--features dev-ui`, which reads from disk and has no such step. If the machine already has a
+or use `--features dev-ui`, which reads from disk and has no such step. CI builds the binary once and
+runs the flows in three shards (`pnpm replay --shard=k/3`); `fullyParallel` in
+`playwright.config.mjs` is what lets the one spec file split by test, and `workers: 1` still runs
+one flow at a time. If the machine already has a
 Chromium and the download is blocked, `POS_UI_CHROMIUM=/path/to/chrome pnpm replay` points the
 launcher at it.
 
