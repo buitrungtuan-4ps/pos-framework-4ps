@@ -66,7 +66,7 @@ pub struct DailyRevenue {
     ///
     /// Bounded by the store's fee rules, not by its trade: one entry per code a rule charged that
     /// day, and the cloud refuses a second active fee under a code a store already runs
-    /// ([`crate::fees::shares_code_with`]).
+    /// (`pos_cloud::fees::shares_code_with`).
     ///
     /// `#[serde(default)]`, so a day stored before this field loads with no fees and gains them
     /// from the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay

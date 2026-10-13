@@ -4,11 +4,11 @@
 //! The one fold that turns events into a per-trading-day rollup
 //! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 //!
-//! Both the from-log computation ([`Cloud::daily_rollups`](crate::types::Cloud::daily_rollups)) and
-//! the incrementally-**materialised** projection ([`super::projection`]) run *this* function over
-//! their events, so the two paths cannot drift: whatever a full re-scan would compute is exactly what
-//! the maintained rollup holds. The fold uses only envelope fields (`business_date`, `event_type`),
-//! so it needs no per-event-type decoding.
+//! Both the from-log computation ([`daily_rollups_from_log`], behind
+//! `pos_cloud::cloud::Cloud::daily_rollups`) and the incrementally-**materialised** projection
+//! ([`super::projection`]) run *this* function over their events, so the two paths cannot drift:
+//! whatever a full re-scan would compute is exactly what the maintained rollup holds. The fold uses
+//! only envelope fields (`business_date`, `event_type`), so it needs no per-event-type decoding.
 
 use core::num::NonZeroU32;
 use std::collections::BTreeMap;

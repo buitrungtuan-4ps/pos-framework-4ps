@@ -28,7 +28,8 @@ use pos_cloud_api::console::require_permission;
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_cloud_api::response::{api_error, csv_download_response};
 
-/// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].
+/// The materialised **revenue** rollup for one store, windowed exactly as
+/// [`admin_daily_rollups`](crate::rollups::admin_daily_rollups).
 ///
 /// Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —
 /// narrower than the counts read's `console.data.read`. The rollup carries no customer or employee
