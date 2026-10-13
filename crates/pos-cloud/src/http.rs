@@ -143,7 +143,7 @@ use crate::auth::admin::{
     hash_recovery_code, hash_session_token, login, logout, system_actor,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
-use crate::auth::bearer::{authenticate, confine_to_store, require_scope, require_store};
+use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
@@ -163,7 +163,7 @@ use crate::claim::{
     BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
     hash_claim_secret, hash_user_code,
 };
-use crate::cloud::{Cloud, DailyCash, DailyRevenue, DailyRollup, STORE_DRAWER};
+use crate::cloud::Cloud;
 use crate::config::InternalSecret;
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
@@ -171,10 +171,7 @@ use crate::config_tree::{
     merge::{diff, merge_layers},
 };
 use crate::dashboard::rollup::WindowError;
-use crate::dashboard::{
-    RollupError, RollupStore, RollupWindow, StoredRollups, admitted_devices, dashboard, revenue,
-    xz_report,
-};
+use crate::dashboard::{RollupError, RollupStore, admitted_devices};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     DeviceWriteOutcome, PersistedDeviceProposal,
@@ -204,6 +201,13 @@ use crate::lease::{
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
+use crate::reports::revenue::{
+    admin_export_revenue, admin_export_revenue_fees, admin_export_revenue_tax, admin_revenue_daily,
+};
+use crate::reports::rollups::{
+    admin_daily_rollups, admin_export_rollups, admin_rollups_reset, daily_rollups,
+};
+use crate::reports::xz::admin_xz_report;
 use base64::Engine as _;
 use pos_core::lease::LeaseGeneration;
 
@@ -335,11 +339,11 @@ const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; \
 /// a clone talks to the same backing store.
 pub struct CloudApp<S, R, K, C, A, T, W> {
     cloud: Cloud<S>,
-    rollups: R,
-    keys: K,
-    clock: C,
-    admin: A,
-    config_trees: T,
+    pub(crate) rollups: R,
+    pub(crate) keys: K,
+    pub(crate) clock: C,
+    pub(crate) admin: A,
+    pub(crate) config_trees: T,
     webhooks: W,
     admin_session_ttl_secs: u64,
     admin_session_idle_ttl_secs: u64,
@@ -363,7 +367,7 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     trusted_proxy_hops: usize,
     /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
     /// no-op, so a route can always record unconditionally; the binary wires the real store in.
-    audit: Arc<dyn AuditRecorder>,
+    pub(crate) audit: Arc<dyn AuditRecorder>,
     /// When QR ordering got one switch ([`crate::qr_ordering::OneSwitch::since`]): a rollback to a
     /// version published before then is settled. `None` restores every version as it is.
     qr_switch_since: Option<pos_proto::Timestamp>,
@@ -25879,7 +25883,7 @@ fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
 /// A CSV download response ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5): the
 /// bytes with `text/csv` and a `content-disposition` naming the file so the browser saves it. `filename`
 /// is a fixed, server-chosen literal per domain — never tenant-supplied — so it needs no escaping.
-fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
+pub(crate) fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
     (
         [
             (CONTENT_TYPE, "text/csv; charset=utf-8".to_owned()),
@@ -30466,91 +30470,6 @@ where
     }
 }
 
-/// A store's per-trading-day activity rollups, oldest day first — answered from the materialised
-/// rollup, never a log scan.
-///
-/// Requires a valid API key with the `read_rollups` scope, and answers **only** for that key's
-/// tenant: the tenant comes from the verified grant, never the request, so a caller can read a
-/// store's rollups only if the store is within its own tenant. A `store_id` outside the tenant is
-/// not an error — it simply has no rollup and reads back as an empty list.
-#[utoipa::path(
-    get,
-    path = "/v1/stores/{store_id}/rollups/daily",
-    params(("store_id" = String, Path, description = "The store's 26-character ULID")),
-    security(("api_key" = [])),
-    responses(
-        (status = 200, description = "Daily activity rollups, oldest day first", body = Vec<DailyRollup>),
-        (status = 400, description = "The store id is not a ULID"),
-        (status = 401, description = "The API key is missing, malformed, or invalid"),
-        (status = 403, description = "The API key lacks the read_rollups scope"),
-        (status = 503, description = "The rollup store is unreachable"),
-    ),
-    tag = "rollups",
-)]
-pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(window): Query<RollupWindowQuery>,
-) -> Response
-where
-    // S and A are unused here but are part of the shared `CloudApp` state, which the `State`
-    // extractor needs whole as `Clone + Send + Sync`.
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: ApiKeyStore + Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
-    // read rollups at all? Only then does the request touch a resource.
-    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
-        Ok(grant) => grant,
-        Err(denied) => return denied.into_response(),
-    };
-    if let Err(forbidden) = require_scope(&grant, Scope::ReadRollups) {
-        return forbidden.into_response();
-    }
-    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
-        Ok([store_id]) => StoreId::new(store_id),
-        Err(refusal) => return refusal,
-    };
-    if let Err(forbidden) = confine_to_store(&grant, store_id) {
-        return forbidden.into_response();
-    }
-    let window = match window.into_window() {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    // The tenant is the grant's, not the request's — this is the isolation boundary.
-    match dashboard(&app.rollups, grant.tenant(), store_id, &window).await {
-        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The date-range window params shared by the rollup read routes (ADR-0081, Track O4): an inclusive
-/// `from`/`to` business-date range and a `limit` cap. All optional — absent gives the default
-/// [`crate::dashboard::rollup::DEFAULT_WINDOW_DAYS`]-day window, never the store's whole history.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RollupWindowQuery {
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
-impl RollupWindowQuery {
-    /// Validates the params into a [`RollupWindow`], or returns a `400` message.
-    fn into_window(self) -> Result<RollupWindow, WindowError> {
-        RollupWindow::new(self.from, self.to, self.limit)
-    }
-}
-
 // --- The store-facing configuration surface (`/sync`) -------------------------------------------
 
 /// The version a store reports it currently holds, if any.
@@ -31479,7 +31398,7 @@ where
 /// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
 /// session, or the store down), or a `403` when the session is valid but the role lacks the
 /// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
-async fn require_permission<A, C>(
+pub(crate) async fn require_permission<A, C>(
     admin_store: &A,
     clock: &C,
     headers: &HeaderMap,
@@ -31857,7 +31776,7 @@ fn parse_audit_page(
               tenant scope, action, entity type+id, and the before/after values; bundling them into \
               a struct at every one of the many call sites would only add ceremony, not clarity"
 )]
-async fn audit_action<C>(
+pub(crate) async fn audit_action<C>(
     audit: &Arc<dyn AuditRecorder>,
     clock: &C,
     actor: &AdminContext,
@@ -33143,9 +33062,9 @@ where
 /// The tenant a config request is scoped to. The super-admin is global, so it names the tenant on
 /// the query string, exactly as API-key provisioning does.
 #[derive(Debug, Clone, Deserialize)]
-struct ConfigTenantQuery {
+pub(crate) struct ConfigTenantQuery {
     /// The tenant whose store's config tree to author or read (a 26-character ULID).
-    tenant_id: String,
+    pub(crate) tenant_id: String,
 }
 
 /// The version id a successful publish produced.
@@ -33800,62 +33719,6 @@ where
         .into_response()
 }
 
-/// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup
-/// read is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not
-/// a tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The
-/// super-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads
-/// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
-/// mutated.
-async fn admin_daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    // The tenant is named explicitly here (the admin is global), unlike the `/v1` read where it is
-    // the API key's. It is a read of the materialised rollup — event counts only, no PII.
-    match dashboard(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The `/admin` daily-rollup query: the explicit `tenant_id` (the console admin is global) plus the
-/// shared [`RollupWindowQuery`] date range and cap (ADR-0081, Track O4).
-#[derive(Debug, Clone, Deserialize)]
-struct AdminRollupWindowQuery {
-    tenant_id: String,
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/devices/admitted",
@@ -33920,482 +33783,6 @@ where
         };
     match admitted_devices(&app.rollups, tenant_id, store_id).await {
         Ok(devices) => (StatusCode::OK, Json(devices)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].
-///
-/// Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —
-/// narrower than the counts read's `console.data.read`. The rollup carries no customer or employee
-/// identifier; the tenant is named explicitly (the console admin is global).
-async fn admin_revenue_daily<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(revenue) => (StatusCode::OK, Json(revenue)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
-/// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
-/// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the
-/// day's drawers is named from the store's published `devices` node as the report is served
-/// ([`published_till_names`]).
-async fn admin_xz_report<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<XzReportQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: ConfigTreeStore + Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    match xz_report(&app.rollups, tenant_id, store_id, query.business_date).await {
-        Ok(mut report) => {
-            report.till_names =
-                published_till_names(&app.config_trees, (tenant_id, store_id), &report.cash).await;
-            (StatusCode::OK, Json(report)).into_response()
-        }
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The names the store's published `devices` node gives the tills among `cash`'s drawers, by
-/// `terminal_device_id` (ADR-0167 decision 13).
-///
-/// Read as the report is served, so a till renamed since shows its new name and one the node no
-/// longer lists shows none, and the console labels it by its id. Only `TERMINAL` entries name a
-/// drawer. A day with only the store's drawer reads nothing, and a tree that cannot be read names
-/// nothing rather than failing the report, whose figures stand without the names.
-async fn published_till_names<T: ConfigTreeStore>(
-    config_trees: &T,
-    (tenant_id, store_id): (TenantId, StoreId),
-    cash: &DailyCash,
-) -> std::collections::BTreeMap<String, String> {
-    if cash.by_drawer.keys().all(|drawer| drawer == STORE_DRAWER) {
-        return std::collections::BTreeMap::new();
-    }
-    let Ok(Some(state)) = config_trees
-        .load(tenant_id, store_id)
-        .await
-        .map(strip_tree_version)
-    else {
-        return std::collections::BTreeMap::new();
-    };
-    let devices = ConfigTree::from_state(store_id, CapabilityValidator, state)
-        .current_effective()
-        .and_then(|effective| effective.get("devices").cloned())
-        .and_then(|node| serde_json::from_value::<PublishedDevices>(node).ok())
-        .unwrap_or_default();
-    devices
-        .devices()
-        .iter()
-        .filter(|device| device.kind.known() == pos_proto::devices::DeviceKind::Terminal)
-        .map(|till| (till.device_id.to_string(), till.name.as_str().to_owned()))
-        .filter(|(till, _)| cash.by_drawer.contains_key(till))
-        .collect()
-}
-
-/// The X/Z report query: the explicit `tenant_id` plus an optional `business_date` (`YYYY-MM-DD`);
-/// absent, the current day is reported.
-#[derive(Debug, Clone, Deserialize)]
-struct XzReportQuery {
-    tenant_id: String,
-    #[serde(default)]
-    business_date: Option<String>,
-}
-
-/// Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read
-/// (ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by
-/// row count.
-async fn admin_export_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let context =
-        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
-            Ok(context) => context,
-            Err(denied) => return denied,
-        };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    let days = match dashboard(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = export::rollups_csv(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        "reports.export_rollups",
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": "rollups", "rows": days.len() })),
-    )
-    .await;
-    csv_download_response("rollups.csv", body)
-}
-
-/// What sets one of a store's revenue exports apart from the others: its file, how it is written,
-/// and what its audit entry calls it and counts.
-///
-/// The exports are one rule, which [`export_revenue`] keeps: revenue is **T2**, so each needs
-/// `console.reports.revenue`, reads the window the revenue read does, and is audited by how many
-/// rows it held, never what they held.
-struct RevenueExport {
-    /// The file the download is saved as, such as `revenue-tax.csv`.
-    name: &'static str,
-    /// The audit entry's action, such as `reports.export_revenue_tax`.
-    action: &'static str,
-    /// The audit entry's `domain`, such as `revenue_tax`.
-    domain: &'static str,
-    /// Writes the window's days as the file.
-    write: fn(&[DailyRevenue]) -> Result<Vec<u8>, csv::Error>,
-    /// How many rows the file holds under its header.
-    rows: fn(&[DailyRevenue]) -> usize,
-}
-
-/// Downloads a store's daily revenue rollups as `file` writes them, windowed like the read
-/// (ADR-0081, Track O4).
-async fn export_revenue<S, R, K, C, A, T, W>(
-    app: &CloudApp<S, R, K, C, A, T, W>,
-    headers: &HeaderMap,
-    store_id: &str,
-    query: AdminRollupWindowQuery,
-    file: &RevenueExport,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let context = match require_permission(
-        &app.admin,
-        &app.clock,
-        headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = (file.write)(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        file.action,
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": file.domain, "rows": (file.rows)(&days) })),
-    )
-    .await;
-    csv_download_response(file.name, body)
-}
-
-/// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
-/// Track O4).
-async fn admin_export_revenue<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue.csv",
-        action: "reports.export_revenue",
-        domain: "revenue",
-        write: export::revenue_csv,
-        rows: <[DailyRevenue]>::len,
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-#[utoipa::path(
-    get,
-    path = "/admin/stores/{store_id}/revenue/fees/export",
-    params(
-        ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
-        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
-        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
-        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
-        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
-                                                       newest in range: 90 when absent, and \
-                                                       never more than 366"),
-    ),
-    responses(
-        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
-                                      is `business_date,currency_code,fee_code,fee_name,bills,\
-                                      amount,tax`, then one row per trading day per fee code the \
-                                      day's settled bills charged, oldest day first and then by \
-                                      code: the fee's name, the bills that charged it, what it \
-                                      charged and the tax on it, in the store's currency's minor \
-                                      units. A day that charged no fee has no row, and neither \
-                                      has a bill settled by an edge from before fee lines, whose \
-                                      charge is only in `revenue.csv`'s `service_charge`. Only \
-                                      the header for a window with no fees, and for a store \
-                                      whose rollup has not been projected yet"),
-        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
-                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
-    ),
-    tag = "reports",
-)]
-/// A store's fees by code as a CSV download, one row per trading day per code
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
-///
-/// Windowed as the revenue read is, and long-format: a file of its own rather than columns added to
-/// `revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,
-/// so it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,
-/// and the audit trail records how many rows were exported, never what they held.
-async fn admin_export_revenue_fees<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue-fees.csv",
-        action: "reports.export_revenue_fees",
-        domain: "revenue_fees",
-        write: export::revenue_fees_csv,
-        rows: |days| days.iter().map(|day| day.by_fee.len()).sum(),
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-#[utoipa::path(
-    get,
-    path = "/admin/stores/{store_id}/revenue/tax/export",
-    params(
-        ("store_id" = String, Path, description = "The store whose tax to export (a 26-character ULID)"),
-        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
-        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
-        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
-        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
-                                                       newest in range: 90 when absent, and \
-                                                       never more than 366"),
-    ),
-    responses(
-        (status = 200, description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
-                                      is `business_date,currency_code,component_name,\
-                                      rate_basis_points,tax`, then one row per trading day per \
-                                      tax component name and rate the day's settled bills \
-                                      recorded, oldest day first and then by name and rate: the \
-                                      tax their tax lines recorded under it, in the store's \
-                                      currency's minor units. A fee's tax is inside its tax \
-                                      line, so it adds no row of its own. Nothing is invented: a \
-                                      bill that recorded no components, settled before its store \
-                                      recorded them or taxed at rates with none, is in \
-                                      `revenue.csv`'s `tax` and in no row here, so a day's rows \
-                                      can sum to less than its tax and no row stands for the \
-                                      difference. Only the header for a window with no \
-                                      components, as for a store whose tax table names none, and \
-                                      for a store whose rollup has not been projected yet"),
-        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
-                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
-    ),
-    tag = "reports",
-)]
-/// A store's tax by component as a CSV download, one row per trading day per component name and
-/// rate ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
-/// decision 5).
-///
-/// A file of its own beside `revenue-fees.csv`, and the same in every way that matters: windowed
-/// as the revenue read is, behind `console.reports.revenue`, and audited by how many rows were
-/// exported, never what they held.
-async fn admin_export_revenue_tax<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue-tax.csv",
-        action: "reports.export_revenue_tax",
-        domain: "revenue_tax",
-        write: export::revenue_tax_csv,
-        rows: |days| days.iter().map(|day| day.by_tax_component.len()).sum(),
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-/// Resets a store's materialised rollup so the projector rebuilds it from the event log
-/// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
-/// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
-/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
-/// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
-async fn admin_rollups_reset<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<ConfigTenantQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::PublishConfig,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    match app
-        .rollups
-        .save(tenant_id, store_id, &StoredRollups::default())
-        .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => rollup_error_response(&error),
     }
 }
@@ -34896,7 +34283,7 @@ fn ulid_refusal(bad: &[&str]) -> Response {
 /// names. `Inverted` carries **no** `details`: neither `from` nor `to` is wrong on its own, and the
 /// standing rule is to name only the field that actually was — attributing it to `from` would send
 /// a caller who mistyped `to` to the wrong input. The message already names both.
-fn window_refusal(error: WindowError) -> Response {
+pub(crate) fn window_refusal(error: WindowError) -> Response {
     match error {
         WindowError::MalformedFrom => api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -35385,7 +34772,7 @@ fn error_response(error: &PortError) -> Response {
 /// Maps a rollup-read failure to a `503`, logging the detail rather than returning it — a dashboard
 /// read only fails when the store itself is unreachable, which is transient and the caller's cue to
 /// retry, and the internal reason is not the client's business.
-fn rollup_error_response(error: &RollupError) -> Response {
+pub(crate) fn rollup_error_response(error: &RollupError) -> Response {
     tracing::error!(%error, "a dashboard rollup read failed");
     api_error(
         ErrorStatus::Unavailable,
