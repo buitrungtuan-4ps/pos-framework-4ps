@@ -50,6 +50,8 @@ To find the files a change touches, start from the **[repository map](repository
 | [permissions.md](permissions.md) | The permission matrix and its default roles (generated) |
 | [state-machines.md](state-machines.md) | Every state machine's transition table (generated) |
 | [openapi.json](openapi.json) · [openapi-admin.json](openapi-admin.json) | The `/v1` integrator and `/admin` console APIs (generated) |
+| [generated/crate-graph.md](generated/crate-graph.md) | The workspace crates by layer, what each depends on, and what depends on it (generated) |
+| [generated/adr-index.md](generated/adr-index.md) | The ADRs nothing in the code cites, and any citation of an ADR that does not exist (generated). `cargo xtask gen-docs --adr-citations [ADR-NNNN]` prints which files cite each ADR |
 | [snapshots/](snapshots/) | The published contracts: [events](snapshots/events.txt), [permissions](snapshots/permissions.txt), [settings](snapshots/settings.txt), [capabilities](snapshots/capabilities.txt), [edge routes](snapshots/routes.txt). Each is generated, and CI refuses a removal |
 | [capacity-and-reliability.md](capacity-and-reliability.md) | Sizing numbers, load limits, and the failure and recovery matrix |
 | [gate-register.md](gate-register.md) | The gates only a person, a credential, hardware or an outside body can clear |

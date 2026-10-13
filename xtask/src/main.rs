@@ -11,6 +11,7 @@ use std::process::ExitCode;
 mod checks;
 mod code_stats;
 mod finding;
+mod gen_docs;
 
 pub use finding::Finding;
 
@@ -33,6 +34,11 @@ cargo xtask <check>
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
+
+cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
+
+  write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
+  ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
 
 cargo xtask code-stats [--json] [--root <dir>]
 
@@ -64,6 +70,7 @@ fn main() -> ExitCode {
         "changelog" => checks::changelog::run(&rest),
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
+        "gen-docs" => gen_docs::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),

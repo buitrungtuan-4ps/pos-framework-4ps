@@ -37,7 +37,7 @@ use crate::Finding;
 const RULE: &str = "crates";
 
 /// The layers ADR-0170's target layout names.
-const LAYERS: [&str; 7] = [
+pub const LAYERS: [&str; 7] = [
     "core", "port", "adapter", "app", "testing", "tool", "country",
 ];
 
@@ -71,10 +71,22 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         );
     }
     let root = repo_root();
+    let crates = load(&root)?;
+    let codeowners = std::fs::read_to_string(root.join("CODEOWNERS"))?;
+    let adrs = adr_numbers(&root.join("docs/adr"))?;
+    Ok(check(&crates, &codeowners, &adrs))
+}
+
+/// The workspace crates, from `cargo metadata --no-deps` run at `root`, sorted by directory.
+///
+/// # Errors
+///
+/// [`Error`] if `cargo metadata` fails or prints something that is not JSON.
+pub fn load(root: &Path) -> Result<Vec<Crate>, Error> {
     let output =
         std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
             .args(["metadata", "--format-version", "1", "--no-deps"])
-            .current_dir(&root)
+            .current_dir(root)
             .output()?;
     if !output.status.success() {
         return Err(format!(
@@ -84,10 +96,7 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         .into());
     }
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    let crates = crates_from(&root, &metadata);
-    let codeowners = std::fs::read_to_string(root.join("CODEOWNERS"))?;
-    let adrs = adr_numbers(&root.join("docs/adr"))?;
-    Ok(check(&crates, &codeowners, &adrs))
+    Ok(crates_from(root, &metadata))
 }
 
 /// The workspace crates in `cargo metadata --no-deps` output, with their READMEs read from disk.
@@ -313,7 +322,7 @@ fn expect_line(
 }
 
 /// The crates that depend on `name`, outside tests and in tests only.
-fn dependents(crates: &[Crate], name: &str) -> (BTreeSet<String>, BTreeSet<String>) {
+pub fn dependents(crates: &[Crate], name: &str) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut normal = BTreeSet::new();
     let mut dev = BTreeSet::new();
     for other in crates {

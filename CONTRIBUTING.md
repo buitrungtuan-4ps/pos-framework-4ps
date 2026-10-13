@@ -62,6 +62,8 @@ If `just preflight` fails, fix that before anything else. Do not invent alternat
 
 **Every workspace crate has a `README.md` and a contract card**, `[package.metadata.pos]` in its `Cargo.toml`: its layer, a one-line purpose, its ADRs and its owners ([ADR-0170](docs/adr/0170-repository-layout-code-naming-and-size-rules.md)). `cargo xtask crates --check`, which `just preflight` and CI run, holds them to the workspace. The README's Layer and Owners line must match the card. Its Depends on and Used by lines must list exactly what `cargo metadata` reports. The owners must be the team `CODEOWNERS` routes the directory to. Each failure prints the line to paste.
 
+`docs/generated/` holds the crate graph and the ADR index, which `cargo xtask gen-docs` writes from the tree. The graph changes when a crate's dependencies or card do. The index lists only the ADRs nothing cites and any citation of an ADR that does not exist (`ADR-NNNN`, or a link to `adr/NNNN-…`, in the code or `.github/`), so it changes rarely. `cargo xtask gen-docs --check` fails until both are regenerated, and fails on any citation of a missing ADR. Which files cite an ADR is not committed, because it changes in almost every pull request: `cargo xtask gen-docs --adr-citations [ADR-NNNN]` prints it.
+
 Generated documents — OpenAPI, the permission matrix, the event catalogue — are **never** hand-edited. Regenerate them. `.gitattributes` marks every generated file `linguist-generated`, with the command that rewrites it, so a pull request's diff collapses them.
 
 ## 6. Changelog and release notes
