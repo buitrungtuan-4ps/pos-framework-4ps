@@ -27,6 +27,7 @@ members = [
     "crates/adapters/erp-sap",
     "crates/pos-edge",
     "crates/pos-print-agent",
+    "crates/pos-cloud-api",
     "crates/pos-cloud",
     "crates/pos-simulator",
     "examples/minimal-edge",

@@ -36,7 +36,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::error::ErrorStatus;
 use pos_proto::time::Timestamp;
 
-use crate::http::{api_error, service_unavailable};
+use crate::response::{api_error, service_unavailable};
 
 use super::SuperAdminCredential;
 use super::session::COOKIE_NAME;

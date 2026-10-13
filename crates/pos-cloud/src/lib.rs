@@ -55,13 +55,13 @@
 #![forbid(unsafe_code)]
 
 pub mod activation;
+// Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_api::{audit, auth, paging};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
 pub mod archive_retention;
 pub mod assets;
-pub mod audit;
-pub mod auth;
 pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
@@ -94,7 +94,6 @@ mod openapi;
 mod openapi_admin;
 pub mod orders;
 pub mod ota;
-pub mod paging;
 pub mod people;
 pub mod people_compiler;
 pub mod people_readiness;
