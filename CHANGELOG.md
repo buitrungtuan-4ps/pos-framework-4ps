@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **DataTable sorting reuses Intl.Collator instance.**
+  Hoisted `Intl.Collator` instantiation outside `DataTable` component body in `dashboard/src/components/kit.tsx` to module scope (`tableCollator`), eliminating repeated object allocation and collation setup during client-side table sorting. No upgrade note: no wire or schema changes.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
