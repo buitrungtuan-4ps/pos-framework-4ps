@@ -95,7 +95,7 @@ use pos_proto::channels::{
 use pos_proto::determinism::ClockSource;
 use pos_proto::devices::{DeviceConnection, PaperWidth, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
-use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
+use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::fees::{
     FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees,
@@ -126,7 +126,6 @@ use pos_proto::{ErrorResponse, ErrorStatus};
 use pos_country::CountryRegistry;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
-use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
@@ -190,13 +189,17 @@ use crate::images::{self, ImagePipelineError, RenderError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
-    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
+    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError,
     RegionAcknowledgement, RegionAcknowledgementStore, RegionAgreement, RegionRefusal,
     RetireOutcome, SettleOutcome, handover_state, lease_node, region_agreement, resolve_region,
     standing_acknowledgement,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
+
+mod lease_bump;
+mod locale_node;
+mod release_schedule;
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
@@ -253,7 +256,7 @@ use crate::retention::{RetentionError, SubjectStore};
 // is gone and the reader no longer has to hold two meanings of one word at once.
 use crate::releases::{
     NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
-    ResolveRefusal, TargetStore, resolve_for_stores,
+    ResolveRefusal, TargetStore,
 };
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
@@ -10407,39 +10410,7 @@ fn checked_locale_node(
     request: &PublishLocaleRequest,
     facts: &PackedFacts,
 ) -> Result<serde_json::Value, Response> {
-    // Checked first because it is the field this route did not use to have: a caller built against
-    // the older shape must be told *that*, rather than being led through the fields it did send.
-    let Ok(country) = CountryCode::parse(&request.country_code) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "country_code is required and must be an ISO 3166-1 alpha-2 code — two letters, such \
-             as VN or JP. It records which country this store is in, beside its currency and \
-             timezone",
-            &[("country_code", "INVALID_FORMAT")],
-        ));
-    };
-    let Ok(currency) = CurrencyCode::parse(&request.currency_code) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "currency_code is not a 3-letter code",
-            &[("currency_code", "INVALID_FORMAT")],
-        ));
-    };
-    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "timezone is not a valid IANA name",
-            &[("timezone", "INVALID_FORMAT")],
-        ));
-    }
-    if CutoffHour::new(request.cutoff_hour).is_err() {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "cutoff_hour must be in 0..=23",
-            &[("cutoff_hour", "OUT_OF_RANGE")],
-        ));
-    }
-    let denominations = checked_denominations(request)?;
+    let (country, currency, denominations) = locale_node::checked_locale_fields(request)?;
 
     let mut locale_value = serde_json::json!({
         // Upper-cased by `CountryCode::parse` on the way in, so the fleet console's comparison
@@ -10453,82 +10424,7 @@ fn checked_locale_node(
         "cash_rounding_increment": request.cash_rounding_increment,
         "cash_denominations": denominations,
     });
-    // How many decimals the store's currency has (ADR-0134), which that record says rides this node
-    // — and did not. Without it the edge keeps the đồng-shaped zero its bootstrap starts with, and
-    // an Indian store draws 26145 paise as `INR 26,145` on the till and prints `INR 26145` on a tax
-    // invoice. The front ends each carry a fallback table for the window before a store syncs, and
-    // neither one fires: `GET /api/locale` serves the session's zero as though it were an answer,
-    // and `0 ?? fallback` is `0`. A published zero beats a correct guess, which is why this is the
-    // cloud's to say rather than theirs to infer.
-    //
-    // Not a field on the request: an operator choosing their own exponent could state that the
-    // rupee has three decimals, and ADR-0134 makes the country pack the authority precisely so
-    // nobody has to.
-    //
-    // Omitted for a currency no pack names, which is the "absent leaves what the session has" case
-    // `PublishedLocale` was deliberately built with — saying nothing rather than publishing a guess.
-    // Unreachable from the console, whose currency picker is filled from this same country list.
-    if let Some(exponent) = facts.exponents.get(&currency)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "currency_exponent".to_owned(),
-            serde_json::Value::from(*exponent),
-        );
-    }
-    // How long the store keeps a personal record before its own sweep scrubs it
-    // ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)), which the edge has read from
-    // this node since that record and which this node has never carried.
-    //
-    // Harmless so far, and worth saying why rather than implying a breach: every pack,
-    // `LocalePack::default` and the edge's bootstrap all say 365, so no store's period is wrong
-    // today and the sweep on the edge's ticker really does run. What the gap would have cost is the
-    // *next* change — each pack's figure is marked "a default, not a determination", and the day
-    // somebody sets a country's real period every store would have gone on forgetting at 365 while
-    // the publish looked applied.
-    //
-    // From the pack rather than from the request, for the reason the exponent is: a retention period
-    // answers to a privacy notice, and a form field invites a number that suits the shop rather than
-    // the law.
-    if let Some(days) = facts.retention_days.get(&country)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "default_retention_days".to_owned(),
-            serde_json::Value::from(*days),
-        );
-    }
-    // How the country writes a number
-    // ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Compiled into
-    // every pack since ADR-0027 and, until now, read by nothing anywhere: the till grouped `en-US`,
-    // the receipt grouped with a comma, and Vietnam's own `1.234.567,50` appeared on neither.
-    //
-    // This release carries it to the store and no surface draws with it yet. The receipt and the
-    // till follow separately, because each changes a figure a person is looking at and the receipt's
-    // is a tax document.
-    //
-    // Serialised from the pack's own type, so the shape the edge parses and the shape the cloud
-    // sends cannot drift apart into two spellings of the same three fields.
-    if let Ok(format) = facts
-        .number_formats
-        .get(&country)
-        .ok_or(())
-        .and_then(|format| serde_json::to_value(format).map_err(|_| ()))
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert("number_format".to_owned(), format);
-    }
-    // The language of the store's country (ADR-0160), which a receipt set to
-    // `RECEIPT_LANGUAGE_COUNTRY` prints in. The cloud's to say for the reason the rest of these are:
-    // the edge a store runs carries no country pack of its own.
-    if let Some(language) = facts.languages.get(&country)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "country_language".to_owned(),
-            serde_json::Value::String(language.clone()),
-        );
-    }
+    locale_node::add_country_pack_facts(&mut locale_value, facts, country, currency);
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
     if let Some(language) = request
@@ -24018,57 +23914,35 @@ async fn admin_bump_lease<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<BumpLeaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::ManageStores,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let (tenant_id, store_id) = match parse_ulid_fields([
+    .await?;
+    let [tenant_id, store_id] = parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
-    ]) {
-        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-        Err(refusal) => return refusal,
-    };
-    let requested_placement = match request.edge_placement.as_deref() {
-        None => None,
-        Some(token) => match EdgePlacement::from_wire(token) {
-            Some(EdgePlacement::Unspecified) | None => {
-                return api_error_with_details(
-                    ErrorStatus::InvalidArgument,
-                    "edge_placement must be one of EDGE_PLACEMENT_IN_STORE, \
-                     EDGE_PLACEMENT_HOSTED_BY_OPERATOR, EDGE_PLACEMENT_HOSTED_BY_PLATFORM — \
-                     omit the field to keep the store where it is",
-                    &[("edge_placement", "UNKNOWN_VALUE")],
-                );
-            }
-            Some(placement) => Some(placement),
-        },
-    };
+    ])?;
+    let (tenant_id, store_id) = (TenantId::new(tenant_id), StoreId::new(store_id));
+    let requested_placement = lease_bump::requested_placement(request.edge_placement.as_deref())?;
     // Where the store's data will rest, decided by the same request that decides which machine
     // holds it (ADR-0114). The rule is a pure function so it can be tested without an HTTP stack;
     // here it is only turned into an envelope.
-    let region = match resolve_region(
+    let region = resolve_region(
         requested_placement,
         request.region_country.as_deref(),
         request.region_label.as_deref(),
-    ) {
-        Ok(region) => region,
-        Err(refusal) => return region_refusal_response(refusal),
-    };
+    )
+    .map_err(region_refusal_response)?;
     // The counter moves first. If the publish then fails the store is on a generation no till has
     // been told about, which is the safe half of the split: every box keeps the generation it holds
     // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
@@ -24076,10 +23950,7 @@ where
     //
     // The placement rides inside that same write rather than following it, so there is no interval
     // in which the store record and the lease disagree (ADR-0110).
-    let expected_generation = match if_match_lease(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
-    };
+    let expected_generation = if_match_lease(&headers)?;
     let acknowledged = request.acknowledge_undrained.map(LeaseGeneration::new);
     let bump = match state
         .config_trees
@@ -24099,12 +23970,12 @@ where
         // the point: the comment above explains why the counter moves before the publish, and a
         // request that issued no generation must not reach a publish that would have to name one.
         Ok(LeaseBumpOutcome::VersionMismatch { current }) => {
-            return lease_moved_response(current);
+            return Err(lease_moved_response(current));
         }
         Ok(LeaseBumpOutcome::Undrained { superseded }) => {
-            return lease_undrained_response(superseded);
+            return Err(lease_undrained_response(superseded));
         }
-        Err(error) => return lease_store_error_response(&error),
+        Err(error) => return Err(lease_store_error_response(&error)),
     };
     let node = lease_node(bump.generation);
     let receipt_floor = receipt_floor(&state.config_trees, tenant_id, store_id).await;
@@ -24112,7 +23983,7 @@ where
         .map(|number| ("receipt_floor", serde_json::json!({ "number": number })))
         .into_iter()
         .collect();
-    publish_ota_node(
+    let response = publish_ota_node(
         &state,
         &context,
         tenant_id,
@@ -24126,34 +23997,17 @@ where
             // bump chose it. Without the second flag the trail cannot tell a store that was moved
             // to a hosted machine from one whose already-hosted box was swapped — the same row
             // either way, and only one of them is a change of what the store can promise.
-            detail: serde_json::json!({
-                "generation": bump.generation.value(),
-                "edge_placement": bump.edge_placement.as_wire(),
-                "edge_placement_moved": requested_placement.is_some(),
-                // Where the store's data now rests, and the place a person would recognise
-                // (ADR-0114). Both read from what the write returned rather than echoed from the
-                // request, so a swap in place records the region the store *has* rather than the
-                // nothing this body said. A country code is business metadata and goes in whole;
-                // the label is free text and goes in whole too, because an entry whose payload is
-                // redacted does not record what was chosen, which is the only thing this entry
-                // exists to record (ADR-0069's redaction rule is about personal data, and the
-                // console's field asks for a place).
-                "region_country": bump.region.as_ref().map(Region::country_str),
-                "region_label": bump.region.as_ref().map(Region::label),
-                // The generation whose events this bump knowingly abandoned, or `null`. It has to
-                // be here because it is nowhere else: an acknowledged bump does not *clear*
-                // `superseded_generation`, it rolls it forward to the machine it is displacing now.
-                // The trail is the only record that an earlier machine's sales were written off,
-                // and by whom.
-                "abandoned_generation": acknowledged.map(LeaseGeneration::value),
-                // What the replacement numbers its receipts above, or `null` when no floor went
-                // out (ADR-0149).
-                "receipt_floor": receipt_floor,
-            }),
+            detail: lease_bump::bump_audit_detail(
+                &bump,
+                requested_placement,
+                acknowledged,
+                receipt_floor,
+            ),
             companions,
         },
     )
-    .await
+    .await;
+    Ok(response)
 }
 
 /// The receipt floor a lease bump publishes beside the lease (ADR-0149): the highest receipt number
@@ -34999,7 +34853,7 @@ where
 /// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
-/// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
+/// release needs no timezone at all, and only [`resolve_for_stores`](crate::releases::resolve_for_stores) knows whether this release is
 /// one. The refusal, when it comes, names the store.
 async fn release_target_timezones<Cfg>(
     config_trees: &Cfg,
@@ -35071,19 +34925,12 @@ fn unresolvable_moment(refusals: &[(StoreId, ResolveRefusal)]) -> Response {
 /// Nothing is written until everything has resolved. A store that cannot be timed, a node that will
 /// not compile, a prerequisite a store is missing — each refuses the whole release, because a
 /// half-written release is exactly the half-published Tết this record exists to prevent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one ordered gauntlet, and the order is the record's: settle the instruction, expand \
-              the target, resolve every instant, check every prerequisite, compile every node — and \
-              only then write. Splitting it into helpers would let a future edit move a write above \
-              a check, which is the half-published Tết ADR-0125 exists to prevent"
-)]
 async fn admin_schedule_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Path(release_id): Path<String>,
     Json(request): Json<ScheduleReleaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
@@ -35093,219 +34940,57 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    // The gauntlet, in the record's order (ADR-0125): settle the instruction, expand the target,
+    // resolve every instant, check every prerequisite, compile every node — and only then write.
+    // Each step refuses with the response to send, so nothing after a refusal runs.
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::PublishConfig,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
-        Ok([tenant_id]) => TenantId::new(tenant_id),
-        Err(refusal) => return refusal,
-    };
-    let release = match state.releases.fetch_one(tenant_id, &release_id).await {
-        Ok(Some(release)) => release,
-        Ok(None) => return not_found("release"),
-        Err(error) => return release_error_response(&error),
-    };
-    if release.status != ReleaseStatus::Draft {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has already been scheduled; cancel it and make another",
-        );
-    }
-    let Some(moment) = release.moment.clone() else {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has no moment; give it a wall-clock time or an instant before scheduling",
-        );
-    };
-    if request.nodes.is_empty() {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release carries no nodes, so scheduling it would publish nothing",
-        );
-    }
-
-    // Settle the instruction before anything is read per store: an unknown node is the request's own
-    // mistake and would be the same answer at every shop.
-    let mut carried: Vec<(Arc<dyn BatchNode>, &serde_json::Value)> =
-        Vec::with_capacity(request.nodes.len());
-    for asked in &request.nodes {
-        let Some(node) = state
-            .nodes
-            .iter()
-            .find(|candidate| candidate.key() == asked.node)
-        else {
-            return unknown_batch_node(&state.nodes, &asked.node);
-        };
-        carried.push((Arc::clone(node), &asked.arguments));
-    }
-
-    let stores = match release_target_stores(
-        &state.groups,
-        &state.registry,
+    .await?;
+    let [tenant_id] = parse_ulid_fields([("tenant_id", &request.tenant_id)])?;
+    let tenant_id = TenantId::new(tenant_id);
+    let (release, moment) =
+        release_schedule::draft_to_schedule(&state.releases, tenant_id, &release_id, &request)
+            .await?;
+    let carried = release_schedule::settle_nodes(&state.nodes, &request.nodes)?;
+    let (stores, targets) = release_schedule::target_stores(
+        (&state.groups, &state.registry, &state.config_trees),
         tenant_id,
-        release.target_group_id.as_deref(),
-        request.store_ids.as_deref(),
+        &release,
+        &request,
     )
-    .await
-    {
-        Ok(stores) => stores,
-        Err(refusal) => return refusal,
-    };
-    let targets = match release_target_timezones(&state.config_trees, tenant_id, &stores).await {
-        Ok(targets) => targets,
-        Err(refusal) => return refusal,
-    };
-
-    // One wall-clock time is one instant per timezone: a fleet spanning Ho Chi Minh City and Tokyo
-    // has a two-hour spread, and this is where it is written down (ADR-0125 §2).
-    let resolved = resolve_for_stores(&moment, &targets);
-    let refusals: Vec<(StoreId, ResolveRefusal)> = resolved
-        .iter()
-        .filter_map(|store| match &store.outcome {
-            Err(refusal) => Some((store.store_id, refusal.clone())),
-            Ok(_) => None,
-        })
-        .collect();
-    if !refusals.is_empty() {
-        return unresolvable_moment(&refusals);
-    }
-
-    // The schedule-time half of ADR-0125 §6. A prerequisite the release carries itself is satisfied
-    // by the release — the activator applies them in dependency order — so only the ones it does not
-    // carry are read from the store.
+    .await?;
+    let resolved = release_schedule::resolve_instants(&moment, &targets)?;
     let carried_keys: Vec<&str> = carried.iter().map(|(node, _)| node.key()).collect();
-    for (node, _) in &carried {
-        for needed in prerequisites_for(node.key()) {
-            if carried_keys.contains(needed) {
-                continue;
-            }
-            for store_id in &stores {
-                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
-                    .await
-                {
-                    Ok(serde_json::Value::Null) => {
-                        return api_error(
-                            ErrorStatus::Unprocessable,
-                            format!(
-                                "store {store_id} has no `{needed}` node, which `{}` needs; publish \
-                                 one to it or carry `{needed}` in this release",
-                                node.key()
-                            ),
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(refusal) => return refusal,
-                }
-            }
-        }
-    }
-
-    // Compile each node once for the tenant, then once per store. A refusal here is the
-    // instruction's own — a menu that will not compile — and refuses the release rather than being
-    // recorded at every shop. What a write composes on a store's tree when it lands — a menu's
-    // `fees` — is not snapshotted: it is read from the tree when the write lands, and a snapshot
-    // of it would publish over whatever fee rules are written before the moment arrives.
-    let mut pairs: Vec<(StoreId, String, serde_json::Value)> = Vec::new();
-    for (node, arguments) in &carried {
-        let plan = match node.plan(tenant_id, arguments).await {
-            Ok(plan) => plan,
-            Err(refusal) => return refusal,
-        };
-        for store_id in &stores {
-            match plan.compile_for(*store_id).await {
-                Ok(compiled) => {
-                    for (key, value) in compiled {
-                        pairs.push((*store_id, key, value));
-                    }
-                }
-                Err(refusal) => return refusal,
-            }
-        }
-    }
-
-    let instants: std::collections::BTreeMap<StoreId, i64> = resolved
-        .iter()
-        .filter_map(|store| store.outcome.as_ref().ok().map(|at| (store.store_id, *at)))
-        .collect();
-    // The clock each instant was read in, written down beside it. Without this the report can print
-    // the moment but not the sentence an operator approved — "04:00 at Ginza" and the same instant
-    // read in Ho Chi Minh City are one number and two different reviews (ADR-0125 §26).
-    let zones: std::collections::BTreeMap<StoreId, String> = resolved
-        .iter()
-        .filter_map(|store| {
-            store
-                .timezone
-                .as_ref()
-                .map(|zone| (store.store_id, zone.clone()))
-        })
-        .collect();
-    let now_ms = state.clock.now().as_milliseconds_since_epoch();
-    let mut written = 0_usize;
-    for (store_id, node_key, node_value) in pairs {
-        let Some(effective_at_ms) = instants.get(&store_id).copied() else {
-            // Unreachable: every store resolved above or the release was refused. Recorded rather
-            // than unwrapped, because the alternative is a panic in a request handler.
-            tracing::error!(%store_id, release = %release_id, "a release pair has no instant");
-            return service_unavailable("releases");
-        };
-        let Some(pair_id) = mint_ulid(now_ms) else {
-            return service_unavailable("releases");
-        };
-        let publish = NewScheduledPublish {
-            id: pair_id.to_string(),
-            tenant_id,
-            store_id,
-            node_key,
-            node_value,
-            effective_at_ms,
-            created_by: context.admin.id.clone(),
-            release_id: Some(release_id.clone()),
-            resolved_timezone: zones.get(&store_id).cloned(),
-        };
-        if let Err(error) = state.scheduled.schedule(&publish).await {
-            // Some pairs are already written. They are visible in the report and the release stays
-            // `draft`, which is the honest state for a set that never fully landed — and cancelling
-            // it withdraws what did get written.
-            tracing::error!(%error, release = %release_id, written, "a release pair could not be scheduled");
-            return scheduled_error_response(&error);
-        }
-        written += 1;
-    }
-
-    if let Err(error) = state
-        .releases
-        .set_status(tenant_id, &release_id, ReleaseStatus::Scheduled)
-        .await
-    {
-        return release_error_response(&error);
-    }
-    // One audit row for the decision, beside the per-publish rows the activator's writes will add:
-    // "who decided to ship Tết" has one answer and "when did Ginza get it" has forty (ADR-0125 §7).
-    audit_action(
-        &state.audit,
-        &state.clock,
-        &context,
-        Some(tenant_id),
-        "release.scheduled",
-        "release",
-        &release_id,
-        None,
-        Some(serde_json::json!({
-            "nodes": carried_keys,
-            "stores": stores.len(),
-            "pairs": written,
-        })),
+    release_schedule::check_prerequisites(
+        &state.config_trees,
+        tenant_id,
+        &stores,
+        &carried,
+        &carried_keys,
     )
-    .await;
-    release_report_response(&state, tenant_id, &release_id).await
+    .await?;
+    let pairs = release_schedule::compile_pairs(tenant_id, &stores, &carried).await?;
+
+    // Only now, with every check passed, is anything written.
+    let written = release_schedule::schedule_pairs(
+        &state.scheduled,
+        (tenant_id, &release_id),
+        &context.admin.id,
+        state.clock.now().as_milliseconds_since_epoch(),
+        &resolved,
+        pairs,
+    )
+    .await?;
+    let summary = serde_json::json!({
+        "nodes": carried_keys,
+        "stores": stores.len(),
+        "pairs": written,
+    });
+    Ok(release_schedule::mark_scheduled(&state, &context, (tenant_id, &release_id), summary).await)
 }
 
 #[utoipa::path(
