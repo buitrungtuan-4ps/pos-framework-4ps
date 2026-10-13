@@ -335,7 +335,8 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use crate::cloud::{Cloud, DailyRevenue};
+    use crate::cloud::DailyRevenue;
+    use crate::dashboard::rollup::daily_rollups_from_log;
 
     fn store_id() -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
@@ -502,8 +503,7 @@ mod tests {
                 .await
                 .expect("revenue");
 
-        // The authoritative answer is the full from-log fold. `project` only borrowed `events`, so it
-        // can be moved into a Cloud now.
+        // The authoritative answer is the full from-log fold.
         let mut rescanned = BTreeMap::new();
         let log = events
             .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
@@ -513,8 +513,7 @@ mod tests {
             fold_revenue(&mut rescanned, event);
         }
         let authoritative_revenue = render_revenue_window(rescanned, &RollupWindow::default());
-        let authoritative = Cloud::new(events)
-            .daily_rollups(store_id())
+        let authoritative = daily_rollups_from_log(&events, store_id())
             .await
             .expect("from-log rollups");
         assert_eq!(

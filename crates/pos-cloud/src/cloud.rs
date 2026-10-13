@@ -7,7 +7,6 @@
 //! `pos-fakes` in a test and `store-postgres` in the cloud — static dispatch, no `dyn`
 //! ([ADR-0013](../../../docs/adr/0013-async-strategy.md), [ADR-0026](../../../docs/adr/0026-port-shapes.md)).
 
-use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -16,7 +15,7 @@ use utoipa::ToSchema;
 use std::sync::Arc;
 
 use pos_ports::dynamic::BoxFuture;
-use pos_ports::event_store::{EventQuery, EventStore};
+use pos_ports::event_store::EventStore;
 use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BrandId, StoreId, TenantId};
@@ -52,9 +51,6 @@ pub trait StoreOwners: Send + Sync + core::fmt::Debug {
     /// `Ok(None)`.
     fn owner_of(&self, store_id: StoreId) -> BoxFuture<'_, Result<Option<StoreOwner>, PortError>>;
 }
-
-/// How many events a rollup pass reads per page from the log.
-const ROLLUP_PAGE: u32 = 512;
 
 /// How many trading days before an anchor's own the chain window reaches back.
 ///
@@ -854,39 +850,14 @@ impl<S: EventStore> Cloud<S> {
         stamped
     }
 
-    /// The per-day activity rollup for one store, oldest day first.
-    ///
-    /// Reads the store's log in pages and folds each event into its trading day with the shared
-    /// [`fold_event`](crate::dashboard::rollup::fold_event). This computes the rollup from the log
-    /// every call — correct but O(events); the dashboard read path materialises the *same* fold and
-    /// answers in O(days) ([`crate::dashboard`], [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+    /// The per-day activity rollup for one store, oldest day first, computed from the log every call:
+    /// [`daily_rollups_from_log`](crate::dashboard::rollup::daily_rollups_from_log) over this cloud's
+    /// event store.
     ///
     /// # Errors
     ///
     /// [`PortError`] if the store cannot be reached.
     pub async fn daily_rollups(&self, store_id: StoreId) -> Result<Vec<DailyRollup>, PortError> {
-        let page = NonZeroU32::new(ROLLUP_PAGE).unwrap_or(NonZeroU32::MIN);
-        let page_len = usize::try_from(ROLLUP_PAGE).unwrap_or(usize::MAX);
-        let mut days: BTreeMap<String, DailyRollup> = BTreeMap::new();
-        let mut cursor = None;
-        loop {
-            let mut query = EventQuery::first(store_id, page);
-            if let Some(after) = cursor {
-                query = query.after(after);
-            }
-            let batch = self.store.read(&query).await?;
-            if batch.is_empty() {
-                break;
-            }
-            for event in &batch {
-                crate::dashboard::rollup::fold_event(&mut days, event);
-            }
-            let short = batch.len() < page_len;
-            cursor = batch.last().map(|event| event.event_id);
-            if short {
-                break;
-            }
-        }
-        Ok(crate::dashboard::rollup::render(days))
+        crate::dashboard::rollup::daily_rollups_from_log(&self.store, store_id).await
     }
 }
