@@ -89,15 +89,10 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         return Ok(Vec::new());
     }
     let crates = load(&root)?;
-    let documents = [
-        ("crate-graph.md", crate_graph(&crates)),
-        ("adr-index.md", adr_index(&adrs, &citations)),
-    ];
     let mut findings = dangling_findings(&adrs, &citations);
-    for (name, text) in documents {
-        let path = format!("{OUT_DIR}/{name}");
+    for (path, text) in documents(&crates, &adrs, &citations) {
         if matches!(mode, Mode::Check) {
-            if std::fs::read_to_string(root.join(&path)).ok().as_deref() != Some(text.as_str()) {
+            if !matches_committed(&root, &path, &text) {
                 findings.push(
                     Finding::new(&path, "gen-docs", "is not what the tree generates")
                         .with_hint("run `cargo xtask gen-docs` and commit the result"),
@@ -109,6 +104,44 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         }
     }
     Ok(findings)
+}
+
+/// Each generated document's path and what the tree renders for it.
+fn documents(
+    crates: &[Crate],
+    adrs: &BTreeMap<u32, (String, String)>,
+    citations: &Citations,
+) -> [(String, String); 2] {
+    [
+        (format!("{OUT_DIR}/crate-graph.md"), crate_graph(crates)),
+        (
+            format!("{OUT_DIR}/adr-index.md"),
+            adr_index(adrs, citations),
+        ),
+    ]
+}
+
+/// True when the committed file at `path` is exactly `text`.
+fn matches_committed(root: &Path, path: &str, text: &str) -> bool {
+    std::fs::read_to_string(root.join(path)).ok().as_deref() == Some(text)
+}
+
+/// Each generated document's path, and whether the committed file is what the tree renders.
+///
+/// # Errors
+///
+/// [`Error`] if the tree, `git ls-files` or `docs/adr/` cannot be read.
+pub fn up_to_date(crates: &[Crate]) -> Result<Vec<(String, bool)>, Error> {
+    let root = repo_root();
+    let adrs = adr_titles(&root.join("docs/adr"))?;
+    let citations = citations(&citing_files(&root)?);
+    Ok(documents(crates, &adrs, &citations)
+        .into_iter()
+        .map(|(path, text)| {
+            let current = matches_committed(&root, &path, &text);
+            (path, current)
+        })
+        .collect())
 }
 
 /// A Mermaid node id for a crate name.

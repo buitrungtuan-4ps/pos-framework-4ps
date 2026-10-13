@@ -13,6 +13,7 @@ mod checks;
 mod code_stats;
 mod finding;
 mod gen_docs;
+mod impact;
 
 pub use finding::Finding;
 
@@ -45,6 +46,11 @@ cargo xtask affected --classes [--base <ref>] [--all]
 
   which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,
   workflows, deploy), one `class=true|false` line each, for $GITHUB_OUTPUT (ADR-0171)
+
+cargo xtask impact [--base <ref>]
+
+  a report, not a check: the path classes, affected crates, snapshots, generated docs, and which
+  pull-request jobs run or skip, as Markdown for the pull-request comment (ADR-0171)
 
 cargo xtask code-stats [--json] [--root <dir>]
 
@@ -87,6 +93,7 @@ fn main() -> ExitCode {
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
+        "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),
