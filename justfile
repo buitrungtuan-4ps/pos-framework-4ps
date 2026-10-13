@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates gen-docs-check mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -112,6 +112,14 @@ links:
 # cargo metadata and CODEOWNERS (ADR-0170 decisions 1 and 5).
 crates:
     cargo run -q -p xtask -- crates --check
+
+# docs/generated/ (the crate graph and the ADR index) is what the tree generates. `just gen-docs`
+# rewrites it after a dependency or card changes, or an ADR is first cited or no longer cited.
+gen-docs:
+    cargo run -q -p xtask -- gen-docs
+
+gen-docs-check:
+    cargo run -q -p xtask -- gen-docs --check
 
 # Files duplicated across the ui/ and dashboard/ front-end build roots (design tokens, the contrast
 # gate) must stay byte-identical — the substitute for a shared module they cannot import.

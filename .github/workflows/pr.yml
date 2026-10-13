@@ -70,6 +70,8 @@ jobs:
         run: cargo run -q -p xtask -- countries
       - name: every crate has a README and a contract card that agree with the workspace
         run: cargo run -q -p xtask -- crates --check
+      - name: docs/generated is what the tree generates
+        run: cargo run -q -p xtask -- gen-docs --check
       - name: files mirrored across the front-end build roots stay identical
         run: cargo run -q -p xtask -- mirrored-files
       - name: no vendor brand name in pos-core / pos-proto production code
