@@ -130,6 +130,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **CI: the `test` job may run for 15 minutes instead of 10.** The workspace's tests alone take 8–9
+  minutes on a hosted runner, and a slow runner start cancelled #680's job after every test had
+  passed. Nothing a store runs changes. The cache and selective-run work that follows brings a pull
+  request's CI back under the ten-minute target.
+
 - **A cash drawer behind POS Station's print agent opens by itself**
   ([ADR-0167](docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A drawer wired to a USB
   receipt printer that a print agent writes stayed shut, and the till said to open it with its key,
