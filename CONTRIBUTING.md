@@ -59,7 +59,7 @@ If `just preflight` fails, fix that before anything else. Do not invent alternat
 | Capacity, limits, failure behaviour | `docs/capacity-and-reliability.md` |
 | A term a newcomer would not know | `docs/glossary.md` |
 
-Generated documents — OpenAPI, the permission matrix, the event catalogue — are **never** hand-edited. Regenerate them.
+Generated documents — OpenAPI, the permission matrix, the event catalogue — are **never** hand-edited. Regenerate them. `.gitattributes` marks every generated file `linguist-generated`, with the command that rewrites it, so a pull request's diff collapses them.
 
 ## 6. Changelog and release notes
 
