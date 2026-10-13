@@ -16,6 +16,15 @@
 use std::path::Path;
 use std::process::Command;
 
+/// The `pos-edge` binary. `CARGO_BIN_EXE_*` is fixed at compile time, so a test run from a
+/// nextest archive on another machine (CI's shards) would look for it where it was built;
+/// nextest says where it put it instead.
+fn pos_edge_bin() -> std::ffi::OsString {
+    std::env::var_os("NEXTEST_BIN_EXE_pos-edge")
+        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_pos_edge"))
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_pos-edge").into())
+}
+
 /// A box as a re-run finds it: `bin/current` on slot-a, a store database, and a config naming both.
 fn laid_out_box(root: &Path) -> std::path::PathBuf {
     let bin = root.join("bin");
@@ -47,7 +56,7 @@ fn config_for(root: &Path, store: &Path) -> std::path::PathBuf {
 
 /// Runs `pos-edge promote` against `config`, returning whether it succeeded and what it said.
 fn promote(root: &Path, config: &Path) -> (bool, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_pos-edge"))
+    let output = Command::new(pos_edge_bin())
         .arg("promote")
         .env("POS_EDGE_CONFIG", config)
         .env("RUST_LOG", "info")
@@ -77,7 +86,7 @@ fn promote_puts_this_binary_in_place_of_the_version_a_re_run_finds() {
     );
     assert!(
         std::fs::read(bin.join("slot-b")).expect("slot-b")
-            == std::fs::read(env!("CARGO_BIN_EXE_pos-edge")).expect("the binary"),
+            == std::fs::read(pos_edge_bin()).expect("the binary"),
         "what went in is the program's own bytes, which is what the installer carried"
     );
     assert_eq!(

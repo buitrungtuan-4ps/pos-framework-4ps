@@ -212,31 +212,113 @@ jobs:
   # Tests. The domain suite touches no database, network or hardware, so it needs
   # no services here — that is the point of the sans-I/O core.
   # ---------------------------------------------------------------------------
-  test:
+  # The tests, built once and run in shards (ADR-0171 decision 2). `test-archive`
+  # compiles the affected crates' tests into a nextest archive; `test-shard` runs
+  # it in three partitions at once; `test-doc` runs the doc tests, which nextest
+  # does not; and `test`, the required check, passes only when they did.
+  test-archive:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       PACKAGES: ${{ needs.changes.outputs.packages || '--workspace' }}
-      DOC_PACKAGES: ${{ needs.changes.outputs.doc_packages || '--workspace' }}
-    # 15, not 10: the suite alone now takes 8–9 minutes and a slow runner start
-    # pushed it past 10 on #680 with every test already passed. The cache and
-    # selective-run work (ADR-0171) brings it back under the ten-minute target.
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
         with:
           cache-key: test
+      - uses: ./.github/actions/nextest-setup
       # PACKAGES is `--workspace` or `-p name …` from xtask, split into arguments.
-      - run: |
+      - name: build the tests into one archive
+        run: |
           read -ra args <<<"$PACKAGES"
-          cargo test "${args[@]}" --locked
+          cargo nextest archive "${args[@]}" --locked --archive-file "$RUNNER_TEMP/tests.tar.zst"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}/tests.tar.zst
+          retention-days: 1
+          if-no-files-found: error
+
+  test-shard:
+    needs: [changes, test-archive]
+    if: ${{ !cancelled() && needs.test-archive.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # The archive holds the test binaries; the checkout is the files they read at run time
+      # (snapshots, fixtures), mapped back in with --workspace-remap.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A few tests run `cargo metadata`, so the pinned toolchain must be on the path. No cache:
+      # nothing is compiled here.
+      - name: install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: ./.github/actions/nextest-setup
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: nextest-archive
+          path: ${{ runner.temp }}
+      - name: run shard ${{ matrix.shard }} of 3
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/tests.tar.zst" \
+            --workspace-remap "$GITHUB_WORKSPACE" --partition "count:$SHARD/3"
+
+  test-doc:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.rust == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DOC_PACKAGES: ${{ needs.changes.outputs.doc_packages || '--workspace' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.DOC_PACKAGES != 'none'
+      - uses: ./.github/actions/rust-setup
+        if: env.DOC_PACKAGES != 'none'
+        with:
+          cache-key: test-doc
       - name: doc examples compile
         if: env.DOC_PACKAGES != 'none'
         run: |
           read -ra args <<<"$DOC_PACKAGES"
           cargo test "${args[@]}" --doc
+
+  # The required check. It always runs, so it always reports, and it reads its
+  # dependencies' results rather than inheriting a skip: a shard skipped because the
+  # archive failed is a failure here, never a silent pass.
+  test:
+    needs: [changes, test-archive, test-shard, test-doc]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: every test job passed, or none had anything to run
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUST: ${{ needs.changes.outputs.rust }}
+          ARCHIVE: ${{ needs.test-archive.result }}
+          SHARDS: ${{ needs.test-shard.result }}
+          DOCS: ${{ needs.test-doc.result }}
+        run: |
+          echo "changes=$CHANGES rust=$RUST archive=$ARCHIVE shards=$SHARDS doc=$DOCS"
+          if [ "$CHANGES" != "success" ] || [ "$RUST" = "true" ]; then
+            # Rust is affected (or the classifier failed, so everything ran): all must pass.
+            for result in "$ARCHIVE" "$SHARDS" "$DOCS"; do
+              [ "$result" = "success" ] || { echo "::error::a test job did not succeed ($result)"; exit 1; }
+            done
+          else
+            # Nothing to test: skipped is fine, anything else is not.
+            for result in "$ARCHIVE" "$SHARDS" "$DOCS"; do
+              case "$result" in success|skipped) ;; *) echo "::error::a test job ended $result"; exit 1;; esac
+            done
+          fi
 
   # ---------------------------------------------------------------------------
   # Both target platforms, because the store binary runs on Windows.

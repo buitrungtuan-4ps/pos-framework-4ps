@@ -15,6 +15,15 @@ use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// The `pos-edge` binary. `CARGO_BIN_EXE_*` is fixed at compile time, so a test run from a
+/// nextest archive on another machine (CI's shards) would look for it where it was built;
+/// nextest says where it put it instead.
+fn pos_edge_bin() -> std::ffi::OsString {
+    std::env::var_os("NEXTEST_BIN_EXE_pos-edge")
+        .or_else(|| std::env::var_os("NEXTEST_BIN_EXE_pos_edge"))
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_pos-edge").into())
+}
+
 #[tokio::test]
 async fn a_box_that_cannot_bind_writes_no_pairing_file() {
     // Hold a port, then point the edge at it.
@@ -36,7 +45,7 @@ async fn a_box_that_cannot_bind_writes_no_pairing_file() {
     )
     .expect("write the config");
 
-    let mut edge = Command::new(env!("CARGO_BIN_EXE_pos-edge"))
+    let mut edge = Command::new(pos_edge_bin())
         .env("POS_EDGE_CONFIG", &config)
         .env("POS_EDGE_PAIRING_FILE", &pairing)
         .env("RUST_LOG", "warn")
