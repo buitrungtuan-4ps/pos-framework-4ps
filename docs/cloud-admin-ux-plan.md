@@ -355,7 +355,7 @@ Reproduced end to end: `POST /admin/invites` returns a single-use token; the inv
 issues a TOTP secret. They then go to sign in and get **"The password or code was not accepted."**
 Every time.
 
-The cause is in `crates/pos-cloud/src/auth/admin.rs`. `login` reads `store.load_credential()` — the
+The cause is in `crates/pos-cloud-api/src/auth/admin.rs`. `login` reads `store.load_credential()` — the
 *single* super-admin credential — and checks `admin.credential.password_matches(...)`. It never
 reads `admin_users.password_phc`, which is exactly where `admin_accept_invite` wrote the invitee's
 password (`crates/pos-cloud/src/http.rs`, `create_admin_user`). `LoginRequest` has no email or

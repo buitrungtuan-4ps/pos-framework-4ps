@@ -27,6 +27,7 @@ pub mod admin;
 pub mod apikey;
 pub mod bearer;
 pub mod console_rbac;
+pub mod device_credential;
 pub mod enrol;
 pub mod password;
 pub mod rate_limit;

@@ -15,7 +15,7 @@ In-memory implementations of the ports. They let `pos-core`, `pos-edge` and `pos
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-contract-tests`, `pos-ports`, `pos-proto`.
-- **Used by** (workspace crates): `minimal-edge`; in tests, `key-vault-keyring`, `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `store-sqlite`, `updater-minisign`.
+- **Used by** (workspace crates): `minimal-edge`; in tests, `key-vault-keyring`, `pos-cloud`, `pos-cloud-api`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `store-sqlite`, `updater-minisign`.
 
 ## Entry points
 

@@ -198,7 +198,7 @@ not tidying: leaving them would mean the wire still *offered* a store id that th
 careful to ignore, which is the kind of field somebody wires back up in two years.
 
 **What the move actually buys, stated exactly.** A report is now **tenant-attributable**. It is not
-store-attributable, because a [`Grant`](../../crates/pos-cloud/src/auth/apikey.rs) pins a tenant and a
+store-attributable, because a [`Grant`](../../crates/pos-cloud-api/src/auth/apikey.rs) pins a tenant and a
 scope, not a store — so a key issued to one store can still name a sibling store of the same tenant in
 the path. Cross-tenant forgery is closed; intra-tenant is not. That residual is bounded by what a
 report *is*: pure telemetry that never changes what any box runs ([ADR-0078](0078-sync-and-ota-closure.md)),

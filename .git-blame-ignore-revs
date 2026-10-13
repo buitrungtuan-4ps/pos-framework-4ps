@@ -4,3 +4,6 @@
 #
 # Main is squash-merged, so a move is listed by the commit it landed as on main, added after the
 # merge: one full SHA per line, with a comment naming the pull request above it.
+
+# #727 — the reporting routes move out of http.rs into reports/
+4113ab9fc55356fdc81573213adc7f714b25e26f
