@@ -13,3 +13,6 @@
 
 # #730 — reporting moves into pos-cloud-reports
 08cef898f6155545ca7af3c9d36193b2f5a19b7c
+
+# #732 — five long functions split along their own seams (the moves inside each split)
+d96093fc01f63ca2bcdd0e8c6e01956216ce83d8
