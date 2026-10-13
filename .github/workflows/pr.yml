@@ -921,9 +921,10 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- xtask-impact -->"))) | .id' \
-            | head -n 1)"
+          # All matching ids, then the first in shell: piping into `head` could SIGPIPE `gh`.
+          ids="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- xtask-impact -->"))) | .id')"
+          id="${ids%%$'\n'*}"
           if [ -n "$id" ]; then
             gh api --method PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/impact.md" > /dev/null
           else
