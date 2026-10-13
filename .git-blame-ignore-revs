@@ -7,3 +7,6 @@
 
 # #727 — the reporting routes move out of http.rs into reports/
 4113ab9fc55356fdc81573213adc7f714b25e26f
+
+# #728 — auth, audit, paging and the error envelope move into pos-cloud-api
+12552bff049c0d6ad435160bfb6af3cb1b877395
