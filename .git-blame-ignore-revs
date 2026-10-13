@@ -10,3 +10,6 @@
 
 # #728 — auth, audit, paging and the error envelope move into pos-cloud-api
 12552bff049c0d6ad435160bfb6af3cb1b877395
+
+# #730 — reporting moves into pos-cloud-reports
+08cef898f6155545ca7af3c9d36193b2f5a19b7c
