@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Harness implementations, so `tests/contract.rs` can run all nineteen suites.
+//! Harness implementations, so `tests/contract.rs` can run all twenty suites.
 //!
 //! Each one is thin, and that is the point: the destructive operations a suite needs — losing power,
 //! severing a link, emptying a paper roll, staging an ambiguous card result — are methods on the

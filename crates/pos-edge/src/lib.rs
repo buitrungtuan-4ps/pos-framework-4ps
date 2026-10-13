@@ -6,22 +6,23 @@
 //! This crate is the thin application layer [ADR-0013](../../../docs/adr/0013-async-strategy.md)
 //! calls for: it owns the async runtime, the HTTP surface and the transaction, and it composes the
 //! synchronous [`pos_core`] domain with whatever adapters the fork selected. It serves the operator
-//! UI to every device on the store LAN and, in later slices, applies each decision inside one
-//! transaction and fans the result out over a WebSocket.
+//! UI to every device on the store LAN, applies each decision inside one transaction
+//! ([`app`]), and fans the result out over a WebSocket.
 //!
 //! The [`main`](../pos_edge/index.html) entry point is deliberately tiny; everything testable lives
 //! here so the HTTP surface can be exercised without binding a socket (see `tests/http.rs`).
 //!
 //! # What lives where
 //!
-//! - [`config`] — the edge's configuration, loaded from disk (with last-known-good retention in a
-//!   later slice).
+//! - [`config`] — the edge's configuration, loaded from disk; [`active_config`] holds the running
+//!   configuration with its last-known-good.
 //! - [`telemetry`] — the `tracing` subscriber, which records identifiers and counts but **never PII**
 //!   ([`pos_proto::pii`]).
 //! - [`fanout`] — the store-LAN fan-out: one committed change broadcast to every device under 50 ms
 //!   ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)).
-//! - [`http`] — the axum router: the health probe, the embedded UI, and the `/ws` WebSocket today;
-//!   the domain routes as they land.
+//! - [`app`] — the application layer: every command, loaded, decided, applied and published.
+//! - [`http`] — the axum router: the health probe, the embedded UI, the `/ws` WebSocket, and the
+//!   `/api/*` domain routes, one file per area.
 //! - [`activation`] — the first-boot device activation flow and the boot gate: a generic sub-router
 //!   composing [`CloudSync`](pos_ports::CloudSync) and [`KeyVault`](pos_ports::KeyVault), merged into
 //!   the app once its concrete adapters are selected
