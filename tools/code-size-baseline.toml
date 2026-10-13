@@ -14,7 +14,7 @@
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 38555
+"crates/pos-cloud/src/http.rs" = 37942
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
