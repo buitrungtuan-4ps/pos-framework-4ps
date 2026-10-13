@@ -15,7 +15,10 @@ export default defineConfig({
   // The screen walk is a record, not a gate, and it costs minutes (`pnpm screens`, which uses
   // `playwright.screens.config.mjs`). A pull request should not pay for it here.
   testIgnore: ["**/screens.spec.mjs"],
-  fullyParallel: false,
+  // `fullyParallel` is what lets `--shard=k/3` split this one spec file by test rather than by file,
+  // so CI can run the flows in three jobs (ADR-0171). It does not overlap them: `workers: 1` keeps
+  // one test at a time within a run, each against its own edge.
+  fullyParallel: true,
   workers: 1,
   retries: 0,
   forbidOnly: Boolean(process.env["CI"]),

@@ -64,7 +64,7 @@ fmt → clippy -D warnings → unit tests (core: no database, no network)
 | `test-archive`, `test-shard`, `test-doc`, `deny`, `postgres` | Rust. `test`, the required check, always runs and passes only when the three test jobs passed, or none had anything to run |
 | `lints` | Rust or `deploy/` |
 | `build` | Rust (the build), or Rust, `deploy/` or `dashboard/` (the Windows installer checks); its steps skip rather than the job, so each matrix check still reports |
-| `ui`, `replay` | `ui/`, `packages/shared/` or Rust |
+| `ui`, `replay-build`, `replay-shard` | `ui/`, `packages/shared/` or Rust. `replay-build` builds the UI and `examples/minimal-edge` once; three `replay-shard` jobs each run a third of the flows against it (`--shard=k/3`); `replay`, the required check, always runs and passes only when they did, or none had anything to run |
 | `dashboard` | `dashboard/`, `packages/shared/`, Rust or `deploy/` |
 | `console-replay` | `dashboard/`, `packages/shared/` or Rust |
 
