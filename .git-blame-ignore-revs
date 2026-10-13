@@ -1,0 +1,6 @@
+# Commits that only move code (ADR-0170 decision 4), so `git blame` looks through them to the
+# commit that last changed each line. GitHub's blame view reads this file; locally, run
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Main is squash-merged, so a move is listed by the commit it landed as on main, added after the
+# merge: one full SHA per line, with a comment naming the pull request above it.
