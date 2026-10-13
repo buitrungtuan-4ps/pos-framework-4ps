@@ -265,6 +265,8 @@ jobs:
       - uses: ./.github/actions/node-setup
       - name: install dependencies
         run: pnpm install --frozen-lockfile
+      - name: the size rules (ESLint, ADR-0172)
+        run: pnpm lint
       - name: typecheck and build
         run: pnpm build
 
@@ -429,6 +431,8 @@ jobs:
       - uses: ./.github/actions/node-setup
       - name: install dependencies
         run: pnpm install --frozen-lockfile
+      - name: the size rules (ESLint, ADR-0172)
+        run: pnpm lint
       - name: typecheck and build
         run: pnpm build
 

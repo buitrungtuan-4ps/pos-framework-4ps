@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && pnpm tokens && pnpm classes && pnpm steps && vite build",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint . && node scripts/eslint-baseline.mjs --check",
     "i18n:lint": "node scripts/i18n-lint.mjs",
     "contrast": "node scripts/wcag-contrast.mjs",
     "tokens": "node scripts/token-roles.mjs",
@@ -27,8 +28,10 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.0.9",
+    "eslint": "10.11.0",
     "tailwindcss": "^4.0.9",
     "typescript": "^5.9.3",
+    "typescript-eslint": "8.70.1",
     "vite": "^8.3.1",
     "vite-plugin-solid": "^2.11.2"
   },

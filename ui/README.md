@@ -32,7 +32,16 @@ pnpm install          # once, and after dependency changes
 pnpm build            # tsc --noEmit, then vite build → ui/dist/
 pnpm dev              # live server, proxying /api and /ws to a store on :8787
 pnpm typecheck        # types only
+pnpm lint             # the size rules: ESLint, then the baseline check (ADR-0172)
 ```
+
+`pnpm lint` holds `src/` and `scripts/` to ADR-0170's TypeScript size limits: a file fails above
+1,000 lines and a function above 100 (both counted without blank lines and comments), and nesting
+fails deeper than 4. Warnings start at 500 lines, 50-line functions, complexity 10 and 5
+parameters. Files that already broke a fail level are listed in `eslint-baseline.json` with their
+figures and may not grow. When one is back within the limit, `pnpm lint` fails until its entry is
+removed (`node scripts/eslint-baseline.mjs --write`, then check the diff only removes).
+`eslint-disable` comments have no effect. The config and the script are mirrored in `dashboard/`.
 
 `pnpm build` writes `ui/dist/`, which the default `pos-edge` build embeds. For a live UI against a
 running store, `pnpm dev` (Vite) serves the app and proxies the API and the WebSocket to

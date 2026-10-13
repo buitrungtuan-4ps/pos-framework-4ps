@@ -16,7 +16,8 @@ How to read the **Checked by** column:
   `POS_UPDATE_SNAPSHOTS=1` and the test command given in the row (`just snapshot` does pos-proto and
   pos-core).
 - **`ui build`** and **`dashboard build`** are `pnpm build`. It typechecks, runs the i18n lint and
-  parity, contrast and step-budget scripts, and in `dashboard/` the vitest suite.
+  parity, contrast and step-budget scripts, and in `dashboard/` the vitest suite. The same jobs run
+  **`pnpm lint`** first: ESLint's size rules and their baseline ([ADR-0172](adr/0172-eslint-checks-the-front-ends.md)).
 - **replay** and **console-replay** are the Playwright jobs.
 
 Every change also needs a `changes/<topic>.md` file ([`changes/README.md`](../changes/README.md),
@@ -112,7 +113,7 @@ Console permissions are separate: see the cloud route table.
 
 | Step | Files | Checked by |
 |---|---|---|
-| Screen | `ui/src/screens/<Screen>.tsx` | `ui build` |
+| Screen | `ui/src/screens/<Screen>.tsx` | `ui build`, `pnpm lint` |
 | Route | `<Route path=… component=…>` in `ui/src/App.tsx` | `ui build` (step budget reads it) |
 | Task budget | `TASKS` in `ui/scripts/step-budget.mjs` | `ui build` |
 | Strings | `ui/src/i18n/en.json`, `vi.json` | `ui build` (i18n lint and parity) |
