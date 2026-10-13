@@ -1,0 +1,15 @@
+# cargo-nextest (ADR-0171 decision 2). Locally `cargo test` and `cargo nextest run` run the same
+# tests; CI uses nextest to build the tests once and run them in shards, each test in its own
+# process.
+
+[profile.default]
+# Report a test that runs past a minute, so a hang is visible before the job's timeout.
+slow-timeout = { period = "60s" }
+
+[profile.ci]
+# Run every test even after one fails, so a pull request learns of every failure at once.
+fail-fast = false
+# No retries: a test that passes only on a second try is a flaky test to fix, not to hide.
+retries = 0
+slow-timeout = { period = "60s" }
+failure-output = "immediate-final"

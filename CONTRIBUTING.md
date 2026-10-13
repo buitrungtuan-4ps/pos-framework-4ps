@@ -28,6 +28,15 @@ just run-edge            # a store on your machine, UI at http://localhost:8080
 just run-cloud           # the control plane on your machine
 ```
 
+**CI runs the tests with [cargo-nextest](https://nexte.st/)**, each test in its own process, built once and split into three shards. `just test` keeps `cargo test`, and the two run the same tests. To run them the way CI does, install the version pinned in `tools/tool-versions.toml` (`[cargo-nextest]`), then:
+
+```bash
+cargo nextest run --workspace --profile ci   # what the three shards run between them
+cargo test --workspace --doc                 # the doc tests, which nextest does not run
+```
+
+The `ci` profile in `.config/nextest.toml` reports every failure rather than stopping at the first, and never retries. A test that passes under `cargo test` but not under nextest usually shares state with another test through a global, an environment variable or a port. Fix the test, or put it in a `test-groups` entry in `.config/nextest.toml`. Never skip it.
+
 If `just preflight` fails, fix that before anything else. Do not invent alternative build commands; if one is missing, add it to the `justfile` in its own PR.
 
 ## 3. Before writing code

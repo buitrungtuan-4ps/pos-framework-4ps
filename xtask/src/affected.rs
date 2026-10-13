@@ -11,7 +11,7 @@
 //!
 //! | Class | Files |
 //! |---|---|
-//! | `rust_all` | `crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.cargo/`, `.github/`, `xtask/`, `tools/` |
+//! | `rust_all` | `crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.cargo/`, `.config/` (nextest), `.github/`, `xtask/`, `tools/` |
 //! | `rust` | any other file under `crates/`, `countries/`, `examples/` or `apps/`, any `*.rs` or `Cargo.toml`, the `justfile`; and `rust_all` |
 //! | `ui`, `dashboard`, `shared` | `ui/`, `dashboard/`, `packages/shared/` |
 //! | `deploy` | `deploy/`, `k8s/`, `.dockerignore` |
@@ -41,7 +41,7 @@ pub const CLASSES: [&str; 8] = [
 ];
 
 /// Paths whose change can affect every Rust crate, or how CI runs: they run everything.
-const RUST_ALL: [&str; 13] = [
+const RUST_ALL: [&str; 14] = [
     "crates/pos-proto/",
     "crates/pos-core/",
     "crates/pos-ports/",
@@ -52,6 +52,7 @@ const RUST_ALL: [&str; 13] = [
     "clippy.toml",
     "deny.toml",
     ".cargo/",
+    ".config/",
     ".github/",
     "xtask/",
     "tools/",
@@ -375,6 +376,7 @@ mod tests {
         );
         assert_eq!(classes(&["Cargo.lock"]), ["rust", "rust_all"]);
         assert_eq!(classes(&["tools/tool-versions.toml"]), ["rust", "rust_all"]);
+        assert_eq!(classes(&[".config/nextest.toml"]), ["rust", "rust_all"]);
     }
 
     #[test]
