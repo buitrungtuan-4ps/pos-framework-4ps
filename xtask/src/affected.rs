@@ -16,7 +16,7 @@
 //! | `ui`, `dashboard`, `shared` | `ui/`, `dashboard/`, `packages/shared/` |
 //! | `deploy` | `deploy/`, `k8s/`, `.dockerignore` |
 //! | `workflows` | `.github/` |
-//! | `docs_only` | true when every file is documentation: `docs/`, `changes/`, `.jules/`, any `*.md` outside `.github/`, `LICENSE`, `CODEOWNERS`, `.gitignore`, `.gitattributes`, `.editorconfig` |
+//! | `docs_only` | true when every file is documentation: `docs/`, `changes/`, `.jules/`, any `*.md` outside `.github/`, `LICENSE`, `CODEOWNERS`, `.gitignore`, `.gitattributes`, `.editorconfig`, `.git-blame-ignore-revs` |
 //!
 //! **When unsure, run.** A file no rule names counts as `rust_all`, `ui` and `dashboard` all at
 //! once, and so does `--all`, which CI passes on a push to `main` and on a schedule. The only way a
@@ -59,7 +59,7 @@ const RUST_ALL: [&str; 14] = [
 ];
 
 /// Files that change no build and no test.
-const DOCS: [&str; 9] = [
+const DOCS: [&str; 10] = [
     "docs/",
     "changes/",
     ".jules/",
@@ -68,6 +68,8 @@ const DOCS: [&str; 9] = [
     ".gitignore",
     ".gitattributes",
     ".editorconfig",
+    // Which commits `git blame` looks through: read by git and GitHub, never by a build or a test.
+    ".git-blame-ignore-revs",
     "README.md",
 ];
 
@@ -637,6 +639,20 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_blame_ignore_list_is_documentation() {
+        assert_eq!(classes(&[".git-blame-ignore-revs"]), ["docs_only"]);
+        assert_eq!(
+            classes(&[".git-blame-ignore-revs", "docs/metrics/pilot-2026-10.md"]),
+            ["docs_only"]
+        );
+        assert_eq!(
+            classes(&[".git-blame-ignore-revs", "crates/pos-cloud/src/http.rs"]),
+            ["rust"],
+            "it adds nothing to a change that has code"
+        );
     }
 
     #[test]
