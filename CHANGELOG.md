@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **AccountMenu focus visible accessibility.**
+  Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` focus outline styling to interactive controls in `dashboard/src/components/AccountMenu.tsx` (the menu trigger button, language select, router links, and sign-out button) for improved keyboard navigation accessibility.
+
 ### Security
 
 - **A CSV export never hands a spreadsheet a formula.** Excel, LibreOffice and Google Sheets run a
