@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 
 mod checks;
+mod code_stats;
 mod finding;
 
 pub use finding::Finding;
@@ -30,6 +31,10 @@ cargo xtask <check>
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
+
+cargo xtask code-stats [--json] [--root <dir>]
+
+  a report, not a check: file, function, parameter, crate README and front-end figures (ADR-0170)
 ";
 
 fn main() -> ExitCode {
@@ -39,6 +44,16 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let rest: Vec<String> = args.collect();
+
+    if check == "code-stats" {
+        return match code_stats::run(&rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("xtask code-stats: {error}");
+                ExitCode::from(3)
+            }
+        };
+    }
 
     let findings = match check.as_str() {
         "deps-rule" => checks::deps_rule::run(&rest),
