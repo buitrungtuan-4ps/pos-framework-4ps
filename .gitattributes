@@ -8,3 +8,26 @@ deploy/edge/install-pos-print-agent.ps1 text eol=lf
 deploy/edge/pos-print-agent.service     text eol=lf
 deploy/edge/trust-internal-signing-cert.ps1 text eol=lf
 deploy/release/*.ps1             text eol=lf
+
+# Generated files (ADR-0170 decision 5). `linguist-generated` collapses them in pull-request diffs
+# and leaves them out of the language statistics; they still show, and still need review. Each is
+# rewritten by its generator, never by hand:
+#   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-proto     docs/snapshots/events.txt, settings.txt,
+#                                                      docs/configuration.md
+#   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-core      docs/snapshots/capabilities.txt,
+#                                                      permissions.txt, docs/permissions.md,
+#                                                      docs/state-machines.md
+#   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-edge      docs/snapshots/routes.txt
+#   POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-cloud     docs/openapi.json, docs/openapi-admin.json
+#   dashboard/src/installers.mjs                       the two installer templates below
+#   cargo and pnpm                                     the lockfiles
+docs/snapshots/*                         linguist-generated=true
+docs/openapi*.json                       linguist-generated=true
+docs/configuration.md                    linguist-generated=true
+docs/permissions.md                      linguist-generated=true
+docs/state-machines.md                   linguist-generated=true
+deploy/edge/install-pos-edge.ps1         linguist-generated=true
+deploy/edge/install-pos-print-agent.ps1  linguist-generated=true
+Cargo.lock                               linguist-generated=true
+apps/pos-station/src-tauri/Cargo.lock    linguist-generated=true
+**/pnpm-lock.yaml                        linguist-generated=true
