@@ -59,6 +59,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [metrics/baseline-2026-10.md](metrics/baseline-2026-10.md) | The size and shape of the code before the standardisation work |
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
 | [../SECURITY.md](../SECURITY.md) · [../MAINTAINERS.md](../MAINTAINERS.md) | Reporting a vulnerability; who owns which area |
+| `README.md` in every workspace crate, for example [pos-core](../crates/pos-core/README.md), [pos-edge](../crates/pos-edge/README.md), [store-sqlite](../crates/adapters/store-sqlite/README.md) | One crate each: what it is, what it owns, its workspace dependencies and dependents, entry points, governing ADRs, how to test it |
 | [../ui/README.md](../ui/README.md) · [../dashboard/public/fonts/README.md](../dashboard/public/fonts/README.md) · [../countries/vn/README.md](../countries/vn/README.md) · [../countries/jp/README.md](../countries/jp/README.md) · [../countries/in/README.md](../countries/in/README.md) | The till's front end, the console's self-hosted typeface, and each shipped country module |
 
 ## Explanation: understand why
