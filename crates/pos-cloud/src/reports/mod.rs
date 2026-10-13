@@ -16,4 +16,5 @@
 
 pub(crate) mod revenue;
 pub(crate) mod rollups;
+pub(crate) mod state;
 pub(crate) mod xz;

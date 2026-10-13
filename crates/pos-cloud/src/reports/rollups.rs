@@ -24,9 +24,10 @@ use crate::dashboard::rollup::WindowError;
 use crate::dashboard::{RollupStore, RollupWindow, StoredRollups, dashboard};
 use crate::export;
 use crate::http::{
-    CloudApp, ConfigTenantQuery, api_error, audit_action, csv_download_response, parse_ulid_fields,
+    ConfigTenantQuery, api_error, audit_action, csv_download_response, parse_ulid_fields,
     require_permission, rollup_error_response, window_refusal,
 };
+use crate::reports::state::ReportsState;
 
 /// A store's per-trading-day activity rollups, oldest day first — answered from the materialised
 /// rollup, never a log scan.
@@ -49,22 +50,18 @@ use crate::http::{
     ),
     tag = "rollups",
 )]
-pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub(crate) async fn daily_rollups<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(window): Query<RollupWindowQuery>,
 ) -> Response
 where
-    // S and A are unused here but are part of the shared `CloudApp` state, which the `State`
-    // extractor needs whole as `Clone + Send + Sync`.
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
     // read rollups at all? Only then does the request touch a resource.
@@ -119,20 +116,18 @@ impl RollupWindowQuery {
 /// super-admin is global ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)) — it already reads
 /// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
 /// mutated.
-pub(crate) async fn admin_daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub(crate) async fn admin_daily_rollups<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) =
         require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
@@ -172,20 +167,18 @@ pub(crate) struct AdminRollupWindowQuery {
 /// Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read
 /// (ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by
 /// row count.
-pub(crate) async fn admin_export_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub(crate) async fn admin_export_rollups<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<AdminRollupWindowQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     let context =
         match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
@@ -228,20 +221,18 @@ where
 /// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
 /// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 /// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
-pub(crate) async fn admin_rollups_reset<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub(crate) async fn admin_rollups_reset<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<ConfigTenantQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &app.admin,

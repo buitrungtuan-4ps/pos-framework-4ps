@@ -21,27 +21,26 @@ use crate::cloud::{DailyCash, STORE_DRAWER};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::dashboard::{RollupStore, xz_report};
 use crate::http::strip_tree_version;
-use crate::http::{CloudApp, parse_ulid_fields, require_permission, rollup_error_response};
+use crate::http::{parse_ulid_fields, require_permission, rollup_error_response};
+use crate::reports::state::ReportsState;
 
 /// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
 /// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
 /// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the
 /// day's drawers is named from the store's published `devices` node as the report is served
 /// ([`published_till_names`]).
-pub(crate) async fn admin_xz_report<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+pub(crate) async fn admin_xz_report<R, K, C, A, T>(
+    State(app): State<ReportsState<R, K, C, A, T>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<XzReportQuery>,
 ) -> Response
 where
-    S: Clone + Send + Sync + 'static,
     R: RollupStore + Clone + Send + Sync + 'static,
     K: Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &app.admin,
