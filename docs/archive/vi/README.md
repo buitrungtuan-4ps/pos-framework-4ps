@@ -2,7 +2,7 @@
 
 These are the original Vietnamese design documents produced during the design discussion. They are **not maintained** and must never be used to reconcile code.
 
-The English documents in the parent directory are the single source of truth. If you find a rule here that is missing there, treat it as a bug in the English set and fix the English set.
+The English documents under `docs/` are the single source of truth. If you find a rule here that is missing there, treat it as a bug in the English set and fix the English set.
 
 | File | Superseded by |
 |---|---|
