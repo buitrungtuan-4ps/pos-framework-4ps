@@ -10,12 +10,11 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 
 - Event ingest (a store's HTTPS `/sync/stores/{store_id}/events`, the NATS cursor, and `/internal/ingest`) and the rollup read model
 - The configuration tree: compose, validate, version, publish
-- Console authentication, role-based access and API keys
 - Webhooks, retention and PII masking, OTA release hosting, exports
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
 - **Used by** (workspace crates): no workspace crate.
 
 ## Entry points
@@ -26,7 +25,7 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 - `src/reports/`: the reporting routes: the daily rollups, revenue and its CSV exports, the X/Z report
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
 - `src/config_tree/`: the configuration tree
-- `src/auth/`: console login, sessions, `ConsolePermission`, API keys
+- `pos-cloud-api` (re-exported as `auth`, `audit`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail and the error envelope
 
 ## Rules
 

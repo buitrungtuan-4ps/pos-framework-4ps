@@ -15,7 +15,7 @@ The cloud's `EventStore` over PostgreSQL, and the tables behind every other clou
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`.
-- **Used by** (workspace crates): `pos-cloud`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-api`.
 
 ## Entry points
 
