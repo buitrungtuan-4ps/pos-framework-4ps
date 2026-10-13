@@ -45,7 +45,7 @@ Read this file before your first change. Everything below is enforced by CI wher
 - Make every new adapter pass the shared contract test suite for its port.
 - Apply [`docs/design-principles.md`](docs/design-principles.md): extend by adding an adapter, never by branching inside the core; extract shared code on the **third** occurrence, not the second; no speculative abstraction, flag, or layer.
 - Land the documentation change in the **same pull request** as the behaviour change.
-- Add a `CHANGELOG.md` entry for every user-visible change, with an upgrade note when a protocol, migration, permission, or default value changes.
+- Add a `changes/` file for every user-visible change (`changes/README.md`), with an `upgrade_note` when a protocol, migration, permission, or default value changes. Do not edit `CHANGELOG.md` by hand; `cargo xtask changelog` folds the files in before a release.
 
 ## 3. One command
 
@@ -83,7 +83,7 @@ A change is complete when all of these are true:
 
 ## 5b. Three artifacts, three jobs
 
-`docs/**` describes **how it is now** · `docs/adr/**` records **why it was decided** (immutable — supersede rather than edit) · `CHANGELOG.md` records **what changed and when**. Do not put history into the specification, and never bury a decision in a commit message.
+`docs/**` describes **how it is now** · `docs/adr/**` records **why it was decided** (immutable — supersede rather than edit) · `CHANGELOG.md`, folded from `changes/`, records **what changed and when**. Do not put history into the specification, and never bury a decision in a commit message.
 
 ## 6. Pull requests
 

@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned links mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -98,6 +98,11 @@ lint-config:
 
 actions-pinned:
     cargo run -q -p xtask -- actions-pinned
+
+# Every change file under changes/ is well-formed (ADR-0170 decision 5). `cargo xtask changelog`
+# without --check folds them into CHANGELOG.md, by hand, before a release.
+changelog-check:
+    cargo run -q -p xtask -- changelog --check
 
 links:
     cargo run -q -p xtask -- links
