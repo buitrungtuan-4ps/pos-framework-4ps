@@ -1,6 +1,6 @@
 # Naming and API standard
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-13
 
 Based on Google's API Improvement Proposals (AIP), with four deliberate deviations listed in §12.
 
@@ -217,6 +217,54 @@ Permission ids are contracts: add only, never remove.
 ## 10. Source code
 
 Crates use `kebab-case` (`pos-core`, `fiscal-vn`) per Cargo convention. Modules, files, functions, and variables are `snake_case`. Types, traits, and enum types are `PascalCase`. Constants are `SCREAMING_SNAKE_CASE`. Rust enum variants are `PascalCase` internally and serialise to `UPPER_SNAKE_CASE` on the wire.
+
+### 10.1 Code and files
+
+[ADR-0170](adr/0170-repository-layout-code-naming-and-size-rules.md) decision 2. Everything that
+crosses a boundary keeps §1–§9; nothing published is renamed to fit this section. These rules apply
+to new code, and existing names that break them are left alone until the code around them moves.
+
+**Rust** follows the [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/naming.html):
+
+| Rule | Example from this tree |
+|---|---|
+| `as_` is a free borrow or copy, `to_` an allocating or costly conversion, `into_` consumes `self` | `Timestamp::as_milliseconds_since_epoch`, `as_wire` (`pos-proto/src/wire_enum.rs`), `EventEnvelope::into_typed` |
+| A getter is the field's name, with no `get_` | `PublishedSession::idle_lock_seconds`, `PublishedShift::opening_float_minor` |
+| A predicate starts `is_` or `has_` | `Sessions::is_durable`, `has_gone_idle` (`pos-edge/src/auth.rs`) |
+| An error type ends in `Error` | `PortError`, `BlobKeyError` (`pos-ports`), `TransitionError`, `ClockError` (`pos-core`) |
+
+**TypeScript** (`ui/`, `dashboard/`):
+
+| Rule | Example from this tree |
+|---|---|
+| A file that exports one component is that component's name, `PascalCase.tsx` | `ui/src/screens/Shift.tsx`, `dashboard/src/components/CommandPalette.tsx` |
+| Any other module is `kebab-case.ts`, or `.tsx` when it holds JSX | `dashboard/src/lib/nav-groups.ts`, `dashboard/src/lib/entity-crud.ts`, `dashboard/src/components/kit.tsx` |
+| A hook is `useX` | `useDarkTakeover` (`ui/src/lib/screen.ts`), `useEntityCrud` (`dashboard/src/lib/entity-crud.ts`) |
+
+Two existing modules predate the rule and keep their names until they move:
+`ui/src/api/edgeVersion.ts` and `ui/src/api/leaseStanding.ts`.
+
+**Files and directories** are `kebab-case`: `crates/pos-core`, `crates/adapters/store-sqlite`,
+`templates/adapter-template`, `docs/guides/write-an-adapter.md`. The exception is a Rust module, whose
+file or directory is `snake_case` because the module path is its name: `pos-edge/src/http/route_permissions.rs`,
+`pos-cloud/src/config_tree/`.
+
+**Standard codes**, for new fields and values:
+
+| Kind | Standard | Example |
+|---|---|---|
+| Country | ISO 3166-1 alpha-2, upper-case on the wire, lower-case in a path | `CountryCode` (`pos-proto/src/locale.rs`), `countries/vn` |
+| Currency | ISO 4217 | `{"currency_code":"VND","amount_minor":150000}` (§3.2) |
+| Language and locale | BCP 47 | `vi-VN`, `ja-JP`; `LocalePack`'s language tag |
+| Instant | RFC 3339, UTC, in a field ending `_time` (§3.1) | `event_time`, `close_time` |
+
+One published field predates the time rule and stays, since nothing published is renamed:
+`placed_at_ms` in `docs/openapi.json`.
+
+**Language.** Code is in English: identifiers, comments, log lines and error messages. Vietnamese
+prose appears only in the i18n catalogues (`ui/src/i18n/vi.json`, `dashboard/src/i18n/vi.json`) and
+in the archive of the original design documents (`docs/archive/vi/`). A Vietnamese *value* is data,
+not prose: a test fixture's dish (`"Phở bò"`) or a comment naming the currency's unit (đồng).
 
 ## 11. Versioning
 
