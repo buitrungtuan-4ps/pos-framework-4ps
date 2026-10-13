@@ -38,7 +38,6 @@
 "crates/pos-proto/src/fees.rs" = 1317
 "crates/pos-proto/src/locale.rs" = 1376
 "crates/pos-proto/src/menu.rs" = 1224
-"crates/pos-proto/src/settings.rs" = 1375
 
 [functions]
 "crates/adapters/store-postgres/src/alerts.rs::PostgresAlerts::upsert" = { lines = 41, params = 10 }
@@ -106,7 +105,6 @@
 "crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
 "crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
 "crates/pos-fakes/src/store.rs::<FakeTx as TxContext>::commit" = { lines = 102, params = 1 }
-"crates/pos-proto/src/settings.rs::register" = { lines = 475, params = 0 }
 "xtask/src/checks/countries.rs::run" = { lines = 137, params = 1 }
 "xtask/src/checks/deps_rule.rs::check" = { lines = 125, params = 3 }
 "xtask/src/checks/tls_modes.rs::run" = { lines = 122, params = 1 }
