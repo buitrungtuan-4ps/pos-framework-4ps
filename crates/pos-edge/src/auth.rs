@@ -285,6 +285,18 @@ pub fn has_gone_idle(last_seen: Timestamp, now: Timestamp, timeout: Duration) ->
     elapsed_ms >= timeout_ms
 }
 
+/// What [`Sessions::admit`] found: who is acting, at which instant, and whether that instant is due
+/// to be written through to the registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Admission {
+    /// The employee signed in on the device.
+    pub employee_id: EmployeeId,
+    /// The instant the check was made at, now the device's `last_seen_at`.
+    pub now: Timestamp,
+    /// Whether the caller should [flush](Sessions::flush_last_seen) it.
+    pub flush_due: bool,
+}
+
 /// Who is signed in on each paired device (S0b, [ADR-0084](../../../docs/adr/0084-device-authentication.md)),
 /// durable across a restart (S0d, [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)).
 ///
@@ -495,6 +507,60 @@ impl Sessions {
             .copied()?;
         // Read after the map's lock is released, so the two locks are never held together.
         (!has_gone_idle(held.last_seen_at, now, self.idle_timeout())).then_some(held.employee_id)
+    }
+
+    /// The employee signed in on `device` as of the instant `clock` gives, read **while the map is
+    /// held**, or `None` if nobody is or the device has gone idle. The request path's read.
+    ///
+    /// The clock is read under the lock, not before it, because [`Self::admit`] moves
+    /// `last_seen_at` under the same lock. Read before it, a request could stamp its instant, lose
+    /// the lock to a later request from the same device that moves `last_seen_at` past that
+    /// instant, and then see an interval below zero: the clock gone backwards, so an expired
+    /// sign-in. The till sends several reads at once after signing in, and on a busy box one of
+    /// them was refused `403` that way.
+    pub fn employee_now(
+        &self,
+        device: DeviceId,
+        clock: impl FnOnce() -> Timestamp,
+    ) -> Option<EmployeeId> {
+        // Read before the map's lock is taken, so the two locks are never held together.
+        let idle_timeout = self.idle_timeout();
+        let by_device = self
+            .by_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let held = by_device.get(&device)?;
+        (!has_gone_idle(held.last_seen_at, clock(), idle_timeout)).then_some(held.employee_id)
+    }
+
+    /// The command gate's check and touch in one step: the employee signed in on `device`, with the
+    /// instant `clock` gave, and whether that instant is due to be flushed to the registry. `None`
+    /// if nobody is signed in or the device has gone idle, and then nothing is touched.
+    ///
+    /// One lock, with the clock read inside it, for the reason [`Self::employee_now`] gives: two
+    /// requests from one device then see the instants in the order they move `last_seen_at`, so
+    /// only a clock that really went backwards expires a sign-in.
+    pub fn admit(&self, device: DeviceId, clock: impl FnOnce() -> Timestamp) -> Option<Admission> {
+        let idle_timeout = self.idle_timeout();
+        let mut by_device = self
+            .by_device
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let held = by_device.get_mut(&device)?;
+        let now = clock();
+        if has_gone_idle(held.last_seen_at, now, idle_timeout) {
+            return None;
+        }
+        let behind = now
+            .as_milliseconds_since_epoch()
+            .saturating_sub(held.last_seen_at.as_milliseconds_since_epoch());
+        held.last_seen_at = now;
+        let due = i64::try_from(LAST_SEEN_FLUSH_INTERVAL.as_millis()).unwrap_or(i64::MAX);
+        Some(Admission {
+            employee_id: held.employee_id,
+            now,
+            flush_due: self.registry.is_some() && behind >= due,
+        })
     }
 
     /// Records that `device` was just heard from, so it does not go idle while in use.
@@ -929,6 +995,87 @@ mod tests {
             "nothing to flush, because nothing was created"
         );
         assert_eq!(sessions.employee_for(device, at(1_000)), None);
+    }
+
+    #[test]
+    fn concurrent_requests_from_one_device_never_expire_each_other() {
+        // The till sends several reads at once after signing in. With the clock read before the
+        // lock, one of them could lose the lock to a later one that moved `last_seen_at` past its
+        // instant, see time run backwards and be refused `403` — on a busy box that left Paid in
+        // and Paid out disabled for the shift. `admit` and `employee_now` read the clock inside
+        // the lock, so a clock that only moves forwards never expires a sign-in.
+        use super::Sessions;
+        use pos_proto::ids::DeviceId;
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        const THREADS: usize = 8;
+        const CALLS: usize = 2_000;
+
+        let sessions = Sessions::new();
+        let device = DeviceId::new(Ulid::from_u128(0xD));
+        let alice = EmployeeId::new(Ulid::from_u128(1));
+        block_on(sessions.sign_in(device, alice, at(1_000_000))).expect("no registry");
+        // A clock that only moves forwards, one millisecond per read, shared by every thread.
+        let ticks = AtomicI64::new(1_000_001);
+        let clock = || at(ticks.fetch_add(1, Ordering::SeqCst));
+
+        let refused = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..THREADS)
+                .map(|worker| {
+                    let (sessions, clock) = (&sessions, &clock);
+                    scope.spawn(move || {
+                        (0..CALLS)
+                            .filter(|call| {
+                                if (worker + call) % 2 == 0 {
+                                    sessions.admit(device, clock).is_none()
+                                } else {
+                                    sessions.employee_now(device, clock).is_none()
+                                }
+                            })
+                            .count()
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("worker finished"))
+                .sum::<usize>()
+        });
+        assert_eq!(
+            refused, 0,
+            "a forward-only clock refused {refused} requests"
+        );
+    }
+
+    #[test]
+    fn admit_touches_only_a_live_sign_in_and_still_fails_closed() {
+        use super::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Sessions};
+        use pos_proto::ids::DeviceId;
+
+        let sessions = Sessions::new();
+        let device = DeviceId::new(Ulid::from_u128(0xD));
+        let alice = EmployeeId::new(Ulid::from_u128(1));
+        // Admitting an unsigned device creates nothing.
+        assert_eq!(sessions.admit(device, || at(1_000)), None);
+        assert_eq!(sessions.employee_for(device, at(1_000)), None);
+
+        block_on(sessions.sign_in(device, alice, at(1_000_000))).expect("no registry");
+        let window_ms = i64::try_from(DEFAULT_SIGN_IN_IDLE_TIMEOUT.as_millis()).expect("fits");
+        let inside = at(1_000_000 + window_ms - 1);
+        let admission = sessions
+            .admit(device, || inside)
+            .expect("inside the window");
+        assert_eq!(admission.employee_id, alice);
+        assert_eq!(admission.now, inside);
+        assert!(!admission.flush_due, "no registry, so nothing to flush");
+        // The admission moved `last_seen_at`, so the window now runs from `inside`.
+        let extended = at(inside.as_milliseconds_since_epoch() + window_ms - 1);
+        assert_eq!(sessions.employee_now(device, || extended), Some(alice));
+
+        // A clock that really went backwards still expires the sign-in, and touches nothing.
+        assert_eq!(sessions.admit(device, || at(1_000_000)), None);
+        assert_eq!(sessions.employee_now(device, || at(1_000_000)), None);
+        assert_eq!(sessions.employee_for(device, inside), Some(alice));
     }
 
     #[test]
