@@ -49,3 +49,6 @@ ac5ed387df46d51333366e12989d510776edabb3
 
 # #785 — the store-group routes and their tests move into their own modules
 6282a181e99bddd8c6028a169ce17925799da176
+
+# #786 — the config publish machinery, preview, version history and releases move into their own modules
+a7b61c90e9345195d63abcf7bae5aa6919a04a69
