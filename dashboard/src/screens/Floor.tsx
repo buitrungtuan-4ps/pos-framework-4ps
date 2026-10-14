@@ -120,10 +120,10 @@ export function Floor() {
     toast.error(message);
   };
 
-  const areaName = (id: string) =>
-    areas()?.find((area) => area.area_id === id)?.name ?? id;
-  // Memoize active areas array filtering to prevent O(N) re-filtering on every component re-render/signal read.
-  // Declared below `areas` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
+  // Both memos read `areas` once per change rather than once per table row, and are declared below
+  // the `areas` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
+  const areaNames = createMemo(() => new Map(areas()?.map((area) => [area.area_id, area.name])));
+  const areaName = (id: string) => areaNames().get(id) ?? id;
   const activeAreas = createMemo(() => areas()?.filter((area) => area.status === "active") ?? []);
 
   const createArea = async () => {
