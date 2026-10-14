@@ -46,3 +46,6 @@ cc96b577880f638942616eae3be801f09ebc4a86
 
 # #780 — the per-store config publishes and their tests move into their own modules
 ac5ed387df46d51333366e12989d510776edabb3
+
+# #785 — the store-group routes and their tests move into their own modules
+6282a181e99bddd8c6028a169ce17925799da176
