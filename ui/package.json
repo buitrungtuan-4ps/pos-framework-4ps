@@ -17,6 +17,7 @@
     "steps": "node scripts/step-budget.mjs",
     "replay": "playwright test",
     "screens": "playwright test --config playwright.screens.config.mjs",
+    "perf": "playwright test --config playwright.perf.config.mjs",
     "classes": "node scripts/device-classes.mjs"
   },
   "dependencies": {
