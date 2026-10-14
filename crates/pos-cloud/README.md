@@ -22,7 +22,7 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 - `src/main.rs`: the binary
 - `src/cloud.rs`: `Cloud`: ingest and the read model
 - `src/http.rs`: `router`, and every handler not yet moved into its area; `FromRef` builds the reports' state
-- `src/http/<area>.rs` and `src/http/<area>/`: an area's routes, state and handlers, one module per area (inventory and fees so far)
+- `src/http/<area>.rs` and `src/http/<area>/`: an area's routes, state and handlers, one module per area (inventory, fees and catalog so far)
 - `pos-cloud-reports` (re-exported as `dashboard::{rollup, projection}`, the report types in `cloud`, the CSV writers in `export`): the reports and their routes; `src/dashboard/projector.rs` keeps them current
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
 - `src/config_tree/`: the configuration tree

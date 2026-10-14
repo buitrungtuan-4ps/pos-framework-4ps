@@ -19,3 +19,6 @@ d96093fc01f63ca2bcdd0e8c6e01956216ce83d8
 
 # #770 — the inventory routes and their tests move into their own modules
 e0b926e3a891eb9605e6ce4eb5cef735ea254b4e
+
+# #771 — the fee routes and their tests move into their own modules
+0fdb9165fc8c22a7c15fe6f9b936b56e9d059bfb
