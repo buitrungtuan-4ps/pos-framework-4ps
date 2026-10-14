@@ -4335,6 +4335,103 @@ test("a store that publishes no idle lock never locks", async ({ page }) => {
   }
 });
 
+// The store's data loads through one engine (ADR-0173): a required piece that will not load holds
+// the till behind a Retry, a failed read is retried on its own, and an optional piece that will
+// not load leaves the till working and says what is missing and why a button waits.
+
+/** Types the demo badge and PIN, without waiting for the floor: a gated till does not draw it. */
+async function signInWithoutWaiting(page, edge) {
+  await page.locator("#signin-code").fill(edge.staffCode);
+  await page.locator("#signin-pin").fill(edge.staffPin);
+  await page.locator('[data-step="submit"]').click();
+}
+
+/** Answers `pattern` with a 503 while `failing()` holds, and counts how often it did. */
+async function refuseWhile(page, pattern, failing) {
+  const refused = { count: 0 };
+  await page.route(pattern, async (route) => {
+    if (failing()) {
+      refused.count += 1;
+      await route.fulfill({ status: 503, body: "busy" });
+    } else {
+      await route.continue();
+    }
+  });
+  return refused;
+}
+
+test("a price book that will not load holds the till behind a Retry, and the Retry draws it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let failing = true;
+    const refused = await refuseWhile(page, "**/api/menu", () => failing);
+    await pair(page, edge);
+    await signInWithoutWaiting(page, edge);
+
+    const gate = page.locator('[data-outcome="store-loading"]');
+    await expect(gate).toContainText("Could not load: Price book");
+    await expect(page.locator('[data-outcome="floor"]')).toHaveCount(0);
+    expect(refused.count).toBeGreaterThan(0);
+
+    failing = false;
+    await page.locator('[data-step="retryLoad"]').click();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(gate).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a read that fails is tried again on its own, and the till is drawn without a tap", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let answered = 0;
+    const refused = await refuseWhile(page, "**/api/locale", () => {
+      answered += 1;
+      return answered <= 2;
+    });
+    await pair(page, edge);
+    await signInWithoutWaiting(page, edge);
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    expect(refused.count, "two refusals, then the read that drew the till").toBe(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("reason codes that will not load leave the till selling, say so, and say why a void waits", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let failing = true;
+    await refuseWhile(page, "**/api/reason-codes", () => failing);
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    const banner = page.locator('[data-outcome="store-data-missing"]');
+    await expect(banner).toContainText("Reason codes");
+    await seatTable(page);
+    await addItem(page);
+    const voidLine = page.locator('[data-step="askVoid"]').first();
+    await expect(voidLine).toBeDisabled();
+    await expect(page.locator("#why-reasons")).toHaveText("Could not load: Reason codes");
+    await expect(voidLine).toHaveAttribute("aria-describedby", "why-reasons");
+
+    failing = false;
+    await banner.locator('[data-step="retryLoad"]').click();
+    await expect(banner).toHaveCount(0);
+    await expect(voidLine).toBeEnabled();
+    await expect(page.locator("#why-reasons")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

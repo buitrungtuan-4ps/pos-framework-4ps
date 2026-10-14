@@ -6,6 +6,7 @@ import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/types";
 import { t, type MessageKey } from "../i18n";
+import { WhyUnavailable } from "../components/StoreData";
 import { money, type Money } from "../lib/money";
 import {
   closeDrawerShifts,
@@ -642,6 +643,7 @@ export function Shift() {
               class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
               classList={{ "border-primary": direction() === "in" }}
               disabled={movementParsed() === null || reasonsFor(PAID_IN).length === 0}
+              aria-describedby="why-movement-reasons"
               data-step="askPaidIn"
               onClick={() => askPaidIn()}
             >
@@ -652,12 +654,14 @@ export function Shift() {
               class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
               classList={{ "border-primary": direction() === "out" }}
               disabled={movementParsed() === null || reasonsFor(PAID_OUT).length === 0}
+              aria-describedby="why-movement-reasons"
               data-step="askPaidOut"
               onClick={() => askPaidOut()}
             >
               {t("shift.paid_out")}
             </button>
           </div>
+          <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
           <Show when={direction()}>
             {(way) => (
               <>
@@ -874,11 +878,13 @@ export function Shift() {
               type="button"
               class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
               disabled={reasonsFor(DRAWER_OPEN).length === 0}
+              aria-describedby="why-drawer-reasons"
               data-step="askOpenDrawer"
               onClick={() => askOpenDrawer()}
             >
               {t("shift.open_drawer")}
             </button>
+            <WhyUnavailable entry="reason_codes" id="why-drawer-reasons" />
             </Show>
           }
         >

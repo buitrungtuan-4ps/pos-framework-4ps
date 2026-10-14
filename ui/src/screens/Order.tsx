@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/r
 import { api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { t } from "../i18n";
+import { WhyUnavailable } from "../components/StoreData";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
@@ -899,6 +900,7 @@ export function Order() {
                       type="button"
                       class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
                       disabled={reasonsFor(VOID_LINE).length === 0}
+                      aria-describedby="why-reasons"
                       data-step="askVoid"
                       onClick={() => askVoid(line)}
                     >
@@ -910,6 +912,7 @@ export function Order() {
               )}
             </For>
           </ul>
+          <WhyUnavailable entry="reason_codes" id="why-reasons" />
 
           {/*
             The reason picker (ADR-0115). Every entry it offers declares `REASON_ACTION_VOID_LINE`, so

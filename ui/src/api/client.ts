@@ -139,6 +139,62 @@ function jsonOf(text: string): unknown {
   }
 }
 
+// The `ApiError` a refused answer becomes.
+//
+// A `401` means the device token is stale or missing — this device must pair again, so drop the
+// token and let the app route to pairing. A `403` means the token is fine but nobody is signed in
+// (S0b): keep the token, and the app routes to sign-in instead.
+async function refused(response: Response): Promise<never> {
+  if (response.status === 401) {
+    clearDeviceToken();
+  }
+  const text = await response.text().catch(() => "");
+  const reason = response.headers.get("pos-error-reason");
+  // That refusal's sentence is its `message`, so a screen that shows the sentence shows a sentence.
+  const details = reason === "VARIANCE_REASON_REQUIRED" ? jsonOf(text) : undefined;
+  const said = (details as { message?: unknown } | undefined)?.message;
+  throw new ApiError(
+    response.status,
+    (typeof said === "string" ? said : text.trim()) || response.statusText,
+    reason,
+    details,
+  );
+}
+
+// What a read that may be revalidated answered: nothing new, or a body and the tag it carries.
+export type Revalidated<T> =
+  | { readonly notModified: true }
+  | { readonly notModified: false; readonly body: T; readonly etag: string | null };
+
+// A read of `path` that names the tag of the copy this device holds, so an edge that has nothing
+// newer answers `304` with no body (ADR-0173). The edge's tags are weak, because it serves one body
+// gzip or plain under one tag; `If-None-Match` compares weakly, so that changes nothing here.
+//
+// `no-store`, so the browser neither answers from its own cache nor adds a tag of its own: the
+// engine that calls this holds the copy and its tag. An edge too old to send a tag answers every
+// read in full, and `etag` is then `null`.
+export async function revalidate<T>(path: string, etag: string | null): Promise<Revalidated<T>> {
+  const headers = authHeaders(false);
+  if (etag !== null) {
+    headers["if-none-match"] = etag;
+  }
+  const response = await fetch(edgeBase() + path, { method: "GET", headers, cache: "no-store" });
+  observeEdgeVersion(response);
+  observeLeaseStanding(response);
+  if (response.status === 304) {
+    return { notModified: true };
+  }
+  if (!response.ok) {
+    return refused(response);
+  }
+  return { notModified: false, body: (await response.json()) as T, etag: response.headers.get("etag") };
+}
+
+// The path of a price book: the store's own, or one channel's (ADR-0066).
+export function menuPath(channel?: string): string {
+  return channel === undefined ? "/api/menu" : `/api/menu?channel=${encodeURIComponent(channel)}`;
+}
+
 // `base` defaults to the edge this device paired with. Pairing itself passes one explicitly,
 // because at that moment nothing is stored yet — the base is what the operator just supplied, and
 // storing it before the call succeeds would leave a device claiming an edge that refused it.
@@ -158,23 +214,7 @@ async function request<T>(
   observeEdgeVersion(response);
   observeLeaseStanding(response);
   if (!response.ok) {
-    // A `401` means the device token is stale or missing — this device must pair again, so drop the
-    // token and let the app route to pairing. A `403` means the token is fine but nobody is signed in
-    // (S0b): keep the token, and the app routes to sign-in instead.
-    if (response.status === 401) {
-      clearDeviceToken();
-    }
-    const text = await response.text().catch(() => "");
-    const reason = response.headers.get("pos-error-reason");
-    // That refusal's sentence is its `message`, so a screen that shows the sentence shows a sentence.
-    const details = reason === "VARIANCE_REASON_REQUIRED" ? jsonOf(text) : undefined;
-    const said = (details as { message?: unknown } | undefined)?.message;
-    throw new ApiError(
-      response.status,
-      (typeof said === "string" ? said : text.trim()) || response.statusText,
-      reason,
-      details,
-    );
+    return refused(response);
   }
   // A `204` has nothing to read, and reading nothing as JSON throws: retiring a device, and sending
   // or refusing a guest's order, each reported "the store did not respond" after the store had done
@@ -288,10 +328,7 @@ export const api = {
   // channel's own book, the one the edge prices its orders from (ADR-0066); an edge that predates
   // the parameter ignores it and serves its own, which is also what it prices from.
   menu: (channel?: string) =>
-    request<MenuResponse>(
-      "GET",
-      channel === undefined ? "/api/menu" : `/api/menu?channel=${encodeURIComponent(channel)}`,
-    ),
+    request<MenuResponse>("GET", menuPath(channel)),
 
   // Staff mark an item sold out at this store (86), and bring it back. Every device folds the
   // event and greys the item out; the edge refuses a line for it in the meantime.

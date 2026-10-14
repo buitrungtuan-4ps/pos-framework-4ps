@@ -4,7 +4,7 @@ import { Route, Router } from "@solidjs/router";
 import { ApiError, api, deviceToken } from "./api/client";
 import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
-import { LiveLink } from "./api/live";
+import { LiveLink, type LinkStatus } from "./api/live";
 import { IdleLock } from "./components/IdleLock";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
@@ -23,7 +23,10 @@ import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
 import { locked, takeSession } from "./state/session";
-import { fold, loadConfiguration, loadLiveOrders, loadStore, setLink } from "./state/store";
+import { StoreGate, StoreDataBanner } from "./components/StoreData";
+import { reconnected } from "./state/engine";
+import { loadConfiguration, loadStore } from "./state/registry";
+import { fold, loadLiveOrders, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
 // versions and nothing else: the operator cannot fix it, and the person who can needs the two
@@ -100,7 +103,10 @@ function Shell(props: ParentProps) {
         <Superseded />
         <LeaseAhead />
         <VersionDrift />
-        <main class="flex-1 overflow-y-auto">{props.children}</main>
+        <StoreDataBanner />
+        <main class="flex-1 overflow-y-auto">
+          <StoreGate>{props.children}</StoreGate>
+        </main>
       </div>
       <IdleLock />
     </>
@@ -128,6 +134,7 @@ export function App() {
     );
   }
 
+  let lastStatus: LinkStatus = "connecting";
   const link = new LiveLink({
     onEvent: fold,
     onResync: () => {
@@ -138,9 +145,17 @@ export function App() {
       void loadLiveOrders();
       void loadConfiguration();
     },
-    // A new configuration is live on the edge: read it again, without a new sign-in (ADR-0160).
-    onConfigApplied: () => void loadConfiguration(),
-    onStatus: setLink,
+    // A new configuration is live on the edge: read again what it changed, without a new sign-in
+    // (ADR-0160, ADR-0173).
+    onConfigApplied: (changed) => void loadConfiguration(changed),
+    onStatus: (status) => {
+      // Back after a drop: everything held is revalidated, and what did not change costs a `304`.
+      if (status === "open" && lastStatus === "closed") {
+        void reconnected();
+      }
+      lastStatus = status;
+      setLink(status);
+    },
   });
   // The device half of the boot gate, once the store server itself is known to be usable: pair, then
   // sign in, then draw the store.
