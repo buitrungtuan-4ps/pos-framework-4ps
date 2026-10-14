@@ -23,8 +23,10 @@ integrator API, the `/admin` console API and the `/sync` surface stores call. Se
   envelope; it has no routes. [`pos-cloud-reports`](../pos-cloud-reports/README.md) holds the
   rollups, revenue, the X/Z report, their CSV exports and their routes, which `pos-cloud` mounts.
   A report changes there, not here.
-- `src/http.rs` is very large. Add a handler beside its area's router, and do not move code in a
-  feature PR: moves are their own pull requests (ADR-0170 decision 6).
+- `src/http.rs` is very large, and its areas are moving into `src/http/<area>` one pull request at
+  a time (plan row 5). Add a handler beside its area's router, in the area's module once it has
+  one, and do not move code in a feature PR: moves are their own pull requests (ADR-0170
+  decision 6). An area's route tests move the same way, into `tests/cloud/<area>.rs`.
 
 ## Most often touched
 

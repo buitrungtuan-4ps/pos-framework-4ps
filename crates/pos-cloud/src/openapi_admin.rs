@@ -497,24 +497,52 @@ const UNDOCUMENTED: &[&str] = &[
 /// token wide.
 #[cfg(test)]
 fn registered_admin_paths() -> std::collections::BTreeSet<String> {
-    /// The router source. Every `/admin` route is registered here — the other route-carrying
-    /// modules (`orders`, `qr_http`, `relay`) serve `/v1` and the relay surface only, which
-    /// `no_admin_routes_are_registered_outside_the_router_source` holds them to.
-    const ROUTER_SOURCE: &str = include_str!("http.rs");
-
     let mut paths = std::collections::BTreeSet::new();
-    for tail in ROUTER_SOURCE.split(".route(").skip(1) {
-        let Some(open) = tail.find('"') else { continue };
-        let after_open = tail.get(open + 1..).unwrap_or_default();
-        let Some(close) = after_open.find('"') else {
-            continue;
-        };
-        let literal = after_open.get(..close).unwrap_or_default();
-        if literal == "/admin" || literal.starts_with("/admin/") {
-            paths.insert(literal.to_owned());
+    for source in router_sources() {
+        for tail in source.split(".route(").skip(1) {
+            let Some(open) = tail.find('"') else { continue };
+            let after_open = tail.get(open + 1..).unwrap_or_default();
+            let Some(close) = after_open.find('"') else {
+                continue;
+            };
+            let literal = after_open.get(..close).unwrap_or_default();
+            if literal == "/admin" || literal.starts_with("/admin/") {
+                paths.insert(literal.to_owned());
+            }
         }
     }
     paths
+}
+
+/// The router sources: `http.rs` and every module under `http/`, where each business area's routes
+/// are declared. Every `/admin` route is registered in one of them; the other route-carrying modules
+/// (`orders`, `qr_http`, `relay`) serve `/v1` and the relay surface only.
+///
+/// Read from the tree when the test runs, so a route that moves into a new module is still found.
+#[cfg(test)]
+pub(crate) fn router_sources() -> Vec<String> {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![source.join("http.rs")];
+    let mut directories = vec![source.join("http")];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .collect()
 }
 
 #[cfg(test)]
