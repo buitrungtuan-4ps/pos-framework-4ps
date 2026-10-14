@@ -11,7 +11,9 @@
 //! holds the three pure steps between a written value and a store's document, and the store the
 //! values live in:
 //!
-//! 1. [`validate`]: the setting exists, may be written at that scope, and the value is one it takes.
+//! 1. [`validate`]: the setting exists, may be written at that scope, and the value is one it takes;
+//!    then, for the console's write, [`confirmation`]: a value that needs a recorded confirmation
+//!    carries one (ADR-0169 decision 2).
 //! 2. [`resolve_for_store`]: which value reaches one store, and from which scope.
 //! 3. [`tenant_layer_nodes`]: the nodes those values make on the store's Tenant layer.
 //!
@@ -79,6 +81,46 @@ pub enum SettingRefusal {
         /// What is wrong with the value, which decides the reason the refusal names.
         refusal: ValueRefusal,
     },
+    /// The value is written only with a recorded confirmation, and the write did not confirm its
+    /// notice ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+    /// decision 2).
+    #[error(
+        "`{setting_key}` is set to {value} only with its notice confirmed: confirm it on Settings, \
+         which sends notice_confirmed"
+    )]
+    ConfirmationRequired {
+        /// The setting.
+        setting_key: String,
+        /// The value that needs confirming.
+        value: &'static str,
+    },
+}
+
+/// The notice a write of `value` confirms, which its audit entry records beside the value.
+///
+/// `Ok(None)` for a value that needs no confirmation, whatever `notice_confirmed` says: clearing a
+/// setting, and writing any value its `confirm` does not name, confirm nothing.
+///
+/// # Errors
+///
+/// [`SettingRefusal::ConfirmationRequired`] for the value the setting's `confirm` names, written
+/// without `notice_confirmed`, at any scope.
+pub fn confirmation(
+    setting: &Setting,
+    value: &serde_json::Value,
+    notice_confirmed: bool,
+) -> Result<Option<&'static str>, SettingRefusal> {
+    let Some(confirm) = setting.confirm.filter(|_| setting.needs_confirming(value)) else {
+        return Ok(None);
+    };
+    if notice_confirmed {
+        Ok(Some(confirm.notice))
+    } else {
+        Err(SettingRefusal::ConfirmationRequired {
+            setting_key: setting.key(),
+            value: confirm.value,
+        })
+    }
 }
 
 /// Checks a value before it is stored, and returns the setting it is for.
@@ -309,7 +351,7 @@ mod tests {
     use std::sync::Mutex;
 
     use pos_proto::ids::TenantId;
-    use pos_proto::settings::SettingScope;
+    use pos_proto::settings::{Confirm, Setting, SettingScope, SettingShape};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
     use pos_proto::wire_enum::Open;
@@ -317,7 +359,7 @@ mod tests {
 
     use super::{
         SettingRefusal, SettingValue, SettingsStore, SettingsStoreError, StorePlacement,
-        resolve_for_store, switch_without_people, tenant_layer_nodes, validate,
+        confirmation, resolve_for_store, switch_without_people, tenant_layer_nodes, validate,
     };
 
     const KEY: &str = "shift.no_shift_selling";
@@ -355,6 +397,57 @@ mod tests {
             only.scope,
             only.scope_id.clone(),
         ))
+    }
+
+    /// A setting whose `OWNER_ONE_PERSON` needs confirming, built here so the tests do not wait for
+    /// the register's first such entry.
+    fn drawer_owner() -> Setting {
+        Setting {
+            node: "example",
+            field: "drawer_owner",
+            shape: SettingShape::Choice {
+                values: vec!["OWNER_SHARED", "OWNER_ONE_PERSON"],
+                default: "OWNER_SHARED",
+                preset: None,
+            },
+            scopes: &[SettingScope::Tenant, SettingScope::Store],
+            since: "0.15.0",
+            confirm: Some(Confirm {
+                value: "OWNER_ONE_PERSON",
+                notice: "settings.item.example.drawer_owner.confirm",
+            }),
+            summary: "Whose a drawer is.",
+        }
+    }
+
+    #[test]
+    fn the_value_that_needs_confirming_is_refused_unless_its_notice_is_confirmed() {
+        assert_eq!(
+            confirmation(&drawer_owner(), &json!("OWNER_ONE_PERSON"), false),
+            Err(SettingRefusal::ConfirmationRequired {
+                setting_key: "example.drawer_owner".to_owned(),
+                value: "OWNER_ONE_PERSON",
+            })
+        );
+        assert_eq!(
+            confirmation(&drawer_owner(), &json!("OWNER_ONE_PERSON"), true),
+            Ok(Some("settings.item.example.drawer_owner.confirm"))
+        );
+    }
+
+    #[test]
+    fn any_other_value_confirms_nothing_whatever_the_write_says() {
+        for notice_confirmed in [false, true] {
+            assert_eq!(
+                confirmation(&drawer_owner(), &json!("OWNER_SHARED"), notice_confirmed),
+                Ok(None)
+            );
+        }
+        let register_entry = validate(KEY, SettingScope::Store, &json!(REFUSE)).expect("a value");
+        assert_eq!(
+            confirmation(&register_entry, &json!(REFUSE), true),
+            Ok(None)
+        );
     }
 
     #[test]
