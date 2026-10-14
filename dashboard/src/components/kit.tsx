@@ -958,11 +958,19 @@ export function Tabs<K extends string>(props: {
   onSelect: (key: K) => void;
   label: string;
 }) {
-  const move = (from: number, step: number) => {
-    const count = props.tabs.length;
-    const next = props.tabs[(from + step + count) % count];
-    if (next) {
-      props.onSelect(next.key);
+  // A key that moves the selection also moves focus to the tab it selected: the old tab has just
+  // left the tab order (`tabindex=-1`), so focus left on it would be stranded. The key's default,
+  // scrolling the page, is cancelled, since the strip has used the key.
+  const selectAt = (event: KeyboardEvent & { currentTarget: HTMLButtonElement }, at: number) => {
+    const tab = props.tabs[at];
+    if (!tab) {
+      return;
+    }
+    event.preventDefault();
+    props.onSelect(tab.key);
+    const button = event.currentTarget.parentElement?.children[at];
+    if (button instanceof HTMLElement) {
+      button.focus();
     }
   };
   return (
@@ -979,20 +987,15 @@ export function Tabs<K extends string>(props: {
             tabindex={props.active === tab.key ? 0 : -1}
             onClick={() => props.onSelect(tab.key)}
             onKeyDown={(event) => {
+              const count = props.tabs.length;
               if (event.key === "ArrowRight") {
-                move(index(), 1);
+                selectAt(event, (index() + 1) % count);
               } else if (event.key === "ArrowLeft") {
-                move(index(), -1);
+                selectAt(event, (index() - 1 + count) % count);
               } else if (event.key === "Home") {
-                const first = props.tabs[0];
-                if (first) {
-                  props.onSelect(first.key);
-                }
+                selectAt(event, 0);
               } else if (event.key === "End") {
-                const last = props.tabs[props.tabs.length - 1];
-                if (last) {
-                  props.onSelect(last.key);
-                }
+                selectAt(event, count - 1);
               }
             }}
             class={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
