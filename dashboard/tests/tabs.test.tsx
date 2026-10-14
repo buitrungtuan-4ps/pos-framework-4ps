@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Tabs } from "../src/components/kit";
@@ -98,5 +99,38 @@ describe("the Tabs component", () => {
     // Press End key -> selects third
     fireEvent.keyDown(tabButtons[1]!, { key: "End" });
     expect(onSelect).toHaveBeenCalledWith("third");
+  });
+
+  it("moves focus to the tab a key selects, and keeps the key from scrolling the page", () => {
+    // A screen holds the active tab, as Alerts does; the keys walk the strip from the second tab.
+    const [active, setActive] = createSignal<"first" | "second" | "third">("second");
+    render(() => (
+      <Tabs tabs={tabs} active={active()} onSelect={setActive} label="Category view" />
+    ));
+    const tabButtons = screen.getAllByRole("tab");
+    tabButtons[1]!.focus();
+
+    const steps: [string, number][] = [
+      ["ArrowRight", 2],
+      ["ArrowRight", 0],
+      ["ArrowLeft", 2],
+      ["Home", 0],
+      ["End", 2],
+    ];
+    for (const [key, expected] of steps) {
+      const notPrevented = fireEvent.keyDown(document.activeElement!, { key });
+      expect(notPrevented).toBe(false);
+      expect(document.activeElement).toBe(tabButtons[expected]);
+      expect(tabButtons[expected]?.getAttribute("tabindex")).toBe("0");
+    }
+  });
+
+  it("leaves other keys to the browser", () => {
+    render(() => <Tabs tabs={tabs} active="second" onSelect={vi.fn()} label="Category view" />);
+    const tabButtons = screen.getAllByRole("tab");
+    tabButtons[1]!.focus();
+
+    expect(fireEvent.keyDown(tabButtons[1]!, { key: "Tab" })).toBe(true);
+    expect(document.activeElement).toBe(tabButtons[1]);
   });
 });
