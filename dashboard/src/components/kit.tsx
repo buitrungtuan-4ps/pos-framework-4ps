@@ -18,6 +18,7 @@ import {
 
 import type { NodePreview } from "../api/types";
 import { t } from "../i18n";
+import { useClickOutside } from "../lib/dismiss";
 import type { EntityCrud } from "../lib/entity-crud";
 import { useEscape } from "../lib/escape";
 import { Banner, Button, TextField } from "./ui";
@@ -1053,25 +1054,24 @@ export function Toolbar(props: ParentProps<{ trailing?: JSX.Element }>) {
 export function RowActions(props: { label: string; children: JSX.Element }) {
   const [open, setOpen] = createSignal(false);
   let container: HTMLDivElement | undefined;
+  let trigger: HTMLButtonElement | undefined;
 
-  useEscape(open, () => setOpen(false));
-
-  createEffect(() => {
-    if (!open()) {
-      return;
+  // Escape hands focus back to the trigger when it was inside the menu, as the notification bell
+  // does: the entries take focus, and closing under one would drop it on the page body.
+  useEscape(open, () => {
+    const hadFocus = container?.contains(document.activeElement) ?? false;
+    setOpen(false);
+    if (hadFocus) {
+      trigger?.focus();
     }
-    const dismiss = (event: MouseEvent) => {
-      if (container && !container.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", dismiss);
-    onCleanup(() => document.removeEventListener("mousedown", dismiss));
   });
+
+  useClickOutside(open, () => container, () => setOpen(false));
 
   return (
     <div class="relative" ref={container}>
       <Button
+        ref={trigger}
         variant="ghost"
         size="sm"
         aria-label={props.label}
