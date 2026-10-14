@@ -33,6 +33,12 @@
 // store's publish did, the store scope here does both again: one action writes the values the store
 // does not set itself, and one publishes the store again.
 //
+// # A value that needs a recorded confirmation (ADR-0169 decision 4)
+//
+// A value whose catalogue entry names it in `confirm` is saved only once its notice is ticked, and
+// the save then carries `notice_confirmed` (`components/SettingConfirmation.tsx`). A setting needs
+// nothing here for it: its `confirm` and its notice's translations.
+//
 // # Before you turn this on (ADR-0158, Rollout)
 //
 // For one store, `permissions.enforced` carries a panel that lists what each role held there does
@@ -83,6 +89,12 @@ import {
   SwitchField,
 } from "../components/ui";
 import { ConfirmDialog, EmptyState, TechnicalDetails } from "../components/kit";
+import {
+  awaitingConfirmation,
+  ConfirmNotice,
+  confirmation,
+  createTick,
+} from "../components/SettingConfirmation";
 import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
 import { toast } from "../components/Toast";
 
@@ -279,6 +291,20 @@ function explained(caught: unknown, clearing: boolean): unknown {
     key = "settings.refused.archived";
   }
   return key === null ? caught : new ApiError(caught.status, t(key), caught.canonical, caught.details);
+}
+
+/** A neutral notice: a fact the operator should know, not a failure. */
+function Notice(props: { lines: readonly string[] }) {
+  return (
+    <Show when={props.lines.length > 0}>
+      <div
+        role="status"
+        class="flex flex-col gap-1 rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+      >
+        <For each={props.lines}>{(line) => <p>{line}</p>}</For>
+      </div>
+    </Show>
+  );
 }
 
 export function Settings() {
@@ -504,7 +530,8 @@ export function Settings() {
       });
   };
 
-  const save = (setting: SettingDefinition) => {
+  /** Writes the value picked; `confirmed` is its `noticeConfirmed`, from {@link confirmation}. */
+  const save = (setting: SettingDefinition, confirmed: readonly [] | readonly [true] = []) => {
     const value = drafts()[setting.setting_key];
     if (!takes(setting, value) || value === undefined) {
       return;
@@ -514,7 +541,7 @@ export function Settings() {
     write(
       place(setting.setting_key),
       false,
-      () => api.putSetting(tenantId(), setting.setting_key, scope, id, value),
+      () => api.putSetting(tenantId(), setting.setting_key, scope, id, value, ...confirmed),
       () => {
         toast.ok(t("settings.saved", { setting: settingTitle(setting) }));
         dropDraft(setting.setting_key);
@@ -721,18 +748,6 @@ export function Settings() {
     </>
   );
 
-  /** A neutral notice: a fact the operator should know, not a failure. */
-  const Notice = (props: { lines: readonly string[] }) => (
-    <Show when={props.lines.length > 0}>
-      <div
-        role="status"
-        class="flex flex-col gap-1 rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
-      >
-        <For each={props.lines}>{(line) => <p>{line}</p>}</For>
-      </div>
-    </Show>
-  );
-
   /**
    * Said beside a variance limit where the tenant's reason list offers no active reason for a close
    * over or short, so the limit asks nothing (ADR-0167 decision 12). Read only where it is shown.
@@ -773,6 +788,7 @@ export function Settings() {
     const hereValue = (): Json | undefined => here()?.value;
     const draft = (): Json | undefined => drafts()[key()];
     const pick = (value: Json) => setDrafts((current) => ({ ...current, [key()]: value }));
+    const [ticked, setTicked] = createTick(draft);
     /** A value picked that the setting takes and that is not already what is written here. */
     const changed = () => {
       const picked = draft();
@@ -949,10 +965,12 @@ export function Settings() {
                   />
                 </Match>
               </Switch>
+              <ConfirmNotice setting={setting()} picked={draft()} changed={changed()} ticked={ticked()}
+                onTick={setTicked} covers={targetName()} disabled={writing.saving()} />
               <div class="flex flex-wrap gap-2">
                 <Button
-                  disabled={writing.saving() || !changed()}
-                  onClick={() => save(setting())}
+                  disabled={writing.saving() || !changed() || awaitingConfirmation(setting(), draft(), ticked())}
+                  onClick={() => save(setting(), confirmation(setting(), draft() ?? null, ticked()))}
                 >
                   {t("settings.save")}
                 </Button>

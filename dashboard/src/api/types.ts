@@ -2033,6 +2033,12 @@ export interface SettingDefinition {
   readonly scopes: readonly string[];
   /** The first release that honours it, `MAJOR.MINOR.PATCH` (ADR-0160 decision 5). */
   readonly since: string;
+  /**
+   * The value written only with a recorded confirmation, a wire token, and the translation key of
+   * the notice the person confirms, `settings.item.<setting_key>.confirm` (ADR-0169). Absent when
+   * every value can be written without one.
+   */
+  readonly confirm?: { readonly value: string; readonly notice: string };
 }
 
 /** One value a tenant has written, from `GET /admin/settings`. */
