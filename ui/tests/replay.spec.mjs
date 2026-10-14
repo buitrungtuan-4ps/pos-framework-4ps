@@ -46,6 +46,43 @@ async function fetchWhole(route) {
   return route.fetch({ headers });
 }
 
+/**
+ * Holds `pattern`'s POST until the test calls `release()`, so "while the request is out" is a moment
+ * the test acts in rather than a race against a timer it has to win on a slow machine.
+ *
+ * With `reachEdge`, the request goes to the edge at once and only its answer is held: the edge has
+ * committed, and its live-link event is on its way, before the till hears the answer. Without it,
+ * the request itself waits, so neither the answer nor the event exists yet. `sent` resolves once
+ * the request has reached that point.
+ */
+async function holdPost(page, pattern, { reachEdge = false } = {}) {
+  let release = () => {};
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  let reached = () => {};
+  const sent = new Promise((resolve) => {
+    reached = resolve;
+  });
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    if (reachEdge) {
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    } else {
+      reached();
+      await released;
+      await route.continue();
+    }
+  });
+  return { release, sent };
+}
+
 /** A declared route as a regular expression: `:param` matches one path segment. */
 function routePattern(route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -524,10 +561,7 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
     // Hold the answer back, so "while the request is in flight" is a moment the test can act in
     // rather than a race it has to win. This is the moment a busy store server gives an operator
     // for free.
-    await page.route("**/api/session/sign-in", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      await route.continue();
-    });
+    const held = await holdPost(page, "**/api/session/sign-in");
 
     await page.locator("#signin-code").fill(edge.staffCode);
     await page.locator("#signin-pin").fill("999999");
@@ -535,7 +569,9 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
 
     // The operator does not wait: the button is disabled while the request is out, the field is
     // not, and they have already started the next attempt.
+    await held.sent;
     await page.locator("#signin-pin").fill("4321");
+    held.release();
 
     await expect(page.getByRole("alert")).toBeVisible();
 
@@ -2443,13 +2479,16 @@ test("a guest's line that joins the table's order is on the table's order as it 
   try {
     let link = null;
     let last = null;
+    const carried = [];
     await page.routeWebSocket(
       (url) => url.pathname === "/ws",
       (socket) => {
         link = socket;
         socket.connectToServer().onMessage((message) => {
-          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          const frame = JSON.parse(String(message));
+          const { stream_id: streamId, sequence } = frame;
           last = typeof sequence === "number" ? { streamId, sequence } : last;
+          carried.push(frame.event_type);
           socket.send(message);
         });
       },
@@ -2460,6 +2499,10 @@ test("a guest's line that joins the table's order is on the table's order as it 
     await addItem(page);
     const lines = page.locator('[data-outcome="line-added"]');
     await expect(lines).toHaveCount(1);
+    // The link is open and has carried the line's own event, so the frames below are the next ones
+    // after everything the edge has said, rather than ones that race the line's.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
     const live = await page.evaluate(() =>
       fetch("/api/orders/live", {
         headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
@@ -4222,13 +4265,16 @@ test("a till hears a new configuration and reads again what the person may do", 
     await aSessionThatSays(page, true, () => granted);
     let link = null;
     let last = null;
+    const carried = [];
     await page.routeWebSocket(
       (url) => url.pathname === "/ws",
       (socket) => {
         link = socket;
         socket.connectToServer().onMessage((message) => {
-          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          const frame = JSON.parse(String(message));
+          const { stream_id: streamId, sequence } = frame;
           last = typeof sequence === "number" ? { streamId, sequence } : last;
+          carried.push(frame.event_type);
           socket.send(message);
         });
       },
@@ -4238,6 +4284,10 @@ test("a till hears a new configuration and reads again what the person may do", 
     await seatTable(page);
     await addItem(page);
     await expect(page.locator('[data-step="fireOrder"]')).toHaveCount(0);
+    // The link is open and has carried the line's own event, so the frame below is the next one
+    // after everything the edge has said, rather than one that races the line's.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
 
     granted.push("sales.line.fire");
     const position = last === null ? {} : { stream_id: last.streamId, sequence: last.sequence + 1 };
@@ -4751,19 +4801,6 @@ async function refusePost(page, pattern, reason) {
   });
 }
 
-/** Holds `pattern`'s POST answer back for `ms` after the edge has made it. */
-async function delayAnswer(page, pattern, ms) {
-  await page.route(pattern, async (route) => {
-    if (route.request().method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const response = await fetchWhole(route);
-    await new Promise((resolve) => setTimeout(resolve, ms));
-    await route.fulfill({ response });
-  });
-}
-
 test("an added line shows at once, sending, and payment waits until the edge confirms it", async ({
   page,
 }) => {
@@ -4773,16 +4810,14 @@ test("an added line shows at once, sending, and payment waits until the edge con
     await signIn(page, edge);
     await seatTable(page);
     // The answer, and the live link's event with it, held back: only the till's own paint is left.
-    await page.route("**/api/tables/*/lines", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
-      await route.continue();
-    });
+    const held = await holdPost(page, "**/api/tables/*/lines");
     await page.locator('[data-step="onItem"]').first().click();
     await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
     await expect(page.locator('[data-step="takePayment"]')).toBeDisabled();
     await expect(page.locator("#why-pending")).toHaveText(
       "Waiting for the store to confirm the last change.",
     );
+    held.release();
 
     await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
@@ -4881,12 +4916,15 @@ test("the edge's event arriving before its answer confirms the line once, never 
     await pair(page, edge);
     await signIn(page, edge);
     await seatTable(page);
-    // The edge makes the line and the live link carries its event at once; the answer is late.
-    await delayAnswer(page, "**/api/tables/*/lines", 1_500);
+    // The edge makes the line and the live link carries its event at once; the answer is held
+    // until the event has confirmed the line.
+    const held = await holdPost(page, "**/api/tables/*/lines", { reachEdge: true });
     await page.locator('[data-step="onItem"]').first().click();
-    // Confirmed by the event, with the edge's figure, while the answer is still on its way.
+    await held.sent;
+    // Confirmed by the event, with the edge's figure, while the answer is still held.
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
-    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0, { timeout: 1_200 });
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    held.release();
     // And once the answer lands, still the one line.
     await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
