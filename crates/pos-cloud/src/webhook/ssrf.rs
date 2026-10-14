@@ -336,22 +336,20 @@ fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
     Some(classify_v4(low_32).unwrap_or(ForbiddenReason::Reserved))
 }
 
-/// The forbidden class of an IPv6 address, or `None` if it is public unicast.
-fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
-    if ip.is_unspecified() {
-        return Some(ForbiddenReason::Unspecified);
-    }
-    if ip.is_loopback() {
-        return Some(ForbiddenReason::Loopback);
-    }
+/// Classifies an IPv6 address embedding an IPv4 payload, if any.
+fn classify_v6_embedded_v4(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
+    let is_zero_prefix =
+        segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
 
-    let segments = ip.segments();
-    // 6over4 / IPv4-compatible interface identifier (`<prefix>:0:0:a.b.c.d`, RFC 2529).
-    if segments[4] == 0 && segments[5] == 0 {
+    // 6over4 / IPv4-compatible (`<prefix>:0:0:a.b.c.d`), SIIT (`<prefix>:ffff:0:a.b.c.d`),
+    // or IPv4-mapped (`<prefix>:0:ffff:a.b.c.d` / `<prefix>:ffff:ffff:a.b.c.d`).
+    let is_v4_compat = segments[4] == 0 && segments[5] == 0;
+    let is_siit = segments[4] == 0xffff && segments[5] == 0;
+    let is_v4_mapped = (segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff;
+
+    if is_v4_compat || is_siit || is_v4_mapped {
         let [.., a, b, c, d] = ip.octets();
-        let is_v4_compat_prefix =
-            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if is_v4_compat_prefix || a != 0 {
+        if is_zero_prefix || a != 0 {
             let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
             if reason.is_some() {
                 return reason;
@@ -359,34 +357,7 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         }
     }
 
-    // SIIT IPv4-translated IPv6 address (`<prefix>:ffff:0:a.b.c.d`, RFC 6145).
-    if segments[4] == 0xffff && segments[5] == 0 {
-        let [.., a, b, c, d] = ip.octets();
-        let is_siit_prefix =
-            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if is_siit_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
-            }
-        }
-    }
-
-    // IPv4-mapped interface identifier (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`, RFC 4291).
-    if (segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff {
-        let [.., a, b, c, d] = ip.octets();
-        let is_v4_mapped_prefix =
-            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if is_v4_mapped_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
-            }
-        }
-    }
-
-    // NAT64, well-known prefix or local-use (RFC 6052, RFC 8215) — its own function because the
-    // two prefixes place their embedded address differently and the reason takes explaining.
+    // NAT64, well-known prefix or local-use (RFC 6052, RFC 8215).
     if let Some(reason) = classify_nat64(segments, ip) {
         return Some(reason);
     }
@@ -399,6 +370,23 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
             return Some(reason);
         }
+    }
+
+    None
+}
+
+/// The forbidden class of an IPv6 address, or `None` if it is public unicast.
+fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
+    if ip.is_unspecified() {
+        return Some(ForbiddenReason::Unspecified);
+    }
+    if ip.is_loopback() {
+        return Some(ForbiddenReason::Loopback);
+    }
+
+    let segments = ip.segments();
+    if let Some(reason) = classify_v6_embedded_v4(segments, ip) {
+        return Some(reason);
     }
 
     let [first, second, third, ..] = segments;
@@ -456,9 +444,10 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     {
         // 2001:10::/28 (ORCHIDv1, RFC 4843), 2001:20::/28 (ORCHIDv2, RFC 7343), and 2001:30::/28 (ORCHIDv3, RFC 9389).
         Some(ForbiddenReason::Reserved)
-    } else if (first == 0x2001 && second == 0x0003)
-        || (first == 0x2001 && second == 0x0005)
-        || (first == 0x2001 && second == 0x0004 && third == 0x0112)
+    } else if first == 0x2001
+        && (second == 0x0003
+            || second == 0x0005
+            || (second == 0x0004 && third == 0x0112))
     {
         // 2001:3::/32 AMT (RFC 7450), 2001:5::/32 LISP EID (RFC 7982), and 2001:4:112::/48 AS112 (RFC 7535).
         Some(ForbiddenReason::Reserved)
@@ -884,125 +873,37 @@ mod tests {
 
     #[test]
     fn v6_tunneling_and_benchmarking_prefixes_are_refused() {
-        // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
-        assert_eq!(
-            classify_ip(ip("2001:1234:5678:9abc::127.0.0.1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:1234:5678:9abc::127.0.0.1"),
-                ForbiddenReason::Loopback
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2606:2800:220:1::169.254.169.254")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2606:2800:220:1::169.254.169.254"),
-                ForbiddenReason::LinkLocal
-            ))
-        );
-        // ISATAP smuggling cases (`::5efe:a.b.c.d` and with arbitrary prefixes).
-        assert_eq!(
-            classify_ip(ip("::5efe:127.0.0.1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("::5efe:127.0.0.1"),
-                ForbiddenReason::Loopback
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("::5efe:169.254.169.254")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("::5efe:169.254.169.254"),
-                ForbiddenReason::LinkLocal
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:db8::5efe:127.0.0.1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:db8::5efe:127.0.0.1"),
-                ForbiddenReason::Loopback
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:1234:5678:9abc:0:5efe:169.254.169.254")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:1234:5678:9abc:0:5efe:169.254.169.254"),
-                ForbiddenReason::LinkLocal
-            ))
-        );
-        // Benchmarking IPv6 range (2001:2::/48).
-        assert_eq!(
-            classify_ip(ip("2001:2::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:2::1"),
-                ForbiddenReason::Benchmarking
-            ))
-        );
-        // Discard-Only IPv6 range (100::/64, RFC 6666).
-        assert_eq!(
-            classify_ip(ip("100::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("100::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("100::dead:beef")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("100::dead:beef"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        // PCP and TURN anycast IPv6 range (2001:1::/32, RFC 7723 / RFC 8155).
-        assert_eq!(
-            classify_ip(ip("2001:1::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:1::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        // ORCHIDv1 (2001:10::/28, RFC 4843), ORCHIDv2 (2001:20::/28, RFC 7343), and ORCHIDv3 (2001:30::/28, RFC 9389) IPv6 ranges.
-        assert_eq!(
-            classify_ip(ip("2001:10::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:10::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:20::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:20::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:30::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:30::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        // AMT (2001:3::/32, RFC 7450), LISP EID (2001:5::/32, RFC 7982), and AS112 (2001:4:112::/48, RFC 7535) IPv6 ranges.
-        assert_eq!(
-            classify_ip(ip("2001:3::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:3::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:5::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:5::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("2001:4:112::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:4:112::1"),
-                ForbiddenReason::Reserved
-            ))
-        );
+        for (address, reason) in [
+            // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
+            ("2001:1234:5678:9abc::127.0.0.1", ForbiddenReason::Loopback),
+            ("2606:2800:220:1::169.254.169.254", ForbiddenReason::LinkLocal),
+            // ISATAP smuggling cases (`::5efe:a.b.c.d` and with arbitrary prefixes).
+            ("::5efe:127.0.0.1", ForbiddenReason::Loopback),
+            ("::5efe:169.254.169.254", ForbiddenReason::LinkLocal),
+            ("2001:db8::5efe:127.0.0.1", ForbiddenReason::Loopback),
+            ("2001:1234:5678:9abc:0:5efe:169.254.169.254", ForbiddenReason::LinkLocal),
+            // Benchmarking IPv6 range (2001:2::/48).
+            ("2001:2::1", ForbiddenReason::Benchmarking),
+            // Discard-Only IPv6 range (100::/64, RFC 6666).
+            ("100::1", ForbiddenReason::Reserved),
+            ("100::dead:beef", ForbiddenReason::Reserved),
+            // PCP and TURN anycast IPv6 range (2001:1::/32, RFC 7723 / RFC 8155).
+            ("2001:1::1", ForbiddenReason::Reserved),
+            // ORCHIDv1 (2001:10::/28), ORCHIDv2 (2001:20::/28), and ORCHIDv3 (2001:30::/28).
+            ("2001:10::1", ForbiddenReason::Reserved),
+            ("2001:20::1", ForbiddenReason::Reserved),
+            ("2001:30::1", ForbiddenReason::Reserved),
+            // AMT (2001:3::/32), LISP EID (2001:5::/32), and AS112 (2001:4:112::/48).
+            ("2001:3::1", ForbiddenReason::Reserved),
+            ("2001:5::1", ForbiddenReason::Reserved),
+            ("2001:4:112::1", ForbiddenReason::Reserved),
+        ] {
+            assert_eq!(
+                classify_ip(ip(address)),
+                Err(SsrfRejection::ForbiddenAddress(ip(address), reason)),
+                "{address} must be refused"
+            );
+        }
     }
 
     #[test]
