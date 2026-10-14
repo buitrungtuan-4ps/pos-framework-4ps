@@ -43,6 +43,7 @@ use pos_ports::PortName;
 use pos_ports::error::PortError;
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 
+pub mod protected_key;
 pub mod sealed;
 
 pub use sealed::{SealedFiles, SealedFirst, VAULT_KEY_LEN, VaultKey};
@@ -325,7 +326,13 @@ impl OsVault {
                 ));
             }
         };
-        match VaultKey::read(&key) {
+        // Linux reads the key a root helper unsealed for this start (ADR-0151); Windows keeps its
+        // own, protected with DPAPI, and makes it on the first start (ADR-0174).
+        #[cfg(windows)]
+        let vault_key = protected_key::open_or_create(&key, &protected_key::Dpapi);
+        #[cfg(not(windows))]
+        let vault_key = VaultKey::read(&key);
+        match vault_key {
             Ok(vault_key) => Self {
                 backend: OsBackend::Sealed(SealedFirst::new(
                     SealedFiles::new(dir.clone(), vault_key),
@@ -348,6 +355,26 @@ impl OsVault {
     #[must_use]
     pub const fn standing(&self) -> &VaultStanding {
         &self.standing
+    }
+
+    /// Moves every secret still only in the OS keyring into the sealed store, each proven before
+    /// its keyring entry is deleted, and answers how many moved. A box does this at start, so that
+    /// none is left behind when its service changes account (ADR-0174 decision 7). A vault with no
+    /// sealed store moves nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] for the first secret that could not be moved; it stays in the keyring.
+    pub async fn migrate_from_keyring(&self) -> Result<usize, PortError> {
+        let OsBackend::Sealed(sealed) = &self.backend else {
+            return Ok(0);
+        };
+        let sealed = sealed.clone();
+        off_the_workers(move || {
+            let accounts: Vec<&str> = SecretName::ALL.iter().map(|name| name.as_label()).collect();
+            sealed.migrate(&accounts)
+        })
+        .await
     }
 }
 

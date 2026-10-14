@@ -355,6 +355,19 @@ jobs:
         if: env.RUN_RUST == 'true'
         shell: bash
 
+      # The vault key DPAPI protects, and the KeyVault contract suite over the sealed vault, on the
+      # one runner that has DPAPI (ADR-0174). The Linux legs run the same suite over a raw key file.
+      # Only when either crate is affected.
+      - name: the vault's tests, on Windows
+        if: matrix.os == 'windows-2022' && env.RUN_RUST == 'true'
+        shell: bash
+        run: |
+          case " $PACKAGES " in
+            *" --workspace "*|*" key-vault-keyring "*|*" windows-protect "*)
+              cargo test -p windows-protect -p key-vault-keyring --locked ;;
+            *) echo "neither windows-protect nor key-vault-keyring is affected" ;;
+          esac
+
       # The only runner in the estate with a PowerShell parser, so it is where the Windows
       # installer gets checked (issue #182). `dashboard/src/installers.mjs` emits both the
       # checked-in `deploy/edge/install-pos-edge.ps1` and the per-store script the new-store

@@ -83,6 +83,7 @@ pub mod state;
 pub mod sync_status;
 pub mod telemetry;
 pub mod trusted_keys;
+mod vault;
 pub mod version;
 
 pub use activation::{activation_router, boot_standing};

@@ -1,0 +1,23 @@
+[package]
+name        = "windows-protect"
+version     = "0.1.0"
+description = "Windows' own protection for a store box's state: DPAPI for the vault key (ADR-0174)."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# DPAPI is the only thing this crate reaches, and only on Windows. `windows-sys` 0.61 is already in
+# the lock through `windows-service`, so this adds no crate to it (ADR-0174, Consequences).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[lints]
+workspace = true
+
+[package.metadata.pos]
+layer = "adapter"
+purpose = "Windows' own protection for a store box's state: DPAPI for the vault key."
+adrs = [174]
+owners = ["@maintainers-architecture"]
