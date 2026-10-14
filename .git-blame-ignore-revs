@@ -40,3 +40,6 @@ cc96b577880f638942616eae3be801f09ebc4a86
 
 # #778 — the floor routes and their tests move into their own modules
 47699bcc1df99ad56f3c3c567a5176ed0587bfef
+
+# #779 — the settings and reason-code routes and their tests move into their own modules
+3a4668168d96b0aa3c59a0c626f076d69e0fdb2d
