@@ -22,6 +22,7 @@ members = [
     "crates/adapters/updater-minisign",
     "crates/adapters/cloud-sync-http",
     "crates/adapters/key-vault-keyring",
+    "crates/adapters/windows-protect",
     "crates/adapters/shipping-ahamove",
     "crates/adapters/shipping-grabexpress",
     "crates/adapters/erp-sap",

@@ -43,6 +43,7 @@ use pos_ports::PortName;
 use pos_ports::error::PortError;
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 
+pub mod protected_key;
 pub mod sealed;
 
 pub use sealed::{SealedFiles, SealedFirst, VAULT_KEY_LEN, VaultKey};
@@ -325,7 +326,13 @@ impl OsVault {
                 ));
             }
         };
-        match VaultKey::read(&key) {
+        // Linux reads the key a root helper unsealed for this start (ADR-0151); Windows keeps its
+        // own, protected with DPAPI, and makes it on the first start (ADR-0174).
+        #[cfg(windows)]
+        let vault_key = protected_key::open_or_create(&key, &protected_key::Dpapi);
+        #[cfg(not(windows))]
+        let vault_key = VaultKey::read(&key);
+        match vault_key {
             Ok(vault_key) => Self {
                 backend: OsBackend::Sealed(SealedFirst::new(
                     SealedFiles::new(dir.clone(), vault_key),
@@ -348,6 +355,26 @@ impl OsVault {
     #[must_use]
     pub const fn standing(&self) -> &VaultStanding {
         &self.standing
+    }
+
+    /// Moves every secret still only in the OS keyring into the sealed store, each proven before
+    /// its keyring entry is deleted, and answers how many moved. A box does this at start, so that
+    /// none is left behind when its service changes account (ADR-0174 decision 7). A vault with no
+    /// sealed store moves nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] for the first secret that could not be moved; it stays in the keyring.
+    pub async fn migrate_from_keyring(&self) -> Result<usize, PortError> {
+        let OsBackend::Sealed(sealed) = &self.backend else {
+            return Ok(0);
+        };
+        let sealed = sealed.clone();
+        off_the_workers(move || {
+            let accounts: Vec<&str> = SecretName::ALL.iter().map(|name| name.as_label()).collect();
+            sealed.migrate(&accounts)
+        })
+        .await
     }
 }
 
@@ -483,6 +510,20 @@ mod os_vault {
             .block_on(future)
     }
 
+    /// Writes `raw` as a vault key in the form this platform keeps it: raw on Linux, where a root
+    /// helper unseals it (ADR-0151), and protected with DPAPI on Windows (ADR-0174).
+    #[expect(
+        clippy::expect_used,
+        reason = "test scaffolding: a key that cannot be written is a broken test host"
+    )]
+    fn write_key(path: &std::path::Path, raw: [u8; VAULT_KEY_LEN]) {
+        #[cfg(windows)]
+        let bytes = windows_protect::protect_for_machine(&raw).expect("DPAPI protects the key");
+        #[cfg(not(windows))]
+        let bytes = raw.to_vec();
+        std::fs::write(path, bytes).expect("a vault key");
+    }
+
     /// A sealed vault per case, each in its own directory, kept until the harness is dropped.
     #[derive(Default)]
     struct SealedVaultHarness {
@@ -499,7 +540,7 @@ mod os_vault {
         async fn fresh(&self) -> Setup<Self::Vault> {
             let dir = tempfile::tempdir().expect("a temporary directory");
             let key = dir.path().join("vault-key");
-            std::fs::write(&key, [5_u8; VAULT_KEY_LEN]).expect("a vault key");
+            write_key(&key, [5_u8; VAULT_KEY_LEN]);
             let vault = OsVault::from_paths(Some(key), Some(dir.path().join("vault")));
             assert!(matches!(vault.standing(), VaultStanding::Sealed(_)));
             self.dirs
@@ -521,6 +562,10 @@ mod os_vault {
         );
     }
 
+    /// On Linux the key is made by the root helper, never by the service, so a missing one is a
+    /// fault (ADR-0151). On Windows the service makes it on its first start (ADR-0174), which is
+    /// covered below.
+    #[cfg(not(windows))]
     #[test]
     fn a_vault_key_that_does_not_read_makes_every_call_fail_rather_than_fall_back() {
         let dir = tempfile::tempdir().expect("a temporary directory");
@@ -545,6 +590,64 @@ mod os_vault {
         ));
     }
 
+    /// A key that is there and does not open is a fault on every platform: on Windows, bytes that
+    /// are neither a raw key nor a DPAPI blob this machine made.
+    #[test]
+    fn a_vault_key_that_does_not_open_makes_every_call_fail_rather_than_fall_back() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let short = dir.path().join("short-key");
+        std::fs::write(&short, [1_u8; 8]).expect("a short key");
+        let vault = OsVault::from_paths(Some(short), Some(dir.path().join("vault")));
+        assert!(matches!(vault.standing(), VaultStanding::Unusable(_)));
+        assert!(block_on(vault.load(SecretName::DeviceCredential)).is_err());
+    }
+
+    /// The first start of a Windows box makes its vault key, protected with DPAPI, and the next
+    /// start opens the same one (ADR-0174 decision 7).
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_box_makes_its_vault_key_on_the_first_start_and_keeps_it() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let key = dir.path().join("data").join("vault.key");
+        let first = OsVault::from_paths(Some(key.clone()), Some(dir.path().join("vault")));
+        assert!(matches!(first.standing(), VaultStanding::Sealed(_)));
+        block_on(first.store(SecretName::DeviceCredential, &Secret::new(b"made".to_vec())))
+            .expect("stored");
+        let kept = std::fs::read(&key).expect("kept");
+        assert_ne!(kept.len(), VAULT_KEY_LEN, "kept protected, never raw");
+        let second = OsVault::from_paths(Some(key), Some(dir.path().join("vault")));
+        let loaded = block_on(second.load(SecretName::DeviceCredential)).expect("loaded");
+        assert_eq!(
+            loaded.map(|secret| secret.expose().to_vec()),
+            Some(b"made".to_vec())
+        );
+    }
+
+    /// A Windows box configured by hand with a raw key keeps its secrets: the key is adopted,
+    /// protected with DPAPI, and still opens what was sealed under it.
+    #[cfg(windows)]
+    #[test]
+    fn a_raw_key_on_windows_is_adopted_and_still_opens_its_secrets() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let key = dir.path().join("vault-key");
+        std::fs::write(&key, [6_u8; VAULT_KEY_LEN]).expect("a raw key");
+        let vault = OsVault::from_paths(Some(key.clone()), Some(dir.path().join("vault")));
+        assert!(matches!(vault.standing(), VaultStanding::Sealed(_)));
+        block_on(vault.store(SecretName::DeviceCredential, &Secret::new(b"kept".to_vec())))
+            .expect("stored");
+        assert_ne!(
+            std::fs::read(&key).expect("kept").len(),
+            VAULT_KEY_LEN,
+            "now protected"
+        );
+        let after = OsVault::from_paths(Some(key), Some(dir.path().join("vault")));
+        let loaded = block_on(after.load(SecretName::DeviceCredential)).expect("loaded");
+        assert_eq!(
+            loaded.map(|secret| secret.expose().to_vec()),
+            Some(b"kept".to_vec())
+        );
+    }
+
     #[test]
     fn a_key_without_a_directory_or_the_reverse_is_a_mistake_not_the_keyring() {
         let dir = tempfile::tempdir().expect("a temporary directory");
@@ -564,7 +667,7 @@ mod os_vault {
         // reads what the first stored.
         let dir = tempfile::tempdir().expect("a temporary directory");
         let key = dir.path().join("vault-key");
-        std::fs::write(&key, [5_u8; VAULT_KEY_LEN]).expect("a vault key");
+        write_key(&key, [5_u8; VAULT_KEY_LEN]);
         let before = OsVault::from_paths(Some(key.clone()), Some(dir.path().join("vault")));
         block_on(before.store(
             SecretName::DeviceCredential,

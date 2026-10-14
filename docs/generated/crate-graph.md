@@ -27,6 +27,7 @@ flowchart LR
     store_postgres["store-postgres"]
     store_sqlite["store-sqlite"]
     updater_minisign["updater-minisign"]
+    windows_protect["windows-protect"]
   end
   subgraph app
     pos_cloud["pos-cloud"]
@@ -59,6 +60,7 @@ flowchart LR
   erp_sap --> pos_proto
   erp_sap --> pos_providers
   key_vault_keyring --> pos_ports
+  key_vault_keyring --> windows_protect
   link_nats --> pos_ports
   link_nats --> pos_proto
   metrics_vm --> pos_ports
@@ -153,7 +155,7 @@ flowchart LR
 | `blob-garage` | adapter | `crates/adapters/blob-garage` | The cloud BlobStore over Garage/S3, with hand-rolled SigV4 and HTTP and no S3 SDK. | `pos-cloud` | — |
 | `cloud-sync-http` | adapter | `crates/adapters/cloud-sync-http` | The edge's CloudSync and MessageLink over HTTPS to the cloud: activation, OTA fetch, and event delivery. | `pos-edge` | — |
 | `erp-sap` | adapter | `crates/adapters/erp-sap` | The SAP ErpSink adapter: nightly whole-day revenue and consumption posting over HTTPS. | `pos-cloud` | — |
-| `key-vault-keyring` | adapter | `crates/adapters/key-vault-keyring` | The edge's KeyVault: device credentials in the OS credential store, sealed with systemd-creds on headless Linux. | `pos-edge` | — |
+| `key-vault-keyring` | adapter | `crates/adapters/key-vault-keyring` | The edge's KeyVault: device credentials in the OS credential store, sealed under a systemd-creds key on Linux and a DPAPI key on Windows. | `pos-edge` | — |
 | `link-nats` | adapter | `crates/adapters/link-nats` | The store-to-cloud MessageLink over NATS JetStream, and the cloud's consumer of it. | `pos-cloud`, `pos-edge` | — |
 | `metrics-vm` | adapter | `crates/adapters/metrics-vm` | The cloud MetricsSink over VictoriaMetrics: bounded queue, background flush, hand-rolled HTTP import. | `pos-cloud` | — |
 | `minimal-edge` | app | `examples/minimal-edge` | The smallest runnable store: pos_edge on the in-memory fakes, with no database, hardware or network. | — | — |
@@ -181,4 +183,5 @@ flowchart LR
 | `store-postgres` | adapter | `crates/adapters/store-postgres` | The cloud EventStore and the cloud's own stores over PostgreSQL (tokio-postgres, deadpool, monthly partitions, RLS). | `pos-cloud`, `pos-cloud-api`, `pos-cloud-reports` | — |
 | `store-sqlite` | adapter | `crates/adapters/store-sqlite` | The edge store over SQLite: event, config, device, subject and intake stores on one single-writer thread. | `pos-edge` | — |
 | `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-edge` | — |
+| `windows-protect` | adapter | `crates/adapters/windows-protect` | Windows' own protection for a store box's state: DPAPI for the vault key. | `key-vault-keyring` | — |
 | `xtask` | tool | `xtask` | Repository checks run by just preflight and CI: dependency rule, snapshots, migrations, links, changelog, code size. | — | — |
