@@ -34,6 +34,7 @@ export type PermissionId =
   | "billing.payment.take"
   | "billing.receipt.reprint"
   | "cash.drawer.open_no_sale"
+  | "cash.drawer.override_assignment"
   | "cash.movement.record"
   | "cash.shift.close"
   | "cash.shift.manage_other_till"
@@ -50,7 +51,8 @@ export type PermissionId =
 
 // The acts that take another person's approval today: voiding a fired line or a bill, a discount
 // above the ceiling, waiving a fee, opening the drawer without a sale, and starting, counting or
-// closing another till's drawer (`docs/pos-spec.md` §9, ADR-0167 decision 3). Any other permission
+// closing another till's drawer (`docs/pos-spec.md` §9, ADR-0167 decision 3), and acting on a drawer
+// assigned to another person (decision 9). Any other permission
 // the edge accepts only when held directly, so holding one of those with approval lets the person
 // do nothing at this till.
 const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
@@ -59,6 +61,7 @@ const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
   "billing.discount.override_ceiling",
   "billing.fee.waive",
   "cash.drawer.open_no_sale",
+  "cash.drawer.override_assignment",
   "cash.shift.manage_other_till",
 ]);
 

@@ -96,7 +96,17 @@ impl<S: EventStore> Edge<S> {
             waiting: (published != model).then_some(published),
             own: scope.own.filter(|_| model == DrawerModel::PerTerminal),
             drawers,
+            access: session.shift.drawer_access(),
         }
+    }
+
+    /// The person on the store's roster under `code`, whom a drawer started for another till may be
+    /// given to where the store assigns drawers (ADR-0167 decision 9): `None` for a code nobody on
+    /// it has, or one with no id. The till types a code, as it does an approver's, because it keeps
+    /// no names.
+    #[must_use]
+    pub fn employee_with_code(&self, code: &str) -> Option<EmployeeId> {
+        self.session().staff.get(code)?.employee_id
     }
 
     /// The drawer `scope` names under the model the edge runs, and whether it is another till's than

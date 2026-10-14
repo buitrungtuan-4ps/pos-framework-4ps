@@ -482,11 +482,12 @@ export interface BuyerRequest {
   email?: string;
 }
 
-export interface SettleRequest {
+export type SettleRequest = {
   payments: PaymentRequest[];
   // Absent on every ordinary retail sale, which is nearly every bill.
   buyer?: BuyerRequest;
-}
+  // The override approver, where this till's drawer is another person's (ADR-0167 decision 9).
+} & Partial<ApproverRequest>;
 
 export interface BillResponse {
   bill_id: string;
@@ -622,6 +623,8 @@ export interface LayoutResponse {
 export type OpenShiftRequest = {
   opening_float: Money;
   terminal_device_id?: string;
+  /** Whom another till's drawer is for, by staff code, where the store assigns drawers. */
+  assigned_staff_code?: string;
 } & Partial<ApproverRequest>;
 
 /** The blind count, with an approver for another till's drawer where the person needs one. */
@@ -631,6 +634,8 @@ export interface ShiftResponse {
   shift_id: string;
   /** The till whose drawer it is, where the store keeps a drawer per till (ADR-0167). */
   terminal_device_id?: string;
+  /** Whose the drawer is for this session, where the store assigns drawers: an id, never a name. */
+  assigned_employee_id?: string;
   state: string;
   expected_amount?: Money;
   counted_amount?: Money;
@@ -682,6 +687,8 @@ export interface DrawersResponse {
   /** The till this device is, whose drawer is its own; absent for a device that is no till. */
   terminal_device_id?: string;
   drawers: DrawerEntry[];
+  /** Present where each drawer is one person's for its session (ADR-0167 decision 9). */
+  drawer_access?: "DRAWER_ACCESS_ASSIGNED";
 }
 
 /**
@@ -712,10 +719,10 @@ export interface BatchCloseResponse {
 }
 
 /** A paid in or a paid out: how much, in minor units, and why (ADR-0165). */
-export interface CashMovementRequest {
+export type CashMovementRequest = {
   amount_minor: number;
   reason_code_id: string;
-}
+} & Partial<ApproverRequest>;
 
 /**
  * Opening the drawer without a sale: why, and the manager whose PIN allows it (ADR-0165). No manager

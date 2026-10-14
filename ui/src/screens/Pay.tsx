@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
+import { DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import type {
   BillResponse,
@@ -1297,6 +1298,7 @@ export function Pay() {
               the guest's money already on the counter. A bill put on screen mid-flow (the next part of
               a split) starts in exactly that state, so the window is not only the first load's.
             */}
+            <DrawerOwner own approver />
             <div class="mt-4 flex flex-col gap-2">
               <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button

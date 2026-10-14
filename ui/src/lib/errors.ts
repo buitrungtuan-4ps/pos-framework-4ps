@@ -51,6 +51,10 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // Cash, or a drawer of its own, at a device that is none of the store's tills, where the store
   // keeps a drawer per till (ADR-0167 decision 6).
   NOT_A_TILL: "error.not_a_till",
+  // A drawer that is one person's for its session, and an act on it by somebody else with no
+  // approver; another till's drawer started for nobody on the roster (ADR-0167 decision 9).
+  DRAWER_ASSIGNED_TO_ANOTHER: "error.drawer_assigned_to_another",
+  ASSIGNEE_REQUIRED: "error.assignee_required",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",

@@ -72,7 +72,9 @@ use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::{PublishedQr, TableOrder};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
-use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
+use pos_proto::shift::{
+    CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
+};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::tender_keys::PublishedTenderKeys;
 use pos_proto::text::PermissionKey;
@@ -2017,6 +2019,8 @@ pub struct DrawersView {
     pub own: Option<DeviceId>,
     /// The store's one drawer, or one per till its `devices` node lists.
     pub drawers: Vec<DrawerView>,
+    /// Whether the store's drawers are anybody's or each one person's (ADR-0167 decision 9).
+    pub access: DrawerAccess,
 }
 
 /// Which way cash moved through the drawer outside a sale

@@ -22,12 +22,12 @@
     "max-lines-per-function": 1140
   },
   "src/screens/Pay.tsx": {
-    "max-lines": 1252,
-    "max-lines-per-function": 1180
+    "max-lines": 1254,
+    "max-lines-per-function": 1181
   },
   "src/screens/Shift.tsx": {
-    "max-lines": 1038,
-    "max-lines-per-function": 974
+    "max-lines": 1049,
+    "max-lines-per-function": 983
   },
   "src/screens/SignIn.tsx": {
     "max-lines-per-function": 129
@@ -39,7 +39,7 @@
     "max-lines-per-function": 166
   },
   "src/state/store.ts": {
-    "max-lines": 1619,
+    "max-lines": 1627,
     "max-lines-per-function": 311
   }
 }
