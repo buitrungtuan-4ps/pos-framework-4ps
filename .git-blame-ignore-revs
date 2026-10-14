@@ -67,3 +67,6 @@ c188487521b485ab1ba01d77c5c75e14213de4bd
 
 # #791 — the store-sync, reconcile, chain and OTA routes and their tests move into their own modules
 cf79d45af82eb57c382047eddc15b8aea38d1721
+
+# #792 — the archive, OTA rollout, raw config and admitted-device routes and their tests move into their own modules
+dc8c5eb97db492c7daa013c0d6f7f3a8c442a1e7
