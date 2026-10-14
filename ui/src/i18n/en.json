@@ -368,6 +368,7 @@
   "setup.submit": "Activate",
   "setup.title": "Activate this store",
   "setup.unavailable": "This store server runs without a cloud, so there is nothing to activate.",
+  "setup.state_too_open": "Other accounts on this computer can read this store's data. Run the store server's installer again on this computer, as an administrator, to close it.",
   "shift.approver_code": "Manager's code",
   "shift.approver_pin": "Manager's PIN",
   "shift.assignee_code": "Staff code of the person the drawer is for",

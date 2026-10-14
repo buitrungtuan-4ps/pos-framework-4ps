@@ -4895,6 +4895,34 @@ test("the edge's event arriving before its answer confirms the line once, never 
   }
 });
 
+// The store server says whether other accounts on its computer can read the store's data
+// (ADR-0174), and the setup screen warns where they can. The example store has no cloud, so the
+// standing it would answer is stubbed with each value.
+test("the setup screen warns when other accounts on the computer can read the store's data", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let access = "STATE_ACCESS_TOO_OPEN";
+    await page.route("**/api/activation", (route) =>
+      route.fulfill({ json: { activated: false, state_access: access } }),
+    );
+    await page.goto(`${edge.baseURL}/setup`);
+    const warning = page.locator('[data-outcome="state-too-open"]');
+    await expect(warning).toHaveText(
+      "Other accounts on this computer can read this store's data. Run the store server's installer again on this computer, as an administrator, to close it.",
+    );
+    await expect(page.locator("input").first()).toBeVisible();
+
+    access = "STATE_ACCESS_OK";
+    await page.reload();
+    await expect(page.locator("input").first()).toBeVisible();
+    await expect(warning).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

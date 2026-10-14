@@ -1,4 +1,4 @@
-import { Match, Switch, createSignal, onMount } from "solid-js";
+import { Match, Show, Switch, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
@@ -57,11 +57,29 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 // A store server with no cloud does not mount the activation route, and answers `404`: there is
 // nothing to activate. Anything else is retried with the engine's backoff and shown in place,
 // rather than read as a box without a cloud.
-function createStandingRead(setStanding: (standing: Standing) => void) {
+function createStandingRead(
+  setStanding: (standing: Standing) => void,
+  setTooOpen: (tooOpen: boolean) => void,
+) {
   return createScreenRead(
     () => api.activation(),
-    (state) => setStanding(state.activated ? "activated" : "needed"),
+    (state) => {
+      setStanding(state.activated ? "activated" : "needed");
+      setTooOpen(state.state_access === "STATE_ACCESS_TOO_OPEN");
+    },
     { handled: onStatus(404, () => setStanding("unavailable")) },
+  );
+}
+
+// Other accounts on this computer can read the store's data, and running the installer again closes
+// it (ADR-0174 decision 5).
+function StateTooOpen(props: { when: boolean }) {
+  return (
+    <Show when={props.when}>
+      <p class="mb-4 rounded-token border border-danger px-3 py-2 text-ink" role="alert" data-outcome="state-too-open">
+        {t("setup.state_too_open")}
+      </p>
+    </Show>
   );
 }
 
@@ -74,7 +92,9 @@ export function Setup() {
   const [standing, setStanding] = createSignal<Standing>("checking");
   const [busy, setBusy] = createSignal(false);
 
-  const standingRead = createStandingRead(setStanding);
+  // Other accounts on this computer can read the store's data (ADR-0174): said whatever the standing.
+  const [tooOpen, setTooOpen] = createSignal(false);
+  const standingRead = createStandingRead(setStanding, setTooOpen);
   onMount(() => void standingRead.run());
 
   const submit = async () => {
@@ -112,6 +132,7 @@ export function Setup() {
   return (
     <section class="mx-auto max-w-sm p-4">
       <PageHeader title={t("setup.title")} />
+      <StateTooOpen when={tooOpen()} />
 
       <Switch>
         <Match when={standing() === "checking"}>

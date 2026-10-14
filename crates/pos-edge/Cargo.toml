@@ -165,6 +165,8 @@ url            = { version = "2", features = ["serde"] }
 # cargo-deny entry.
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
+# Who may read the state directory, from its access-control list (ADR-0174).
+windows-protect = { path = "../adapters/windows-protect" }
 
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with

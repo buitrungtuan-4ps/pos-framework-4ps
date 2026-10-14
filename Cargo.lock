@@ -1963,6 +1963,7 @@ dependencies = [
  "updater-minisign",
  "url",
  "webpki-roots 1.0.9",
+ "windows-protect",
  "windows-service",
  "zeroize",
 ]

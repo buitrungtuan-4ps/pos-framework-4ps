@@ -793,6 +793,10 @@ export interface ActivateAccepted {
 
 export interface ActivationStanding {
   activated: boolean;
+  // Whether the store's data is closed to other accounts on the store server's computer
+  // (ADR-0174): `STATE_ACCESS_OK`, `STATE_ACCESS_TOO_OPEN` or `STATE_ACCESS_UNCHECKED`. Absent from
+  // an edge older than the field, or one that was not told where its data is.
+  state_access?: string;
 }
 
 /**
