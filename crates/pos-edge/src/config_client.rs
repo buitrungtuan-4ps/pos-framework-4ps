@@ -28,6 +28,7 @@
 //! Scope: the delta form of a config update is still the cloud's to send as a snapshot — this loop
 //! pulls whole documents (ADR-0039) and stores them as [`ConfigUpdate::Snapshot`].
 
+use crate::config_changes::AppliedDocument;
 use core::future::Future;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
@@ -408,6 +409,8 @@ pub struct ConfigClient<T, S> {
     transport: T,
     edge: Arc<Edge<S>>,
     held_version: Mutex<Option<String>>,
+    /// The document this client last applied, so the next one can say which nodes it changed.
+    applied: AppliedDocument,
     /// The same `Arc<Origins>` the CORS layer reads, or `None` on a client built without one — the
     /// on-fakes example and most tests, which serve no cross-origin caller.
     origins: Option<Arc<Origins>>,
@@ -442,6 +445,7 @@ where
             transport,
             edge,
             held_version: Mutex::new(held_version),
+            applied: AppliedDocument::default(),
             origins: None,
             revocations: None,
             lease: None,
@@ -544,7 +548,9 @@ where
         };
         // The session, the lease and the origins are all live now, so tell the open tills: each one
         // reloads what it draws from configuration without a new sign-in (ADR-0160 item 7).
-        self.edge.announce_config(&synced.config_version_id);
+        let changed = self.applied.replace(&synced.document);
+        self.edge
+            .announce_config(&synced.config_version_id, changed);
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
         // after a restart), not a reason to refuse a document the counter is already selling on.

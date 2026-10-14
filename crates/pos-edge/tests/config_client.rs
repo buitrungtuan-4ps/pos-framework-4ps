@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use pos_core::lease::LeaseStanding;
+use pos_edge::config_changes::changed_nodes;
 use pos_edge::config_client::{
     ConfigClient, ConfigTransport, ConfigTransportError, SyncedConfig, restore_session_from_store,
 };
@@ -80,6 +81,35 @@ impl ConfigTransport for FakeConfigTransport {
             config_version_id: self.version.clone(),
             document: self.document.clone(),
         }))
+    }
+}
+
+/// A cloud that publishes `documents` in turn, one per pull, and then has nothing newer.
+struct PublishingTransport {
+    documents: std::sync::Mutex<std::collections::VecDeque<SyncedConfig>>,
+}
+
+impl PublishingTransport {
+    fn new(documents: Vec<(&str, serde_json::Value)>) -> Self {
+        let documents = documents
+            .into_iter()
+            .map(|(version, document)| SyncedConfig {
+                config_version_id: version.to_owned(),
+                document,
+            })
+            .collect();
+        Self {
+            documents: std::sync::Mutex::new(documents),
+        }
+    }
+}
+
+impl ConfigTransport for PublishingTransport {
+    async fn fetch(
+        &self,
+        _held_version: Option<&str>,
+    ) -> Result<Option<SyncedConfig>, ConfigTransportError> {
+        Ok(self.documents.lock().expect("documents lock").pop_front())
     }
 }
 
@@ -431,4 +461,47 @@ fn a_published_receipt_floor_lifts_the_receipt_counter() {
     run_ready(receipts.raise_floor(store_id(), 5)).expect("raises");
     let after = run_ready(receipts.allocate_receipt(store_id(), bill(2))).expect("allocates");
     assert_eq!(after, 42, "a lower floor never lowers the counter");
+}
+
+#[test]
+fn a_second_publish_names_the_nodes_it_changed_and_the_first_names_none() {
+    let edge = edge();
+    let mut till = edge.fanout().subscribe();
+    let mut with_layout = menu_document();
+    with_layout["layout"] = serde_json::json!({ "categories": [] });
+    let transport = PublishingTransport::new(vec![
+        ("01J00000000000000000000001", menu_document()),
+        ("01J00000000000000000000002", with_layout),
+    ]);
+    let client = ConfigClient::new(transport, edge.clone(), None);
+
+    run_ready(client.pump_once()).expect("first pump");
+    let first: serde_json::Value =
+        serde_json::from_str(&till.try_recv().expect("first frame")).expect("JSON");
+    assert_eq!(first["type"], "config_applied");
+    assert!(
+        first.get("changed_nodes").is_none(),
+        "the first document after a start has nothing to compare with, so it names nothing: {first}"
+    );
+
+    run_ready(client.pump_once()).expect("second pump");
+    let second: serde_json::Value =
+        serde_json::from_str(&till.try_recv().expect("second frame")).expect("JSON");
+    assert_eq!(second["changed_nodes"], serde_json::json!(["layout"]));
+}
+
+#[test]
+fn changed_nodes_names_each_node_added_removed_or_changed_once_and_sorted() {
+    let before = serde_json::json!({ "menu": 1, "floor": 1, "locale": 1 });
+    let after = serde_json::json!({ "menu": 2, "locale": 1, "tax": 1 });
+    assert_eq!(
+        changed_nodes(&before, &after),
+        Some(vec![
+            "floor".to_owned(),
+            "menu".to_owned(),
+            "tax".to_owned()
+        ])
+    );
+    assert_eq!(changed_nodes(&before, &before), Some(Vec::new()));
+    assert_eq!(changed_nodes(&serde_json::json!([]), &after), None);
 }
