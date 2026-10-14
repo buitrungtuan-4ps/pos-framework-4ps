@@ -2,15 +2,21 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The `400` a settings write the register refuses becomes: the field at fault and the reason the
-//! console explains it by.
+//! console explains it by. And the `400` for any other write that would make a store run a value
+//! that needs a recorded confirmation (ADR-0169 decision 3).
 
 use axum::response::Response;
 
 use pos_proto::ErrorStatus;
-use pos_proto::settings::ValueRefusal;
+use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::settings::{ValueRefusal, register};
+use serde_json::Value;
 
-use super::api_error_with_details;
+use super::{api_error_with_details, config_store_error_response, version_mismatch};
+use crate::config_tree::{ConfigTree, ConfigTreeStore, ConfigValidator};
+use crate::confirmed_values::Unconfirmed;
 use crate::settings::SettingRefusal;
+use crate::version::{UpdateOutcome, Version};
 
 /// The `400` a value the register refuses becomes, naming the field at fault.
 pub(super) fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
@@ -34,4 +40,91 @@ pub(super) fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
         refusal.to_string(),
         &[(field, reason)],
     )
+}
+
+/// The `400` a layer write, a rollback or a release's schedule answers when it would make a store run
+/// a value that needs a recorded confirmation, which it did not run before: the setting's key, with
+/// `CONFIRMATION_REQUIRED`, and a message that points to Settings. A release names the store, since
+/// it reaches many.
+pub(super) fn unconfirmed_response(
+    unconfirmed: &Unconfirmed,
+    store_id: Option<StoreId>,
+) -> Response {
+    let message = match store_id {
+        Some(store_id) => format!("store {store_id}: {unconfirmed}"),
+        None => unconfirmed.to_string(),
+    };
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        message,
+        &[(unconfirmed.setting_key.as_str(), "CONFIRMATION_REQUIRED")],
+    )
+}
+
+/// Saves a store's tree after a layer write or a rollback, once [`crate::confirmed_values::check`]
+/// passes against the register: `before` is what the store ran when the tree was read. Nothing is
+/// saved for a write it refuses.
+///
+/// `saved` is the tenant, the store, and the version the tree was read at. That precondition is the
+/// one the store evaluates at write time, and it is what prevents two writes interleaving: an
+/// `If-Match` compared against the handler's own read can already have been overtaken.
+pub(super) async fn save_if_confirmed<Cfg, V>(
+    config_trees: &Cfg,
+    (tenant_id, store_id, read_at): (TenantId, StoreId, Option<&Version>),
+    before: &Value,
+    tree: &ConfigTree<V>,
+) -> Result<(), Response>
+where
+    Cfg: ConfigTreeStore,
+    V: ConfigValidator,
+{
+    crate::confirmed_values::check(&register(), before, &tree.effective())
+        .map_err(|unconfirmed| unconfirmed_response(&unconfirmed, None))?;
+    match config_trees
+        .save(tenant_id, store_id, &tree.state(), read_at)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(_)) => Ok(()),
+        Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => Err(version_mismatch()),
+        Err(error) => Err(config_store_error_response(&error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    use pos_proto::ids::StoreId;
+    use pos_proto::ulid::Ulid;
+
+    use super::unconfirmed_response;
+    use crate::confirmed_values::Unconfirmed;
+
+    #[tokio::test]
+    async fn a_write_that_would_run_an_unconfirmed_value_names_the_setting() {
+        let response = unconfirmed_response(
+            &Unconfirmed {
+                setting_key: "example.drawer_owner".to_owned(),
+                value: "OWNER_ONE_PERSON",
+            },
+            Some(StoreId::new(Ulid::from_u128(7))),
+        );
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("collect the refusal");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON envelope");
+        assert_eq!(
+            body["error"]["details"],
+            json!([{ "field": "example.drawer_owner", "reason": "CONFIRMATION_REQUIRED" }])
+        );
+        let message = body["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("Settings"), "{message}");
+        assert!(
+            message.starts_with(&format!("store {}", StoreId::new(Ulid::from_u128(7)))),
+            "a release names the store: {message}"
+        );
+    }
 }

@@ -12,19 +12,23 @@ use axum::response::Response;
 use pos_proto::ErrorStatus;
 use pos_proto::ids::{StoreId, TenantId};
 
+use super::setting_refusal::unconfirmed_response;
 use super::{
     AdminContext, AdminStore, BatchNode, ClockSource, RegistryStore, ReleaseNodeRequest,
-    ReleaseState, ScheduleReleaseRequest, StoreGroupStore, api_error, audit_action, mint_ulid,
-    not_found, prerequisites_for, read_store_node_as_run, release_error_response,
-    release_report_response, release_target_stores, release_target_timezones,
-    scheduled_error_response, service_unavailable, unknown_batch_node, unresolvable_moment,
+    ReleaseState, ScheduleReleaseRequest, StoreGroupStore, api_error, audit_action,
+    config_store_error_response, mint_ulid, not_found, prerequisites_for, read_store_node_as_run,
+    release_error_response, release_report_response, release_target_stores,
+    release_target_timezones, scheduled_error_response, service_unavailable, unknown_batch_node,
+    unresolvable_moment,
 };
-use crate::config_tree::ConfigTreeStore;
+use crate::config_tree::{ConfigTreeState, ConfigTreeStore};
 use crate::releases::{
     Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ResolveRefusal, ResolvedStore,
     TargetStore, resolve_for_stores,
 };
-use crate::scheduling::{NewScheduledPublish, ScheduledPublishStore};
+use crate::scheduling::{
+    NewScheduledPublish, ScheduledPublishStore, check_confirmations as check_one,
+};
 
 /// A node the release carries, with the arguments its plan takes.
 type CarriedNode<'r> = (Arc<dyn BatchNode>, &'r serde_json::Value);
@@ -180,6 +184,41 @@ pub(super) async fn compile_pairs(
         }
     }
     Ok(pairs)
+}
+
+/// Refuses a release that would make a store run a value that needs a recorded confirmation, which
+/// it does not run now
+/// ([ADR-0169](../../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+/// decision 3).
+///
+/// Each pair is checked against its store's tree as it stands, composed as the activator will
+/// compose it. The activator checks again when the pair comes due, since the store may change
+/// meanwhile.
+pub(super) async fn check_confirmations<Cfg: ConfigTreeStore>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    pairs: &[(StoreId, String, serde_json::Value)],
+) -> Result<(), Response> {
+    let register = pos_proto::settings::register();
+    if register.iter().all(|setting| setting.confirm.is_none()) {
+        return Ok(());
+    }
+    let mut trees: std::collections::BTreeMap<StoreId, Option<ConfigTreeState>> =
+        std::collections::BTreeMap::new();
+    for (store_id, node_key, node_value) in pairs {
+        if !trees.contains_key(store_id) {
+            let state = config_trees
+                .load(tenant_id, *store_id)
+                .await
+                .map_err(|error| config_store_error_response(&error))?
+                .map(|versioned| versioned.record);
+            trees.insert(*store_id, state);
+        }
+        let state = trees.get(store_id).and_then(Option::as_ref);
+        check_one(&register, state, node_key, node_value)
+            .map_err(|unconfirmed| unconfirmed_response(&unconfirmed, Some(*store_id)))?;
+    }
+    Ok(())
 }
 
 /// Writes every pair at its store's instant, and returns how many were written.

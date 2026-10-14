@@ -203,7 +203,7 @@ mod release_schedule;
 mod setting_refusal;
 mod settings_confirm;
 
-use setting_refusal::setting_refusal_response;
+use setting_refusal::{save_if_confirmed, setting_refusal_response};
 
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
@@ -22474,20 +22474,16 @@ where
         .as_object()
         .map(|map| map.keys().cloned().collect())
         .unwrap_or_default();
-    match tree.publish(level, layer, version_id, node_keys) {
-        Ok(id) => match config_trees
-            .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
-            .await
-        {
-            // The `If-Match` above compared against this handler's own read, which another publish
-            // may already have overtaken. This is the precondition the store evaluates at write
-            // time, and it is the one that actually prevents the interleave.
-            Ok(UpdateOutcome::Updated(_)) => Ok(id),
-            Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => Err(version_mismatch()),
-            Err(error) => Err(config_store_error_response(&error)),
-        },
-        Err(ConfigError::Invalid(violations)) => Err(unprocessable_violations(&violations)),
-    }
+    // What the store runs now, for the one check every write but the settings write takes
+    // (ADR-0169 decision 3).
+    let before = tree.effective();
+    let id = match tree.publish(level, layer, version_id, node_keys) {
+        Ok(id) => id,
+        Err(ConfigError::Invalid(violations)) => return Err(unprocessable_violations(&violations)),
+    };
+    let saved = (tenant_id, store_id, loaded.version.as_ref());
+    save_if_confirmed(config_trees, saved, &before, &tree).await?;
+    Ok(id)
 }
 
 /// The generation a lease bump's `If-Match` names, or `None` for `*`.
@@ -33459,6 +33455,7 @@ where
     // A version from before QR ordering had one switch comes back with the switch it ran, and
     // `qr.enabled` and the channel list agreeing with it (ADR-0160 decision 5).
     let from_before_the_switch = crate::qr_ordering::predates(version_id, app.qr_switch_since);
+    let before = tree.effective();
     let Some(new_id) = tree.restore_with(version_id, new_version_id, |document| {
         if from_before_the_switch {
             crate::qr_ordering::settle(document);
@@ -33466,14 +33463,11 @@ where
     }) else {
         return not_found("config version");
     };
-    match app
-        .config_trees
-        .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
-        .await
-    {
-        Ok(UpdateOutcome::Updated(_)) => {}
-        Ok(UpdateOutcome::VersionMismatch | UpdateOutcome::NotFound) => return version_mismatch(),
-        Err(error) => return config_store_error_response(&error),
+    // A version that ran a value needing a recorded confirmation, which the store no longer runs,
+    // comes back only once it is confirmed on Settings (ADR-0169 decision 3): `save_if_confirmed`.
+    let saved = (tenant_id, store_id, loaded.version.as_ref());
+    if let Err(refusal) = save_if_confirmed(&app.config_trees, saved, &before, &tree).await {
+        return refusal;
     }
     audit_action(
         &app.audit,
@@ -34903,8 +34897,11 @@ fn unresolvable_moment(refusals: &[(StoreId, ResolveRefusal)]) -> Response {
     responses(
         (status = 200, description = "The release is scheduled, and the body is its node × store \
                                       report. Every pair is `PENDING` until its instant arrives"),
-        (status = 400, description = "An id is not a ULID, or the node is not one of the batchable \
-                                      kinds", body = crate::openapi_admin::ErrorResponse),
+        (status = 400, description = "An id is not a ULID, the node is not one of the batchable \
+                                      kinds, or a pair would make its store run a value that \
+                                      needs a recorded confirmation, which it does not run now \
+                                      (the setting key, CONFIRMATION_REQUIRED; confirm it on \
+                                      Settings). Nothing is written", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "No such release in this tenant", body = crate::openapi_admin::ErrorResponse),
@@ -34974,6 +34971,7 @@ where
     )
     .await?;
     let pairs = release_schedule::compile_pairs(tenant_id, &stores, &carried).await?;
+    release_schedule::check_confirmations(&state.config_trees, tenant_id, &pairs).await?;
 
     // Only now, with every check passed, is anything written.
     let written = release_schedule::schedule_pairs(
