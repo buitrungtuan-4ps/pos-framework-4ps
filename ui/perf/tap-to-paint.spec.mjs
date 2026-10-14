@@ -14,11 +14,17 @@
 // The edge round trip is the browser's resource timing for every `/api/*` request made meanwhile,
 // from the request's start to the response's end. Ids in a path are folded to `:id`.
 //
-// # What it does not do
+// # Budgets
 //
-// It asserts no timing. It prints the figures and writes them as JSON to `POS_PERF_OUT`, or to
-// `test-results/tap-to-paint.json` by default. Budgets are enforced by the nightly job once the
-// work each one measures has landed.
+// ADR-0173 decision 6 gives each act a 95th-percentile budget: 50 ms for an act the till answers
+// on its own (switching screens, and the three acts it paints before the edge answers), 150 ms for
+// an act that waits for the edge, and 300 ms from a reload to a drawn order screen. The figures and
+// each budget's headroom are written as JSON to `POS_PERF_OUT`, or to
+// `test-results/tap-to-paint.json` by default.
+//
+// Only with `POS_PERF_ENFORCE=1`, which the nightly job sets, does a p95 over its budget fail the
+// run. Every commit's checks assert no timing (ADR-0109): a number from a shared runner on a debug
+// build is a number about the runner.
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -35,6 +41,27 @@ const SWITCHES_PER_ROUND = 10;
 const RELOADS_PER_ROUND = 5;
 
 const OUT = process.env["POS_PERF_OUT"] ?? "test-results/tap-to-paint.json";
+const ENFORCE = process.env["POS_PERF_ENFORCE"] === "1";
+
+/** Each act's p95 budget in milliseconds (ADR-0173 decision 6). */
+const ALONE_MS = 50;
+const EDGE_MS = 150;
+const RELOAD_MS = 300;
+const BUDGETS = {
+  "seat a table": EDGE_MS,
+  "add a line": ALONE_MS,
+  "change a quantity": ALONE_MS,
+  "order screen to floor": ALONE_MS,
+  "floor to order screen": ALONE_MS,
+  "reload to a drawn order screen": RELOAD_MS,
+  "open the move list": ALONE_MS,
+  "move a table": ALONE_MS,
+};
+
+/** Waits, outside any sample, until the edge has confirmed whatever the till painted. */
+async function confirmed(page) {
+  await expect(page.locator('[data-outcome="line-sending"], [data-outcome="writes-pending"]')).toHaveCount(0);
+}
 
 /** Runs in the page before any of its own scripts: remembers each tap's `pointerdown` time. */
 function installProbe() {
@@ -168,6 +195,25 @@ async function pairAndSignIn(page, edge) {
   await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
 }
 
+/**
+ * Opens the list of tables to move to, which the till answers alone, then moves, which it paints
+ * before the edge answers (ADR-0173 decision 4), until no table is free.
+ */
+async function moveUntilNoTableIsFree(page, acts) {
+  for (;;) {
+    const open = page.locator('[data-step="openMove"]');
+    acts["open the move list"].push(await measure(page, open, { present: '[data-step="moveTo"]' }));
+    const offered = page.locator('[data-step="moveTo"]');
+    if ((await offered.count()) <= 1) {
+      return;
+    }
+    acts["move a table"].push(
+      await measure(page, offered.first(), { text: '[data-outcome="order-open"]' }),
+    );
+    await confirmed(page);
+  }
+}
+
 /** One round against a fresh edge: every act, `per`-many times, into `acts` and `requests`. */
 async function round(page, acts, requests) {
   const edge = await startEdge();
@@ -184,12 +230,14 @@ async function round(page, acts, requests) {
     for (let i = 0; i < LINES_PER_ROUND; i += 1) {
       const item = page.locator('[data-step="onItem"]').first();
       acts["add a line"].push(await measure(page, item, { count: '[data-outcome="line-added"]' }));
+      await confirmed(page);
     }
 
     // One more on the first line, which waits for the edge.
     for (let i = 0; i < QUANTITY_TAPS_PER_ROUND; i += 1) {
       const plus = page.locator('[data-step="setQuantity"]').first();
       acts["change a quantity"].push(await measure(page, plus, { text: '[data-outcome="line-quantity"]' }));
+      await confirmed(page);
     }
     await drainRequests(page, requests);
 
@@ -212,19 +260,7 @@ async function round(page, acts, requests) {
       await drainRequests(page, requests);
     }
 
-    // Opening the list of tables to move to (local), then moving, which waits for the edge, until
-    // no table is free.
-    for (;;) {
-      const open = page.locator('[data-step="openMove"]');
-      acts["open the move list"].push(await measure(page, open, { present: '[data-step="moveTo"]' }));
-      const offered = page.locator('[data-step="moveTo"]');
-      if ((await offered.count()) <= 1) {
-        break;
-      }
-      acts["move a table"].push(
-        await measure(page, offered.first(), { text: '[data-outcome="order-open"]' }),
-      );
-    }
+    await moveUntilNoTableIsFree(page, acts);
     await drainRequests(page, requests);
   } finally {
     await edge.stop();
@@ -251,9 +287,16 @@ test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
     await context.close();
   }
 
+  const tapToPaint = Object.fromEntries(
+    Object.entries(acts).map(([act, samples]) => {
+      const summary = summarise(samples);
+      const budget = BUDGETS[act];
+      return [act, { ...summary, budget, headroom: Math.round((budget - summary.p95) * 10) / 10 }];
+    }),
+  );
   const result = {
     rounds: ROUNDS,
-    tapToPaint: Object.fromEntries(Object.entries(acts).map(([act, s]) => [act, summarise(s)])),
+    tapToPaint,
     edgeRoundTrip: Object.fromEntries(
       Object.entries(requests)
         .sort(([a], [b]) => a.localeCompare(b))
@@ -263,4 +306,10 @@ test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
   mkdirSync(dirname(OUT), { recursive: true });
   writeFileSync(OUT, JSON.stringify(result, null, 2) + "\n");
   console.log(JSON.stringify(result, null, 2));
+  if (ENFORCE) {
+    const over = Object.entries(tapToPaint)
+      .filter(([, figures]) => figures.p95 > figures.budget)
+      .map(([act, figures]) => `${act}: p95 ${figures.p95} ms over its ${figures.budget} ms budget`);
+    expect(over, "every act within its tap-to-paint budget (ADR-0173)").toEqual([]);
+  }
 });
