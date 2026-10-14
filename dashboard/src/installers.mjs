@@ -434,7 +434,7 @@ export function linuxInstaller(v) {
     "# this installer was handed — a silent downgrade of a shop that had updated itself. So the",
     "# slots are laid out once, and a re-run refreshes the config, the unit and the rescue copy",
     "# without touching the running binary. That is what makes running this twice safe.",
-    'install -d -o pos -g pos "$STATE" "$STATE/bin"',
+    'install -d -o pos -g pos -m 0700 "$STATE" "$STATE/bin"',
     'if [ -e "$STATE/bin/current" ]; then',
     '  echo "bin/current exists — leaving the installed binary alone (the edge manages its own updates)"',
     "else",
