@@ -68,7 +68,7 @@
 "crates/pos-cloud/src/http.rs::admin_create_routing" = { lines = 123, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_invite_admin" = { lines = 109, params = 3 }
-"crates/pos-cloud/src/http.rs::admin_preview_fees" = { lines = 111, params = 3 }
+"crates/pos-cloud/src/http/fees/preview.rs::admin_preview_fees" = { lines = 111, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_integrations" = { lines = 108, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_menu" = { lines = 107, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_store_profile" = { lines = 102, params = 3 }
