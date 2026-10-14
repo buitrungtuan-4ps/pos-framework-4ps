@@ -44,6 +44,12 @@ The layout:
 /var/lib/pos-edge/store.sqlite.pre-update   the database as it was before the install
 ```
 
+`/var/lib/pos-edge` is mode **0700**, readable by `pos` alone, and the unit's `UMask=0077` keeps
+everything the edge creates in it private ([ADR-0174](../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)
+decision 6): the database holds token digests, staff sessions and subject rows. The unit's
+`StateDirectoryMode=0700` and the installers both set it, so a box set up before this is closed the
+next time its installer runs. Read the files as root; the edge's log is in the journal, not here.
+
 An install writes the spare slot, retargets `current` with one atomic `rename(2)`, and **exits**;
 `Restart=always` is what turns that exit into a start on the new binary. If a committed version
 never reaches a healthy boot, the edge counts its attempts, and past three it points `current` back
