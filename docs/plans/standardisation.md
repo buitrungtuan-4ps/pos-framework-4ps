@@ -17,7 +17,7 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 |---|---|---|---|
 | 0. Prepare and measure | CI test timeout 15 min; ADR-0170 and ADR-0171; the code-stats baseline; changesets under `changes/`; generated files marked | Done | #700, #701, #702, #703, #704 |
 | 1. CI quick wins | Per-job caches saved from `main`, no debug info, mold | Done | #705 |
-| 2. Rules, map, AI context | Naming rules, repository map, docs index (2.1); crate READMEs and contract cards (2.2); crate graph and ADR index (2.3); short root and nested `AGENTS.md`, docs drift (2.4); plans and root cleanup (2.5); size ratchet gate (2.6); ESLint (2.7); `packages/shared` (2.8) | Done, except the 2.4 nested `AGENTS.md` files, which the owner approved on 2026-10-14 and are next; the root rewrite is deferred | #707, #708, #709, #710, #712, #713, #714, #715, #716, #717 |
+| 2. Rules, map, AI context | Naming rules, repository map, docs index (2.1); crate READMEs and contract cards (2.2); crate graph and ADR index (2.3); short root and nested `AGENTS.md`, docs drift (2.4); plans and root cleanup (2.5); size ratchet gate (2.6); ESLint (2.7); `packages/shared` (2.8) | Done. The 2.4 nested `AGENTS.md` files landed on 2026-10-14; the root rewrite is deferred | #707, #708, #709, #710, #712, #713, #714, #715, #716, #717, #745 |
 | 3. CI runs what changed | A `changes` job with path classes, `xtask affected`, nextest, build once and shard, `xtask impact` on each PR; `main` and nightly run everything | Done. A docs-only pull request takes 0:34 instead of 9:28; one that runs everything takes about 5:20, with no job over 3:47 ([figures](../metrics/ci-2026-10-phase3.md)) | #720, #721, #722, #723, #724, #725 |
 | 4. Pilot | Reporting split into modules, then `pos-cloud-reports` on a `pos-cloud-api` base; the five longest functions split; build, token and review time measured | Done. **Decision gate 1** taken 2026-10-14: option B, below. A report is now changed in one crate that builds in 2.4 s; `pos-cloud` still takes about 81 s ([figures](../metrics/pilot-2026-10.md)) | #727, #728, #730, #732 |
 | 5. Module split | `http.rs`, `app.rs`, `persistence.rs`, `printing.rs` and the large test files into modules of ≤ 500 lines by business area and role; a route declared in one place | Not started; in full under gate 1. The pull-request backlog is cleared through #738–#743 | |
@@ -59,7 +59,7 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
   - Phase 7 writes tests for `pos-cloud`'s `main.rs::run` and `store-postgres`'s
     `PostgresStore::migrate` before it splits them. The pilot left both unsplit: the first has no
     tests, the second is tested only against PostgreSQL ([figures](../metrics/pilot-2026-10.md)).
-- **ADR-0169 is approved** as drafted: a setting value can require a recorded confirmation,
+- **[ADR-0169](../adr/0169-a-setting-value-can-require-a-recorded-confirmation.md) is approved** as drafted: a setting value can require a recorded confirmation,
   enforced on every route that can write it. It is built before ADR-0167 slices 7b and 7c land.
 - **`AGENTS.md`:** the phase 2.4 nested files are added. The root rewrite is deferred. This
   replaces the 2026-10-13 entry for the nested files only.
