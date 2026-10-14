@@ -25,3 +25,6 @@ e0b926e3a891eb9605e6ce4eb5cef735ea254b4e
 
 # #772 — the catalog routes and their tests move into their own modules
 424714f952a9e8797b45f6b79f20b7939e380223
+
+# #773 — the tax-rate and media routes and their tests move into their own modules
+ff336192c5920981fba88a889e6afd4c76359681
