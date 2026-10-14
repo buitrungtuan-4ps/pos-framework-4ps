@@ -4152,6 +4152,55 @@ test("a drawer open past its business day is flagged, and a change of model wait
   }
 });
 
+// Where a store assigns drawers (ADR-0167 decision 9), the till says whose a drawer is by id alone,
+// asks for the override approver on another person's, and asks whom another till's drawer is for by
+// staff code. The example shares its drawers, so the two shift reads are rewritten to say the store
+// assigns them and that the counter's drawer is another person's.
+test("an assigned drawer says whose it is and asks for the override on another person's", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    const another = (shift) =>
+      shift === null ? null : { ...shift, assigned_employee_id: "01ANOTHERPERS0NAAAAAAAAAAA" };
+    await page.route("**/api/shifts/current", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: another(await response.json()) });
+    });
+    await page.route("**/api/shifts", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const response = await route.fetch();
+      const read = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...read,
+          drawer_access: "DRAWER_ACCESS_ASSIGNED",
+          drawers: read.drawers.map((drawer) => ({ ...drawer, shift: another(drawer.shift) })),
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await navigateTo(page, "/");
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-drawer-owner="other"]').first()).toHaveText(
+      "Another person's drawer for this shift.",
+    );
+    await expect(page.locator("#override-approver-code")).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await expect(page.locator("#drawer-assignee")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A role changed in the console reaches an open till with the configuration, without a new sign-in:
 // the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
 // session again. The frame is given the next position on the stream, so it is heard as itself.

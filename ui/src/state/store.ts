@@ -8,6 +8,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
 import { loadSession } from "./session";
+import { ownOverride } from "./drawer-access";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -130,6 +131,8 @@ export interface ShiftInfo {
   // Still open past the business day it opened on, which the Shift screen flags (ADR-0167
   // decision 11). The edge's judgement, read with the shift: the till keeps no business day.
   dayEnded?: boolean;
+  // Whose the drawer is, where the store assigns drawers: an id, never a name (decision 9).
+  assignee?: string;
 }
 
 interface StoreShape {
@@ -1931,6 +1934,7 @@ function shiftInfo(response: ShiftResponse): ShiftInfo {
     paidIn: response.paid_in_amount,
     paidOut: response.paid_out_amount,
     dayEnded: response.day_ended === true,
+    assignee: response.assigned_employee_id,
   };
 }
 
@@ -1951,6 +1955,7 @@ function replaceShift(info: ShiftInfo | null): void {
           paidIn: info.paidIn,
           paidOut: info.paidOut,
           dayEnded: info.dayEnded,
+          assignee: info.assignee,
         },
   );
 }
@@ -2254,7 +2259,7 @@ export async function settle(
   payments: PaymentRequest[],
   buyer?: BuyerRequest,
 ): Promise<BillResponse> {
-  const response = await api.settleBill(billId, { payments, buyer });
+  const response = await api.settleBill(billId, { payments, buyer, ...ownOverride() });
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
@@ -2286,7 +2291,7 @@ export async function openShift(openingFloatMinor: number): Promise<void> {
 }
 
 export async function countShift(shiftId: string, countedMinor: number): Promise<void> {
-  const response = await api.countShift(shiftId, { counted_minor: countedMinor });
+  const response = await api.countShift(shiftId, { counted_minor: countedMinor, ...ownOverride() });
   setState("shift", "state", response.state);
   setState("shift", "counted", response.counted_amount);
   setState("shift", "expected", response.expected_amount);
@@ -2296,7 +2301,9 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
 export async function closeShift(shiftId: string, reasonCodeId?: string): Promise<ShiftInfo> {
   const response = await api.closeShift(
     shiftId,
-    reasonCodeId === undefined ? undefined : { reason_code_id: reasonCodeId },
+    reasonCodeId === undefined && ownOverride().approver_code === undefined
+      ? undefined
+      : { ...ownOverride(), reason_code_id: reasonCodeId },
   );
   const info = shiftInfo(response);
   replaceShift(info);
@@ -2314,10 +2321,12 @@ export async function openDrawerShift(
   till: string,
   floatMinor: number,
   approval?: ApproverRequest,
+  assignee?: string,
 ): Promise<ShiftResponse> {
   const response = await api.openShift({
     opening_float: { currency_code: storeCurrency(), amount_minor: floatMinor },
     terminal_device_id: till,
+    assigned_staff_code: assignee?.trim() || undefined,
     ...approval,
   });
   if (till === ownTill()) {
@@ -2389,7 +2398,7 @@ export async function recordCashMovement(
   amountMinor: number,
   reasonCodeId: string,
 ): Promise<DrawerOutcome | undefined> {
-  const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId };
+  const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId, ...ownOverride() };
   const response =
     direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
   setState("shift", "paidIn", response.paid_in_amount);
@@ -2405,6 +2414,6 @@ export async function openDrawerNoSale(
   reasonCodeId: string,
   approval?: ApproverRequest,
 ): Promise<DrawerOutcome> {
-  const response = await api.openDrawer({ reason_code_id: reasonCodeId, ...approval });
+  const response = await api.openDrawer({ reason_code_id: reasonCodeId, ...(approval ?? ownOverride()) });
   return response.drawer_open;
 }

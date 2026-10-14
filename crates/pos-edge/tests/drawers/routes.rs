@@ -780,6 +780,41 @@ async fn an_assigned_drawer_says_whose_it_is_by_id_and_refuses_anybody_else_by_r
     assert_eq!(status, StatusCode::OK, "{sprang}");
 }
 
+/// A till learns from `GET /api/shifts` whether drawers are assigned, and names whom another till's
+/// drawer is for by the staff code it types, which the edge reads against its roster.
+#[tokio::test]
+async fn a_till_reads_whether_drawers_are_assigned_and_names_the_person_by_staff_code() {
+    let tills = drawers_app(false).await;
+    let listed = get(&tills, &tills.bar, "/api/shifts").await;
+    assert!(
+        listed.get("drawer_access").is_none(),
+        "shared drawers answer as before: {listed}"
+    );
+    tills
+        .edge
+        .apply_session(assigned(DrawerModel::PerTerminal, false));
+    let listed = get(&tills, &tills.bar, "/api/shifts").await;
+    assert_eq!(listed["drawer_access"], "DRAWER_ACCESS_ASSIGNED");
+
+    let mut start = approver();
+    start["opening_float"] = json!(vnd(300_000));
+    start["terminal_device_id"] = json!(till(COUNTER));
+    start["assigned_staff_code"] = json!("NOBODY");
+    let (status, reason, _) = post(&tills, &tills.stranger, "/api/shifts", start.clone()).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("ASSIGNEE_REQUIRED")),
+        "a code nobody on the roster has names nobody"
+    );
+    start["assigned_staff_code"] = json!(" CSH-1 ");
+    let (status, _, opened) = post(&tills, &tills.stranger, "/api/shifts", start).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(
+        opened["assigned_employee_id"],
+        employee(CASHIER).to_string().as_str()
+    );
+}
+
 /// Counts `shift` at `counted` over the route from the device holding `token`.
 async fn count_at(tills: &Tills, token: &str, shift: &str, counted: i64) {
     let uri = format!("/api/shifts/{shift}/count");

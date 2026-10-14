@@ -52,7 +52,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::ids::{DeviceId, EmployeeId, EventId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
-use pos_proto::shift::DrawerModel;
+use pos_proto::shift::{DrawerAccess, DrawerModel};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 
@@ -86,6 +86,10 @@ pub(crate) struct OpenRequest {
     /// roster. A drawer started at its own till is the starter's, and this is ignored there.
     #[serde(default)]
     assigned_employee_id: Option<EmployeeId>,
+    /// The same person by their staff code, which is what a till types. Read only where
+    /// `assigned_employee_id` is absent; a code nobody on the roster has names nobody.
+    #[serde(default)]
+    assigned_staff_code: Option<String>,
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
@@ -288,13 +292,17 @@ where
         request.approver_code.as_ref(),
         request.approver_pin.as_ref(),
     );
+    let assignee = request.assigned_employee_id.or_else(|| {
+        let code = request.assigned_staff_code.as_deref()?;
+        edge.employee_with_code(code.trim())
+    });
     respond(
         edge.open_shift_at(
             actor,
             scope,
             request.opening_float,
             approval.as_ref(),
-            request.assigned_employee_id,
+            assignee,
         )
         .await,
     )
@@ -335,6 +343,11 @@ struct DrawersResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_device_id: Option<String>,
     drawers: Vec<DrawerResponse>,
+    /// `DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167
+    /// decision 9), so the till asks whom another till's drawer is for and tells a person's own
+    /// drawer by `assigned_employee_id`. Absent where drawers are shared, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drawer_access: Option<&'static str>,
 }
 
 /// One drawer: absent `terminal_device_id` and `name` for the store's one drawer.
@@ -362,6 +375,7 @@ impl DrawersResponse {
             drawer_model: view.model.as_wire(),
             waiting_drawer_model: view.waiting.map(DrawerModel::as_wire),
             terminal_device_id: view.own.map(|till| till.to_string()),
+            drawer_access: (view.access == DrawerAccess::Assigned).then(|| view.access.as_wire()),
             drawers: view
                 .drawers
                 .into_iter()
