@@ -36,7 +36,7 @@ price used to be?", and no basis for the accountability a multi-admin, complianc
   any tenant's row and to read across tenants for the console's audit screen.
 
 - **The actor is threaded from the session, not invented.** Every `/admin` write route already
-  resolves the acting [`AdminContext`](../../crates/pos-cloud/src/auth/admin.rs) through the
+  resolves the acting [`AdminContext`](../../crates/pos-cloud-api/src/auth/admin.rs) through the
   permission guard ([ADR-0067](0067-multi-admin-console-rbac.md)); the audit entry's actor is that
   admin's id/email/role. There is no anonymous or system actor for a console mutation — a route that
   cannot name its actor does not write an audit row (and, being behind the guard, cannot run at all).

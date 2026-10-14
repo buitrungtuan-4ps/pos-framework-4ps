@@ -1,0 +1,61 @@
+[package]
+name        = "pos-cloud-reports"
+version     = "0.0.0"
+description = "The cloud's reports: the rollups folded from the event log, revenue with its fees and tax, the X/Z report, their CSV files and routes."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Moved out of pos-cloud for the reporting pilot (ADR-0170 decision 4), with the same dependencies at
+# the same versions: this crate adds edges to crates already in the lockfile, and nothing new.
+[dependencies]
+pos-cloud-api = { path = "../pos-cloud-api" }
+pos-ports     = { path = "../pos-ports" }
+pos-proto     = { path = "../pos-proto" }
+# The rollup table (ADR-0036). This crate implements its RollupStore for it, since a trait can be
+# implemented for another crate's type only where the trait is defined.
+store-postgres = { path = "../adapters/store-postgres" }
+
+axum       = "0.8"
+csv        = "1"
+tracing    = "0.1"
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+utoipa     = "6"
+
+[dev-dependencies]
+tokio              = { version = "1", features = ["rt-multi-thread", "macros"] }
+pos-fakes          = { path = "../pos-fakes" }
+pos-contract-tests = { path = "../pos-contract-tests" }
+
+# The same lint table as pos-cloud, which this code came from.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The cloud's reports: rollups folded from the event log and materialised, revenue, the X/Z report, their CSV exports and their routes."
+adrs = [36, 81, 159, 167, 168, 170]
+owners = ["@maintainers-cloud"]

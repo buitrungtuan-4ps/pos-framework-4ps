@@ -15,7 +15,7 @@ The suites that make an adapter swappable as a tested fact: one per port. An ada
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`.
-- **Used by** (workspace crates): `pos-fakes`; in tests, `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`.
+- **Used by** (workspace crates): `pos-fakes`; in tests, `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`.
 
 ## Entry points
 

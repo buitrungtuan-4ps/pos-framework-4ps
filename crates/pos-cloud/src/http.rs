@@ -95,7 +95,7 @@ use pos_proto::channels::{
 use pos_proto::determinism::ClockSource;
 use pos_proto::devices::{DeviceConnection, PaperWidth, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
-use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
+use pos_proto::enums::{PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::fees::{
     FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees,
@@ -126,24 +126,21 @@ use pos_proto::{ErrorResponse, ErrorStatus};
 use pos_country::CountryRegistry;
 
 use pos_core::activation::{ActivationCode, Redemption, redeem};
-use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
 use crate::archive::{
     ArchiveSecret, ArchiveStore, StoreArchive, StoreArchiveKey, archive_object_key,
 };
-use crate::audit::{
-    AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder,
-};
+use crate::audit::{AuditEntry, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder};
 use crate::auth::admin::{
     AdminContext, AdminRole, AdminStatus, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID,
-    LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint,
-    SessionSummary, authenticate_session, authenticated_admin, current_session_token_hash,
-    hash_recovery_code, hash_session_token, login, logout, system_actor,
+    LoginRequest, NewAdminInvite, NewAdminUser, NewRecoveryCode, SessionMint, SessionSummary,
+    authenticate_session, authenticated_admin, current_session_token_hash, hash_recovery_code,
+    hash_session_token, login, logout, system_actor,
 };
 use crate::auth::apikey::{ApiKeyAdminStore, ApiKeyId, ApiKeyStore, Scope, issue};
-use crate::auth::bearer::{authenticate, confine_to_store, require_scope, require_store};
+use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::auth::console_rbac::{ConsolePermission, role_grants};
 use crate::auth::enrol::{
     MIN_PASSWORD_LEN, SetupRequest, TOTP_SECRET_BYTES, build_enrolment, constant_time_eq,
@@ -163,18 +160,14 @@ use crate::claim::{
     BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
     hash_claim_secret, hash_user_code,
 };
-use crate::cloud::{Cloud, DailyCash, DailyRevenue, DailyRollup, STORE_DRAWER};
+use crate::cloud::Cloud;
 use crate::config::InternalSecret;
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, ConfigTreeStore,
     ConfigValidator, SyncOutcome,
     merge::{diff, merge_layers},
 };
-use crate::dashboard::rollup::WindowError;
-use crate::dashboard::{
-    RollupError, RollupStore, RollupWindow, StoredRollups, admitted_devices, dashboard, revenue,
-    xz_report,
-};
+use crate::dashboard::{RollupStore, admitted_devices};
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     DeviceWriteOutcome, PersistedDeviceProposal,
@@ -196,15 +189,40 @@ use crate::images::{self, ImagePipelineError, RenderError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
-    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
+    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError,
     RegionAcknowledgement, RegionAcknowledgementStore, RegionAgreement, RegionRefusal,
     RetireOutcome, SettleOutcome, handover_state, lease_node, region_agreement, resolve_region,
     standing_acknowledgement,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
+
+mod lease_bump;
+mod locale_node;
+mod release_schedule;
+// The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
+// stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
+use pos_cloud_reports::revenue::{
+    admin_export_revenue, admin_export_revenue_fees, admin_export_revenue_tax, admin_revenue_daily,
+};
+use pos_cloud_reports::rollups::{
+    admin_daily_rollups, admin_export_rollups, admin_rollups_reset, daily_rollups,
+};
+use pos_cloud_reports::state::ReportsState;
+// The console's permission check, tenant query and audit entry live in pos-cloud-api, and the
+// rollup refusals in pos-cloud-reports; `crate::http::require_permission` and the rest still work.
+use crate::till_names::PublishedTillNames;
 use base64::Engine as _;
+pub(crate) use pos_cloud_api::console::{
+    ConfigTenantQuery, audit_action, mint_ulid, require_permission,
+};
+pub(crate) use pos_cloud_api::response::{
+    api_error, api_error_with_details, csv_download_response, parse_ulid_fields,
+    service_unavailable, ulid_refusal,
+};
+pub(crate) use pos_cloud_reports::refusal::rollup_error_response;
+use pos_cloud_reports::xz::admin_xz_report;
 use pos_core::lease::LeaseGeneration;
 
 use crate::anchor::{AnchorConflict, AnchorLedger};
@@ -238,7 +256,7 @@ use crate::retention::{RetentionError, SubjectStore};
 // is gone and the reader no longer has to hold two meanings of one word at once.
 use crate::releases::{
     NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
-    ResolveRefusal, TargetStore, resolve_for_stores,
+    ResolveRefusal, TargetStore,
 };
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
@@ -335,11 +353,11 @@ const CONTENT_SECURITY_POLICY_VALUE: &str = "default-src 'self'; \
 /// a clone talks to the same backing store.
 pub struct CloudApp<S, R, K, C, A, T, W> {
     cloud: Cloud<S>,
-    rollups: R,
-    keys: K,
-    clock: C,
-    admin: A,
-    config_trees: T,
+    pub(crate) rollups: R,
+    pub(crate) keys: K,
+    pub(crate) clock: C,
+    pub(crate) admin: A,
+    pub(crate) config_trees: T,
     webhooks: W,
     admin_session_ttl_secs: u64,
     admin_session_idle_ttl_secs: u64,
@@ -363,7 +381,7 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     trusted_proxy_hops: usize,
     /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
     /// no-op, so a route can always record unconditionally; the binary wires the real store in.
-    audit: Arc<dyn AuditRecorder>,
+    pub(crate) audit: Arc<dyn AuditRecorder>,
     /// When QR ordering got one switch ([`crate::qr_ordering::OneSwitch::since`]): a rollback to a
     /// version published before then is settled. `None` restores every version as it is.
     qr_switch_since: Option<pos_proto::Timestamp>,
@@ -604,6 +622,29 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     }
 }
 
+/// The reporting routes' part of the application state (ADR-0170 decision 4): what a report handler
+/// reads, cloned out of the whole application per request, as axum clones the application itself.
+impl<S, R, K, C, A, T, W> axum::extract::FromRef<CloudApp<S, R, K, C, A, T, W>>
+    for ReportsState<R, K, C, A, PublishedTillNames<T>>
+where
+    R: Clone,
+    K: Clone,
+    C: Clone,
+    A: Clone,
+    T: Clone,
+{
+    fn from_ref(app: &CloudApp<S, R, K, C, A, T, W>) -> Self {
+        Self {
+            rollups: app.rollups.clone(),
+            keys: app.keys.clone(),
+            clock: app.clock.clone(),
+            admin: app.admin.clone(),
+            audit: Arc::clone(&app.audit),
+            till_names: PublishedTillNames(app.config_trees.clone()),
+        }
+    }
+}
+
 /// Builds the cloud router over `app`.
 #[expect(
     clippy::too_many_lines,
@@ -626,7 +667,7 @@ where
         .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
         .route(
             "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<S, R, K, C, A, T, W>),
+            get(daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route("/v1/openapi.json", get(openapi))
         .route("/admin/openapi.json", get(admin_openapi))
@@ -734,11 +775,11 @@ where
         )
         .route(
             "/admin/stores/{store_id}/rollups/reset",
-            post(admin_rollups_reset::<S, R, K, C, A, T, W>),
+            post(admin_rollups_reset::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/rollups/daily",
-            get(admin_daily_rollups::<S, R, K, C, A, T, W>),
+            get(admin_daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         // Beside the other rollup reads, and on **this** router, because the roster is folded into
         // the same materialised blob the reads above answer from — the state that answers it lives
@@ -752,27 +793,27 @@ where
         )
         .route(
             "/admin/stores/{store_id}/revenue/daily",
-            get(admin_revenue_daily::<S, R, K, C, A, T, W>),
+            get(admin_revenue_daily::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/reports/xz",
-            get(admin_xz_report::<S, R, K, C, A, T, W>),
+            get(admin_xz_report::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/rollups/export",
-            get(admin_export_rollups::<S, R, K, C, A, T, W>),
+            get(admin_export_rollups::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/export",
-            get(admin_export_revenue::<S, R, K, C, A, T, W>),
+            get(admin_export_revenue::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/fees/export",
-            get(admin_export_revenue_fees::<S, R, K, C, A, T, W>),
+            get(admin_export_revenue_fees::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/tax/export",
-            get(admin_export_revenue_tax::<S, R, K, C, A, T, W>),
+            get(admin_export_revenue_tax::<R, K, C, A, PublishedTillNames<T>>),
         )
         .route(
             "/admin/webhooks",
@@ -10369,39 +10410,7 @@ fn checked_locale_node(
     request: &PublishLocaleRequest,
     facts: &PackedFacts,
 ) -> Result<serde_json::Value, Response> {
-    // Checked first because it is the field this route did not use to have: a caller built against
-    // the older shape must be told *that*, rather than being led through the fields it did send.
-    let Ok(country) = CountryCode::parse(&request.country_code) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "country_code is required and must be an ISO 3166-1 alpha-2 code — two letters, such \
-             as VN or JP. It records which country this store is in, beside its currency and \
-             timezone",
-            &[("country_code", "INVALID_FORMAT")],
-        ));
-    };
-    let Ok(currency) = CurrencyCode::parse(&request.currency_code) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "currency_code is not a 3-letter code",
-            &[("currency_code", "INVALID_FORMAT")],
-        ));
-    };
-    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "timezone is not a valid IANA name",
-            &[("timezone", "INVALID_FORMAT")],
-        ));
-    }
-    if CutoffHour::new(request.cutoff_hour).is_err() {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "cutoff_hour must be in 0..=23",
-            &[("cutoff_hour", "OUT_OF_RANGE")],
-        ));
-    }
-    let denominations = checked_denominations(request)?;
+    let (country, currency, denominations) = locale_node::checked_locale_fields(request)?;
 
     let mut locale_value = serde_json::json!({
         // Upper-cased by `CountryCode::parse` on the way in, so the fleet console's comparison
@@ -10415,82 +10424,7 @@ fn checked_locale_node(
         "cash_rounding_increment": request.cash_rounding_increment,
         "cash_denominations": denominations,
     });
-    // How many decimals the store's currency has (ADR-0134), which that record says rides this node
-    // — and did not. Without it the edge keeps the đồng-shaped zero its bootstrap starts with, and
-    // an Indian store draws 26145 paise as `INR 26,145` on the till and prints `INR 26145` on a tax
-    // invoice. The front ends each carry a fallback table for the window before a store syncs, and
-    // neither one fires: `GET /api/locale` serves the session's zero as though it were an answer,
-    // and `0 ?? fallback` is `0`. A published zero beats a correct guess, which is why this is the
-    // cloud's to say rather than theirs to infer.
-    //
-    // Not a field on the request: an operator choosing their own exponent could state that the
-    // rupee has three decimals, and ADR-0134 makes the country pack the authority precisely so
-    // nobody has to.
-    //
-    // Omitted for a currency no pack names, which is the "absent leaves what the session has" case
-    // `PublishedLocale` was deliberately built with — saying nothing rather than publishing a guess.
-    // Unreachable from the console, whose currency picker is filled from this same country list.
-    if let Some(exponent) = facts.exponents.get(&currency)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "currency_exponent".to_owned(),
-            serde_json::Value::from(*exponent),
-        );
-    }
-    // How long the store keeps a personal record before its own sweep scrubs it
-    // ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)), which the edge has read from
-    // this node since that record and which this node has never carried.
-    //
-    // Harmless so far, and worth saying why rather than implying a breach: every pack,
-    // `LocalePack::default` and the edge's bootstrap all say 365, so no store's period is wrong
-    // today and the sweep on the edge's ticker really does run. What the gap would have cost is the
-    // *next* change — each pack's figure is marked "a default, not a determination", and the day
-    // somebody sets a country's real period every store would have gone on forgetting at 365 while
-    // the publish looked applied.
-    //
-    // From the pack rather than from the request, for the reason the exponent is: a retention period
-    // answers to a privacy notice, and a form field invites a number that suits the shop rather than
-    // the law.
-    if let Some(days) = facts.retention_days.get(&country)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "default_retention_days".to_owned(),
-            serde_json::Value::from(*days),
-        );
-    }
-    // How the country writes a number
-    // ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Compiled into
-    // every pack since ADR-0027 and, until now, read by nothing anywhere: the till grouped `en-US`,
-    // the receipt grouped with a comma, and Vietnam's own `1.234.567,50` appeared on neither.
-    //
-    // This release carries it to the store and no surface draws with it yet. The receipt and the
-    // till follow separately, because each changes a figure a person is looking at and the receipt's
-    // is a tax document.
-    //
-    // Serialised from the pack's own type, so the shape the edge parses and the shape the cloud
-    // sends cannot drift apart into two spellings of the same three fields.
-    if let Ok(format) = facts
-        .number_formats
-        .get(&country)
-        .ok_or(())
-        .and_then(|format| serde_json::to_value(format).map_err(|_| ()))
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert("number_format".to_owned(), format);
-    }
-    // The language of the store's country (ADR-0160), which a receipt set to
-    // `RECEIPT_LANGUAGE_COUNTRY` prints in. The cloud's to say for the reason the rest of these are:
-    // the edge a store runs carries no country pack of its own.
-    if let Some(language) = facts.languages.get(&country)
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "country_language".to_owned(),
-            serde_json::Value::String(language.clone()),
-        );
-    }
+    locale_node::add_country_pack_facts(&mut locale_value, facts, country, currency);
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
     if let Some(language) = request
@@ -23980,57 +23914,35 @@ async fn admin_bump_lease<Cfg, A, C, L>(
     State(state): State<OtaConfigState<Cfg, A, C, L>>,
     headers: HeaderMap,
     Json(request): Json<BumpLeaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::ManageStores,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let (tenant_id, store_id) = match parse_ulid_fields([
+    .await?;
+    let [tenant_id, store_id] = parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
-    ]) {
-        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-        Err(refusal) => return refusal,
-    };
-    let requested_placement = match request.edge_placement.as_deref() {
-        None => None,
-        Some(token) => match EdgePlacement::from_wire(token) {
-            Some(EdgePlacement::Unspecified) | None => {
-                return api_error_with_details(
-                    ErrorStatus::InvalidArgument,
-                    "edge_placement must be one of EDGE_PLACEMENT_IN_STORE, \
-                     EDGE_PLACEMENT_HOSTED_BY_OPERATOR, EDGE_PLACEMENT_HOSTED_BY_PLATFORM — \
-                     omit the field to keep the store where it is",
-                    &[("edge_placement", "UNKNOWN_VALUE")],
-                );
-            }
-            Some(placement) => Some(placement),
-        },
-    };
+    ])?;
+    let (tenant_id, store_id) = (TenantId::new(tenant_id), StoreId::new(store_id));
+    let requested_placement = lease_bump::requested_placement(request.edge_placement.as_deref())?;
     // Where the store's data will rest, decided by the same request that decides which machine
     // holds it (ADR-0114). The rule is a pure function so it can be tested without an HTTP stack;
     // here it is only turned into an envelope.
-    let region = match resolve_region(
+    let region = resolve_region(
         requested_placement,
         request.region_country.as_deref(),
         request.region_label.as_deref(),
-    ) {
-        Ok(region) => region,
-        Err(refusal) => return region_refusal_response(refusal),
-    };
+    )
+    .map_err(region_refusal_response)?;
     // The counter moves first. If the publish then fails the store is on a generation no till has
     // been told about, which is the safe half of the split: every box keeps the generation it holds
     // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
@@ -24038,10 +23950,7 @@ where
     //
     // The placement rides inside that same write rather than following it, so there is no interval
     // in which the store record and the lease disagree (ADR-0110).
-    let expected_generation = match if_match_lease(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
-    };
+    let expected_generation = if_match_lease(&headers)?;
     let acknowledged = request.acknowledge_undrained.map(LeaseGeneration::new);
     let bump = match state
         .config_trees
@@ -24061,12 +23970,12 @@ where
         // the point: the comment above explains why the counter moves before the publish, and a
         // request that issued no generation must not reach a publish that would have to name one.
         Ok(LeaseBumpOutcome::VersionMismatch { current }) => {
-            return lease_moved_response(current);
+            return Err(lease_moved_response(current));
         }
         Ok(LeaseBumpOutcome::Undrained { superseded }) => {
-            return lease_undrained_response(superseded);
+            return Err(lease_undrained_response(superseded));
         }
-        Err(error) => return lease_store_error_response(&error),
+        Err(error) => return Err(lease_store_error_response(&error)),
     };
     let node = lease_node(bump.generation);
     let receipt_floor = receipt_floor(&state.config_trees, tenant_id, store_id).await;
@@ -24074,7 +23983,7 @@ where
         .map(|number| ("receipt_floor", serde_json::json!({ "number": number })))
         .into_iter()
         .collect();
-    publish_ota_node(
+    let response = publish_ota_node(
         &state,
         &context,
         tenant_id,
@@ -24088,34 +23997,17 @@ where
             // bump chose it. Without the second flag the trail cannot tell a store that was moved
             // to a hosted machine from one whose already-hosted box was swapped — the same row
             // either way, and only one of them is a change of what the store can promise.
-            detail: serde_json::json!({
-                "generation": bump.generation.value(),
-                "edge_placement": bump.edge_placement.as_wire(),
-                "edge_placement_moved": requested_placement.is_some(),
-                // Where the store's data now rests, and the place a person would recognise
-                // (ADR-0114). Both read from what the write returned rather than echoed from the
-                // request, so a swap in place records the region the store *has* rather than the
-                // nothing this body said. A country code is business metadata and goes in whole;
-                // the label is free text and goes in whole too, because an entry whose payload is
-                // redacted does not record what was chosen, which is the only thing this entry
-                // exists to record (ADR-0069's redaction rule is about personal data, and the
-                // console's field asks for a place).
-                "region_country": bump.region.as_ref().map(Region::country_str),
-                "region_label": bump.region.as_ref().map(Region::label),
-                // The generation whose events this bump knowingly abandoned, or `null`. It has to
-                // be here because it is nowhere else: an acknowledged bump does not *clear*
-                // `superseded_generation`, it rolls it forward to the machine it is displacing now.
-                // The trail is the only record that an earlier machine's sales were written off,
-                // and by whom.
-                "abandoned_generation": acknowledged.map(LeaseGeneration::value),
-                // What the replacement numbers its receipts above, or `null` when no floor went
-                // out (ADR-0149).
-                "receipt_floor": receipt_floor,
-            }),
+            detail: lease_bump::bump_audit_detail(
+                &bump,
+                requested_placement,
+                acknowledged,
+                receipt_floor,
+            ),
             companions,
         },
     )
-    .await
+    .await;
+    Ok(response)
 }
 
 /// The receipt floor a lease bump publishes beside the lease (ADR-0149): the highest receipt number
@@ -25874,23 +25766,6 @@ fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
         ),
         &[(field, "MISSING_DEPENDENT_FIELD")],
     )
-}
-
-/// A CSV download response ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5): the
-/// bytes with `text/csv` and a `content-disposition` naming the file so the browser saves it. `filename`
-/// is a fixed, server-chosen literal per domain — never tenant-supplied — so it needs no escaping.
-fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
-    (
-        [
-            (CONTENT_TYPE, "text/csv; charset=utf-8".to_owned()),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
-            ),
-        ],
-        body,
-    )
-        .into_response()
 }
 
 /// A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
@@ -30466,91 +30341,6 @@ where
     }
 }
 
-/// A store's per-trading-day activity rollups, oldest day first — answered from the materialised
-/// rollup, never a log scan.
-///
-/// Requires a valid API key with the `read_rollups` scope, and answers **only** for that key's
-/// tenant: the tenant comes from the verified grant, never the request, so a caller can read a
-/// store's rollups only if the store is within its own tenant. A `store_id` outside the tenant is
-/// not an error — it simply has no rollup and reads back as an empty list.
-#[utoipa::path(
-    get,
-    path = "/v1/stores/{store_id}/rollups/daily",
-    params(("store_id" = String, Path, description = "The store's 26-character ULID")),
-    security(("api_key" = [])),
-    responses(
-        (status = 200, description = "Daily activity rollups, oldest day first", body = Vec<DailyRollup>),
-        (status = 400, description = "The store id is not a ULID"),
-        (status = 401, description = "The API key is missing, malformed, or invalid"),
-        (status = 403, description = "The API key lacks the read_rollups scope"),
-        (status = 503, description = "The rollup store is unreachable"),
-    ),
-    tag = "rollups",
-)]
-pub(crate) async fn daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(window): Query<RollupWindowQuery>,
-) -> Response
-where
-    // S and A are unused here but are part of the shared `CloudApp` state, which the `State`
-    // extractor needs whole as `Clone + Send + Sync`.
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: ApiKeyStore + Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    // Identity first: who is calling, and are they who they claim? Then authorisation: may this key
-    // read rollups at all? Only then does the request touch a resource.
-    let grant = match authenticate(&app.keys, &app.clock, &headers).await {
-        Ok(grant) => grant,
-        Err(denied) => return denied.into_response(),
-    };
-    if let Err(forbidden) = require_scope(&grant, Scope::ReadRollups) {
-        return forbidden.into_response();
-    }
-    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
-        Ok([store_id]) => StoreId::new(store_id),
-        Err(refusal) => return refusal,
-    };
-    if let Err(forbidden) = confine_to_store(&grant, store_id) {
-        return forbidden.into_response();
-    }
-    let window = match window.into_window() {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    // The tenant is the grant's, not the request's — this is the isolation boundary.
-    match dashboard(&app.rollups, grant.tenant(), store_id, &window).await {
-        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The date-range window params shared by the rollup read routes (ADR-0081, Track O4): an inclusive
-/// `from`/`to` business-date range and a `limit` cap. All optional — absent gives the default
-/// [`crate::dashboard::rollup::DEFAULT_WINDOW_DAYS`]-day window, never the store's whole history.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RollupWindowQuery {
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
-impl RollupWindowQuery {
-    /// Validates the params into a [`RollupWindow`], or returns a `400` message.
-    fn into_window(self) -> Result<RollupWindow, WindowError> {
-        RollupWindow::new(self.from, self.to, self.limit)
-    }
-}
-
 // --- The store-facing configuration surface (`/sync`) -------------------------------------------
 
 /// The version a store reports it currently holds, if any.
@@ -31471,37 +31261,6 @@ where
     }
 }
 
-/// The role-aware `/admin` guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)):
-/// authenticates the session, resolves the acting admin, and checks that their role grants
-/// `permission`. Every permission-gated `/admin` route calls this in place of the bare session check.
-///
-/// On success the acting [`AdminContext`] is returned (routes that only gate can ignore it). On
-/// failure it returns the response to send: `401`/`503` from the session check (absent/invalid
-/// session, or the store down), or a `403` when the session is valid but the role lacks the
-/// permission — a distinct verdict, since the caller is authenticated and only under-privileged.
-async fn require_permission<A, C>(
-    admin_store: &A,
-    clock: &C,
-    headers: &HeaderMap,
-    permission: ConsolePermission,
-) -> Result<AdminContext, Response>
-where
-    A: AdminStore,
-    C: ClockSource,
-{
-    let context = authenticated_admin(admin_store, clock, headers)
-        .await
-        .map_err(|denied: SessionDenied| denied.into_response())?;
-    if role_grants(context.admin.role, permission) {
-        Ok(context)
-    } else {
-        Err(api_error(
-            ErrorStatus::PermissionDenied,
-            "insufficient permissions",
-        ))
-    }
-}
-
 // --- Console audit read (`GET /admin/audit`, ADR-0069 slice 4) ----------------------------------
 
 /// The collaborators the audit read needs, stated independently of [`CloudApp`]: the concrete audit
@@ -31843,58 +31602,6 @@ fn parse_audit_page(
         Err(PageRequestError::LimitOutOfRange) => Err(page_bound_refusal("limit")),
         Err(PageRequestError::OffsetOutOfRange) => Err(page_bound_refusal("offset")),
     })
-}
-
-/// Records one console mutation to the audit trail ([ADR-0069](../../../docs/adr/0069-audit-trail.md)),
-/// best-effort and after the mutation has already succeeded: mints the entry id from `clock`, snapshots
-/// the acting admin from `actor`, and hands the entry to the recorder (which logs, never propagates, a
-/// store failure). A mint failure is logged and the entry dropped rather than failing the caller's
-/// completed mutation. `before` is the entity's prior value (`None` for a create), `after` its new
-/// value (`None` for a delete); `tenant` scopes the entry (`None` for a tenant-global action).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one audit entry is genuinely this many independent facts — recorder, clock, actor, \
-              tenant scope, action, entity type+id, and the before/after values; bundling them into \
-              a struct at every one of the many call sites would only add ceremony, not clarity"
-)]
-async fn audit_action<C>(
-    audit: &Arc<dyn AuditRecorder>,
-    clock: &C,
-    actor: &AdminContext,
-    tenant: Option<TenantId>,
-    action: &str,
-    entity_type: &str,
-    entity_id: &str,
-    before: Option<serde_json::Value>,
-    after: Option<serde_json::Value>,
-) where
-    C: ClockSource,
-{
-    let now = clock.now();
-    let Some(ulid) = mint_ulid(now.as_milliseconds_since_epoch()) else {
-        tracing::error!(
-            action,
-            "could not mint an audit id; this action is not recorded"
-        );
-        return;
-    };
-    let entry = AuditEntry {
-        id: AuditId::new(ulid),
-        tenant_id: tenant,
-        actor: AuditActor {
-            admin_id: actor.admin.id.clone(),
-            email: actor.admin.email.clone(),
-            role: actor.admin.role,
-        },
-        action: action.to_owned(),
-        entity_type: entity_type.to_owned(),
-        entity_id: entity_id.to_owned(),
-        before,
-        after,
-        request_id: None,
-        at: now,
-    };
-    audit.record(entry).await;
 }
 
 /// A super-admin request to provision a new API key for a tenant.
@@ -33140,14 +32847,6 @@ where
     }
 }
 
-/// The tenant a config request is scoped to. The super-admin is global, so it names the tenant on
-/// the query string, exactly as API-key provisioning does.
-#[derive(Debug, Clone, Deserialize)]
-struct ConfigTenantQuery {
-    /// The tenant whose store's config tree to author or read (a 26-character ULID).
-    tenant_id: String,
-}
-
 /// The version id a successful publish produced.
 #[derive(Debug, Clone, serde::Serialize)]
 struct PublishedConfig {
@@ -33800,62 +33499,6 @@ where
         .into_response()
 }
 
-/// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup
-/// read is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not
-/// a tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The
-/// super-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads
-/// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
-/// mutated.
-async fn admin_daily_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) =
-        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    // The tenant is named explicitly here (the admin is global), unlike the `/v1` read where it is
-    // the API key's. It is a read of the materialised rollup — event counts only, no PII.
-    match dashboard(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(rollups) => (StatusCode::OK, Json(rollups)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The `/admin` daily-rollup query: the explicit `tenant_id` (the console admin is global) plus the
-/// shared [`RollupWindowQuery`] date range and cap (ADR-0081, Track O4).
-#[derive(Debug, Clone, Deserialize)]
-struct AdminRollupWindowQuery {
-    tenant_id: String,
-    #[serde(default)]
-    from: Option<String>,
-    #[serde(default)]
-    to: Option<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/devices/admitted",
@@ -33920,482 +33563,6 @@ where
         };
     match admitted_devices(&app.rollups, tenant_id, store_id).await {
         Ok(devices) => (StatusCode::OK, Json(devices)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].
-///
-/// Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —
-/// narrower than the counts read's `console.data.read`. The rollup carries no customer or employee
-/// identifier; the tenant is named explicitly (the console admin is global).
-async fn admin_revenue_daily<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(revenue) => (StatusCode::OK, Json(revenue)).into_response(),
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
-/// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
-/// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the
-/// day's drawers is named from the store's published `devices` node as the report is served
-/// ([`published_till_names`]).
-async fn admin_xz_report<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<XzReportQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: ConfigTreeStore + Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    match xz_report(&app.rollups, tenant_id, store_id, query.business_date).await {
-        Ok(mut report) => {
-            report.till_names =
-                published_till_names(&app.config_trees, (tenant_id, store_id), &report.cash).await;
-            (StatusCode::OK, Json(report)).into_response()
-        }
-        Err(error) => rollup_error_response(&error),
-    }
-}
-
-/// The names the store's published `devices` node gives the tills among `cash`'s drawers, by
-/// `terminal_device_id` (ADR-0167 decision 13).
-///
-/// Read as the report is served, so a till renamed since shows its new name and one the node no
-/// longer lists shows none, and the console labels it by its id. Only `TERMINAL` entries name a
-/// drawer. A day with only the store's drawer reads nothing, and a tree that cannot be read names
-/// nothing rather than failing the report, whose figures stand without the names.
-async fn published_till_names<T: ConfigTreeStore>(
-    config_trees: &T,
-    (tenant_id, store_id): (TenantId, StoreId),
-    cash: &DailyCash,
-) -> std::collections::BTreeMap<String, String> {
-    if cash.by_drawer.keys().all(|drawer| drawer == STORE_DRAWER) {
-        return std::collections::BTreeMap::new();
-    }
-    let Ok(Some(state)) = config_trees
-        .load(tenant_id, store_id)
-        .await
-        .map(strip_tree_version)
-    else {
-        return std::collections::BTreeMap::new();
-    };
-    let devices = ConfigTree::from_state(store_id, CapabilityValidator, state)
-        .current_effective()
-        .and_then(|effective| effective.get("devices").cloned())
-        .and_then(|node| serde_json::from_value::<PublishedDevices>(node).ok())
-        .unwrap_or_default();
-    devices
-        .devices()
-        .iter()
-        .filter(|device| device.kind.known() == pos_proto::devices::DeviceKind::Terminal)
-        .map(|till| (till.device_id.to_string(), till.name.as_str().to_owned()))
-        .filter(|(till, _)| cash.by_drawer.contains_key(till))
-        .collect()
-}
-
-/// The X/Z report query: the explicit `tenant_id` plus an optional `business_date` (`YYYY-MM-DD`);
-/// absent, the current day is reported.
-#[derive(Debug, Clone, Deserialize)]
-struct XzReportQuery {
-    tenant_id: String,
-    #[serde(default)]
-    business_date: Option<String>,
-}
-
-/// Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read
-/// (ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by
-/// row count.
-async fn admin_export_rollups<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let context =
-        match require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await {
-            Ok(context) => context,
-            Err(denied) => return denied,
-        };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    let days = match dashboard(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = export::rollups_csv(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        "reports.export_rollups",
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": "rollups", "rows": days.len() })),
-    )
-    .await;
-    csv_download_response("rollups.csv", body)
-}
-
-/// What sets one of a store's revenue exports apart from the others: its file, how it is written,
-/// and what its audit entry calls it and counts.
-///
-/// The exports are one rule, which [`export_revenue`] keeps: revenue is **T2**, so each needs
-/// `console.reports.revenue`, reads the window the revenue read does, and is audited by how many
-/// rows it held, never what they held.
-struct RevenueExport {
-    /// The file the download is saved as, such as `revenue-tax.csv`.
-    name: &'static str,
-    /// The audit entry's action, such as `reports.export_revenue_tax`.
-    action: &'static str,
-    /// The audit entry's `domain`, such as `revenue_tax`.
-    domain: &'static str,
-    /// Writes the window's days as the file.
-    write: fn(&[DailyRevenue]) -> Result<Vec<u8>, csv::Error>,
-    /// How many rows the file holds under its header.
-    rows: fn(&[DailyRevenue]) -> usize,
-}
-
-/// Downloads a store's daily revenue rollups as `file` writes them, windowed like the read
-/// (ADR-0081, Track O4).
-async fn export_revenue<S, R, K, C, A, T, W>(
-    app: &CloudApp<S, R, K, C, A, T, W>,
-    headers: &HeaderMap,
-    store_id: &str,
-    query: AdminRollupWindowQuery,
-    file: &RevenueExport,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let context = match require_permission(
-        &app.admin,
-        &app.clock,
-        headers,
-        ConsolePermission::ReadRevenue,
-    )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    let window = match RollupWindow::new(query.from, query.to, query.limit) {
-        Ok(window) => window,
-        Err(error) => return window_refusal(error),
-    };
-    let days = match revenue(&app.rollups, tenant_id, store_id, &window).await {
-        Ok(days) => days,
-        Err(error) => return rollup_error_response(&error),
-    };
-    let Ok(body) = (file.write)(&days) else {
-        return api_error(ErrorStatus::Internal, "could not build the CSV");
-    };
-    audit_action(
-        &app.audit,
-        &app.clock,
-        &context,
-        Some(tenant_id),
-        file.action,
-        "store",
-        &store_id.to_string(),
-        None,
-        Some(serde_json::json!({ "domain": file.domain, "rows": (file.rows)(&days) })),
-    )
-    .await;
-    csv_download_response(file.name, body)
-}
-
-/// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
-/// Track O4).
-async fn admin_export_revenue<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue.csv",
-        action: "reports.export_revenue",
-        domain: "revenue",
-        write: export::revenue_csv,
-        rows: <[DailyRevenue]>::len,
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-#[utoipa::path(
-    get,
-    path = "/admin/stores/{store_id}/revenue/fees/export",
-    params(
-        ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
-        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
-        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
-        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
-        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
-                                                       newest in range: 90 when absent, and \
-                                                       never more than 366"),
-    ),
-    responses(
-        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
-                                      is `business_date,currency_code,fee_code,fee_name,bills,\
-                                      amount,tax`, then one row per trading day per fee code the \
-                                      day's settled bills charged, oldest day first and then by \
-                                      code: the fee's name, the bills that charged it, what it \
-                                      charged and the tax on it, in the store's currency's minor \
-                                      units. A day that charged no fee has no row, and neither \
-                                      has a bill settled by an edge from before fee lines, whose \
-                                      charge is only in `revenue.csv`'s `service_charge`. Only \
-                                      the header for a window with no fees, and for a store \
-                                      whose rollup has not been projected yet"),
-        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
-                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
-    ),
-    tag = "reports",
-)]
-/// A store's fees by code as a CSV download, one row per trading day per code
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
-///
-/// Windowed as the revenue read is, and long-format: a file of its own rather than columns added to
-/// `revenue.csv`, whose header stays as every spreadsheet built on it reads it. Prices are **T2**,
-/// so it needs `console.reports.revenue`, as `GET /admin/stores/{store_id}/revenue/export` does,
-/// and the audit trail records how many rows were exported, never what they held.
-async fn admin_export_revenue_fees<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue-fees.csv",
-        action: "reports.export_revenue_fees",
-        domain: "revenue_fees",
-        write: export::revenue_fees_csv,
-        rows: |days| days.iter().map(|day| day.by_fee.len()).sum(),
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-#[utoipa::path(
-    get,
-    path = "/admin/stores/{store_id}/revenue/tax/export",
-    params(
-        ("store_id" = String, Path, description = "The store whose tax to export (a 26-character ULID)"),
-        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
-        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
-        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
-        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
-                                                       newest in range: 90 when absent, and \
-                                                       never more than 366"),
-    ),
-    responses(
-        (status = 200, description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
-                                      is `business_date,currency_code,component_name,\
-                                      rate_basis_points,tax`, then one row per trading day per \
-                                      tax component name and rate the day's settled bills \
-                                      recorded, oldest day first and then by name and rate: the \
-                                      tax their tax lines recorded under it, in the store's \
-                                      currency's minor units. A fee's tax is inside its tax \
-                                      line, so it adds no row of its own. Nothing is invented: a \
-                                      bill that recorded no components, settled before its store \
-                                      recorded them or taxed at rates with none, is in \
-                                      `revenue.csv`'s `tax` and in no row here, so a day's rows \
-                                      can sum to less than its tax and no row stands for the \
-                                      difference. Only the header for a window with no \
-                                      components, as for a store whose tax table names none, and \
-                                      for a store whose rollup has not been projected yet"),
-        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
-                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
-                                      zero", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.reports.revenue", body = crate::openapi_admin::ErrorResponse),
-        (status = 500, description = "The CSV could not be built", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
-    ),
-    tag = "reports",
-)]
-/// A store's tax by component as a CSV download, one row per trading day per component name and
-/// rate ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
-/// decision 5).
-///
-/// A file of its own beside `revenue-fees.csv`, and the same in every way that matters: windowed
-/// as the revenue read is, behind `console.reports.revenue`, and audited by how many rows were
-/// exported, never what they held.
-async fn admin_export_revenue_tax<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<AdminRollupWindowQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    let file = RevenueExport {
-        name: "revenue-tax.csv",
-        action: "reports.export_revenue_tax",
-        domain: "revenue_tax",
-        write: export::revenue_tax_csv,
-        rows: |days| days.iter().map(|day| day.by_tax_component.len()).sum(),
-    };
-    export_revenue(&app, &headers, &store_id, query, &file).await
-}
-
-/// Resets a store's materialised rollup so the projector rebuilds it from the event log
-/// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
-/// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
-/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
-/// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
-async fn admin_rollups_reset<S, R, K, C, A, T, W>(
-    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
-    headers: HeaderMap,
-    Path(store_id): Path<String>,
-    Query(query): Query<ConfigTenantQuery>,
-) -> Response
-where
-    S: Clone + Send + Sync + 'static,
-    R: RollupStore + Clone + Send + Sync + 'static,
-    K: Clone + Send + Sync + 'static,
-    C: ClockSource + Clone + Send + Sync + 'static,
-    A: AdminStore + Clone + Send + Sync + 'static,
-    T: Clone + Send + Sync + 'static,
-    W: Clone + Send + Sync + 'static,
-{
-    if let Err(denied) = require_permission(
-        &app.admin,
-        &app.clock,
-        &headers,
-        ConsolePermission::PublishConfig,
-    )
-    .await
-    {
-        return denied;
-    }
-    let (tenant_id, store_id) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
-            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
-            Err(refusal) => return refusal,
-        };
-    match app
-        .rollups
-        .save(tenant_id, store_id, &StoredRollups::default())
-        .await
-    {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => rollup_error_response(&error),
     }
 }
@@ -34720,16 +33887,6 @@ fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
     mint_ulid(now_ms).map(ConfigVersionId::new)
 }
 
-/// A fresh ULID: `now_ms` as the timestamp and 80 CSPRNG bits as the randomness, or `None` if the OS
-/// entropy source is unavailable (the caller then fails closed rather than mint a guessable id).
-fn mint_ulid(now_ms: i64) -> Option<Ulid> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes).ok()?;
-    let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
-    // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
-    Some(Ulid::from_parts(ms, u128::from_le_bytes(bytes)))
-}
-
 /// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid
 /// header value, so a failure to parse it is impossible; the `unwrap_or_else` keeps a fabricated
 /// bad value from taking the process down rather than papering over a real one.
@@ -34774,49 +33931,6 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
     Some((secret, phc))
 }
 
-/// Every error this surface sends, in the one AIP-193 shape
-/// [`pos_proto::error`](../../../pos-proto/src/error.rs) defines
-/// ([ADR-0026](../../../docs/adr/0026-cloud-http-surface.md) §27, `docs/naming-and-api.md` §4).
-///
-/// The HTTP status is **not** a parameter: it is derived from `status` through
-/// [`ErrorStatus::http_code`], which is where the mapping is stated once. A caller that could pick
-/// its own code could pick one that disagrees with the body it is sending, and a client branching on
-/// either would then be reading a different error from the one the server meant.
-///
-/// Field-level detail has no caller yet — the inline validation sites that will carry it are the
-/// next slice — so it is not a parameter either. When it arrives, `ErrorResponse::with_detail` is
-/// already fluent and the door is a second constructor, not a widened signature.
-pub(crate) fn api_error(status: ErrorStatus, message: impl Into<String>) -> Response {
-    (
-        http_status(status),
-        Json(ErrorResponse::new(status, message)),
-    )
-        .into_response()
-}
-
-/// The same envelope, naming **which** field was wrong and why
-/// (`docs/naming-and-api.md` §4).
-///
-/// This is the door [`api_error`] deliberately left open rather than widening its own signature: a
-/// refusal that is not about a particular field cannot grow an empty `details` array by accident,
-/// and a caller cannot pass one where none belongs.
-///
-/// `reason` is a stable `SCREAMING_SNAKE` token; `message` is prose for a person. They are separate
-/// because they change at different rates — the message can be reworded or translated freely, while
-/// the reason is what a client branches on, and wording a client depends on is wording that can no
-/// longer be improved.
-pub(crate) fn api_error_with_details(
-    status: ErrorStatus,
-    message: impl Into<String>,
-    details: &[(&str, &str)],
-) -> Response {
-    let body = details.iter().fold(
-        ErrorResponse::new(status, message),
-        |body, (field, reason)| body.with_detail(*field, *reason),
-    );
-    (http_status(status), Json(body)).into_response()
-}
-
 /// The `422` a composed document earns when every field in it is valid and the document they make
 /// together is not ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
 ///
@@ -34831,92 +33945,6 @@ pub(crate) fn api_error_with_details(
 /// the translation grid's — ended up with no reader in the console at all.
 fn unprocessable_violations(violations: &[String]) -> Response {
     api_error(ErrorStatus::Unprocessable, violations.join("; "))
-}
-
-/// Parses `N` named ULID fields at once, refusing with a detail per field that **actually** failed.
-///
-/// Half of this file's refusals were this one sentence written by hand, and writing it by hand let
-/// it drift three ways at once: 63 different phrasings of "not a ULID"; no `details` array, so a
-/// console could not mark the offending input; and — the one that misinforms a caller — a tuple
-/// parse whose message named *every* field it had looked at (`"tenant_id or store_id is not a
-/// ULID"`) instead of the one that was wrong. About 120 sites did that. A caller reading it has to
-/// guess which half of its request to fix.
-///
-/// Taking the fields as an argument is what makes that ambiguity *unwriteable* rather than merely
-/// fixed here: there is no signature in this module that accepts a message about fields it did not
-/// check, so the next id parse cannot reintroduce the shape.
-///
-/// Returning an array rather than a slice is what keeps the ids typed at the call site — a caller
-/// destructures positionally, `Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store))`,
-/// so nothing is indexed and the newtype stays where it belongs, in the handler.
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
-)]
-pub(crate) fn parse_ulid_fields<const N: usize>(
-    fields: [(&str, &str); N],
-) -> Result<[Ulid; N], Response> {
-    let mut bad: Vec<&str> = Vec::new();
-    // The placeholder for a field that did not parse never escapes: `bad` is non-empty in exactly
-    // that case, and a non-empty `bad` returns the refusal instead of the array.
-    let parsed = fields.map(|(field, raw)| match raw.parse::<Ulid>() {
-        Ok(id) => id,
-        Err(_ignored) => {
-            bad.push(field);
-            Ulid::NIL
-        }
-    });
-    if bad.is_empty() {
-        Ok(parsed)
-    } else {
-        Err(ulid_refusal(&bad))
-    }
-}
-
-/// The refusal [`parse_ulid_fields`] returns: `INVALID_ARGUMENT`, a `NOT_A_ULID` detail per failed
-/// field, and prose naming those fields in the order the caller listed them.
-///
-/// A single bad field reads `"tenant_id is not a ULID"` — the wording 51 of these sites already
-/// used — so for the common case only the `details` array is new, and no client that was reading
-/// the message sees it change.
-fn ulid_refusal(bad: &[&str]) -> Response {
-    let details: Vec<(&str, &str)> = bad.iter().map(|field| (*field, "NOT_A_ULID")).collect();
-    let message = match bad {
-        [field] => format!("{field} is not a ULID"),
-        [head @ .., last] => format!("{} and {last} are not ULIDs", head.join(", ")),
-        // Unreachable: the only caller refuses to build a refusal with nothing to refuse.
-        [] => "a field is not a ULID".to_owned(),
-    };
-    api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
-}
-
-/// The `400` a malformed rollup window earns, naming the query parameter at fault.
-///
-/// The mapping lives here rather than in `dashboard::rollup` because only the route knows the wire
-/// names. `Inverted` carries **no** `details`: neither `from` nor `to` is wrong on its own, and the
-/// standing rule is to name only the field that actually was — attributing it to `from` would send
-/// a caller who mistyped `to` to the wrong input. The message already names both.
-fn window_refusal(error: WindowError) -> Response {
-    match error {
-        WindowError::MalformedFrom => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "from must be a YYYY-MM-DD business date",
-            &[("from", "INVALID_FORMAT")],
-        ),
-        WindowError::MalformedTo => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "to must be a YYYY-MM-DD business date",
-            &[("to", "INVALID_FORMAT")],
-        ),
-        WindowError::Inverted => {
-            api_error(ErrorStatus::InvalidArgument, "from must not be after to")
-        }
-        WindowError::LimitTooSmall => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "limit must be at least 1",
-            &[("limit", "OUT_OF_RANGE")],
-        ),
-    }
 }
 
 /// Why a request-to-record builder refused, and which field to send the caller to.
@@ -35145,19 +34173,6 @@ fn paged_ok<T: Serialize>(page: Page<T>, request: PageRequest) -> Response {
         .into_response()
 }
 
-/// The refusal for a dependency that is down: `SERVICE_UNAVAILABLE`, and no details.
-///
-/// `ErrorStatus::Unavailable`, not `InvalidArgument`, which is the distinction deriving the code
-/// from [`ErrorStatus::http_code`] exists to keep: this refusal is **retryable** and the caller's
-/// request was fine. A client that reads it as its own fault stops retrying something that would
-/// have succeeded.
-pub(crate) fn service_unavailable(service: &str) -> Response {
-    api_error(
-        ErrorStatus::Unavailable,
-        format!("the {service} service is unavailable"),
-    )
-}
-
 /// What was wrong with an `If-Match` value that is present but unusable.
 ///
 /// Separate from the refusal it becomes so the parse can be tested as a pure function: the exact
@@ -35360,15 +34375,6 @@ where
         .into_response()
 }
 
-/// The `axum` status code for an [`ErrorStatus`], over `pos-proto`'s authoritative map.
-///
-/// The fallback is unreachable — every code [`ErrorStatus::http_code`] returns is a valid status,
-/// and `every_status_maps_to_a_valid_code` holds it to that — but an unmappable code would be a
-/// server-side fault by elimination, which is what `500` says.
-fn http_status(status: ErrorStatus) -> StatusCode {
-    StatusCode::from_u16(status.http_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 /// Maps a [`PortError`] to an HTTP response, so a caller retries the retryable statuses (`503`,
 /// `429`) and not the terminal ones.
 ///
@@ -35380,17 +34386,6 @@ fn http_status(status: ErrorStatus) -> StatusCode {
 /// the point of deriving the code is that the next caller cannot inherit the trap.
 fn error_response(error: &PortError) -> Response {
     api_error(error.status(), error.to_string())
-}
-
-/// Maps a rollup-read failure to a `503`, logging the detail rather than returning it — a dashboard
-/// read only fails when the store itself is unreachable, which is transient and the caller's cue to
-/// retry, and the internal reason is not the client's business.
-fn rollup_error_response(error: &RollupError) -> Response {
-    tracing::error!(%error, "a dashboard rollup read failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the dashboard is temporarily unavailable",
-    )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -35858,7 +34853,7 @@ where
 /// for the wall-clock conversion.
 ///
 /// A store with no `locale` node comes back with `None`, which is not an error here: an instant
-/// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
+/// release needs no timezone at all, and only [`resolve_for_stores`](crate::releases::resolve_for_stores) knows whether this release is
 /// one. The refusal, when it comes, names the store.
 async fn release_target_timezones<Cfg>(
     config_trees: &Cfg,
@@ -35930,19 +34925,12 @@ fn unresolvable_moment(refusals: &[(StoreId, ResolveRefusal)]) -> Response {
 /// Nothing is written until everything has resolved. A store that cannot be timed, a node that will
 /// not compile, a prerequisite a store is missing — each refuses the whole release, because a
 /// half-written release is exactly the half-published Tết this record exists to prevent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one ordered gauntlet, and the order is the record's: settle the instruction, expand \
-              the target, resolve every instant, check every prerequisite, compile every node — and \
-              only then write. Splitting it into helpers would let a future edit move a write above \
-              a check, which is the half-published Tết ADR-0125 exists to prevent"
-)]
 async fn admin_schedule_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Path(release_id): Path<String>,
     Json(request): Json<ScheduleReleaseRequest>,
-) -> Response
+) -> Result<Response, Response>
 where
     Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
@@ -35952,219 +34940,57 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    let context = match require_permission(
+    // The gauntlet, in the record's order (ADR-0125): settle the instruction, expand the target,
+    // resolve every instant, check every prerequisite, compile every node — and only then write.
+    // Each step refuses with the response to send, so nothing after a refusal runs.
+    let context = require_permission(
         &state.admin,
         &state.clock,
         &headers,
         ConsolePermission::PublishConfig,
     )
-    .await
-    {
-        Ok(context) => context,
-        Err(denied) => return denied,
-    };
-    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
-        Ok([tenant_id]) => TenantId::new(tenant_id),
-        Err(refusal) => return refusal,
-    };
-    let release = match state.releases.fetch_one(tenant_id, &release_id).await {
-        Ok(Some(release)) => release,
-        Ok(None) => return not_found("release"),
-        Err(error) => return release_error_response(&error),
-    };
-    if release.status != ReleaseStatus::Draft {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has already been scheduled; cancel it and make another",
-        );
-    }
-    let Some(moment) = release.moment.clone() else {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release has no moment; give it a wall-clock time or an instant before scheduling",
-        );
-    };
-    if request.nodes.is_empty() {
-        return api_error(
-            ErrorStatus::Unprocessable,
-            "this release carries no nodes, so scheduling it would publish nothing",
-        );
-    }
-
-    // Settle the instruction before anything is read per store: an unknown node is the request's own
-    // mistake and would be the same answer at every shop.
-    let mut carried: Vec<(Arc<dyn BatchNode>, &serde_json::Value)> =
-        Vec::with_capacity(request.nodes.len());
-    for asked in &request.nodes {
-        let Some(node) = state
-            .nodes
-            .iter()
-            .find(|candidate| candidate.key() == asked.node)
-        else {
-            return unknown_batch_node(&state.nodes, &asked.node);
-        };
-        carried.push((Arc::clone(node), &asked.arguments));
-    }
-
-    let stores = match release_target_stores(
-        &state.groups,
-        &state.registry,
+    .await?;
+    let [tenant_id] = parse_ulid_fields([("tenant_id", &request.tenant_id)])?;
+    let tenant_id = TenantId::new(tenant_id);
+    let (release, moment) =
+        release_schedule::draft_to_schedule(&state.releases, tenant_id, &release_id, &request)
+            .await?;
+    let carried = release_schedule::settle_nodes(&state.nodes, &request.nodes)?;
+    let (stores, targets) = release_schedule::target_stores(
+        (&state.groups, &state.registry, &state.config_trees),
         tenant_id,
-        release.target_group_id.as_deref(),
-        request.store_ids.as_deref(),
+        &release,
+        &request,
     )
-    .await
-    {
-        Ok(stores) => stores,
-        Err(refusal) => return refusal,
-    };
-    let targets = match release_target_timezones(&state.config_trees, tenant_id, &stores).await {
-        Ok(targets) => targets,
-        Err(refusal) => return refusal,
-    };
-
-    // One wall-clock time is one instant per timezone: a fleet spanning Ho Chi Minh City and Tokyo
-    // has a two-hour spread, and this is where it is written down (ADR-0125 §2).
-    let resolved = resolve_for_stores(&moment, &targets);
-    let refusals: Vec<(StoreId, ResolveRefusal)> = resolved
-        .iter()
-        .filter_map(|store| match &store.outcome {
-            Err(refusal) => Some((store.store_id, refusal.clone())),
-            Ok(_) => None,
-        })
-        .collect();
-    if !refusals.is_empty() {
-        return unresolvable_moment(&refusals);
-    }
-
-    // The schedule-time half of ADR-0125 §6. A prerequisite the release carries itself is satisfied
-    // by the release — the activator applies them in dependency order — so only the ones it does not
-    // carry are read from the store.
+    .await?;
+    let resolved = release_schedule::resolve_instants(&moment, &targets)?;
     let carried_keys: Vec<&str> = carried.iter().map(|(node, _)| node.key()).collect();
-    for (node, _) in &carried {
-        for needed in prerequisites_for(node.key()) {
-            if carried_keys.contains(needed) {
-                continue;
-            }
-            for store_id in &stores {
-                match read_store_node_as_run(&state.config_trees, tenant_id, *store_id, needed)
-                    .await
-                {
-                    Ok(serde_json::Value::Null) => {
-                        return api_error(
-                            ErrorStatus::Unprocessable,
-                            format!(
-                                "store {store_id} has no `{needed}` node, which `{}` needs; publish \
-                                 one to it or carry `{needed}` in this release",
-                                node.key()
-                            ),
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(refusal) => return refusal,
-                }
-            }
-        }
-    }
-
-    // Compile each node once for the tenant, then once per store. A refusal here is the
-    // instruction's own — a menu that will not compile — and refuses the release rather than being
-    // recorded at every shop. What a write composes on a store's tree when it lands — a menu's
-    // `fees` — is not snapshotted: it is read from the tree when the write lands, and a snapshot
-    // of it would publish over whatever fee rules are written before the moment arrives.
-    let mut pairs: Vec<(StoreId, String, serde_json::Value)> = Vec::new();
-    for (node, arguments) in &carried {
-        let plan = match node.plan(tenant_id, arguments).await {
-            Ok(plan) => plan,
-            Err(refusal) => return refusal,
-        };
-        for store_id in &stores {
-            match plan.compile_for(*store_id).await {
-                Ok(compiled) => {
-                    for (key, value) in compiled {
-                        pairs.push((*store_id, key, value));
-                    }
-                }
-                Err(refusal) => return refusal,
-            }
-        }
-    }
-
-    let instants: std::collections::BTreeMap<StoreId, i64> = resolved
-        .iter()
-        .filter_map(|store| store.outcome.as_ref().ok().map(|at| (store.store_id, *at)))
-        .collect();
-    // The clock each instant was read in, written down beside it. Without this the report can print
-    // the moment but not the sentence an operator approved — "04:00 at Ginza" and the same instant
-    // read in Ho Chi Minh City are one number and two different reviews (ADR-0125 §26).
-    let zones: std::collections::BTreeMap<StoreId, String> = resolved
-        .iter()
-        .filter_map(|store| {
-            store
-                .timezone
-                .as_ref()
-                .map(|zone| (store.store_id, zone.clone()))
-        })
-        .collect();
-    let now_ms = state.clock.now().as_milliseconds_since_epoch();
-    let mut written = 0_usize;
-    for (store_id, node_key, node_value) in pairs {
-        let Some(effective_at_ms) = instants.get(&store_id).copied() else {
-            // Unreachable: every store resolved above or the release was refused. Recorded rather
-            // than unwrapped, because the alternative is a panic in a request handler.
-            tracing::error!(%store_id, release = %release_id, "a release pair has no instant");
-            return service_unavailable("releases");
-        };
-        let Some(pair_id) = mint_ulid(now_ms) else {
-            return service_unavailable("releases");
-        };
-        let publish = NewScheduledPublish {
-            id: pair_id.to_string(),
-            tenant_id,
-            store_id,
-            node_key,
-            node_value,
-            effective_at_ms,
-            created_by: context.admin.id.clone(),
-            release_id: Some(release_id.clone()),
-            resolved_timezone: zones.get(&store_id).cloned(),
-        };
-        if let Err(error) = state.scheduled.schedule(&publish).await {
-            // Some pairs are already written. They are visible in the report and the release stays
-            // `draft`, which is the honest state for a set that never fully landed — and cancelling
-            // it withdraws what did get written.
-            tracing::error!(%error, release = %release_id, written, "a release pair could not be scheduled");
-            return scheduled_error_response(&error);
-        }
-        written += 1;
-    }
-
-    if let Err(error) = state
-        .releases
-        .set_status(tenant_id, &release_id, ReleaseStatus::Scheduled)
-        .await
-    {
-        return release_error_response(&error);
-    }
-    // One audit row for the decision, beside the per-publish rows the activator's writes will add:
-    // "who decided to ship Tết" has one answer and "when did Ginza get it" has forty (ADR-0125 §7).
-    audit_action(
-        &state.audit,
-        &state.clock,
-        &context,
-        Some(tenant_id),
-        "release.scheduled",
-        "release",
-        &release_id,
-        None,
-        Some(serde_json::json!({
-            "nodes": carried_keys,
-            "stores": stores.len(),
-            "pairs": written,
-        })),
+    release_schedule::check_prerequisites(
+        &state.config_trees,
+        tenant_id,
+        &stores,
+        &carried,
+        &carried_keys,
     )
-    .await;
-    release_report_response(&state, tenant_id, &release_id).await
+    .await?;
+    let pairs = release_schedule::compile_pairs(tenant_id, &stores, &carried).await?;
+
+    // Only now, with every check passed, is anything written.
+    let written = release_schedule::schedule_pairs(
+        &state.scheduled,
+        (tenant_id, &release_id),
+        &context.admin.id,
+        state.clock.now().as_milliseconds_since_epoch(),
+        &resolved,
+        pairs,
+    )
+    .await?;
+    let summary = serde_json::json!({
+        "nodes": carried_keys,
+        "stores": stores.len(),
+        "pairs": written,
+    });
+    Ok(release_schedule::mark_scheduled(&state, &context, (tenant_id, &release_id), summary).await)
 }
 
 #[utoipa::path(
@@ -37746,11 +36572,14 @@ mod error_envelope_tests {
 
     use super::{
         CampaignRequest, FieldRefusal, IngredientRequest, RecipeRequest, SalesChannel,
-        SupplierRequest, WindowError, api_error, build_campaign, build_ingredient, build_recipe,
-        build_supplier, error_response, http_status, parse_known_tokens, window_refusal,
+        SupplierRequest, api_error, build_campaign, build_ingredient, build_recipe, build_supplier,
+        error_response, parse_known_tokens,
     };
     use axum::http::StatusCode;
     use axum::response::Response;
+    use pos_cloud_api::response::http_status;
+    use pos_cloud_reports::dashboard::rollup::WindowError;
+    use pos_cloud_reports::refusal::window_refusal;
     use pos_ports::{PortError, PortName};
     use pos_proto::error::ErrorBody;
     use pos_proto::ulid::Ulid;
@@ -38298,9 +37127,8 @@ mod audit_read_redaction_tests {
     //! What a role without `console.people.read` reads of the audit trail (ADR-0158 decision 9): an
     //! entry about an employee without the person's staff code, and everything else as written.
 
-    use super::{
-        AdminRole, AuditActor, AuditEntry, AuditId, audit_views, without_audited_staff_identity,
-    };
+    use super::{AdminRole, AuditEntry, audit_views, without_audited_staff_identity};
+    use pos_cloud_api::audit::{AuditActor, AuditId};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
     use serde_json::json;

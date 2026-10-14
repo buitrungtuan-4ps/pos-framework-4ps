@@ -32,7 +32,7 @@ use crate::orders::{MoneyDto, OrderLineRequest, OrderRequest, OrderResponse};
                        see ADR-0019."
     ),
     paths(
-        crate::http::daily_rollups,
+        pos_cloud_reports::rollups::daily_rollups,
         crate::orders::submit_order,
         crate::orders::look_up_order,
     ),

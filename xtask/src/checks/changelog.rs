@@ -16,6 +16,9 @@
 //! ```
 //!
 //! - `cargo xtask changelog --check` validates every change file, which the docs gate runs.
+//! - `cargo xtask changelog --exempt [--base <ref>]` prints `true` when the docs gate asks for no
+//!   change file: a pull request Dependabot opened (`PR_AUTHOR`) that changes only manifests and
+//!   lockfiles. A version bump there is recorded by the lockfile, not by a hand-written entry.
 //! - `cargo xtask changelog` folds them in, by hand, before a release is tagged. Each entry goes to
 //!   the top of its kind's heading under `[Unreleased]`, created if absent, in file-name order. The
 //!   upgrade note is appended as the entry's own paragraph. The files are then deleted.
@@ -38,6 +41,13 @@ const KINDS: [(&str, &str); 6] = [
     ("fixed", "Fixed"),
     ("security", "Security"),
 ];
+
+/// The pull-request author whose manifest-only bumps need no change file.
+const DEPENDABOT: &str = "dependabot[bot]";
+
+/// The file names a dependency bump touches, at any depth: the Rust and pnpm manifests and
+/// lockfiles.
+const MANIFESTS: [&str; 4] = ["Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml"];
 
 /// One change file, read and checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +87,30 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     }
     eprintln!("xtask changelog: folded {} change file(s)", changes.len());
     Ok(Vec::new())
+}
+
+/// Whether the docs gate exempts the pull request from a change file, for `--exempt`: the author
+/// from `PR_AUTHOR`, the changed files since the merge base with `--base` (default `origin/main`).
+///
+/// # Errors
+///
+/// When git cannot list the changed files.
+pub fn run_exempt(args: &[String]) -> Result<bool, Error> {
+    let author = std::env::var("PR_AUTHOR").unwrap_or_default();
+    let changed = crate::affected::changed_files(&super::base_ref(args))?;
+    Ok(exempt(&author, &changed))
+}
+
+/// Whether a pull request by `author` changing `changed` needs no change file: Dependabot opened it
+/// and every file it changes is a manifest or a lockfile. Anyone else, or one other file (a source
+/// edit pushed onto Dependabot's branch, say), and the gate applies; so it does to an empty list.
+pub fn exempt(author: &str, changed: &[String]) -> bool {
+    author == DEPENDABOT
+        && !changed.is_empty()
+        && changed.iter().all(|path| {
+            let name = path.rsplit('/').next().unwrap_or(path.as_str());
+            MANIFESTS.contains(&name)
+        })
 }
 
 /// Every change file under `changes/`, with a finding for each that does not parse.
@@ -227,9 +261,43 @@ fn entry(change: &Change) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{fold, parse};
+    use super::{exempt, fold, parse};
 
     const LOG: &str = "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- Old fix.\n\n## [0.1.0] — 2026-01-01\n\n### Added\n\n- First.\n";
+
+    fn paths(list: &[&str]) -> Vec<String> {
+        list.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn dependabot_touching_only_manifests_and_lockfiles_is_exempt() {
+        let bump = paths(&[
+            "Cargo.lock",
+            "crates/pos-render/Cargo.toml",
+            "dashboard/package.json",
+            "dashboard/pnpm-lock.yaml",
+        ]);
+        assert!(exempt("dependabot[bot]", &bump));
+    }
+
+    #[test]
+    fn everyone_else_and_every_other_file_keeps_the_gate() {
+        let bump = paths(&["crates/pos-render/Cargo.toml", "Cargo.lock"]);
+        // Someone else's bump, even of the same files.
+        assert!(!exempt("octocat", &bump));
+        assert!(!exempt("dependabot", &bump));
+        assert!(!exempt("", &bump));
+        // Dependabot's branch with one other file on it.
+        let mixed = paths(&["Cargo.lock", "crates/pos-render/src/shape.rs"]);
+        assert!(!exempt("dependabot[bot]", &mixed));
+        // A name that only ends like a manifest.
+        assert!(!exempt(
+            "dependabot[bot]",
+            &paths(&["crates/x/NotCargo.toml"])
+        ));
+        // Nothing changed is not a bump.
+        assert!(!exempt("dependabot[bot]", &[]));
+    }
 
     #[test]
     fn a_change_file_is_its_kind_its_entry_and_an_optional_upgrade_note() {

@@ -86,6 +86,17 @@ describe("the single-choice picker", () => {
     expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Marinara"]);
   });
 
+  it("folds a query typed in capitals, for a label and for a keyword", () => {
+    // The query is folded once per keystroke, outside the per-option match; a query typed in
+    // capitals must still meet a label and a keyword folded the same way.
+    mount();
+    fireEvent.click(trigger());
+    fireEvent.input(screen.getByRole("combobox"), { target: { value: "BÚN BÒ" } });
+    expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Bún bò Huế"]);
+    fireEvent.input(screen.getByRole("combobox"), { target: { value: "CÀ CHUA" } });
+    expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Marinara"]);
+  });
+
   it("says so rather than showing an empty box when nothing matches", () => {
     mount();
     fireEvent.click(trigger());
@@ -216,6 +227,12 @@ describe("the multi-choice picker", () => {
     for (const name of ["Bánh mì thịt nguội", "Bún bò Huế", "Margherita"]) {
       expect(screen.getByRole("button", { name: `${LABELS.removeLabel}: ${name}` })).toBeTruthy();
     }
+  });
+
+  it("folds a query typed in capitals, as the single picker does", () => {
+    mount([]);
+    fireEvent.input(screen.getByRole("combobox"), { target: { value: "MARGH" } });
+    expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Margherita"]);
   });
 
   it("removes exactly one choice from its chip, and leaves the rest", () => {

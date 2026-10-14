@@ -116,7 +116,7 @@ The store-facing surface grows one family, and it is a copy of the one
 
 They authenticate like the rest of that family, with a scoped key
 ([ADR-0037](0037-api-keys.md)) under one new deny-by-default variant in
-[`apikey.rs`](../../crates/pos-cloud/src/auth/apikey.rs), `Scope::RunHostJobs` (`run_host_jobs`).
+[`apikey.rs`](../../crates/pos-cloud-api/src/auth/apikey.rs), `Scope::RunHostJobs` (`run_host_jobs`).
 `Scope::from_wire` is already deny-by-default on read, so an older cloud simply does not know the
 name and grants nothing.
 
@@ -137,9 +137,9 @@ happens to own — and machines the platform owns today are machines an operator
 
 **The scope says what a key may do; the binding says whose data it may do it to, and the binding is
 the isolation.** In the family this copies, `StoredApiKey`
-([`apikey.rs`](../../crates/pos-cloud/src/auth/apikey.rs)) carries a `tenant_id` — *"the one field
+([`apikey.rs`](../../crates/pos-cloud-api/src/auth/apikey.rs)) carries a `tenant_id` — *"the one field
 isolation rests on"* — and an optional `store_id`, and every `/sync/stores/{store_id}/…` handler calls
-`require_store(&grant, store_id)` ([`bearer.rs`](../../crates/pos-cloud/src/auth/bearer.rs)) so a key
+`require_store(&grant, store_id)` ([`bearer.rs`](../../crates/pos-cloud-api/src/auth/bearer.rs)) so a key
 issued for store A cannot read store B. Without the equivalent here, any key carrying `run_host_jobs`
 could long-poll `GET /sync/hosts/{any_host_id}/jobs` and collect another host's spawn jobs — each one
 carrying a live single-use activation code for a store — which is fleet-wide credential harvesting in
@@ -632,7 +632,7 @@ them by default from a framework that can answer neither.
   `GET /sync/hosts/{host_id}/artifact` — all behind one new deny-by-default scope,
   `Scope::RunHostJobs` (`run_host_jobs`), and all four calling `require_host(&grant, host_id)` before
   they read anything. `StoredApiKey` gains an optional `host_id` beside `store_id`, and
-  [`bearer.rs`](../../crates/pos-cloud/src/auth/bearer.rs) gains `require_host` as the mirror of
+  [`bearer.rs`](../../crates/pos-cloud-api/src/auth/bearer.rs) gains `require_host` as the mirror of
   `require_store`. Internal to the fleet, so the routes stay out of
   [`docs/openapi.json`](../openapi.json) exactly as the other `/sync` routes do.
 - Two new `/admin` routes enrol and retire a host — `POST /admin/hosts` and

@@ -59,6 +59,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [security-review.md](security-review.md) · [security-review-ws-d.md](security-review-ws-d.md) | The pre-production security review, and the ops-hardening pass |
 | [wcag-contrast-audit.md](wcag-contrast-audit.md) | The measured contrast ratio of every design token |
 | [metrics/baseline-2026-10.md](metrics/baseline-2026-10.md) | The size and shape of the code before the standardisation work |
+| [metrics/ci-2026-10-phase3.md](metrics/ci-2026-10-phase3.md) | What CI costs after phase 3 (CI runs what a change affects), against the baseline |
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
 | [../SECURITY.md](../SECURITY.md) · [../MAINTAINERS.md](../MAINTAINERS.md) | Reporting a vulnerability; who owns which area |
 | [../packages/shared/README.md](../packages/shared/README.md) | The design tokens and the scripts both front ends share, and how they reach them |

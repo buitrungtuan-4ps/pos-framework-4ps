@@ -30,7 +30,7 @@ use pos_proto::error::ErrorStatus;
 use pos_proto::ids::StoreId;
 
 use super::apikey::{ApiKeyStore, CredentialKind, Grant, Scope, parse, verify};
-use crate::http::api_error;
+use crate::response::api_error;
 
 /// The authentication scheme this surface accepts.
 const SCHEME: &str = "Bearer";
@@ -203,10 +203,10 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{AuthDenied, authenticate, require_scope, require_store};
-    use crate::activation::mint_device_credential;
     use crate::auth::apikey::{
         ApiKeyId, ApiKeyStore, ApiKeyStoreError, DEVICE_SCOPES, Scope, StoredApiKey, issue,
     };
+    use crate::auth::device_credential::mint_device_credential;
     use pos_proto::ids::StoreId;
 
     /// A low-entropy, obviously-fake secret so no real key material is committed.
