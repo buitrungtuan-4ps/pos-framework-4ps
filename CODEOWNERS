@@ -10,6 +10,8 @@
 /docs/adr/               @maintainers-architecture
 /docs/naming-and-api.md  @maintainers-architecture
 /tools/code-size-baseline.toml @maintainers-architecture
+/ui/eslint-baseline.json @maintainers-architecture
+/dashboard/eslint-baseline.json @maintainers-architecture
 /docs/pos-spec.md        @maintainers-domain
 /CHANGELOG.md            @maintainers-architecture
 /SECURITY.md             @maintainers-security
