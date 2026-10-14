@@ -31,3 +31,6 @@ ff336192c5920981fba88a889e6afd4c76359681
 
 # #775 — the campaign routes move into their own module
 56cb6c52cda6c941632d44dfe9719022b68e067b
+
+# #776 — the people routes and their tests move into their own modules
+cc96b577880f638942616eae3be801f09ebc4a86
