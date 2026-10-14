@@ -513,6 +513,53 @@ fn v6_benchmarking_and_special_purpose_prefixes_are_refused() {
 }
 
 #[test]
+fn iana_s_special_purpose_ipv4_anycast_blocks_are_reserved() {
+    // AMT (192.52.193.0/24, RFC 7450), AS112-v4 (192.31.196.0/24, RFC 7535) and Direct Delegation
+    // AS112 (192.175.48.0/24, RFC 7534): globally reachable, but no webhook receiver lives there.
+    for address in ["192.52.193.1", "192.31.196.1", "192.175.48.1"] {
+        assert_eq!(
+            classify_ip(ip(address)),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip(address),
+                ForbiddenReason::Reserved
+            )),
+            "{address}"
+        );
+    }
+    // The addresses either side of each /24 stay public.
+    for address in [
+        "192.52.192.255",
+        "192.52.194.0",
+        "192.31.195.255",
+        "192.31.197.0",
+        "192.175.47.255",
+        "192.175.49.0",
+    ] {
+        assert_eq!(classify_ip(ip(address)), Ok(()), "{address}");
+    }
+}
+
+#[test]
+fn the_rest_of_iana_s_special_purpose_ipv6_blocks_are_reserved() {
+    // Direct Delegation AS112 (2620:4f:8000::/48, RFC 7534), LISP EID space (2001:5::/32, RFC 7954)
+    // and DRIP Entity Tags (2001:30::/28, RFC 9374).
+    for address in ["2620:4f:8000::1", "2001:5::1", "2001:3f::1"] {
+        assert_eq!(
+            classify_ip(ip(address)),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip(address),
+                ForbiddenReason::Reserved
+            )),
+            "{address}"
+        );
+    }
+    // The neighbours stay public: the /48 and the /28 end where IANA says they do.
+    for address in ["2620:4f:8001::1", "2001:40::1"] {
+        assert_eq!(classify_ip(ip(address)), Ok(()), "{address}");
+    }
+}
+
+#[test]
 fn a_public_https_url_vets() {
     let vetted = vet(
         "https://hooks.example.com/pos",

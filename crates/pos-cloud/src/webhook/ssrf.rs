@@ -250,6 +250,13 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
         || (a == 203 && b == 0 && c == 113);
     let is_ietf_protocol_or_relay =
         (a == 192 && b == 0 && c == 0) || (a == 192 && b == 88 && c == 99);
+    // IANA's special-purpose anycast infrastructure, the IPv4 halves of the IPv6 blocks
+    // `is_special_purpose_v6` names: 192.52.193.0/24 AMT (RFC 7450), 192.31.196.0/24 AS112-v4
+    // (RFC 7535) and 192.175.48.0/24 Direct Delegation AS112 (RFC 7534). Globally reachable, but a
+    // relay or a DNS sink, never a webhook receiver.
+    let is_special_purpose_anycast = (a == 192 && b == 52 && c == 193)
+        || (a == 192 && b == 31 && c == 196)
+        || (a == 192 && b == 175 && c == 48);
     if a == 0 {
         // 0.0.0.0/8 (RFC 1122 "This host on this network", including 0.0.0.0 unspecified).
         Some(ForbiddenReason::Unspecified)
@@ -266,8 +273,13 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
         Some(ForbiddenReason::Benchmarking)
     } else if is_documentation {
         Some(ForbiddenReason::Documentation)
-    } else if ip.is_broadcast() || a >= 240 || is_ietf_protocol_or_relay {
-        // Reserved, future-use, 192.0.0.0/24 IETF Protocol Assignments (RFC 6890), and 192.88.99.0/24 6to4 relay.
+    } else if ip.is_broadcast()
+        || a >= 240
+        || is_ietf_protocol_or_relay
+        || is_special_purpose_anycast
+    {
+        // Reserved, future-use, 192.0.0.0/24 IETF Protocol Assignments (RFC 6890), 192.88.99.0/24 6to4
+        // relay, and the special-purpose anycast blocks above.
         Some(ForbiddenReason::Reserved)
     } else if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
@@ -334,6 +346,18 @@ fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
 
     // Everything else under `64:ff9b::/32`.
     Some(classify_v4(low_32).unwrap_or(ForbiddenReason::Reserved))
+}
+
+/// Whether an IPv6 address, by its first three segments, is in one of IANA's special-purpose blocks
+/// that no webhook receiver lives in: `2001:3::/32` AMT (RFC 7450), `2001:4:112::/48` AS112-v6
+/// (RFC 7535), `2620:4f:8000::/48` Direct Delegation AS112 (RFC 7534), `2001:5::/32` LISP EID space
+/// (RFC 7954) and `2001:30::/28` DRIP Entity Tags (RFC 9374).
+fn is_special_purpose_v6(first: u16, second: u16, third: u16) -> bool {
+    (first == 0x2001 && second == 0x0003)
+        || (first == 0x2001 && second == 0x0004 && third == 0x0112)
+        || (first == 0x2620 && second == 0x004f && third == 0x8000)
+        || (first == 0x2001 && second == 0x0005)
+        || (first == 0x2001 && second & 0xfff0 == 0x0030)
 }
 
 /// The forbidden class of an IPv6 address, or `None` if it is public unicast.
@@ -454,10 +478,7 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
         Some(ForbiddenReason::Reserved)
-    } else if (first == 0x2001 && second == 0x0003)
-        || (first == 0x2001 && second == 0x0004 && third == 0x0112)
-    {
-        // 2001:3::/32 AMT (RFC 7450) and 2001:4:112::/48 AS112 (RFC 7535).
+    } else if is_special_purpose_v6(first, second, third) {
         Some(ForbiddenReason::Reserved)
     } else {
         None
