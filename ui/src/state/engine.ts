@@ -1,8 +1,8 @@
 // The one engine every piece of store data loads through (ADR-0173 decision 2).
 //
-// Each piece is declared once, in `./registry`, as an `Entry`: where it is read, how its body is
-// applied to the store, whether the till may be drawn without it, and which configuration nodes it
-// derives from. This module runs them all the same way:
+// Each piece is declared once, in `./registry`, as an `Entry`: what kind of data it is, where it is
+// read, how its body is applied to the store, whether the till may be drawn without it, and which
+// configuration nodes it derives from. This module runs them all the same way:
 //
 // - **States.** An entry is loading, loaded, *absent* (an edge too old to serve the route answered
 //   `404`, which is an answer, not a failure) or failing. `loaded` means it has applied a body at
@@ -12,8 +12,9 @@
 //   device to pair and a `403` to sign in, as every other call does.
 // - **Revalidation.** Each read names the tag of the copy it holds, and an unchanged copy costs a
 //   bodiless `304`.
-// - **When it reads again.** On a reconnect of the live link, and on `config_applied`: only the
-//   entries that derive from the nodes the frame names, or every one where it names none.
+// - **When it reads again.** On a reconnect of the live link; on a `resync`, the live entries; and
+//   on `config_applied`, only the entries that derive from the nodes the frame names, or every one
+//   where it names none.
 // - **The boot gate.** Once the store's load starts, the till is drawn when every required entry
 //   is loaded or absent.
 //
@@ -24,11 +25,20 @@ import { createStore } from "solid-js/store";
 
 import { ApiError, revalidate } from "../api/client";
 
+// Configuration is what the store sells and how; live data is what it is doing and who is doing it
+// (the session and its permissions, the drawers, the shift, the open orders). Only configuration
+// may ever be kept on the device (ADR-0173 decision 3), so the kind is declared on every entry.
+export type EntryKind = "configuration" | "live";
+
 export interface Entry {
   // The entry's name, and the `data.name.<key>` translation key the screens show it by.
   readonly key: string;
+  readonly kind: EntryKind;
   // Where it is read.
   readonly path: () => string;
+  // A read of more than one route, in place of `path`. It names no tag, so it is always answered
+  // in full.
+  readonly read?: () => Promise<unknown>;
   // Applies a body the edge sent to the store.
   readonly apply: (body: unknown) => void;
   // Whether the till waits for it before it is drawn.
@@ -90,7 +100,10 @@ async function read(found: Entry): Promise<void> {
   timers.delete(found.key);
   setStatus(found.key, "loading", true);
   try {
-    const answer = await revalidate<unknown>(found.path(), etags.get(found.key) ?? null);
+    const answer =
+      found.read === undefined
+        ? await revalidate<unknown>(found.path(), etags.get(found.key) ?? null)
+        : { notModified: false as const, body: await found.read(), etag: null };
     if (!answer.notModified) {
       found.apply(answer.body);
       if (answer.etag === null) {
@@ -131,26 +144,41 @@ export function load(key: string): Promise<void> {
   return next;
 }
 
-// Reads every entry: the store's load at the boot gate and at sign-in, and a reconnect, where each
-// read that names a tag costs a `304` when nothing changed.
-export async function loadAll(): Promise<void> {
+// Reads every entry but those in `except`: the store's load at the boot gate and at sign-in, and a
+// reconnect, where each read that names a tag costs a `304` when nothing changed.
+export async function loadAll(except: readonly string[] = []): Promise<void> {
   setStarted(true);
-  await Promise.all(entries.map((each) => load(each.key)));
+  await Promise.all(
+    entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key)),
+  );
 }
 
-// The live link is back after a drop: everything held is read again, once the store's load has
-// started, and an unchanged copy costs a `304`.
-export async function reconnected(): Promise<void> {
+// Applies a body for `key` that was read outside the engine, as the boot gate's own read of the
+// session is, and counts the entry loaded, so the store's load need not read it again.
+export function prime(key: string, body: unknown): void {
+  const found = entry(key);
+  if (found === undefined) {
+    return;
+  }
+  found.apply(body);
+  setStatus(key, { loading: false, loaded: true, absent: false, failing: false, failures: 0 });
+}
+
+
+// The live link is back after a drop, or fell behind and cannot be replayed: everything is read
+// again, once the store's load has started, and an unchanged copy costs a `304`.
+export async function readAgain(): Promise<void> {
   if (started()) {
     await loadAll();
   }
 }
 
 // Reads what a new configuration may have changed. `changed` is the frame's `changed_nodes`: absent
-// from an edge that cannot say, which reads every entry.
+// from an edge that cannot say, which reads every entry that derives from configuration.
 export async function configApplied(changed: readonly string[] | undefined): Promise<void> {
   if (changed === undefined) {
-    await loadAll();
+    const derived = entries.filter((each) => each.nodes.length > 0 || each.unclaimedNodes === true);
+    await Promise.all(derived.map((each) => load(each.key)));
     return;
   }
   const claimed = new Set(entries.flatMap((each) => each.nodes));

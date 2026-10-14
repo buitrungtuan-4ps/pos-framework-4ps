@@ -4432,6 +4432,55 @@ test("reason codes that will not load leave the till selling, say so, and say wh
   }
 });
 
+test("open orders that will not load hold the till behind a Retry, and the Retry draws them", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const table = new URL(page.url()).pathname;
+
+    let failing = true;
+    await refuseWhile(page, "**/api/orders/live", () => failing);
+    await page.goto(`${edge.baseURL}${table}`);
+    const gate = page.locator('[data-outcome="store-loading"]');
+    await expect(gate).toContainText("Could not load: Open orders");
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+
+    failing = false;
+    await page.locator('[data-step="retryLoad"]').click();
+    await expect(gate).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeAttached();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a signed-in till that reloads reads its session once", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let reads = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/session" && request.method() === "GET") {
+        reads += 1;
+      }
+    });
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    // Every read the store's load makes has answered once the floor is drawn and the open orders
+    // are in; a second read of the session would have gone out with them.
+    await page.waitForLoadState("networkidle");
+    expect(reads, "the boot gate's read, applied, and not read again by the store's load").toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

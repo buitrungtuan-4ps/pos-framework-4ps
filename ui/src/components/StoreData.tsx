@@ -20,6 +20,10 @@ const NAMES: Record<string, MessageKey> = {
   layout: "data.name.layout",
   locale: "data.name.locale",
   reason_codes: "data.name.reason_codes",
+  session: "data.name.session",
+  drawers: "data.name.drawers",
+  shift: "data.name.shift",
+  live_orders: "data.name.live_orders",
 };
 
 // The name of a piece of store data, in the operator's language.

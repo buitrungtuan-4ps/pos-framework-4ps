@@ -7,7 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
-import { reload } from "./engine";
+import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
@@ -28,6 +28,7 @@ import type {
   DrawerOutcome,
   DrawersResponse,
   FloorResponse,
+  LiveOrder,
   LayoutResponse,
   LocaleResponse,
   ReasonCodeEntry,
@@ -1747,20 +1748,26 @@ export function reasonsFor(action: string): ReasonCodeEntry[] {
 //
 // It **merges** rather than replaces. Events can land while the request is in flight, and the fold
 // is the authority on anything newer than this snapshot; replacing wholesale would drop a line added
-// a moment ago. Forgiving like every other loader: a failed read leaves what we hold.
-export async function loadLiveOrders(): Promise<void> {
-  let orders;
-  try {
-    orders = await api.liveOrders();
-  } catch {
-    // An edge that predates this route answers 404, and a device that just paired may be asking
-    // early. Neither is worth emptying a screen over.
-    return;
-  }
-  // What the kitchen still has to make: the live orders again, plus each paid order with no table
-  // whose food no station has bumped (ADR-0161). An edge that predates the route answers 404, and
-  // the board then works from the live orders alone, as it always did.
+// a moment ago. Read through the engine (`./registry`): a failed read leaves what we hold.
+export function loadLiveOrders(): Promise<void> {
+  return load("live_orders");
+}
+
+// The live orders, and what the kitchen still has to make: the live orders again, plus each paid
+// order with no table whose food no station has bumped (ADR-0161). An edge that predates the
+// kitchen route answers 404, and the board then works from the live orders alone, as it always did.
+export interface LiveOrdersRead {
+  orders: LiveOrder[];
+  kitchen: LiveOrder[] | null;
+}
+
+export async function readLiveOrders(): Promise<LiveOrdersRead> {
+  const orders = await api.liveOrders();
   const kitchen = await api.kitchenOrders().catch(() => null);
+  return { orders, kitchen };
+}
+
+export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
   const live = new Set(orders.map((order) => order.order_id));
   const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
@@ -1832,16 +1839,15 @@ export async function loadLiveOrders(): Promise<void> {
 //
 // A shift used to live only in the browser that opened it: a reload, a second till or a tablet that
 // restarted mid-shift drew "No shift open" and offered to open one, the edge refused because one was
-// open, and nothing on screen could count or close it. Forgiving like the other loaders — an edge
-// that predates the route, or a blip, leaves whatever is held.
-export async function loadShift(): Promise<void> {
-  let response: ShiftResponse | null;
-  try {
-    response = await api.currentShift();
-  } catch {
-    return;
-  }
-  // The expectation only where the store's count is not blind (ADR-0160): a blind store is sent none.
+// open, and nothing on screen could count or close it. Read through the engine: an edge that
+// predates the route, or a blip, leaves whatever is held.
+export function loadShift(): Promise<void> {
+  return load("shift");
+}
+
+// Applies the shift the edge answered, or none. The expectation only where the store's count is
+// not blind (ADR-0160): a blind store is sent none.
+export function applyShift(response: ShiftResponse | null): void {
   replaceShift(response === null ? null : shiftInfo(response));
 }
 
@@ -1883,15 +1889,13 @@ function replaceShift(info: ShiftInfo | null): void {
   );
 }
 
-// Every drawer the store keeps (ADR-0167). Forgiving like the other loaders: an edge that predates
-// the read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
-export async function loadDrawers(): Promise<void> {
-  let response: DrawersResponse;
-  try {
-    response = await api.drawers();
-  } catch {
-    return;
-  }
+// Every drawer the store keeps (ADR-0167). Read through the engine: an edge that predates the
+// read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
+export function loadDrawers(): Promise<void> {
+  return load("drawers");
+}
+
+export function applyDrawers(response: DrawersResponse): void {
   setState("drawers", reconcile(response));
 }
 
