@@ -9,6 +9,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createUniqueId,
   For,
   type JSX,
   onCleanup,
@@ -54,7 +55,10 @@ export function Pager(props: {
 
   return (
     <Show when={props.limit > 0 && props.total > props.limit}>
-      <div class="flex items-center justify-between gap-2 text-sm text-ink-muted">
+      <nav
+        aria-label={t("table.pagination")}
+        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+      >
         <span>{t("table.range", { from: from(), to: to(), total: props.total })}</span>
         <div class="flex gap-2">
           <Button
@@ -72,7 +76,7 @@ export function Pager(props: {
             {t("table.next")}
           </Button>
         </div>
-      </div>
+      </nav>
     </Show>
   );
 }
@@ -175,6 +179,44 @@ function createIsWide() {
   query.addEventListener("change", onChange);
   onCleanup(() => query.removeEventListener("change", onChange));
   return wide;
+}
+
+/**
+ * `rows` ordered by `value`, the way a reader expects.
+ *
+ * Each row's value is read once rather than on every comparison, and text compares the way it is
+ * read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that tie
+ * keep the order they came in, because the sort is stable.
+ */
+function sortRows<T>(
+  rows: readonly T[],
+  value: (row: T) => string | number,
+  ascending: boolean,
+): readonly T[] {
+  const direction = ascending ? 1 : -1;
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const decorated = rows.map((row) => ({ row, val: value(row) }));
+  decorated.sort((a, b) => {
+    const av = a.val;
+    const bv = b.val;
+    if (typeof av === "number" && typeof bv === "number") {
+      return (av - bv) * direction;
+    }
+    return collator.compare(String(av), String(bv)) * direction;
+  });
+  return decorated.map((entry) => entry.row);
+}
+
+/**
+ * A header's `aria-sort`: the caret is `aria-hidden`, so this is what tells a screen reader which
+ * way the table is ordered. Only on the column the table is sorted by, as WAI-ARIA asks — one header
+ * at a time — and absent elsewhere.
+ */
+function ariaSort(active: boolean, ascending: boolean): "ascending" | "descending" | undefined {
+  if (!active) {
+    return undefined;
+  }
+  return ascending ? "ascending" : "descending";
 }
 
 export function DataTable<T>(props: {
@@ -284,21 +326,7 @@ export function DataTable<T>(props: {
     if (!value) {
       return base;
     }
-    const direction = ascending() ? 1 : -1;
-    // Each row's value is read once rather than on every comparison, and text compares the way it
-    // is read: numbers in order ("Table 2" before "Table 10"), case and accents set aside. Rows that
-    // tie keep the order they came in, because the sort is stable.
-    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-    const decorated = base.map((row) => ({ row, val: value(row) }));
-    decorated.sort((a, b) => {
-      const av = a.val;
-      const bv = b.val;
-      if (typeof av === "number" && typeof bv === "number") {
-        return (av - bv) * direction;
-      }
-      return collator.compare(String(av), String(bv)) * direction;
-    });
-    return decorated.map((entry) => entry.row);
+    return sortRows(base, value, ascending());
   });
 
   // Server mode needs both halves: a total to count with and a way to ask for the next page. One
@@ -422,7 +450,10 @@ export function DataTable<T>(props: {
                   <tr class="border-b border-line text-ink-muted">
                     <For each={props.columns}>
                       {(column) => (
-                        <th class={`${rowPadding()} pr-4 font-medium ${column.class ?? ""}`}>
+                        <th
+                          class={`${rowPadding()} pr-4 font-medium ${column.class ?? ""}`}
+                          aria-sort={ariaSort(sortKey() === column.key, ascending())}
+                        >
                           <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                             <button
                               type="button"
@@ -489,6 +520,8 @@ export function Modal(
     footer?: JSX.Element;
   }>,
 ) {
+  // The dialog's accessible name is its title, so a screen reader announces what opened.
+  const titleId = createUniqueId();
   useEscape(
     () => props.open,
     () => props.onClose(),
@@ -502,11 +535,12 @@ export function Modal(
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby={titleId}
           class="w-full max-w-lg rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
-            <h2 class="text-lg font-semibold text-ink">{props.title}</h2>
+            <h2 id={titleId} class="text-lg font-semibold text-ink">{props.title}</h2>
             <button
               type="button"
               aria-label={props.closeLabel}
@@ -538,6 +572,8 @@ export function Drawer(
     footer?: JSX.Element;
   }>,
 ) {
+  // The dialog's accessible name is its title, so a screen reader announces what opened.
+  const titleId = createUniqueId();
   useEscape(
     () => props.open,
     () => props.onClose(),
@@ -548,11 +584,12 @@ export function Drawer(
         <div
           role="dialog"
           aria-modal="true"
+          aria-labelledby={titleId}
           class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
-            <h2 class="text-lg font-semibold text-ink">{props.title}</h2>
+            <h2 id={titleId} class="text-lg font-semibold text-ink">{props.title}</h2>
             <button
               type="button"
               aria-label={props.closeLabel}

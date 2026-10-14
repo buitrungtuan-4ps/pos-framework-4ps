@@ -36,7 +36,7 @@
     "max-lines-per-function": 101
   },
   "src/components/kit.tsx": {
-    "max-lines-per-function": 199
+    "max-lines-per-function": 191
   },
   "src/components/ui.tsx": {
     "max-lines-per-function": 156
