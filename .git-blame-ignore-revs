@@ -61,3 +61,6 @@ b09438312281c6d14686d40b8dc854114dc93418
 
 # #789 — the console's own routes and their tests move into their own modules
 d1a5008e818ae5ce8db67d58b1e55e3030d7cb91
+
+# #790 — the registry, fleet, alert, health and subject routes and their tests move into their own modules
+c188487521b485ab1ba01d77c5c75e14213de4bd
