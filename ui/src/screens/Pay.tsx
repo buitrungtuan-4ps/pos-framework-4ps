@@ -14,6 +14,7 @@ import type {
   ReprintResponse,
 } from "../api/types";
 import { t, type MessageKey } from "../i18n";
+import { WhyUnavailable } from "../components/StoreData";
 import {
   formatQuantity,
   money,
@@ -1372,6 +1373,7 @@ export function Pay() {
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
                   disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
+                  aria-describedby="why-reasons"
                   data-step="askDiscount"
                   onClick={() => askDiscount()}
                 >
@@ -1446,11 +1448,13 @@ export function Pay() {
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
                   disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
+                  aria-describedby="why-reasons"
                   data-step="askVoidBill"
                   onClick={() => askVoidBill()}
                 >
                   {t("pay.void")}
                 </button>
+                <WhyUnavailable entry="reason_codes" id="why-reasons" />
                 </Show>
               }
             >

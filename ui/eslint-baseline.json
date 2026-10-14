@@ -18,16 +18,16 @@
     "max-lines-per-function": 363
   },
   "src/screens/Order.tsx": {
-    "max-lines": 1197,
-    "max-lines-per-function": 1140
+    "max-lines": 1200,
+    "max-lines-per-function": 1142
   },
   "src/screens/Pay.tsx": {
-    "max-lines": 1254,
-    "max-lines-per-function": 1181
+    "max-lines": 1258,
+    "max-lines-per-function": 1184
   },
   "src/screens/Shift.tsx": {
-    "max-lines": 1049,
-    "max-lines-per-function": 983
+    "max-lines": 1055,
+    "max-lines-per-function": 988
   },
   "src/screens/SignIn.tsx": {
     "max-lines-per-function": 129
@@ -39,7 +39,7 @@
     "max-lines-per-function": 166
   },
   "src/state/store.ts": {
-    "max-lines": 1627,
+    "max-lines": 1586,
     "max-lines-per-function": 311
   }
 }

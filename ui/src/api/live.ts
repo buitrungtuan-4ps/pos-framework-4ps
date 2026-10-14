@@ -31,13 +31,15 @@ export interface LiveLinkHandlers {
   onEvent: (event: ServerEvent) => void;
   onResync: () => void;
   // The edge applied a new store configuration (ADR-0160 item 7): reload what the till draws from
-  // it — the floor, the menu, the layout, the locale and the reason codes — without a new sign-in.
-  onConfigApplied: () => void;
+  // it without a new sign-in. `changedNodes` is what the edge says changed (ADR-0173), and absent
+  // from an edge that cannot say, or one too old to.
+  onConfigApplied: (changedNodes: readonly string[] | undefined) => void;
   onStatus: (status: LinkStatus) => void;
 }
 
 interface TaggedMessage {
   type?: string;
+  changed_nodes?: unknown;
   event_type?: string;
   payload?: unknown;
   stream_id?: unknown;
@@ -46,6 +48,11 @@ interface TaggedMessage {
 
 // Where this device is in the edge's fan-out: the stream it is reading and the last frame on it
 // that it applied.
+// The frame's `changed_nodes`, where it is a list of names; anything else says nothing.
+function nodesOf(sent: unknown): readonly string[] | undefined {
+  return Array.isArray(sent) && sent.every((node) => typeof node === "string") ? sent : undefined;
+}
+
 interface Position {
   streamId: string;
   sequence: number;
@@ -173,7 +180,7 @@ export class LiveLink {
       if (message.type === "event" && typeof message.event_type === "string") {
         this.#handlers.onEvent({ eventType: message.event_type, payload: message.payload });
       } else if (message.type === "config_applied") {
-        this.#handlers.onConfigApplied();
+        this.#handlers.onConfigApplied(nodesOf(message.changed_nodes));
       }
       // Recorded once the frame is applied, because the position is the last frame this device
       // has, not the last one it was sent.
