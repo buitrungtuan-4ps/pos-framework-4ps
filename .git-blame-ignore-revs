@@ -58,3 +58,6 @@ cced71c608b38ca8fb6318e57f1ba99b791ba194
 
 # #788 — the integration routes and their tests move into their own modules
 b09438312281c6d14686d40b8dc854114dc93418
+
+# #789 — the console's own routes and their tests move into their own modules
+d1a5008e818ae5ce8db67d58b1e55e3030d7cb91
