@@ -14,13 +14,13 @@
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 12230
+"crates/pos-cloud/src/http.rs" = 10411
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
 "crates/pos-cloud/src/persistence.rs" = 5750
 "crates/pos-cloud/src/scheduling.rs" = 1290
-"crates/pos-cloud/tests/cloud.rs" = 20132
+"crates/pos-cloud/tests/cloud.rs" = 18743
 "crates/pos-core/src/billing.rs" = 3800
 "crates/pos-core/src/decision.rs" = 1980
 "crates/pos-core/src/permission.rs" = 1023
@@ -65,9 +65,9 @@
 "crates/pos-cloud/src/config.rs::CloudConfig::validate" = { lines = 118, params = 1 }
 "crates/pos-cloud/src/http.rs::admin_acknowledge_region" = { lines = 117, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
-"crates/pos-cloud/src/http.rs::admin_invite_admin" = { lines = 109, params = 3 }
 "crates/pos-cloud/src/http.rs::router" = { lines = 186, params = 1 }
 "crates/pos-cloud/src/http.rs::serve_ota_artifact" = { lines = 113, params = 4 }
+"crates/pos-cloud/src/http/admin/invites.rs::admin_invite_admin" = { lines = 109, params = 3 }
 "crates/pos-cloud/src/http/catalog.rs::catalog_router" = { lines = 135, params = 4 }
 "crates/pos-cloud/src/http/catalog/publish.rs::admin_publish_menu" = { lines = 107, params = 3 }
 "crates/pos-cloud/src/http/config_nodes/store_profile.rs::admin_publish_store_profile" = { lines = 102, params = 3 }
