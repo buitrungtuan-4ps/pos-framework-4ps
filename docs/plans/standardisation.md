@@ -39,6 +39,8 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
   pull request; only uncited ADRs and citations of missing ones are committed (#710).
 - 2026-10-13 — The size baselines (Rust and ESLint) may only shrink against the merge base; a
   pull request grows one only by stating `size-baseline: grow <reason>` in its body (#714, #717).
+- 2026-10-14 — A function the Rust baseline lists may move to another file without a grow line: an
+  entry gone from one path and added under another with figures no larger is a move (phase 5).
 - 2026-10-13 — ESLint, not Biome, checks the front ends' size rules (ADR-0172, #715, #716).
 - 2026-10-13 — A CI job runs only when the change can affect it; an unknown path, a failed
   classifier, a push to `main` and the nightly run all run everything (#720).
