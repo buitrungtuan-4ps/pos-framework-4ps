@@ -436,6 +436,7 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 "close_report" => Some(json!(shift.close_report().as_wire())),
                 "drawer_day_end" => Some(json!(shift.drawer_day_end().as_wire())),
                 "variance_reason_minor" => Some(json!(shift.variance_reason_minor())),
+                "drawer_access" => Some(json!(shift.drawer_access().as_wire())),
                 _ => None,
             }
         }

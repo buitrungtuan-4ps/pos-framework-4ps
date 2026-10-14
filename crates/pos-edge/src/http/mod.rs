@@ -678,6 +678,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
         AppError::VarianceReasonRequired(_) => "VARIANCE_REASON_REQUIRED",
+        AppError::DrawerAssignedToAnother => "DRAWER_ASSIGNED_TO_ANOTHER",
+        AppError::AssigneeRequired => "ASSIGNEE_REQUIRED",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -736,6 +738,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::CashReasonNotValid
         | AppError::ShiftNotOpen
         | AppError::DrawerDayEnded
+        | AppError::DrawerAssignedToAnother
+        | AppError::AssigneeRequired
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable

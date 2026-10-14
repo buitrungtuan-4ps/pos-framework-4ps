@@ -11,13 +11,15 @@ use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
-use crate::shift::{self, CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift};
+use crate::shift::{
+    self, CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
+};
 use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum::WireEnum;
 
 use super::{
-    EVERY_RELEASE, NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, TENANT_ONLY,
-    choices,
+    Confirm, EVERY_RELEASE, NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit,
+    TENANT_ONLY, choices,
 };
 
 /// The settings on the `shift` node: whether a till sells while no shift is open, the opening float, and
@@ -81,10 +83,10 @@ pub(super) fn shift_settings() -> Vec<Setting> {
 }
 
 /// The settings on the `shift` node's cash drawers: how many the store keeps, what prints when one
-/// closes, what its business day's end does to it, and how far it may be out before its close
-/// asks why, in the register's order.
+/// closes, what its business day's end does to it, how far it may be out before its close asks
+/// why, and whether it is one person's, in the register's order.
 pub(super) fn drawer_settings() -> Vec<Setting> {
-    vec![
+    let mut settings = vec![
         Setting {
             node: PublishedShift::NODE,
             field: "drawer_model",
@@ -162,7 +164,41 @@ pub(super) fn drawer_settings() -> Vec<Setting> {
                       (`REASON_ACTION_CASH_VARIANCE`). `0` asks no reason, as before, and a store \
                       whose reason list offers none for a variance still closes.",
         },
-    ]
+    ];
+    settings.push(drawer_access_setting());
+    settings
+}
+
+/// Whether a drawer is anybody's or one person's (ADR-0167 decision 9), the one value in the
+/// register that is written only with a recorded confirmation (ADR-0169 decision 5).
+fn drawer_access_setting() -> Setting {
+    Setting {
+        node: PublishedShift::NODE,
+        field: "drawer_access",
+        shape: SettingShape::Choice {
+            values: choices::<DrawerAccess>(),
+            default: PublishedShift::default().drawer_access().as_wire(),
+            // No store is given it: it records whose a drawer's over or short is, which a
+            // tenant turns on only by confirming its notice (ADR-0169).
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        // ADR-0167 decision 9, as ADR-0169 decision 5 amends it: an employee's over or short is
+        // personal data, so the cloud writes `ASSIGNED` only with a recorded confirmation.
+        confirm: Some(Confirm {
+            value: "DRAWER_ACCESS_ASSIGNED",
+            notice: "settings.item.shift.drawer_access.confirm",
+        }),
+        summary: "Whether a drawer is anybody's or one person's. `DRAWER_ACCESS_SHARED` lets \
+                      anyone permitted take cash into any drawer, count it and close it, as \
+                      before. `DRAWER_ACCESS_ASSIGNED` makes each drawer, for its session, the \
+                      person's who starts it at their till, or the one a manager names starting it \
+                      for another till, and refuses anybody else's cash, count or close on it with \
+                      `DRAWER_ASSIGNED_TO_ANOTHER` unless they hold \
+                      `cash.drawer.override_assignment` or bring an approver who does. A card is \
+                      never refused. It is written only with a recorded confirmation (ADR-0169).",
+    }
 }
 
 /// The settings on the `session` node: when a till locks, and the staff PIN's rules, in the register's order.
