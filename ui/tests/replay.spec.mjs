@@ -4371,13 +4371,67 @@ async function refuseWhile(page, pattern, failing) {
   return refused;
 }
 
+/**
+ * Records, in the page, that someone has tapped a Retry. The engine retries a failed read on its
+ * own as well (ADR-0173), so a stub that started answering before the tap would let that backoff
+ * succeed first: the Retry would unmount under the click, and the flow would wait on a detached
+ * button. Answering only once the tap is recorded leaves the tap the one way through.
+ */
+async function watchRetryTaps(page) {
+  const watch = () => {
+    if (window.__retryWatched === true) {
+      return;
+    }
+    window.__retryWatched = true;
+    addEventListener(
+      "click",
+      (event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('[data-step="retryLoad"], [data-step="retryRead"]') !== null
+        ) {
+          window.__retryTapped = true;
+        }
+      },
+      { capture: true },
+    );
+  };
+  // Every document from now on, and the one already open: a flow that moves on by a link click
+  // never loads another.
+  await page.addInitScript(watch);
+  await page.evaluate(watch).catch(() => undefined);
+}
+
+/** Whether a Retry has been tapped in the page as it is now; a page between documents has not. */
+async function retryTapped(page) {
+  try {
+    return await page.evaluate(() => window.__retryTapped === true);
+  } catch {
+    return false;
+  }
+}
+
+/** Answers `pattern` with a 503 until a Retry is tapped, and counts how often it did. */
+async function refuseUntilRetried(page, pattern) {
+  await watchRetryTaps(page);
+  const refused = { count: 0 };
+  await page.route(pattern, async (route) => {
+    if (await retryTapped(page)) {
+      await route.continue();
+      return;
+    }
+    refused.count += 1;
+    await route.fulfill({ status: 503, body: "busy" });
+  });
+  return refused;
+}
+
 test("a price book that will not load holds the till behind a Retry, and the Retry draws it", async ({
   page,
 }) => {
   const edge = await startEdge();
   try {
-    let failing = true;
-    const refused = await refuseWhile(page, "**/api/menu", () => failing);
+    const refused = await refuseUntilRetried(page, "**/api/menu");
     await pair(page, edge);
     await signInWithoutWaiting(page, edge);
 
@@ -4386,7 +4440,6 @@ test("a price book that will not load holds the till behind a Retry, and the Ret
     await expect(page.locator('[data-outcome="floor"]')).toHaveCount(0);
     expect(refused.count).toBeGreaterThan(0);
 
-    failing = false;
     await page.locator('[data-step="retryLoad"]').click();
     await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
     await expect(gate).toHaveCount(0);
@@ -4419,8 +4472,7 @@ test("reason codes that will not load leave the till selling, say so, and say wh
 }) => {
   const edge = await startEdge();
   try {
-    let failing = true;
-    await refuseWhile(page, "**/api/reason-codes", () => failing);
+    await refuseUntilRetried(page, "**/api/reason-codes");
     await pair(page, edge);
     await signIn(page, edge);
 
@@ -4433,7 +4485,6 @@ test("reason codes that will not load leave the till selling, say so, and say wh
     await expect(page.locator("#why-reasons")).toHaveText("Could not load: Reason codes");
     await expect(voidLine).toHaveAttribute("aria-describedby", "why-reasons");
 
-    failing = false;
     await banner.locator('[data-step="retryLoad"]').click();
     await expect(banner).toHaveCount(0);
     await expect(voidLine).toBeEnabled();
@@ -4454,14 +4505,12 @@ test("open orders that will not load hold the till behind a Retry, and the Retry
     await addItem(page);
     const table = new URL(page.url()).pathname;
 
-    let failing = true;
-    await refuseWhile(page, "**/api/orders/live", () => failing);
+    await refuseUntilRetried(page, "**/api/orders/live");
     await page.goto(`${edge.baseURL}${table}`);
     const gate = page.locator('[data-outcome="store-loading"]');
     await expect(gate).toContainText("Could not load: Open orders");
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
 
-    failing = false;
     await page.locator('[data-step="retryLoad"]').click();
     await expect(gate).toHaveCount(0);
     await expect(page.locator('[data-outcome="line-added"]').first()).toBeAttached();
@@ -4497,15 +4546,13 @@ test("a screen's own read that fails says so in place, and its Retry reads again
   try {
     await pair(page, edge);
     await signIn(page, edge);
-    let failing = true;
-    const refused = await refuseWhile(page, "**/api/bills/settled", () => failing);
+    const refused = await refuseUntilRetried(page, "**/api/bills/settled");
     await navigateTo(page, "/today");
 
     const failed = page.locator('[data-outcome="read-failed"]');
     await expect(failed).toBeVisible();
     expect(refused.count).toBeGreaterThan(0);
 
-    failing = false;
     await failed.locator('[data-step="retryRead"]').click();
     await expect(failed).toHaveCount(0);
   } finally {
@@ -4517,17 +4564,15 @@ test("a store server that does not answer is not told it has no cloud", async ({
   const edge = await startEdge();
   try {
     // The app's own boot check answers first, "not activated", which keeps the browser on the
-    // setup screen; the screen's read after it is the one that is refused.
-    let failing = true;
+    // setup screen; the screen's reads after it are refused until its Retry is tapped.
+    await watchRetryTaps(page);
     let asked = 0;
     await page.route("**/api/activation", async (route) => {
       asked += 1;
-      if (asked === 1) {
+      if (asked === 1 || (await retryTapped(page))) {
         await route.fulfill({ json: { activated: false } });
-      } else if (failing) {
-        await route.fulfill({ status: 503, body: "busy" });
       } else {
-        await route.fulfill({ json: { activated: false } });
+        await route.fulfill({ status: 503, body: "busy" });
       }
     });
     await page.goto(`${edge.baseURL}/setup`);
@@ -4535,7 +4580,6 @@ test("a store server that does not answer is not told it has no cloud", async ({
     await expect(page.locator('[data-outcome="read-failed"]')).toBeVisible();
     await expect(page.getByText(/runs without a cloud/)).toHaveCount(0);
 
-    failing = false;
     await page.locator('[data-step="retryRead"]').click();
     await expect(page.locator('[data-outcome="read-failed"]')).toHaveCount(0);
     await expect(page.getByText("Checking whether this store is activated…")).toHaveCount(0);
@@ -4617,16 +4661,18 @@ test("a reload confirms the snapshot's price book before anything is sold agains
 
     // The edge cannot be reached for the price book: the snapshot's copy is never drawn, and the
     // till waits for the edge rather than sell against it.
-    let failing = true;
-    await refuseWhile(page, "**/api/menu", () => failing);
+    await refuseUntilRetried(page, "**/api/menu");
     await page.reload();
     await expect(page.locator('[data-outcome="store-loading"]')).toContainText("Could not load: Price book");
     await expect(page.locator('[data-step="onCard"]')).toHaveCount(0);
 
-    // Once it answers, the snapshot's tag is confirmed with a `304`, and the till sells.
-    failing = false;
+    // Once it answers, the snapshot's tag is confirmed with a `304`, and the till sells. The
+    // refusals before the tap are not that answer.
     const confirmed = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/menu" && new URL(response.url()).search === "",
+      (response) =>
+        new URL(response.url()).pathname === "/api/menu" &&
+        new URL(response.url()).search === "" &&
+        response.status() !== 503,
     );
     await page.locator('[data-step="retryLoad"]').click();
     const answer = await confirmed;
