@@ -30,7 +30,7 @@
 //! substantive, since a caller stitching pages together would place the returned rows at the offset
 //! it asked for, not the one it got.
 //!
-//! Note this differs from [`RollupWindow`](crate::dashboard::rollup::RollupWindow), which *clamps*
+//! Note this differs from `pos_cloud::dashboard::rollup::RollupWindow`, which *clamps*
 //! its `limit` to a maximum window of days (ADR-0081). That behaviour is unchanged and out of scope
 //! here; the rule going forward, for paged reads, is the one in this module.
 
@@ -92,7 +92,7 @@ impl PageRequest {
 /// Why a requested page is not one.
 ///
 /// An enum rather than a message, for the reason
-/// [`WindowError`](crate::dashboard::rollup::WindowError) is one: this module knows *what* is out of
+/// `pos_cloud::dashboard::rollup::WindowError` is one: this module knows *what* is out of
 /// range and only the route knows the wire names, so the field naming stays at the HTTP seam and
 /// this type grows no opinion about `details`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

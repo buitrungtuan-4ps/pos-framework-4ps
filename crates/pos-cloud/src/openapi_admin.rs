@@ -48,48 +48,8 @@
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
-/// One reason a request failed, tied to the field responsible — the schema mirror of
-/// [`pos_proto::error::ErrorDetail`].
-#[derive(utoipa::ToSchema)]
-#[expect(
-    dead_code,
-    reason = "a schema-only mirror: utoipa reads the field names and types to build the document, \
-              and nothing constructs or reads an instance"
-)]
-pub(crate) struct ErrorDetail {
-    /// The offending field, in the same `snake_case` name the request used. For a whole-request
-    /// fault this can be a header name (`if-match`) rather than a body field.
-    pub(crate) field: String,
-    /// A stable, machine-readable reason such as `MUST_BE_POSITIVE` or `INVALID_ENUM_VALUE`. Stable
-    /// so a client can branch on it; `message` is for people and may be reworded at any time.
-    pub(crate) reason: String,
-}
-
-/// The error body — the schema mirror of [`pos_proto::error::ErrorBody`].
-#[derive(utoipa::ToSchema)]
-#[expect(dead_code, reason = "a schema-only mirror, as `ErrorDetail` explains")]
-pub(crate) struct ErrorBody {
-    /// The HTTP status code, repeated here so a body is self-describing once logged.
-    pub(crate) code: u16,
-    /// The canonical status, e.g. `INVALID_ARGUMENT`, `NOT_FOUND`, `FAILED_PRECONDITION`.
-    pub(crate) status: String,
-    /// A human-readable explanation. Never contains personal data, because responses are logged.
-    pub(crate) message: String,
-    /// Field-level detail. Absent when the failure is not about a particular field.
-    pub(crate) details: Vec<ErrorDetail>,
-}
-
-/// The envelope every `/admin` failure carries — the schema mirror of
-/// [`pos_proto::error::ErrorResponse`].
-///
-/// One level of nesting so a response is unambiguous at the top level: a success body is the record,
-/// a failure body is `{"error": …}`.
-#[derive(utoipa::ToSchema)]
-#[expect(dead_code, reason = "a schema-only mirror, as `ErrorDetail` explains")]
-pub(crate) struct ErrorResponse {
-    /// The error.
-    pub(crate) error: ErrorBody,
-}
+// Schema mirrors of the error envelope, in pos-cloud-api so every route crate can name them.
+pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
 
 /// The `/admin` console API document.
 #[derive(OpenApi)]
@@ -132,8 +92,8 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_set_printer_paper,
         crate::http::admin_set_terminal_receipt,
         crate::http::admin_set_terminal_float,
-        crate::http::admin_export_revenue_fees,
-        crate::http::admin_export_revenue_tax,
+        pos_cloud_reports::revenue::admin_export_revenue_fees,
+        pos_cloud_reports::revenue::admin_export_revenue_tax,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,

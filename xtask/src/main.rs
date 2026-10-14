@@ -8,10 +8,12 @@
 
 use std::process::ExitCode;
 
+mod affected;
 mod checks;
 mod code_stats;
 mod finding;
 mod gen_docs;
+mod impact;
 
 pub use finding::Finding;
 
@@ -24,7 +26,9 @@ cargo xtask <check>
   snapshot        nothing has been removed from a committed snapshot
   migrations      migrations within a release only add
   docs-gate       a code change touches CHANGELOG.md, or says why not
-  changelog       fold changes/*.md into CHANGELOG.md [Unreleased]; --check validates them
+  changelog       fold changes/*.md into CHANGELOG.md [Unreleased]; --check validates them;
+                  --exempt [--base <ref>] prints whether the docs gate exempts the pull request
+                  (PR_AUTHOR is dependabot[bot] and it changes only manifests and lockfiles)
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
@@ -39,6 +43,16 @@ cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 
   write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
   ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+
+cargo xtask affected --classes [--base <ref>] [--all]
+
+  which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,
+  workflows, deploy), one `class=true|false` line each, for $GITHUB_OUTPUT (ADR-0171)
+
+cargo xtask impact [--base <ref>]
+
+  a report, not a check: the path classes, affected crates, snapshots, generated docs, and which
+  pull-request jobs run or skip, as Markdown for the pull-request comment (ADR-0171)
 
 cargo xtask code-stats [--json] [--root <dir>]
 
@@ -71,7 +85,21 @@ fn main() -> ExitCode {
         };
     }
 
+    if check == "changelog" && rest.iter().any(|argument| argument == "--exempt") {
+        return match checks::changelog::run_exempt(&rest) {
+            Ok(exempt) => {
+                println!("{exempt}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("xtask changelog: {error}");
+                ExitCode::from(3)
+            }
+        };
+    }
+
     let findings = match check.as_str() {
+        "affected" => affected::run(&rest),
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
@@ -80,6 +108,7 @@ fn main() -> ExitCode {
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
+        "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),

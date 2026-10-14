@@ -58,7 +58,7 @@ than the integration needs.
   presented nor a stored key leaks its secret through `Debug`. Test fixtures use an obviously-fake,
   low-entropy secret so no real key material is committed.
 - **Landed since:** the full wiring. The `store-postgres` `api_keys` table (migration `0002`) persists
-  keys and answers the lookup-by-id; the `/v1` bearer extractor ([`auth::bearer`](../../crates/pos-cloud/src/auth/bearer.rs))
+  keys and answers the lookup-by-id; the `/v1` bearer extractor ([`auth::bearer`](../../crates/pos-cloud-api/src/auth/bearer.rs))
   pulls the token, verifies it, and enforces `tenant()` + the required `Scope` on each route; and the
   key-provisioning admin surface — `POST /admin/api-keys` (mints the CSPRNG id + secret, returns the
   one-time token), `GET /admin/api-keys?tenant_id=…` (metadata only, never a secret), and

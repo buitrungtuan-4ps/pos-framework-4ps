@@ -18,6 +18,14 @@ version      = "2.42.1"
 url_linux    = "https://github.com/rui314/mold/releases/download/v{v}/mold-{v}-x86_64-linux.tar.gz"
 sha256_linux = "6ff270c9bf07d2bec5c98aa324eb7c4daf6a1a4d815c05ff1708049616047855"
 
+[cargo-nextest]
+# The test runner of the pull-request `test` job (ADR-0171 decision 2): it archives the
+# affected crates' tests once and runs them in shards. Installed by
+# .github/actions/nextest-setup from the release binary, verified against this hash.
+version      = "0.9.146"
+url_linux    = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-{v}/cargo-nextest-{v}-x86_64-unknown-linux-gnu.tar.gz"
+sha256_linux = "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"
+
 [cargo-deny]
 # Installed from source with `--locked` rather than downloaded. It is a Rust tool,
 # the toolchain is already present, and the build is cached — which avoids both a

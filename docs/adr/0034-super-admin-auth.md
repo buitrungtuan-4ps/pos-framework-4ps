@@ -20,7 +20,7 @@ subdomain.
   error), so a corrupted credential cannot become a way in.
 
 - **A mandatory TOTP second factor (RFC 6238), over HMAC-SHA1.** There is no password-only path:
-  [`authenticate`](../../crates/pos-cloud/src/auth/mod.rs) succeeds only when the password verifies
+  [`authenticate`](../../crates/pos-cloud-api/src/auth/mod.rs) succeeds only when the password verifies
   *and* a TOTP code verifies. TOTP runs over **HMAC-SHA1** — the RFC 6238 default and, decisively, the
   only algorithm the authenticator apps operators actually use compute: Google Authenticator and
   Microsoft Authenticator **ignore** the `otpauth://` URI's `algorithm` field and always assume SHA1,

@@ -8,17 +8,17 @@
 "crates/adapters/store-postgres/tests/integration.rs" = 11673
 "crates/adapters/store-sqlite/src/store.rs" = 1184
 "crates/adapters/store-sqlite/src/writer.rs" = 2521
-"crates/pos-cloud/src/auth/admin.rs" = 3468
+"crates/pos-cloud-api/src/auth/admin.rs" = 3468
+"crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud/src/catalog.rs" = 2018
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
-"crates/pos-cloud/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 38555
+"crates/pos-cloud/src/http.rs" = 37383
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
-"crates/pos-cloud/src/persistence.rs" = 6439
+"crates/pos-cloud/src/persistence.rs" = 5750
 "crates/pos-cloud/src/scheduling.rs" = 1290
 "crates/pos-cloud/src/webhook/ssrf.rs" = 1060
 "crates/pos-cloud/tests/cloud.rs" = 36890
@@ -27,7 +27,7 @@
 "crates/pos-core/src/permission.rs" = 1023
 "crates/pos-edge/src/app.rs" = 12322
 "crates/pos-edge/src/auth.rs" = 1112
-"crates/pos-edge/src/config_client.rs" = 3437
+"crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
 "crates/pos-edge/src/printing.rs" = 6410
 "crates/pos-edge/src/server.rs" = 2125
@@ -38,7 +38,6 @@
 "crates/pos-proto/src/fees.rs" = 1317
 "crates/pos-proto/src/locale.rs" = 1376
 "crates/pos-proto/src/menu.rs" = 1224
-"crates/pos-proto/src/settings.rs" = 1375
 
 [functions]
 "crates/adapters/store-postgres/src/alerts.rs::PostgresAlerts::upsert" = { lines = 41, params = 10 }
@@ -59,13 +58,13 @@
 "crates/adapters/store-postgres/src/store.rs::PostgresStore::migrate" = { lines = 347, params = 1 }
 "crates/adapters/store-sqlite/src/writer.rs::run" = { lines = 252, params = 2 }
 "crates/adapters/store-sqlite/src/writer.rs::verify_chain_chunk" = { lines = 125, params = 4 }
+"crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
 "crates/pos-cloud/src/catalog_compiler.rs::compile_layout_book" = { lines = 118, params = 3 }
 "crates/pos-cloud/src/catalog_compiler.rs::compile_menu" = { lines = 125, params = 6 }
 "crates/pos-cloud/src/config.rs::CloudConfig::validate" = { lines = 118, params = 1 }
 "crates/pos-cloud/src/http.rs::admin_acknowledge_region" = { lines = 117, params = 4 }
-"crates/pos-cloud/src/http.rs::admin_bump_lease" = { lines = 141, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_create_role" = { lines = 105, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_create_routing" = { lines = 123, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
@@ -75,14 +74,11 @@
 "crates/pos-cloud/src/http.rs::admin_publish_menu" = { lines = 107, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_store_profile" = { lines = 102, params = 3 }
 "crates/pos-cloud/src/http.rs::admin_publish_to_store_group" = { lines = 116, params = 4 }
-"crates/pos-cloud/src/http.rs::admin_schedule_release" = { lines = 229, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_set_store_group_members" = { lines = 106, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_update_employee" = { lines = 111, params = 4 }
 "crates/pos-cloud/src/http.rs::admin_upload_media" = { lines = 105, params = 4 }
-"crates/pos-cloud/src/http.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/http.rs::batch_nodes" = { lines = 42, params = 9 }
 "crates/pos-cloud/src/http.rs::catalog_router" = { lines = 135, params = 4 }
-"crates/pos-cloud/src/http.rs::checked_locale_node" = { lines = 142, params = 2 }
 "crates/pos-cloud/src/http.rs::config_release_router" = { lines = 50, params = 9 }
 "crates/pos-cloud/src/http.rs::router" = { lines = 186, params = 1 }
 "crates/pos-cloud/src/http.rs::serve_ota_artifact" = { lines = 113, params = 4 }
@@ -92,7 +88,6 @@
 "crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 126, params = 1 }
 "crates/pos-core/src/billing.rs::assemble" = { lines = 124, params = 1 }
 "crates/pos-core/src/decision.rs::decide_bill" = { lines = 103, params = 3 }
-"crates/pos-edge/src/config_client.rs::session_from_config" = { lines = 546, params = 2 }
 "crates/pos-edge/src/demo.rs::config_document" = { lines = 105, params = 0 }
 "crates/pos-edge/src/http/mod.rs::domain_router" = { lines = 224, params = 8 }
 "crates/pos-edge/src/main.rs::run" = { lines = 110, params = 2 }
@@ -106,7 +101,6 @@
 "crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
 "crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
 "crates/pos-fakes/src/store.rs::<FakeTx as TxContext>::commit" = { lines = 102, params = 1 }
-"crates/pos-proto/src/settings.rs::register" = { lines = 475, params = 0 }
 "xtask/src/checks/countries.rs::run" = { lines = 137, params = 1 }
 "xtask/src/checks/deps_rule.rs::check" = { lines = 125, params = 3 }
 "xtask/src/checks/tls_modes.rs::run" = { lines = 122, params = 1 }

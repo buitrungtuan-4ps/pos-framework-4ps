@@ -308,9 +308,11 @@ export interface PickerOption {
  * `toLocaleLowerCase` on both sides rather than `toLowerCase`: the two differ for scripts the
  * console is already translated into, and folding the query one way and the label the other is a
  * search that silently misses.
+ *
+ * `needle` arrives already folded with `toLocaleLowerCase`: the caller folds the query once per
+ * keystroke rather than once per option.
  */
-function matchesQuery(option: PickerOption, query: string): boolean {
-  const needle = query.toLocaleLowerCase();
+function matchesQuery(option: PickerOption, needle: string): boolean {
   if (option.label.toLocaleLowerCase().includes(needle)) {
     return true;
   }
@@ -376,7 +378,7 @@ export function ComboboxField(props: {
   const optionRefs: HTMLLIElement[] = [];
 
   const shown = createMemo(() => {
-    const needle = query().trim();
+    const needle = query().trim().toLocaleLowerCase();
     if (props.onSearch !== undefined || needle === "") {
       return props.options;
     }
@@ -567,7 +569,7 @@ export function MultiComboboxField(props: {
   const optionRefs: HTMLLIElement[] = [];
 
   const shown = createMemo(() => {
-    const needle = query().trim();
+    const needle = query().trim().toLocaleLowerCase();
     if (props.onSearch !== undefined || needle === "") {
       return props.options;
     }

@@ -1,0 +1,22 @@
+name: nextest-setup
+description: >
+  Install cargo-nextest from its release binary, verified against the sha256 in
+  tools/tool-versions.toml, as rust-setup installs mold. A local composite action
+  rather than a third-party one, for the same reason.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        section="$(sed -n '/^\[cargo-nextest\]/,/^\[/p' tools/tool-versions.toml)"
+        version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' <<<"$section")"
+        expected="$(sed -n 's/^sha256_linux *= *"\(.*\)"/\1/p' <<<"$section")"
+        url="$(sed -n 's/^url_linux *= *"\(.*\)"/\1/p' <<<"$section" | sed "s/{v}/$version/g")"
+        curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/nextest.tar.gz"
+        echo "$expected  $RUNNER_TEMP/nextest.tar.gz" | sha256sum -c -
+        mkdir -p "$HOME/.cargo/bin"
+        tar -C "$HOME/.cargo/bin" -xzf "$RUNNER_TEMP/nextest.tar.gz" cargo-nextest
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        "$HOME/.cargo/bin/cargo-nextest" nextest --version

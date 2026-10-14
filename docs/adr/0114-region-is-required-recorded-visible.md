@@ -397,7 +397,7 @@ Tokyo. Moving where a store's data rests and replacing the machine it rests on a
 which is why they are one request.
 
 That request already carries everything this needs: `ConsolePermission::ManageStores`
-([`console_rbac.rs`](../../crates/pos-cloud/src/auth/console_rbac.rs), the permission
+([`console_rbac.rs`](../../crates/pos-cloud-api/src/auth/console_rbac.rs), the permission
 [ADR-0108](0108-the-lease-generation-is-authority.md) put the bump behind), `If-Match` optimistic
 concurrency ([ADR-0094](0094-console-optimistic-concurrency.md)), and an audit entry.
 

@@ -56,6 +56,24 @@ fmt → clippy -D warnings → unit tests (core: no database, no network)
     → UI build
 ```
 
+**A pull request runs what it can affect** ([ADR-0171](adr/0171-ci-runs-what-a-change-affects.md)). The first job, `changes`, runs `cargo xtask affected --classes` over the files changed since the merge base. It sorts them into `rust`, `rust_all`, `ui`, `dashboard`, `shared`, `deploy`, `workflows` and `docs_only`, and each job runs only for the classes that can affect it:
+
+| Job | Runs when the change touches |
+|---|---|
+| `rules`, `secrets`, `docs-gate`, `impact` | anything (they do not wait for `changes`) |
+| `test-archive`, `test-shard`, `test-doc`, `deny`, `postgres` | Rust. `test`, the required check, always runs and passes only when the three test jobs passed, or none had anything to run |
+| `lints` | Rust or `deploy/` |
+| `build` | Rust (the build), or Rust, `deploy/` or `dashboard/` (the Windows installer checks); its steps skip rather than the job, so each matrix check still reports |
+| `ui`, `replay-build`, `replay-shard` | `ui/`, `packages/shared/` or Rust. `replay-build` builds the UI and `examples/minimal-edge` once; three `replay-shard` jobs each run a third of the flows against it (`--shard=k/3`); `replay`, the required check, always runs and passes only when they did, or none had anything to run |
+| `dashboard` | `dashboard/`, `packages/shared/`, Rust or `deploy/` |
+| `console-replay` | `dashboard/`, `packages/shared/` or Rust |
+
+`crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, the toolchain and lint configs, `.cargo/`, `.config/`, `.github/`, `xtask/` and `tools/` count as all of Rust, and a file no rule names counts as everything. A push to `main` runs everything. A job skipped this way reports success to a required check. Every job is written to run anyway if `changes` itself fails, so a broken classifier runs more, never less. Run `cargo xtask affected --classes --crates` locally to see what a branch would run.
+
+The `impact` job posts the same answer on the pull request as one comment, edited on each push rather than added again. `cargo xtask impact --base origin/main` prints it locally. It lists the path classes, the affected crates, the till and console screens whose files changed, the snapshots the change touches or the affected crates' tests check, whether `docs/generated/` is up to date, and every job with whether it runs or skips. A test in `xtask/src/impact.rs` holds its job list to `pr.yml`, so adding a job or changing a job's `if:` means changing that list too. The comment is information, not a check: posting it never fails the run, and a pull request from a fork, whose token cannot write, gets the job's step summary instead.
+
+Within those jobs, `test`, `lints` (clippy) and `build` work on the **affected crates** only. These are the crates holding a changed file, plus every crate that depends on one of them, through normal, build or dev dependencies, transitively. The list is `--workspace` when a run-everything path changed. `cargo test --doc` runs on the affected crates that have a library. A file outside a crate that a crate compiles in or its tests read (a snapshot, a generated document, the console's i18n catalogue, the edge's installer script) counts as that crate. `READ_BY` in `xtask/src/affected.rs` lists them, and a test there fails on a read it does not list.
+
 **On merge to main**
 
 ```
@@ -123,7 +141,7 @@ Nothing ships without a written trail, because the people who need it most — a
 | **Deprecations** | Listed in every release from the first announcement until removal, never fewer than two releases |
 | **Hotfix** | Branches from `release/x.y`, is cherry-picked back to `main`, and appears in both release notes |
 
-CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**` or `dashboard/**` must also add a `changes/` file (or touch `CHANGELOG.md`) or state `changelog: none` with a reason in the body, and every change file must pass `cargo xtask changelog --check`; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
+CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**` or `dashboard/**` must also add a `changes/` file (or touch `CHANGELOG.md`) or state `changelog: none` with a reason in the body (a Dependabot pull request that changes only `Cargo.toml`, `Cargo.lock`, `package.json` or `pnpm-lock.yaml` files is exempt: `cargo xtask changelog --exempt` decides), and every change file must pass `cargo xtask changelog --check`; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
 
 **Pre-tag checklist:** CI green · change files folded with `cargo xtask changelog` · protocol backwards-compatible for two versions · migrations additive · simulator soak passed · rollback runbook re-read.
 
