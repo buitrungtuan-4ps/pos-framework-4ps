@@ -28,3 +28,6 @@ e0b926e3a891eb9605e6ce4eb5cef735ea254b4e
 
 # #773 — the tax-rate and media routes and their tests move into their own modules
 ff336192c5920981fba88a889e6afd4c76359681
+
+# #775 — the campaign routes move into their own module
+56cb6c52cda6c941632d44dfe9719022b68e067b
