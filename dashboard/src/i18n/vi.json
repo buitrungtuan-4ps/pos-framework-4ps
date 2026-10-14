@@ -2361,6 +2361,7 @@
   "subjects.value": "Giá trị",
   "table.next": "Sau",
   "table.noMatch": "Không có dòng khớp.",
+  "table.pagination": "Phân trang",
   "table.prev": "Trước",
   "table.range": "{from}–{to} trên {total}",
   "table.search": "Tìm…",

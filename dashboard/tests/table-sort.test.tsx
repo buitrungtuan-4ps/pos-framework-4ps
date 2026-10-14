@@ -50,4 +50,27 @@ describe("sorting a text column", () => {
     fireEvent.click(header);
     expect(drawnNames()).toEqual(["Table 10", "table 3", "Table 2", "Phở", "pho"]);
   });
+
+  // The caret is `aria-hidden`; `aria-sort` on the header is what a screen reader announces. Only
+  // the column the table is sorted by carries it, as WAI-ARIA asks.
+  it("tells assistive technology which way the column is sorted", () => {
+    render(() => <DataTable columns={COLUMNS} rows={ROWS} empty={<p>none</p>} />);
+    const column = screen.getByRole("columnheader", { name: /Name/ });
+    const header = screen.getByRole("button", { name: /Name/ });
+    expect(column.hasAttribute("aria-sort")).toBe(false);
+    fireEvent.click(header);
+    expect(column.getAttribute("aria-sort")).toBe("ascending");
+    fireEvent.click(header);
+    expect(column.getAttribute("aria-sort")).toBe("descending");
+  });
+
+  it("leaves a header that cannot sort without aria-sort", () => {
+    const plain: readonly Column<Row>[] = [
+      { key: "name", header: "Name", cell: (row) => <span>{row.name}</span> },
+    ];
+    render(() => <DataTable columns={plain} rows={ROWS} empty={<p>none</p>} />);
+    expect(screen.getByRole("columnheader", { name: "Name" }).hasAttribute("aria-sort")).toBe(
+      false,
+    );
+  });
 });

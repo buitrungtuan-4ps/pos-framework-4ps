@@ -2361,6 +2361,7 @@
   "subjects.value": "Value",
   "table.next": "Next",
   "table.noMatch": "No matching rows.",
+  "table.pagination": "Pagination",
   "table.prev": "Previous",
   "table.range": "{from}–{to} of {total}",
   "table.search": "Search…",
