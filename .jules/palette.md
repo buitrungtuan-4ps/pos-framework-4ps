@@ -1,3 +1,8 @@
+## 2026-09-26 - Tablist Keyboard Navigation Requires PreventDefault and Explicit Focus Transfer
+
+**Learning:** When navigating tabs in a `role="tablist"` via Arrow key navigation (`ArrowLeft`/`ArrowRight`) or `Home`/`End`, browsers will default to scrolling the viewport if `event.preventDefault()` is not called on the `onKeyDown` event. Additionally, updating the state or URL signal alone does not transfer DOM focus to the target tab button; without explicit `element.focus()`, focus remains on the previously active tab element, confusing keyboard and screen reader users.
+**Action:** Always pair `event.preventDefault()` with explicit `focus()` (or queued focus update via `queueMicrotask`) when handling keyboard navigation in custom tab components.
+
 ## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
 
 **Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.

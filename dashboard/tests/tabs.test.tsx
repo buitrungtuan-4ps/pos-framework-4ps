@@ -56,7 +56,7 @@ describe("the Tabs component", () => {
     expect(onSelect).toHaveBeenCalledWith("third");
   });
 
-  it("navigates tabs via ArrowLeft and ArrowRight keys", () => {
+  it("navigates tabs via ArrowLeft and ArrowRight keys and prevents default scrolling", () => {
     const onSelect = vi.fn();
     render(() => (
       <Tabs
@@ -69,16 +69,18 @@ describe("the Tabs component", () => {
 
     const tabButtons = screen.getAllByRole("tab");
 
-    // Press ArrowRight from second tab -> selects third
-    fireEvent.keyDown(tabButtons[1]!, { key: "ArrowRight" });
+    // Press ArrowRight from second tab -> selects third and default is prevented
+    const rightEvent = fireEvent.keyDown(tabButtons[1]!, { key: "ArrowRight" });
     expect(onSelect).toHaveBeenCalledWith("third");
+    expect(rightEvent).toBe(false);
 
-    // Press ArrowLeft from second tab -> selects first
-    fireEvent.keyDown(tabButtons[1]!, { key: "ArrowLeft" });
+    // Press ArrowLeft from second tab -> selects first and default is prevented
+    const leftEvent = fireEvent.keyDown(tabButtons[1]!, { key: "ArrowLeft" });
     expect(onSelect).toHaveBeenCalledWith("first");
+    expect(leftEvent).toBe(false);
   });
 
-  it("navigates to first/last tab via Home and End keys", () => {
+  it("navigates to first/last tab via Home and End keys and prevents default scrolling", () => {
     const onSelect = vi.fn();
     render(() => (
       <Tabs
@@ -91,12 +93,14 @@ describe("the Tabs component", () => {
 
     const tabButtons = screen.getAllByRole("tab");
 
-    // Press Home key -> selects first
-    fireEvent.keyDown(tabButtons[1]!, { key: "Home" });
+    // Press Home key -> selects first and default is prevented
+    const homeEvent = fireEvent.keyDown(tabButtons[1]!, { key: "Home" });
     expect(onSelect).toHaveBeenCalledWith("first");
+    expect(homeEvent).toBe(false);
 
-    // Press End key -> selects third
-    fireEvent.keyDown(tabButtons[1]!, { key: "End" });
+    // Press End key -> selects third and default is prevented
+    const endEvent = fireEvent.keyDown(tabButtons[1]!, { key: "End" });
     expect(onSelect).toHaveBeenCalledWith("third");
+    expect(endEvent).toBe(false);
   });
 });

@@ -920,18 +920,28 @@ export function Tabs<K extends string>(props: {
   onSelect: (key: K) => void;
   label: string;
 }) {
-  const move = (from: number, step: number) => {
-    const count = props.tabs.length;
-    const next = props.tabs[(from + step + count) % count];
-    if (next) {
-      props.onSelect(next.key);
+  const tabRefs: HTMLButtonElement[] = [];
+
+  const selectAndFocus = (index: number) => {
+    const tab = props.tabs[index];
+    if (tab) {
+      props.onSelect(tab.key);
+      queueMicrotask(() => tabRefs[index]?.focus());
     }
   };
+
+  const move = (from: number, step: number) => {
+    const count = props.tabs.length;
+    const nextIndex = (from + step + count) % count;
+    selectAndFocus(nextIndex);
+  };
+
   return (
     <div role="tablist" aria-label={props.label} class="flex flex-wrap gap-1 border-b border-line">
       <For each={props.tabs}>
         {(tab, index) => (
           <button
+            ref={(el) => (tabRefs[index()] = el)}
             type="button"
             role="tab"
             aria-selected={props.active === tab.key}
@@ -942,19 +952,17 @@ export function Tabs<K extends string>(props: {
             onClick={() => props.onSelect(tab.key)}
             onKeyDown={(event) => {
               if (event.key === "ArrowRight") {
+                event.preventDefault();
                 move(index(), 1);
               } else if (event.key === "ArrowLeft") {
+                event.preventDefault();
                 move(index(), -1);
               } else if (event.key === "Home") {
-                const first = props.tabs[0];
-                if (first) {
-                  props.onSelect(first.key);
-                }
+                event.preventDefault();
+                selectAndFocus(0);
               } else if (event.key === "End") {
-                const last = props.tabs[props.tabs.length - 1];
-                if (last) {
-                  props.onSelect(last.key);
-                }
+                event.preventDefault();
+                selectAndFocus(props.tabs.length - 1);
               }
             }}
             class={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
