@@ -147,9 +147,9 @@ const PRINT_ON_SETTLE = {
 };
 
 /**
- * A setting with a value that needs a recorded confirmation (ADR-0169). The register has none until
- * `shift.drawer_access`, so this carries a key the console has no words for, and its notice falls
- * back to the key, as a title does.
+ * A setting with a value that needs a recorded confirmation (ADR-0169), of its own so these tests
+ * do not move with the register's. It carries a key the console has no words for, so its notice
+ * falls back to the key, as a title does.
  */
 const DRAWER_OWNER = {
   setting_key: "example.drawer_owner",
@@ -161,6 +161,24 @@ const DRAWER_OWNER = {
   scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
   since: "0.14.1",
   confirm: { value: "OWNER_ONE_PERSON", notice: "settings.item.example.drawer_owner.confirm" },
+};
+
+/** Whether a drawer is one person's (ADR-0167 decision 9), as the register serves it (ADR-0169). */
+const DRAWER_ACCESS = {
+  setting_key: "shift.drawer_access",
+  node: "shift",
+  field: "drawer_access",
+  kind: "SETTING_KIND_CHOICE",
+  values: ["DRAWER_ACCESS_ASSIGNED", "DRAWER_ACCESS_SHARED"],
+  default: "DRAWER_ACCESS_SHARED",
+  scopes: [
+    "SETTING_SCOPE_TENANT",
+    "SETTING_SCOPE_BRAND",
+    "SETTING_SCOPE_STORE_GROUP",
+    "SETTING_SCOPE_STORE",
+  ],
+  since: "0.14.1",
+  confirm: { value: "DRAWER_ACCESS_ASSIGNED", notice: "settings.item.shift.drawer_access.confirm" },
 };
 
 /** How far over or short a drawer may close before its close asks a reason (ADR-0167 decision 12). */
@@ -864,6 +882,29 @@ describe("shared settings", () => {
     expect(
       (screen.getByRole("button", { name: "Lưu và phát hành" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it("asks for the drawer notice in the console's words, naming the law in Vietnamese", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_ACCESS]);
+    await mount();
+    await screen.findByText("Whose a drawer is");
+    fireEvent.change(control("Value for every store"), {
+      target: { value: "DRAWER_ACCESS_ASSIGNED" },
+    });
+    expect(
+      screen.getByRole("checkbox", {
+        name: /^We have a lawful basis for recording which employee is accountable for a drawer/,
+      }),
+    ).toBeTruthy();
+    cleanup();
+
+    setLocale("vi");
+    await mount();
+    await screen.findByText("Người phụ trách ngăn kéo tiền");
+    fireEvent.change(control("Giá trị cho mọi cửa hàng"), {
+      target: { value: "DRAWER_ACCESS_ASSIGNED" },
+    });
+    expect(screen.getByRole("checkbox", { name: /Nghị định 13\/2023\/NĐ-CP/ })).toBeTruthy();
   });
 
   it("offers a role that cannot publish nothing to write with", async () => {

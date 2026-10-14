@@ -9,6 +9,7 @@
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
 mod assignment_contract;
+mod confirmed_values;
 mod employee_contract;
 mod people_republish_contract;
 
@@ -33197,6 +33198,13 @@ fn archived_group() -> StoreGroupId {
 
 /// The settings routes over fakes, with the layout above seeded.
 fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
+    settings_app_with(Arc::new(NoopAuditRecorder))
+}
+
+/// [`settings_app`], with the settings routes recording to `audit`.
+fn settings_app_with(
+    audit: Arc<dyn AuditRecorder>,
+) -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
     let admin = provisioned_admin();
     let config_trees = FakeConfigTrees::default();
     let registry = FakeRegistry::default();
@@ -33261,7 +33269,7 @@ fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
             config_trees.clone(),
             admin.clone(),
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
         ))
         // The tender publish, whose node the tip keys share (ADR-0160).
         .merge(http::config_channels_router(
