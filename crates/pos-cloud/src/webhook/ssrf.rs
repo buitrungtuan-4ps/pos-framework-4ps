@@ -451,13 +451,16 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && second == 0x0001 {
         // 2001:1::/32 PCP and TURN anycast (RFC 7723, RFC 8155), within 2001::/23 (RFC 2928).
         Some(ForbiddenReason::Reserved)
-    } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
-        // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
+    } else if first == 0x2001
+        && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020 || second & 0xfff0 == 0x0030)
+    {
+        // 2001:10::/28 (ORCHIDv1, RFC 4843), 2001:20::/28 (ORCHIDv2, RFC 7343), and 2001:30::/28 (ORCHIDv3, RFC 9389).
         Some(ForbiddenReason::Reserved)
     } else if (first == 0x2001 && second == 0x0003)
+        || (first == 0x2001 && second == 0x0005)
         || (first == 0x2001 && second == 0x0004 && third == 0x0112)
     {
-        // 2001:3::/32 AMT (RFC 7450) and 2001:4:112::/48 AS112 (RFC 7535).
+        // 2001:3::/32 AMT (RFC 7450), 2001:5::/32 LISP EID (RFC 7982), and 2001:4:112::/48 AS112 (RFC 7535).
         Some(ForbiddenReason::Reserved)
     } else {
         None
@@ -956,7 +959,7 @@ mod tests {
                 ForbiddenReason::Reserved
             ))
         );
-        // ORCHIDv1 (2001:10::/28, RFC 4843) and ORCHIDv2 (2001:20::/28, RFC 7343) IPv6 ranges.
+        // ORCHIDv1 (2001:10::/28, RFC 4843), ORCHIDv2 (2001:20::/28, RFC 7343), and ORCHIDv3 (2001:30::/28, RFC 9389) IPv6 ranges.
         assert_eq!(
             classify_ip(ip("2001:10::1")),
             Err(SsrfRejection::ForbiddenAddress(
@@ -971,11 +974,25 @@ mod tests {
                 ForbiddenReason::Reserved
             ))
         );
-        // AMT (2001:3::/32, RFC 7450) and AS112 (2001:4:112::/48, RFC 7535) IPv6 ranges.
+        assert_eq!(
+            classify_ip(ip("2001:30::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:30::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        // AMT (2001:3::/32, RFC 7450), LISP EID (2001:5::/32, RFC 7982), and AS112 (2001:4:112::/48, RFC 7535) IPv6 ranges.
         assert_eq!(
             classify_ip(ip("2001:3::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("2001:3::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:5::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:5::1"),
                 ForbiddenReason::Reserved
             ))
         );

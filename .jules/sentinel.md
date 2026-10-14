@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-04 - [SSRF IPv6 ORCHIDv3 and LISP EID Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check `2001:30::/28` (ORCHIDv3, RFC 9389) or `2001:5::/32` (LISP EID, RFC 7982) special-purpose IPv6 ranges, allowing non-globally-routable overlay/identifier IPv6 addresses to fall through `classify_v6` as public unicast destinations.
+**Learning:** ORCHIDv3 (`2001:30::/28`) extends the ORCHID cryptographic identifier family (RFC 4843, RFC 7343), and LISP EID (`2001:5::/32`) allocates locator/ID separation identifiers. These ranges represent non-routable overlays that must not be allowed as outbound webhook targets.
+**Prevention:** Check `first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020 || second & 0xfff0 == 0x0030)` (`2001:30::/28` alongside v1/v2) and `first == 0x2001 && second == 0x0005` (`2001:5::/32`) in `classify_v6` to refuse them.
