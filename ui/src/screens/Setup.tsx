@@ -2,9 +2,11 @@ import { Match, Switch, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
+import { createScreenRead, onStatus } from "../state/screen-read";
 
 // Activating the store server: the operator reads the `XXXX-XXXX-XXXX` code off the box's setup sheet
 // and enters it here. The edge exchanges it with the cloud once, keeps the device credential it gets
@@ -52,6 +54,17 @@ const RESTART_GIVE_UP_MS = 60_000;
 
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// A store server with no cloud does not mount the activation route, and answers `404`: there is
+// nothing to activate. Anything else is retried with the engine's backoff and shown in place,
+// rather than read as a box without a cloud.
+function createStandingRead(setStanding: (standing: Standing) => void) {
+  return createScreenRead(
+    () => api.activation(),
+    (state) => setStanding(state.activated ? "activated" : "needed"),
+    { handled: onStatus(404, () => setStanding("unavailable")) },
+  );
+}
+
 export function Setup() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -61,12 +74,8 @@ export function Setup() {
   const [standing, setStanding] = createSignal<Standing>("checking");
   const [busy, setBusy] = createSignal(false);
 
-  onMount(() => {
-    void api
-      .activation()
-      .then((state) => setStanding(state.activated ? "activated" : "needed"))
-      .catch(() => setStanding("unavailable"));
-  });
+  const standingRead = createStandingRead(setStanding);
+  onMount(() => void standingRead.run());
 
   const submit = async () => {
     setError(null);
@@ -107,6 +116,7 @@ export function Setup() {
       <Switch>
         <Match when={standing() === "checking"}>
           <p class="text-ink-muted">{t("setup.checking")}</p>
+          <ReadFailed read={standingRead} />
         </Match>
 
         <Match when={standing() === "restarting"}>

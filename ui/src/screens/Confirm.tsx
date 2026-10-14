@@ -2,11 +2,13 @@ import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { api } from "../api/client";
 import type { RejectReason, WaitingOrder } from "../api/types";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatAmount, tableLabel } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { can } from "../state/permissions";
+import { createScreenRead } from "../state/screen-read";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
 // (ADR-0116).
@@ -39,21 +41,18 @@ export function Confirm() {
   const explain = (caught: unknown) =>
     setError(errorMessage(caught));
 
-  const refresh = () =>
-    api
-      .awaitingConfirmation()
-      .then((waiting) => {
-        setOrders(waiting.orders);
-        setReasons(waiting.reject_reasons);
-        setError(null);
-      })
-      .catch((caught: unknown) => {
-        // A failed reload keeps what is on screen: a queue that blanked on one dropped request every
-        // fifteen seconds would be worse than one that is briefly stale. Only a first load that
-        // fails shows the empty state.
-        setOrders((current) => current ?? []);
-        explain(caught);
-      });
+  // Read every fifteen seconds, and between those with the engine's backoff after a failure. A
+  // failed reload keeps what is on screen: a queue that blanked on one dropped request would be worse
+  // than one that is briefly stale. Only a first load that fails shows the empty state.
+  const queueRead = createScreenRead(
+    () => api.awaitingConfirmation(),
+    (waiting) => {
+      setOrders(waiting.orders);
+      setReasons(waiting.reject_reasons);
+    },
+    { onFailure: () => setOrders((current) => current ?? []) },
+  );
+  const refresh = () => queueRead.run();
 
   onMount(() => {
     void refresh();
@@ -94,6 +93,7 @@ export function Confirm() {
           </p>
         )}
       </Show>
+      <ReadFailed read={queueRead} />
 
       <Show
         when={(orders() ?? []).length > 0}

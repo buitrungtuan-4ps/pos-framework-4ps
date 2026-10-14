@@ -7,10 +7,9 @@ import { can } from "../state/permissions";
 import {
   bump,
   firedLines,
-  queueNumberFor,
-  refreshQueueNumbers,
   type KitchenLine,
 } from "../state/store";
+import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
 
 interface TableGroup {
   orderId: string;

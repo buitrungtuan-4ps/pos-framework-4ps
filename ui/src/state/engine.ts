@@ -83,14 +83,14 @@ function entry(key: string): Entry | undefined {
 }
 
 // Whether the edge may answer differently if asked again.
-function retryable(error: unknown): boolean {
+export function retryable(error: unknown): boolean {
   if (!(error instanceof ApiError)) {
     return true;
   }
   return error.status >= 500 || error.status === 408 || error.status === 429;
 }
 
-function backoff(failures: number): number {
+export function backoff(failures: number): number {
   const delay = Math.min(FIRST_DELAY_MS * 2 ** (failures - 1), CEILING_MS);
   return delay * (0.8 + Math.random() * 0.4);
 }
