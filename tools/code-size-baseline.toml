@@ -20,7 +20,6 @@
 "crates/pos-cloud/src/people.rs" = 1069
 "crates/pos-cloud/src/persistence.rs" = 5750
 "crates/pos-cloud/src/scheduling.rs" = 1290
-"crates/pos-cloud/src/webhook/ssrf.rs" = 1060
 "crates/pos-cloud/tests/cloud.rs" = 36890
 "crates/pos-core/src/billing.rs" = 3800
 "crates/pos-core/src/decision.rs" = 1980
