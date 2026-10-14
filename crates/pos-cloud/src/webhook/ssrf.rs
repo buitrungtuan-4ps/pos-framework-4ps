@@ -445,9 +445,7 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         // 2001:10::/28 (ORCHIDv1, RFC 4843), 2001:20::/28 (ORCHIDv2, RFC 7343), and 2001:30::/28 (ORCHIDv3, RFC 9389).
         Some(ForbiddenReason::Reserved)
     } else if first == 0x2001
-        && (second == 0x0003
-            || second == 0x0005
-            || (second == 0x0004 && third == 0x0112))
+        && (second == 0x0003 || second == 0x0005 || (second == 0x0004 && third == 0x0112))
     {
         // 2001:3::/32 AMT (RFC 7450), 2001:5::/32 LISP EID (RFC 7982), and 2001:4:112::/48 AS112 (RFC 7535).
         Some(ForbiddenReason::Reserved)
@@ -876,12 +874,18 @@ mod tests {
         for (address, reason) in [
             // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
             ("2001:1234:5678:9abc::127.0.0.1", ForbiddenReason::Loopback),
-            ("2606:2800:220:1::169.254.169.254", ForbiddenReason::LinkLocal),
+            (
+                "2606:2800:220:1::169.254.169.254",
+                ForbiddenReason::LinkLocal,
+            ),
             // ISATAP smuggling cases (`::5efe:a.b.c.d` and with arbitrary prefixes).
             ("::5efe:127.0.0.1", ForbiddenReason::Loopback),
             ("::5efe:169.254.169.254", ForbiddenReason::LinkLocal),
             ("2001:db8::5efe:127.0.0.1", ForbiddenReason::Loopback),
-            ("2001:1234:5678:9abc:0:5efe:169.254.169.254", ForbiddenReason::LinkLocal),
+            (
+                "2001:1234:5678:9abc:0:5efe:169.254.169.254",
+                ForbiddenReason::LinkLocal,
+            ),
             // Benchmarking IPv6 range (2001:2::/48).
             ("2001:2::1", ForbiddenReason::Benchmarking),
             // Discard-Only IPv6 range (100::/64, RFC 6666).
