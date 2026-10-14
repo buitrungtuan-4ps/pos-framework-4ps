@@ -136,6 +136,17 @@ export function CatalogItems() {
     subcategories().filter((row) => row.status === "active" && row.item_category_id === newCategory()),
   );
 
+  // Optimization: Memoize options for SelectField controls using createMemo to avoid re-mapping arrays on every component re-render.
+  const taxClassOptions = createMemo(() =>
+    activeTaxClasses().map((row) => ({ value: row.tax_class_id, label: row.name })),
+  );
+  const categoryOptions = createMemo(() =>
+    activeCategories().map((row) => ({ value: row.item_category_id, label: row.name })),
+  );
+  const subcategoryOptions = createMemo(() =>
+    activeSubcategories().map((row) => ({ value: row.item_subcategory_id, label: row.name })),
+  );
+
   /**
    * Move the pager and read that window, stepping back off a window that no longer exists.
    *
@@ -541,10 +552,7 @@ export function CatalogItems() {
           <SelectField
             label={t("catalog.taxClass")}
             value={newTaxClass()}
-            options={activeTaxClasses().map((row) => ({
-              value: row.tax_class_id,
-              label: row.name,
-            }))}
+            options={taxClassOptions()}
             onChange={setNewTaxClass}
             placeholder={t("catalog.chooseTaxClass")}
             // The hint is only true when the list is empty, and it is the whole reason an operator
@@ -554,10 +562,7 @@ export function CatalogItems() {
           <SelectField
             label={t("catalog.category")}
             value={newCategory()}
-            options={activeCategories().map((row) => ({
-              value: row.item_category_id,
-              label: row.name,
-            }))}
+            options={categoryOptions()}
             onChange={(value) => {
               setNewCategory(value);
               // A subcategory belongs to one category, so the old pick cannot survive the change.
@@ -568,10 +573,7 @@ export function CatalogItems() {
           <SelectField
             label={t("catalog.subcategory")}
             value={newSubcategory()}
-            options={activeSubcategories().map((row) => ({
-              value: row.item_subcategory_id,
-              label: row.name,
-            }))}
+            options={subcategoryOptions()}
             onChange={setNewSubcategory}
             placeholder={t("catalog.noSubcategory")}
             disabled={!newCategory()}
