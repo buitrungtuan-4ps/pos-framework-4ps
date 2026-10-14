@@ -1117,7 +1117,7 @@
   "handoff.step5": "Take the old machine off the network, and revoke its key. Two boxes on one store both sell today — the lease supersedes the old one for updates, not for trading.",
   "handoff.stepsTitle": "On the new machine",
   "handoff.title": "Move this store to another machine",
-  "handoff.windowsHint": "Run in an elevated PowerShell with the binary. Lays out the update slots, writes the config, opens the listen port on the Private firewall profile, registers the service with its failure actions, and starts it.",
+  "handoff.windowsHint": "Run in an elevated PowerShell with the binary. Lays out the update slots, writes the config, opens the listen port on the Private firewall profile, registers the service with its failure actions, and starts it under its own service account, with its data readable only by that account and administrators.",
   "handoff.withoutKey": "The files below carry no key. The new machine syncs with the credential it gets when an activation code is typed on its /setup screen.",
   "hub.alerts.link": "Open alerts",
   "hub.alerts.newest": "Most recent: {summary}",

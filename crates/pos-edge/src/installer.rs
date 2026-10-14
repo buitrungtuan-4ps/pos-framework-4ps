@@ -597,17 +597,24 @@ impl BootConfirmation for SystemdInstaller {
     }
 }
 
-/// The default binary directory beside a store database: `<parent of the database>/bin`.
+/// The binary directory for a store database: `<parent of the database>/bin`, or, when the database
+/// is in a directory named `data`, the `bin` beside that directory.
 ///
 /// The service unit sets `WorkingDirectory` and `StateDirectory` to the same place and the database
 /// path is relative to it, so deriving the binary directory from the database keeps one configured
 /// path instead of two that can point at different volumes.
+///
+/// The `data` case is the Windows layout of ADR-0174: the database is in `<root>\data`, which only the
+/// service and administrators can read, and the update slots stay in `<root>\bin`. A version from
+/// before it looks in `data\bin`, finds no `current`, and does not update over the air until the
+/// installer is run again.
 #[must_use]
 pub fn binary_directory(database: &Path) -> PathBuf {
-    database
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("bin")
+    let parent = database.parent().unwrap_or_else(|| Path::new("."));
+    match (parent.file_name(), parent.parent()) {
+        (Some(name), Some(root)) if name == "data" => root.join("bin"),
+        _ => parent.join("bin"),
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -949,6 +956,24 @@ mod tests {
         assert_eq!(
             binary_directory(Path::new("store.sqlite")),
             PathBuf::from("bin"),
+        );
+    }
+
+    #[test]
+    fn the_binary_directory_sits_beside_a_data_directory() {
+        // ADR-0174's split layout: the database in `data`, the update slots beside it, not in it.
+        assert_eq!(
+            binary_directory(Path::new("/srv/pos-edge/data/store.sqlite")),
+            PathBuf::from("/srv/pos-edge/bin"),
+        );
+        assert_eq!(
+            binary_directory(Path::new("data/store.sqlite")),
+            PathBuf::from("bin"),
+        );
+        // Only a directory named exactly `data`.
+        assert_eq!(
+            binary_directory(Path::new("/var/lib/pos-edge-data/store.sqlite")),
+            PathBuf::from("/var/lib/pos-edge-data/bin"),
         );
     }
 

@@ -53,8 +53,10 @@ $script:failures = 0
 
 function global:sc.exe {
     $verb = $args[0]
+    if ($global:scene.ScFails -eq $verb) { $global:LASTEXITCODE = 5; return "[SC] $verb FAILED 5:" }
     switch ($verb) {
         'start' {
+            $global:scene.Events.Add('start')
             if ($global:scene.StartCode -ne 0) {
                 $global:LASTEXITCODE = $global:scene.StartCode
                 return "[SC] StartService FAILED $($global:scene.StartCode):"
@@ -64,13 +66,31 @@ function global:sc.exe {
             # would hide the race a real re-install hits.
             $global:scene.Started = $true
             # A promote that committed left the marker: the service now starts the carried release.
-            if (Test-Path -LiteralPath (Join-Path (Split-Path $global:scene.PairingPath) 'bin/unconfirmed')) {
+            if (Test-Path -LiteralPath (Join-Path $global:scene.Root 'bin/unconfirmed')) {
                 $global:scene.Running = $global:scene.Carried
+            }
+            # What a release that knows ADR-0174 does with the vault settings on its first start.
+            if ($global:scene.MakesVaultKey -and (Test-Path -LiteralPath (Join-Path $global:scene.Root 'data'))) {
+                Set-Content -LiteralPath (Join-Path $global:scene.Root 'data/vault.key') -Value 'protected'
+            }
+            if ($null -ne $global:scene.FirstLog -and (Test-Path -LiteralPath (Join-Path $global:scene.Root 'logs'))) {
+                Set-Content -LiteralPath (Join-Path $global:scene.Root 'logs/pos-edge.log') -Value $global:scene.FirstLog
             }
             $global:LASTEXITCODE = 0
             return '[SC] StartService SUCCESS'
         }
-        'stop' { $global:scene.Stopped = $true; $global:LASTEXITCODE = 0; return '[SC] ControlService SUCCESS' }
+        'stop' {
+            $global:scene.Stopped = $true; $global:scene.Started = $false; $global:scene.Listening = $false
+            $global:LASTEXITCODE = 0; return '[SC] ControlService SUCCESS'
+        }
+        'create' { $global:scene.Registered = $true; $global:LASTEXITCODE = 0; return '[SC] CreateService SUCCESS' }
+        'showsid' { $global:LASTEXITCODE = 0; return "NAME: pos-edge`nSERVICE SID: $($global:scene.ServiceSid)`nSTATUS: Inactive" }
+        'config' {
+            $at = [array]::IndexOf($args, 'obj=')
+            if ($at -ge 0) { $global:scene.Events.Add("account $($args[$at + 1])") }
+            $global:LASTEXITCODE = 0; return '[SC] ChangeServiceConfig SUCCESS'
+        }
+        'privs' { $global:scene.Events.Add("privs $($args[2])"); $global:LASTEXITCODE = 0; return '[SC] ChangeServiceConfig2 SUCCESS' }
         'query' { $global:LASTEXITCODE = 0; return 'SERVICE_NAME: pos-edge' }
         default { $global:LASTEXITCODE = 0; return "[SC] $verb SUCCESS" }
     }
@@ -87,6 +107,57 @@ function global:Get-Service {
 }
 
 function global:New-ItemProperty { }
+
+# The account the service runs as now, from its registry key.
+function global:Get-ItemProperty {
+    param($Path, $Name, $ErrorAction)
+    if ($null -eq $global:scene.Account) { throw 'no such property' }
+    return [pscustomobject]@{ ObjectName = $global:scene.Account }
+}
+
+# Windows' permissions, as ADR-0174 sets them once icacls has run; a scenario can make one come out
+# wrong, or give a directory another owner. Rights are the FileSystemRights bits: full, modify, read.
+function global:Get-Acl {
+    param([string] $LiteralPath)
+    $relative = [System.IO.Path]::GetRelativePath($global:scene.Root, [System.IO.Path]::GetFullPath($LiteralPath))
+    $top = ($relative -split '[\\/]')[0]
+    $service = $global:scene.ServiceSid
+    $grants = @{ 'S-1-5-18' = 0x1F01FF; 'S-1-5-32-544' = 0x1F01FF }
+    $protected = $false
+    if ($relative -eq '.') {
+        $protected = $true; $grants[$service] = 0x1200A9; $grants['S-1-5-32-545'] = 0x1200A9
+    } elseif ($top -eq 'data') {
+        $protected = $relative -eq 'data'; $grants[$service] = 0x301BF
+        if ($global:scene.AclDrift) { $grants['S-1-5-11'] = 0x1200A9 }
+    } else {
+        $grants[$service] = 0x301BF; $grants['S-1-5-32-545'] = 0x1200A9
+    }
+    $owner = if ($global:scene.ForeignOwner -eq $relative) { 'S-1-5-21-1-2-3-1001' } else { 'S-1-5-32-544' }
+    $rules = @(foreach ($sid in $grants.Keys) {
+        [pscustomobject]@{ AccessControlType = 'Allow'; IdentityReference = [pscustomobject]@{ Value = $sid }; FileSystemRights = $grants[$sid] }
+    })
+    $acl = [pscustomobject]@{ AreAccessRulesProtected = $protected; OwnerSid = $owner; Rules = $rules }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetOwner -Value { param($type) [pscustomobject]@{ Value = $this.OwnerSid } }
+    $acl | Add-Member -MemberType ScriptMethod -Name GetAccessRules -Value { param($explicit, $inherited, $type) $this.Rules }
+    return $acl
+}
+
+function global:icacls.exe {
+    $global:scene.Icacls.Add(($args -join ' '))
+    if ($global:scene.IcaclsFails) { $global:LASTEXITCODE = 5; return 'Access is denied.' }
+    $global:LASTEXITCODE = 0
+    return 'Successfully processed 1 files; Failed processing 0 files'
+}
+
+function global:secedit.exe {
+    $cfg = $args[[array]::IndexOf($args, '/cfg') + 1]
+    if ($args[0] -eq '/export') {
+        Set-Content -LiteralPath $cfg -Value @('[Privilege Rights]', 'SeCreateSymbolicLinkPrivilege = *S-1-5-32-544')
+    } else {
+        $global:scene.Events.Add('secedit ' + ((Get-Content -LiteralPath $cfg) -join ' '))
+    }
+    $global:LASTEXITCODE = 0
+}
 function global:Get-NetFirewallRule { @() }
 function global:Remove-NetFirewallRule { }
 function global:New-NetFirewallRule { }
@@ -181,11 +252,16 @@ function global:Get-Date { $global:scene.Clock }
 
 function Invoke-Scenario {
     param([string] $Name, [hashtable] $Overrides)
-    $root = Join-Path $work ($Name -replace '[^A-Za-z0-9]', '-')
+    # The installer takes its root from %ProgramData% (ADR-0174), so each scenario has its own.
+    $env:ProgramData = Join-Path $work ($Name -replace '[^A-Za-z0-9]', '-')
+    $root = Join-Path $env:ProgramData 'pos-edge'
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     $global:scene = @{
+        Root = $root; RootArg = $root; Account = 'LocalSystem'; ServiceSid = 'S-1-5-80-1-2-3-4-5'
+        MakesVaultKey = $true; FirstLog = $null; AclDrift = $false; ForeignOwner = $null; IcaclsFails = $false
+        ScFails = $null; OldLayout = $true; Icacls = [System.Collections.Generic.List[string]]::new()
         Registered = $true; Started = $false; Listening = $false; StartCode = 0; StopHangs = $false
-        Pairing = '/pair?code=222222'; PairingPath = (Join-Path $root 'pairing-url.txt')
+        Pairing = '/pair?code=222222'; PairingPath = (Join-Path $root 'data/pairing-url.txt')
         Answers = $true; AnsweringStore = $store; PortHolder = $null
         Network = 'Private'; Vpn = $null; Lan = @('192.168.1.20'); Cloud = 'ok'; ClockSkewMinutes = 0
         Running = '0.14.0'; Carried = ''; AnswersBefore = $false; Stopped = $false; Promote = 'ok'
@@ -199,20 +275,29 @@ function Invoke-Scenario {
         New-Item -ItemType Directory -Path (Join-Path $root 'bin') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $root 'bin/current') -Value 'the binary the edge installed'
     }
-    if ($global:scene.Stale) { Set-Content -LiteralPath $global:scene.PairingPath -Value '/pair?code=111111' }
+    # The layout before ADR-0174: the database, its WAL and the last run's pairing file in the root.
+    if ($global:scene.Kept -and $global:scene.OldLayout) {
+        Set-Content -LiteralPath (Join-Path $root 'store.sqlite') -Value 'the database'
+        Set-Content -LiteralPath (Join-Path $root 'store.sqlite-wal') -Value 'the last sales'
+        if ($global:scene.Stale) { Set-Content -LiteralPath (Join-Path $root 'pairing-url.txt') -Value '/pair?code=111111' }
+    } elseif ($global:scene.Stale) {
+        New-Item -ItemType Directory -Path (Join-Path $root 'data') -Force | Out-Null
+        Set-Content -LiteralPath $global:scene.PairingPath -Value '/pair?code=111111'
+    }
     if ($null -ne $global:scene.Log) { Set-Content -LiteralPath (Join-Path $root 'pos-edge.log') -Value $global:scene.Log }
 
     # A script that stops half-way is the worst outcome for a technician, so a scenario that ends in
     # an exception is kept as text for the assertions to fail on, not left to end this run.
     $env:FAKE_PROMOTE = $global:scene.Promote
     try {
-        $output = & $installer -Binary $binary -StoreId $store -CloudUrl 'https://cloud.example.com' -Root $root -OpenSetup -CarriedVersion $global:scene.Carried 6>&1 3>&1 2>&1 |
+        $output = & $installer -Binary $binary -StoreId $store -CloudUrl 'https://cloud.example.com' -Root $global:scene.RootArg -OpenSetup -CarriedVersion $global:scene.Carried 6>&1 3>&1 2>&1 |
             ForEach-Object { "$_" }
     } catch {
         $output = @("THE INSTALLER STOPPED: $($_.Exception.Message)")
     }
     return [pscustomobject]@{
-        Name = $Name; Text = ($output -join "`n"); Events = @($global:scene.Events)
+        Name = $Name; Text = ($output -join "`n"); Events = @($global:scene.Events); Root = $root
+        Icacls = @($global:scene.Icacls)
         Promoted = Test-Path -LiteralPath (Join-Path $root 'promote-calls')
         Unconfirmed = Test-Path -LiteralPath (Join-Path $root 'bin/unconfirmed')
     }
@@ -364,6 +449,68 @@ Assert-Says $r 'WARN  the old pos-edge process did not stop within 60 seconds'
 $r = Invoke-Scenario 'L advertised' @{ Pairing = 'http://10.0.0.4:8787/pair?code=333333' }
 Assert-Says $r 'http://10.0.0.4:8787/pair?code=333333'
 Assert-Silent $r '192.168.1.20:8787/pair'
+
+# P. ADR-0174: one path, the split layout, and the service's own account, with LocalSystem kept
+#    whenever a step fails. What only a real Windows can show is in gate-register row P12.
+function Get-Starts($result) { @($result.Events | Where-Object { $_ -eq 'start' }).Count }
+function Get-Account($result) { @($result.Events | Where-Object { $_ -like 'account *' }) | Select-Object -Last 1 }
+
+$r = Invoke-Scenario 'P an old box moves' @{}
+Assert-Says $r 'ok    pos-edge runs as NT SERVICE\pos-edge, and only it and administrators can read'
+Assert-True $r ((Test-Path (Join-Path $r.Root 'data/store.sqlite')) -and (Test-Path (Join-Path $r.Root 'data/store.sqlite-wal'))) 'moves the database with its WAL into data\'
+Assert-True $r (-not (Test-Path (Join-Path $r.Root 'store.sqlite'))) 'leaves no database in the root'
+Assert-True $r ((Get-Content -Raw (Join-Path $r.Root 'config.toml')) -match 'store_path = ".*data.store\.sqlite"') 'points store_path into data\'
+Assert-True $r ((Get-Starts $r) -eq 2) 'starts once as LocalSystem before the account changes'
+$first = [array]::IndexOf($r.Events, 'start')
+$switch = [array]::IndexOf($r.Events, 'account NT SERVICE\pos-edge')
+Assert-True $r ($first -ge 0 -and $switch -gt $first -and [array]::LastIndexOf($r.Events, 'start') -gt $switch) 'changes the account between the two starts'
+Assert-True $r ($r.Events -contains 'privs SeChangeNotifyPrivilege/SeCreateSymbolicLinkPrivilege') 'restricts the service to its two privileges'
+Assert-True $r (@($r.Events | Where-Object { $_ -like 'secedit *SeCreateSymbolicLinkPrivilege = `*S-1-5-32-544,`*S-1-5-80-1-2-3-4-5' }).Count -eq 1) 'grants the symbolic-link right beside whoever holds it'
+Assert-True $r (@($r.Icacls | Where-Object { $_ -like '*data /inheritance:r /grant:r*' }).Count -eq 1) 'closes data\ with inheritance off'
+
+$r = Invoke-Scenario 'P a first install' @{ Kept = $false; Stale = $false; Registered = $false; Account = $null }
+Assert-True $r ((Get-Starts $r) -eq 1) 'has no secrets to move, so starts once'
+Assert-True $r ((Get-Account $r) -eq 'account NT SERVICE\pos-edge') 'runs as its own account'
+$r = Invoke-Scenario 'P already on its own account' @{ Account = 'NT SERVICE\pos-edge'; OldLayout = $false }
+Assert-True $r ((Get-Starts $r) -eq 1) 'does not start as LocalSystem again'
+Assert-Says $r 'ok    pos-edge runs as NT SERVICE\pos-edge'
+
+$r = Invoke-Scenario 'P another root' @{ RootArg = 'C:\Users\Public\pos-edge' }
+Assert-Says $r 'THE INSTALLER STOPPED: refusing -Root C:\Users\Public\pos-edge'
+Assert-True $r (-not (Test-Path (Join-Path $r.Root 'config.toml')) -and -not (Test-Path (Join-Path $r.Root 'data'))) 'changes nothing'
+$r = Invoke-Scenario 'P data planted by a user' @{ ForeignOwner = 'data'; Stale = $true; OldLayout = $false }
+Assert-Says $r 'refusing'
+Assert-Says $r 'owned by S-1-5-21-1-2-3-1001'
+Assert-True $r (-not (Test-Path (Join-Path $r.Root 'config.toml'))) 'changes nothing'
+$link = Join-Path $work 'P-link-target'
+New-Item -ItemType Directory -Path $link -Force | Out-Null
+$env:ProgramData = Join-Path $work 'P-data-is-a-link'
+New-Item -ItemType Directory -Path (Join-Path $env:ProgramData 'pos-edge') -Force | Out-Null
+New-Item -ItemType SymbolicLink -Path (Join-Path $env:ProgramData 'pos-edge/data') -Target $link | Out-Null
+$r = Invoke-Scenario 'P data is a link' @{ Stale = $false; OldLayout = $false }
+Assert-Says $r 'is a link or junction to another place'
+
+$r = Invoke-Scenario 'P the ACL reads back wrong' @{ AclDrift = $true }
+Assert-Says $r 'FAIL  the permissions did not come out as ADR-0174 sets them'
+Assert-Says $r 'grants access to S-1-5-11'
+Assert-Says $r 'The service stays on LocalSystem'
+Assert-True $r ((Get-Account $r) -eq 'account LocalSystem') 'stays on LocalSystem'
+Assert-Says $r 'ok    pos-edge 0.14.0 is answering on port 8787'
+$r = Invoke-Scenario 'P icacls refuses' @{ IcaclsFails = $true }
+Assert-Says $r 'failed with exit code 5: Access is denied.'
+Assert-True $r ((Get-Account $r) -eq 'account LocalSystem') 'stays on LocalSystem'
+$r = Invoke-Scenario 'P sc.exe privs refuses' @{ ScFails = 'privs' }
+Assert-Says $r 'sc.exe privs pos-edge failed with exit code 5'
+Assert-True $r ((Get-Account $r) -eq 'account LocalSystem') 'puts the account back'
+$r = Invoke-Scenario 'P an old release makes no vault key' @{ MakesVaultKey = $false }
+Assert-Says $r 'FAIL  the store made no vault key'
+Assert-True $r ($r.Icacls.Count -eq 0 -and $null -eq (Get-Account $r)) 'changes no permission and no account'
+$r = Invoke-Scenario 'P a secret stays in Credential Manager' @{ FirstLog = 'WARN pos_edge::vault: could not move a secret from the OS keyring into the sealed vault' }
+Assert-Says $r 'FAIL  the store could not move every secret out of Credential Manager'
+Assert-True $r ($null -eq (Get-Account $r)) 'keeps the account'
+$r = Invoke-Scenario 'P the first start never answers' @{ Answers = $false; Pairing = $null }
+Assert-Says $r 'FAIL  the store did not answer on its first start as LocalSystem'
+Assert-True $r ($null -eq (Get-Account $r)) 'keeps the account'
 
 Remove-Item -LiteralPath $work -Recurse -Force
 Write-Host ''
