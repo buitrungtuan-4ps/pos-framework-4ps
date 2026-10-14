@@ -34,3 +34,6 @@ ff336192c5920981fba88a889e6afd4c76359681
 
 # #776 — the people routes and their tests move into their own modules
 cc96b577880f638942616eae3be801f09ebc4a86
+
+# #777 — the device routes and their tests move into their own modules
+66dabd07b530c7351044d0699d2355b5ae0974d5
