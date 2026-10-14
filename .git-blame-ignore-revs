@@ -22,3 +22,6 @@ e0b926e3a891eb9605e6ce4eb5cef735ea254b4e
 
 # #771 — the fee routes and their tests move into their own modules
 0fdb9165fc8c22a7c15fe6f9b936b56e9d059bfb
+
+# #772 — the catalog routes and their tests move into their own modules
+424714f952a9e8797b45f6b79f20b7939e380223
