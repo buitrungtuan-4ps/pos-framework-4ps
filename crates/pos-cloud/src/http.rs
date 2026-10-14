@@ -197,13 +197,15 @@ use crate::lease::{
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 
+mod authored_layer;
 mod lease_bump;
 mod locale_node;
 mod release_schedule;
 mod setting_refusal;
 mod settings_confirm;
 
-use setting_refusal::{save_if_confirmed, setting_refusal_response};
+use authored_layer::publish_authored_layer;
+use setting_refusal::{ConfirmCheck, confirmed, save_if_confirmed, setting_refusal_response};
 
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
@@ -19853,12 +19855,11 @@ where
             switch_without_people,
         };
     }
-    let version = match publish_config_nodes_with(
+    let version = match publish_nodes(
         &state.config_trees,
         &state.clock,
-        tenant_id,
-        store_id,
-        ConfigLevel::Tenant,
+        (tenant_id, store_id, ConfigLevel::Tenant),
+        ConfirmCheck::SettingsRepublish,
         |tree| {
             Ok(crate::settings::tenant_layer_nodes(
                 &tenant_layer(tree),
@@ -22285,6 +22286,24 @@ pub(crate) async fn publish_config_nodes_with<Cfg, C, F>(
     tenant_id: TenantId,
     store_id: StoreId,
     level: ConfigLevel,
+    compose: F,
+) -> Result<ConfigVersionId, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+    F: FnMut(Option<&ConfigTreeState>) -> Result<Vec<(String, serde_json::Value)>, Response>,
+{
+    let at = (tenant_id, store_id, level);
+    publish_nodes(config_trees, clock, at, ConfirmCheck::Required, compose).await
+}
+
+/// [`publish_config_nodes_with`], saying whether the write takes ADR-0169 decision 3's check. Only
+/// the settings republish skips it: every value it publishes passed decision 2 when written.
+async fn publish_nodes<Cfg, C, F>(
+    config_trees: &Cfg,
+    clock: &C,
+    (tenant_id, store_id, level): (TenantId, StoreId, ConfigLevel),
+    check: ConfirmCheck,
     mut compose: F,
 ) -> Result<ConfigVersionId, Response>
 where
@@ -22313,13 +22332,15 @@ where
         // The keys this publish set, recorded on the version so the console can say which node is
         // stale rather than only which tree is (F6).
         let node_keys: Vec<String> = nodes.iter().map(|(key, _)| key.clone()).collect();
-        check_prerequisites(&tree.effective(), &node_keys)?;
+        let before = tree.effective();
+        check_prerequisites(&before, &node_keys)?;
         let id = match tree.publish(level, layer, version_id, node_keys) {
             Ok(id) => id,
             Err(ConfigError::Invalid(violations)) => {
                 return Err(unprocessable_violations(&violations));
             }
         };
+        confirmed(check, &before, &tree.effective())?;
         match config_trees
             .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
             .await
@@ -22433,57 +22454,6 @@ fn layer_with_nodes(
         }
     }
     layer
-}
-
-/// Publishes a whole authored `layer` at `level`, refusing a write made against a stale read.
-///
-/// This is the other half of [`publish_config_nodes`], and the difference is what the caller is
-/// doing. A node publish sets one key and commutes with the others, so it retries. This one replaces
-/// a layer an operator *typed* — every key in it, including keys they never looked at — so a second
-/// writer really does destroy work. That earns a refusal the operator has to see, carrying the
-/// `ConfigVersionId` they were editing so the history screen can show them what changed.
-///
-/// Used only by `PUT /admin/config` and `POST /admin/config/versions/{id}/restore`.
-async fn publish_authored_layer<Cfg, C>(
-    config_trees: &Cfg,
-    clock: &C,
-    headers: &HeaderMap,
-    tenant_id: TenantId,
-    store_id: StoreId,
-    loaded: LoadedTree,
-    level: ConfigLevel,
-    layer: serde_json::Value,
-) -> Result<ConfigVersionId, Response>
-where
-    Cfg: ConfigTreeStore,
-    C: ClockSource,
-{
-    let mut tree = match loaded.state {
-        Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
-        None => ConfigTree::new(store_id, CapabilityValidator),
-    };
-    if_match_config(headers, tree.current_version())?;
-    let Some(version_id) = mint_version_id(clock.now().as_milliseconds_since_epoch()) else {
-        tracing::error!("could not read OS entropy to mint a config version id");
-        return Err(service_unavailable("configuration"));
-    };
-    // A typed layer names no single node, so the version records the layer's own top-level keys:
-    // that is what the operator replaced, and it is the best answer available without asking them
-    // to annotate their own JSON.
-    let node_keys: Vec<String> = layer
-        .as_object()
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default();
-    // What the store runs now, for the one check every write but the settings write takes
-    // (ADR-0169 decision 3).
-    let before = tree.effective();
-    let id = match tree.publish(level, layer, version_id, node_keys) {
-        Ok(id) => id,
-        Err(ConfigError::Invalid(violations)) => return Err(unprocessable_violations(&violations)),
-    };
-    let saved = (tenant_id, store_id, loaded.version.as_ref());
-    save_if_confirmed(config_trees, saved, &before, &tree).await?;
-    Ok(id)
 }
 
 /// The generation a lease bump's `If-Match` names, or `None` for `*`.

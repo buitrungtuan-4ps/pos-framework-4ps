@@ -9,7 +9,7 @@ use axum::response::Response;
 
 use pos_proto::ErrorStatus;
 use pos_proto::ids::{StoreId, TenantId};
-use pos_proto::settings::{ValueRefusal, register};
+use pos_proto::settings::{Setting, ValueRefusal, register};
 use serde_json::Value;
 
 use super::{api_error_with_details, config_store_error_response, version_mismatch};
@@ -61,6 +61,49 @@ pub(super) fn unconfirmed_response(
     )
 }
 
+/// Whether a write takes [`crate::confirmed_values::check`]: every write does but the settings
+/// republish, whose every value passed the settings write's own check when it was written
+/// (ADR-0169 decisions 2 and 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConfirmCheck {
+    /// A layer write, a rollback, a node publish, single or in a batch.
+    Required,
+    /// The settings republish.
+    SettingsRepublish,
+}
+
+/// [`crate::confirmed_values::check`] against the register, for a write that turns what the store
+/// runs from `before` into `after`, as the `400` to answer.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+pub(super) fn confirmed(
+    check: ConfirmCheck,
+    before: &Value,
+    after: &Value,
+) -> Result<(), Response> {
+    confirmed_against(&register(), check, before, after)
+}
+
+/// [`confirmed`] against `register`, which a test passes its own of.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn confirmed_against(
+    register: &[Setting],
+    check: ConfirmCheck,
+    before: &Value,
+    after: &Value,
+) -> Result<(), Response> {
+    if check == ConfirmCheck::SettingsRepublish {
+        return Ok(());
+    }
+    crate::confirmed_values::check(register, before, after)
+        .map_err(|unconfirmed| unconfirmed_response(&unconfirmed, None))
+}
+
 /// Saves a store's tree after a layer write or a rollback, once [`crate::confirmed_values::check`]
 /// passes against the register: `before` is what the store ran when the tree was read. Nothing is
 /// saved for a write it refuses.
@@ -78,8 +121,7 @@ where
     Cfg: ConfigTreeStore,
     V: ConfigValidator,
 {
-    crate::confirmed_values::check(&register(), before, &tree.effective())
-        .map_err(|unconfirmed| unconfirmed_response(&unconfirmed, None))?;
+    confirmed(ConfirmCheck::Required, before, &tree.effective())?;
     match config_trees
         .save(tenant_id, store_id, &tree.state(), read_at)
         .await
@@ -99,8 +141,25 @@ mod tests {
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
 
-    use super::unconfirmed_response;
+    use super::{ConfirmCheck, confirmed_against, unconfirmed_response};
     use crate::confirmed_values::Unconfirmed;
+    use crate::confirmed_values::tests::confirming_register;
+
+    /// What a node publish, single or in a batch, and the settings republish make of a write that
+    /// starts running a value that needs a recorded confirmation.
+    #[test]
+    fn a_node_publish_is_checked_and_only_the_settings_republish_is_not() {
+        let register = confirming_register();
+        let before = json!({ "example": { "drawer_owner": "OWNER_SHARED" } });
+        let after = json!({ "example": { "drawer_owner": "OWNER_ONE_PERSON" } });
+        let refused = confirmed_against(&register, ConfirmCheck::Required, &before, &after)
+            .expect_err("a node publish is refused");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            confirmed_against(&register, ConfirmCheck::SettingsRepublish, &before, &after).is_ok(),
+            "the settings republish publishes what Settings recorded"
+        );
+    }
 
     #[tokio::test]
     async fn a_write_that_would_run_an_unconfirmed_value_names_the_setting() {
