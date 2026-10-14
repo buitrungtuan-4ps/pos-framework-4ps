@@ -80,4 +80,5 @@ To find the files a change touches, start from the **[repository map](repository
 | [cloud-admin-ux-plan.md](cloud-admin-ux-plan.md) | The console overhaul plan (roadmap v2) and what it found |
 | [dependency-review-2026-09.md](dependency-review-2026-09.md) | The September 2026 assessment of every open dependency update |
 | [../AGENTS.md](../AGENTS.md) | The rules every change follows, human or AI |
+| `AGENTS.md` in [`crates/pos-core`](../crates/pos-core/AGENTS.md), [`pos-proto`](../crates/pos-proto/AGENTS.md), [`pos-edge`](../crates/pos-edge/AGENTS.md), [`pos-cloud`](../crates/pos-cloud/AGENTS.md), [`adapters`](../crates/adapters/AGENTS.md), [`ui`](../ui/AGENTS.md), [`dashboard`](../dashboard/AGENTS.md), [`xtask`](../xtask/AGENTS.md) and [`.github`](../.github/AGENTS.md) | Each directory's own rules, gates and first reads. They add to the root file and never override it |
 | [archive/README.md](archive/README.md) | The original Vietnamese design documents (`archive/vi/`): frozen, not maintained |
