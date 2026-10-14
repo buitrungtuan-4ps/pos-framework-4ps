@@ -5,7 +5,10 @@
 //
 // **Live entries are never kept on the device** (ADR-0173 decision 3): the session and its
 // permissions, the drawers (which name the person a drawer is assigned to), the shift and the open
-// orders are read from the edge every time. Only an entry of kind `configuration` may be.
+// orders are read from the edge every time. Only an entry of kind `configuration` may be, in the
+// snapshot (`./snapshot`), and the floor opts out. A price book or the money settings from the
+// snapshot are applied only once the edge confirms them; the layout and the reasons, which hold no
+// money, are drawn from it at once.
 //
 // The nodes are the top-level nodes of the store's configuration each read is built from
 // (`crates/pos-edge/src/config_client/apply.rs`). The price books also derive from settings,
@@ -50,6 +53,9 @@ const ENTRIES: readonly Entry[] = [
     apply: (body) => applyFloor(body as FloorResponse),
     required: true,
     nodes: ["floor", "stations"],
+    // Not kept: the read carries which tables are taken and since when, which is live. A copy
+    // without them would draw every table free, and a `304` could not confirm one with them.
+    persist: false,
   },
   {
     key: "menu",
@@ -91,6 +97,8 @@ const ENTRIES: readonly Entry[] = [
     apply: (body) => applyLayout(body as LayoutResponse),
     required: false,
     nodes: ["layout"],
+    // Where the buttons sit, and no price: drawn from the snapshot until the edge confirms it.
+    drawStale: true,
   },
   {
     key: "locale",
@@ -106,6 +114,8 @@ const ENTRIES: readonly Entry[] = [
     path: () => "/api/reason-codes",
     apply: (body) => applyReasonCodes(body as ReasonCodesResponse),
     required: false,
+    // Which reasons a picker offers, and no money: drawn from the snapshot until confirmed.
+    drawStale: true,
     // The reasons' names are in the store's language.
     nodes: ["reason_codes", "locale"],
   },

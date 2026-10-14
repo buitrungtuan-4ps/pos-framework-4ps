@@ -14,6 +14,7 @@ import { createSignal } from "solid-js";
 
 import type { SessionState } from "../api/client";
 import { load } from "./engine";
+import { clearSnapshot } from "./snapshot";
 import { adoptSession, forgetPermissions } from "./permissions";
 
 const [signedIn, setSignedIn] = createSignal(false);
@@ -61,4 +62,11 @@ export function lockTill(): void {
   setSignedIn(false);
   setLocked(true);
   forgetPermissions();
+}
+
+// A person signed out on this device: they hold nothing, and the store's configuration goes with
+// them (ADR-0173). The idle lock, which keeps the device in the same service, does not call this.
+export async function signedOut(): Promise<void> {
+  forgetPermissions();
+  await clearSnapshot();
 }

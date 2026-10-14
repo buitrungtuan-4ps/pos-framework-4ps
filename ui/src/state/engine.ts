@@ -16,7 +16,12 @@
 //   on `config_applied`, only the entries that derive from the nodes the frame names, or every one
 //   where it names none.
 // - **The boot gate.** Once the store's load starts, the till is drawn when every required entry
-//   is loaded or absent.
+//   is loaded or absent. *Loaded* means the edge confirmed it in this session, with a body or a
+//   `304`: a copy from the snapshot never opens the gate.
+// - **The snapshot** (`./snapshot`). A configuration entry the edge sends is kept, with its tag.
+//   At the next start its tag is sent with the first read, and its body is applied only once the
+//   edge answers `304` to that tag, so nothing is sold against a price the edge has not confirmed.
+//   An entry that holds no money (`drawStale`) is drawn from the snapshot at once, as stale.
 //
 // Nothing here knows a currency, a locale or a country: those are entries like any other.
 
@@ -24,6 +29,7 @@ import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { ApiError, revalidate } from "../api/client";
+import { type Restored, restoreSnapshot, saveSnapshot } from "./snapshot";
 
 // Configuration is what the store sells and how; live data is what it is doing and who is doing it
 // (the session and its permissions, the drawers, the shift, the open orders). Only configuration
@@ -49,11 +55,17 @@ export interface Entry {
   readonly unclaimedNodes?: boolean;
   // Read only while this holds.
   readonly when?: () => boolean;
+  // A configuration entry is kept in the snapshot unless this is `false`; a live one never is.
+  readonly persist?: boolean;
+  // Drawn from the snapshot before the edge confirms it. Only for an entry that holds no money.
+  readonly drawStale?: boolean;
 }
 
 interface Status {
   loading: boolean;
   loaded: boolean;
+  // Drawn from the snapshot, and not yet confirmed by the edge.
+  stale: boolean;
   absent: boolean;
   failing: boolean;
   failures: number;
@@ -69,12 +81,44 @@ let entries: readonly Entry[] = [];
 const etags = new Map<string, string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlight = new Map<string, Promise<void>>();
+// What the snapshot held at this start, until the edge confirms or replaces each entry.
+const restored = new Map<string, Restored>();
+let restoring: Promise<void> | null = null;
+
+function persisted(found: Entry): boolean {
+  return found.kind === "configuration" && found.persist !== false;
+}
+
+// Reads the snapshot once, before the first reads, so they can name its tags.
+function restore(): Promise<void> {
+  restoring ??= restoreSnapshot().then((held) => {
+    for (const found of entries) {
+      const copy = held.get(found.key);
+      if (copy === undefined || !persisted(found)) {
+        continue;
+      }
+      restored.set(found.key, copy);
+      if (found.drawStale === true) {
+        found.apply(copy.body);
+        setStatus(found.key, "stale", true);
+      }
+    }
+  });
+  return restoring;
+}
 
 // Declares the entries. Called once, by `./registry`.
 export function register(list: readonly Entry[]): void {
   entries = list;
   for (const entry of list) {
-    setStatus(entry.key, { loading: false, loaded: false, absent: false, failing: false, failures: 0 });
+    setStatus(entry.key, {
+      loading: false,
+      loaded: false,
+      stale: false,
+      absent: false,
+      failing: false,
+      failures: 0,
+    });
   }
 }
 
@@ -100,19 +144,40 @@ async function read(found: Entry): Promise<void> {
   timers.delete(found.key);
   setStatus(found.key, "loading", true);
   try {
+    const copy = restored.get(found.key);
+    const tag = etags.get(found.key) ?? copy?.etag ?? null;
     const answer =
       found.read === undefined
-        ? await revalidate<unknown>(found.path(), etags.get(found.key) ?? null)
+        ? await revalidate<unknown>(found.path(), tag)
         : { notModified: false as const, body: await found.read(), etag: null };
-    if (!answer.notModified) {
+    restored.delete(found.key);
+    if (answer.notModified) {
+      // The edge confirmed the snapshot's copy: apply it, unless it is already drawn.
+      if (copy !== undefined && etags.get(found.key) === undefined) {
+        etags.set(found.key, copy.etag);
+        if (status[found.key]?.stale !== true) {
+          found.apply(copy.body);
+        }
+      }
+    } else {
       found.apply(answer.body);
       if (answer.etag === null) {
         etags.delete(found.key);
       } else {
         etags.set(found.key, answer.etag);
+        if (persisted(found)) {
+          saveSnapshot(found.key, answer.etag, answer.body);
+        }
       }
     }
-    setStatus(found.key, { loading: false, loaded: true, absent: false, failing: false, failures: 0 });
+    setStatus(found.key, {
+      loading: false,
+      loaded: true,
+      stale: false,
+      absent: false,
+      failing: false,
+      failures: 0,
+    });
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       setStatus(found.key, { loading: false, absent: true, failing: false, failures: 0 });
@@ -148,6 +213,7 @@ export function load(key: string): Promise<void> {
 // reconnect, where each read that names a tag costs a `304` when nothing changed.
 export async function loadAll(except: readonly string[] = []): Promise<void> {
   setStarted(true);
+  await restore();
   await Promise.all(
     entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key)),
   );
@@ -223,17 +289,17 @@ export function waitingFor(): readonly string[] {
 }
 
 // The entries that are failing and hold nothing: what the banner names. One that loaded before and
-// failed since keeps what it has, and is retried without a word.
+// failed since keeps what it has, and is retried without a word, as is one drawn from the snapshot.
 export function notLoaded(): readonly string[] {
   return entries
-    .filter((each) => status[each.key]?.failing && !status[each.key]?.loaded)
+    .filter((each) => status[each.key]?.failing && !status[each.key]?.loaded && !status[each.key]?.stale)
     .map((each) => each.key);
 }
 
 // Why an act that needs `key` cannot be taken now, as a translation key, or `null` where it can.
 export function unavailable(key: string): "data.unavailable_failed" | "data.unavailable_loading" | null {
   const held = status[key];
-  if (held === undefined || held.loaded || held.absent || !started()) {
+  if (held === undefined || held.loaded || held.stale || held.absent || !started()) {
     return null;
   }
   return held.failing ? "data.unavailable_failed" : "data.unavailable_loading";

@@ -3,7 +3,8 @@ import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
-import { can, canAny, forgetPermissions } from "../state/permissions";
+import { can, canAny } from "../state/permissions";
+import { signedOut } from "../state/session";
 import { drawerPerTill, kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
 
 // The screens a device sees before anyone is signed in on it.
@@ -149,7 +150,7 @@ export function StatusBar() {
   // device stays paired, so the next person only signs in, and holds nothing until they have.
   const signOut = async () => {
     await api.signOut();
-    forgetPermissions();
+    await signedOut();
     window.location.replace("/signin");
   };
 
