@@ -146,8 +146,29 @@ pub struct Setting {
     /// The first release that honours the setting. A store running an earlier release is not
     /// offered it (ADR-0160 decision 5).
     pub since: &'static str,
+    /// The value, if any, that is written only with a recorded confirmation of a notice
+    /// ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)).
+    pub confirm: Option<Confirm>,
     /// What the setting decides, in one sentence.
     pub summary: &'static str,
+}
+
+/// A value of a setting that the cloud writes only when the person writing it confirms a notice,
+/// and records that they did
+/// ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+/// decision 1).
+///
+/// For a value that records something about a person, which data protection law lets a tenant do
+/// only on a lawful basis it has told its staff about. The register says which value; the notice's
+/// wording is its translation's, so nothing here names a country.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    /// The wire token that needs confirming. Never the setting's default or its preset, so a store
+    /// runs it only after somebody confirmed it.
+    pub value: &'static str,
+    /// The translation key of the sentence the person confirms,
+    /// `settings.item.<node>.<field>.confirm`.
+    pub notice: &'static str,
 }
 
 impl Setting {
@@ -217,6 +238,14 @@ impl Setting {
                 .then_some(())
                 .ok_or(ValueRefusal::NotTrueOrFalse),
         }
+    }
+
+    /// Whether writing `value` needs a recorded confirmation: whether it is the value the setting's
+    /// [`Confirm`] names. Any other value, and a setting with no `confirm`, needs none.
+    #[must_use]
+    pub fn needs_confirming(&self, value: &serde_json::Value) -> bool {
+        self.confirm
+            .is_some_and(|confirm| value.as_str() == Some(confirm.value))
     }
 
     /// What the setting takes, for the sentence a refusal says: its tokens, its bounds, or `true or
@@ -295,7 +324,8 @@ fn scalar(value: &serde_json::Value) -> String {
 /// Sorted, so the output depends on what the register holds and not on its order. A bare key, a
 /// `kind=`, a `value=` and a `scope=` line are contracts: a value stored in the cloud and an edge on
 /// an older release both rely on them. A `default=`, a `preset=`, a `since=`, and a whole number's
-/// `min=`, `max=` and `unit=` lines may change.
+/// `min=`, `max=` and `unit=` lines may change. A `confirm=` line is a contract too: dropping a
+/// confirmation takes an ADR (ADR-0169).
 #[must_use]
 pub fn render_snapshot() -> String {
     render_snapshot_of(&register())
@@ -335,6 +365,9 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
         for scope in setting.scopes {
             lines.push(format!("{key}\tscope={scope}"));
         }
+        if let Some(confirm) = setting.confirm {
+            lines.push(format!("{key}\tconfirm={}", confirm.value));
+        }
         lines.push(format!("{key}\tsince={}", setting.since));
     }
     lines.sort();
@@ -345,7 +378,9 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
          #\n\
          # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both\n\
          # rely on it, so it may be added to but never renamed or removed. A default, a preset, a\n\
-         # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.\n",
+         # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.\n\
+         # A REMOVED confirm line fails CI too: it is a value written only with a recorded\n\
+         # confirmation, and dropping that takes an ADR. ADR-0169.\n",
     );
     for line in lines {
         out.push_str(&line);
@@ -383,8 +418,17 @@ fn render_markdown_of(settings: &[Setting]) -> String {
          - **New store** is the value the console gives a store it creates, where that differs \
          from the default.\n\
          - **Honoured from** is the first release that honours the setting. A store running an \
-         earlier release ignores it.\n\n",
+         earlier release ignores it.\n",
     );
+    // Said only once a setting has such a value, so the page describes the register it prints.
+    if settings.iter().any(|setting| setting.confirm.is_some()) {
+        out.push_str(
+            "- A value marked **confirmed** is written only when the person writing it confirms \
+             a notice, and the audit trail records who confirmed it and when \
+             ([ADR-0169](adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)).\n",
+        );
+    }
+    out.push('\n');
     out.push_str(
         "| Setting | Values | Default | New store | Where it is set | Honoured from | What it decides |\n",
     );
@@ -400,6 +444,10 @@ fn render_markdown_of(settings: &[Setting]) -> String {
                 format!("{}, `{min}` to `{max}`", unit_phrase(*unit))
             }
             SettingShape::Bool { .. } => "`true`, `false`".to_owned(),
+        };
+        let values = match setting.confirm {
+            Some(confirm) => format!("{values}; `{}` is confirmed", confirm.value),
+            None => values,
         };
         let scopes = setting
             .scopes

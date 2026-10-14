@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::{
-    DOC_PATH, SNAPSHOT_PATH, Setting, SettingKind, SettingScope, SettingShape, SettingUnit,
-    ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
+    Confirm, DOC_PATH, SNAPSHOT_PATH, Setting, SettingKind, SettingScope, SettingShape,
+    SettingUnit, ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
     render_snapshot_of,
 };
 use crate::backup::{DEFAULT_INTERVAL_HOURS, PublishedBackup};
@@ -62,7 +62,28 @@ fn seconds() -> Setting {
         },
         scopes: &[SettingScope::Tenant, SettingScope::Store],
         since: "0.15.0",
+        confirm: None,
         summary: "How long to wait.",
+    }
+}
+
+/// A choice built here whose second value needs a recorded confirmation (ADR-0169).
+fn confirmed_choice() -> Setting {
+    Setting {
+        node: "example",
+        field: "drawer_owner",
+        shape: SettingShape::Choice {
+            values: vec!["OWNER_SHARED", "OWNER_ONE_PERSON"],
+            default: "OWNER_SHARED",
+            preset: None,
+        },
+        scopes: &[SettingScope::Tenant, SettingScope::Store],
+        since: "0.15.0",
+        confirm: Some(Confirm {
+            value: "OWNER_ONE_PERSON",
+            notice: "settings.item.example.drawer_owner.confirm",
+        }),
+        summary: "Whose a drawer is.",
     }
 }
 
@@ -77,6 +98,7 @@ fn switch() -> Setting {
         },
         scopes: &[SettingScope::Store],
         since: "0.15.0",
+        confirm: None,
         summary: "Whether to print.",
     }
 }
@@ -275,6 +297,31 @@ fn assert_well_formed(setting: &Setting) {
         !setting.scopes.contains(&SettingScope::Unspecified),
         "{key} names an unspecified scope"
     );
+    if let Some(confirm) = setting.confirm {
+        let value = json!(confirm.value);
+        assert_eq!(
+            setting.check(&value),
+            Ok(()),
+            "{key}: the value it confirms is not a value it takes"
+        );
+        // ADR-0169 decision 1: a store runs a confirmed value only after somebody confirmed
+        // it, so neither what a store runs unset nor what a new store is given may be one.
+        assert_ne!(
+            value,
+            setting.default_value(),
+            "{key}: the default needs confirming"
+        );
+        assert_ne!(
+            Some(value),
+            setting.preset_value(),
+            "{key}: a new store would be given a value nobody confirmed"
+        );
+        assert_eq!(
+            confirm.notice,
+            format!("settings.item.{key}.confirm"),
+            "{key}: the notice is not under the setting's own translation key"
+        );
+    }
     assert!(!setting.since.is_empty(), "{key} names no release");
     assert!(
         !setting.summary.is_empty(),
@@ -290,6 +337,65 @@ fn every_setting_has_a_default_and_a_preset_it_takes_a_scope_and_a_release() {
     // And the two built here hold to the same rules.
     assert_well_formed(&seconds());
     assert_well_formed(&switch());
+    assert_well_formed(&confirmed_choice());
+}
+
+#[test]
+#[should_panic(expected = "a new store would be given a value nobody confirmed")]
+fn a_preset_that_needs_confirming_is_not_well_formed() {
+    let mut setting = confirmed_choice();
+    setting.shape = SettingShape::Choice {
+        values: vec!["OWNER_SHARED", "OWNER_ONE_PERSON"],
+        default: "OWNER_SHARED",
+        preset: Some("OWNER_ONE_PERSON"),
+    };
+    assert_well_formed(&setting);
+}
+
+#[test]
+#[should_panic(expected = "the default needs confirming")]
+fn a_default_that_needs_confirming_is_not_well_formed() {
+    let mut setting = confirmed_choice();
+    setting.shape = SettingShape::Choice {
+        values: vec!["OWNER_SHARED", "OWNER_ONE_PERSON"],
+        default: "OWNER_ONE_PERSON",
+        preset: None,
+    };
+    assert_well_formed(&setting);
+}
+
+#[test]
+fn only_the_value_a_setting_confirms_needs_confirming() {
+    let setting = confirmed_choice();
+    assert!(setting.needs_confirming(&json!("OWNER_ONE_PERSON")));
+    assert!(!setting.needs_confirming(&json!("OWNER_SHARED")));
+    assert!(!setting.needs_confirming(&json!(1)));
+    assert!(!setting.needs_confirming(&Value::Null));
+    assert!(!seconds().needs_confirming(&json!(120)));
+    assert!(!switch().needs_confirming(&json!(false)));
+}
+
+#[test]
+fn a_confirmed_value_is_a_line_of_the_snapshot_and_marked_in_the_register() {
+    let snapshot = render_snapshot_of(&[confirmed_choice()]);
+    assert!(
+        snapshot
+            .lines()
+            .any(|line| line == "example.drawer_owner\tconfirm=OWNER_ONE_PERSON"),
+        "{snapshot}"
+    );
+    assert!(!render_snapshot_of(&[switch()]).contains("\tconfirm="));
+
+    let markdown = render_markdown_of(&[confirmed_choice()]);
+    assert!(markdown.contains(
+        "| `example.drawer_owner` | `OWNER_SHARED`, `OWNER_ONE_PERSON`; `OWNER_ONE_PERSON` is \
+         confirmed | `OWNER_SHARED` |"
+    ));
+    assert!(markdown.contains("A value marked **confirmed**"));
+    assert!(
+        !render_markdown_of(&[switch()]).contains("**confirmed**"),
+        "the page explains a confirmed value only where the register has one"
+    );
 }
 
 /// The values a test reads back through a setting's node: every token of a choice; a whole

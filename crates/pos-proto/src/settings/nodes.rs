@@ -36,6 +36,7 @@ pub(super) fn shift_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "Whether a till may seat a table, start a counter order or take a payment \
                       while no shift is open. `NO_SHIFT_SELLING_REFUSE` refuses each of them with \
                       `OPEN_SHIFT_REQUIRED` until a shift opens.",
@@ -52,6 +53,7 @@ pub(super) fn shift_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The float the Shift screen fills in when a shift opens, in the store \
                       currency's minor unit: `500000` is 500,000 đồng at a store in Vietnam. The \
                       cashier can change it before opening the shift, and the shift opens with \
@@ -68,6 +70,7 @@ pub(super) fn shift_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "Whether the count at the close of a shift is blind. On, the till says \
                       nothing about what the drawer should hold until the shift closes, so the \
                       cashier counts first. Off, the Shift screen shows the cash the drawer \
@@ -94,6 +97,7 @@ pub(super) fn drawer_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "How many cash drawers the store keeps. `DRAWER_MODEL_PER_STORE` keeps one, \
                       every till's, as before. `DRAWER_MODEL_PER_TERMINAL` keeps a drawer for each \
                       till, each started, counted and closed on its own: cash is taken only at a \
@@ -110,6 +114,7 @@ pub(super) fn drawer_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "What prints when a drawer's shift closes. `CLOSE_REPORT_PER_DRAWER` prints \
                       each drawer's report where it is closed: at the store's receipt printer, or, \
                       where the store keeps a drawer per till, at the receipt printer of the till \
@@ -129,6 +134,7 @@ pub(super) fn drawer_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "What happens to a drawer whose shift is still open once its business day \
                       has ended at the store's cutoff. `DRAWER_DAY_END_FLAG` refuses nothing, and \
                       the shift reads say the drawer's day has ended. \
@@ -148,6 +154,7 @@ pub(super) fn drawer_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "How far over or short a drawer may close, either way, before its close asks \
                       a reason, in the store currency's minor unit: `50000` is 50,000 đồng at a \
                       store in Vietnam. The till asks only after the count, so a blind close stays \
@@ -177,6 +184,7 @@ pub(super) fn session_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "A security setting: how long a till may sit with no touch, key, click or \
                       scroll before it signs its person out and locks, until their PIN opens it \
                       again on the screen they left. `0` never locks. The kitchen board, the pass \
@@ -194,6 +202,7 @@ pub(super) fn session_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "A security setting: how long a signed-in device may go unused before its \
                       sign-in lapses and it asks for a PIN again, which bounds how long a till \
                       carried off while signed in keeps trading. A store that does not set it runs \
@@ -212,6 +221,7 @@ pub(super) fn session_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "A security setting: how many wrong PINs in a row lock a person out, \
                       counted across sign-in and a manager's approval. No value switches the \
                       lockout off.",
@@ -228,6 +238,7 @@ pub(super) fn session_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "A security setting: how long a person stays locked out after too many wrong \
                       PINs. A lockout already running keeps the end it was given. No value \
                       switches the lockout off.",
@@ -245,6 +256,7 @@ pub(super) fn session_settings() -> Vec<Setting> {
             // A PIN belongs to a person, who may work at every store of the tenant.
             scopes: TENANT_ONLY,
             since: EVERY_RELEASE,
+            confirm: None,
             summary: "A security setting: the fewest digits a staff PIN may have, from 4 to 8. It \
                       applies to PINs set or reset from now on, and PINs already set keep working. \
                       It is set for the whole tenant, because a person may work at every store, and \
@@ -267,6 +279,7 @@ pub(super) fn permission_settings() -> Vec<Setting> {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
+        confirm: None,
         summary: "A security setting: whether the till decides every act with the signed-in \
                       person's own permissions. What they hold directly they do alone, what they \
                       hold with approval needs the PIN of someone who holds it directly, and \
@@ -275,8 +288,17 @@ pub(super) fn permission_settings() -> Vec<Setting> {
     }]
 }
 
-/// The settings on the `printing` node, in the register's order.
+/// The settings on the `printing` node, in the register's order: what a receipt prints, then how
+/// large the server draws a line.
 pub(super) fn printing_settings() -> Vec<Setting> {
+    let mut settings = receipt_settings();
+    settings.push(font_size_setting());
+    settings
+}
+
+/// The `printing` settings about a receipt: its languages, whether it prints on settle, and its tax
+/// components.
+fn receipt_settings() -> Vec<Setting> {
     vec![
         Setting {
             node: PublishedPrinting::NODE,
@@ -291,6 +313,7 @@ pub(super) fn printing_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The language a receipt, its copy and a pre-bill print their labels and item \
                       names in. `RECEIPT_LANGUAGE_DISPLAY` follows the store's display language. \
                       `RECEIPT_LANGUAGE_COUNTRY` is the language of the store's country, or the \
@@ -312,6 +335,7 @@ pub(super) fn printing_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "A second language a receipt, its copy and a pre-bill print in, after the \
                       first. Each label prints in both, as `Tạm tính / Subtotal`, or with the \
                       second under the first where the two do not fit on one line. An item, a \
@@ -329,6 +353,7 @@ pub(super) fn printing_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "Whether settling a bill prints the guest's receipt. Off, a settle prints \
                       nothing, and the till's print button prints a copy.",
         },
@@ -343,6 +368,7 @@ pub(super) fn printing_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "Whether a receipt, its copy and a pre-bill print each tax line's named \
                       components under its rate, such as CGST and SGST under India's GST, \
                       wherever the store's `tax` node names them. A copy prints the components \
@@ -350,21 +376,27 @@ pub(super) fn printing_settings() -> Vec<Setting> {
                       still records the components. A store whose `tax` node names none prints \
                       the same either way.",
         },
-        Setting {
-            node: PublishedPrinting::NODE,
-            field: "font_size_dots",
-            shape: SettingShape::Int {
-                min: *printing::FONT_SIZE_DOTS.start(),
-                max: *printing::FONT_SIZE_DOTS.end(),
-                unit: SettingUnit::Count,
-                default: i64::from(printing::DEFAULT_FONT_SIZE_DOTS),
-                // No store is given another value: a new store prints at 24, as every store did
-                // before the setting.
-                preset: None,
-            },
-            scopes: STORE_WIDE,
-            since: NEXT_RELEASE,
-            summary: "How large a line the printer cannot draw in its own characters is printed, \
+    ]
+}
+
+/// The `printing` setting for the size the server draws a line the printer cannot.
+fn font_size_setting() -> Setting {
+    Setting {
+        node: PublishedPrinting::NODE,
+        field: "font_size_dots",
+        shape: SettingShape::Int {
+            min: *printing::FONT_SIZE_DOTS.start(),
+            max: *printing::FONT_SIZE_DOTS.end(),
+            unit: SettingUnit::Count,
+            default: i64::from(printing::DEFAULT_FONT_SIZE_DOTS),
+            // No store is given another value: a new store prints at 24, as every store did
+            // before the setting.
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "How large a line the printer cannot draw in its own characters is printed, \
                       in printer dots per em, from 16 to 48: 24 is a comfortable receipt body at \
                       the 203 dpi most thermal printers run at. The store server draws only such \
                       lines, Vietnamese ones among them; a line the printer's own character set \
@@ -372,8 +404,7 @@ pub(super) fn printing_settings() -> Vec<Setting> {
                       text is drawn at twice it. A change applies from the next print. A box whose \
                       config.toml sets font_size_dots keeps it until this is set, and this then \
                       wins.",
-        },
-    ]
+    }
 }
 
 /// The settings on the `qr` node, in the register's order.
@@ -391,6 +422,7 @@ pub(super) fn qr_settings() -> Vec<Setting> {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
+        confirm: None,
         summary: "What a guest's QR order does at a table that already has an open order. \
                       `TABLE_ORDER_JOIN` adds its lines to that order, so the table has one order \
                       and one bill; where staff confirm a guest's order, its lines join once they \
@@ -415,6 +447,7 @@ pub(super) fn locale_settings() -> Vec<Setting> {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
+        confirm: None,
         summary: "How each tax amount and each fee rounds to the currency's minor unit: the \
                       tax of each tax class, whether prices include their tax or not, the tax on a \
                       fee, and the fee itself. `TAX_ROUNDING_HALF_UP` rounds half a unit or more \
@@ -440,6 +473,7 @@ pub(super) fn tender_key_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The first tip key the pay screen offers, as a whole percentage of the bill: \
                       `10` is ten percent. `0` hides the key. The pay screen offers its keys in \
                       order, after the key for no tip, wherever the store takes tips.",
@@ -456,6 +490,7 @@ pub(super) fn tender_key_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The second tip key the pay screen offers, as a whole percentage of the \
                       bill. `0` hides the key, and so does a percentage the first key offers.",
         },
@@ -471,6 +506,7 @@ pub(super) fn tender_key_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The third tip key the pay screen offers, as a whole percentage of the bill. \
                       `0` hides the key, and so does a percentage an earlier key offers. With no key \
                       left to offer, the pay screen shows no tip row.",
@@ -487,6 +523,7 @@ pub(super) fn tender_key_settings() -> Vec<Setting> {
             },
             scopes: STORE_WIDE,
             since: NEXT_RELEASE,
+            confirm: None,
             summary: "The most guests the pay screen offers to split a bill between evenly: it \
                       offers every number from two up to this one. `6`, as before, fits one row; \
                       above it the row scrolls sideways on a narrow screen rather than wrapping, so \
@@ -509,6 +546,7 @@ pub(super) fn counter_settings() -> Vec<Setting> {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
+        confirm: None,
         summary: "The channel an order the counter starts for a walk-in guest takes, which \
                       decides the price book it is sold from and its tax. \
                       `WALK_IN_CHANNEL_TAKEAWAY` takes every walk-in away, as before. \
@@ -535,6 +573,7 @@ pub(super) fn backup_settings() -> Vec<Setting> {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
+        confirm: None,
         summary: "How many hours apart a store ships a sealed archive of its database off the \
                       box, from 1 to 168: the most trading it can lose if its disk dies. A change \
                       applies from the next archive. No value switches archiving off. Only \

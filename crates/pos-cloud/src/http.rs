@@ -200,6 +200,7 @@ use crate::openapi::ApiDoc;
 mod lease_bump;
 mod locale_node;
 mod release_schedule;
+mod settings_confirm;
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
@@ -18818,7 +18819,7 @@ where
 /// What else it carries depends on the kind: a choice's `values`; a whole number's `min`, `max` and
 /// `unit`, which the screen bounds its input by and names in the operator's language; nothing more
 /// for a switch. `default` and `preset` are the value as the node carries it — a token, a number or
-/// a boolean.
+/// a boolean. `confirm` is a value written only with a recorded confirmation (ADR-0169).
 #[derive(Debug, Clone, serde::Serialize)]
 struct SettingCatalogueEntry {
     setting_key: String,
@@ -18838,6 +18839,8 @@ struct SettingCatalogueEntry {
     preset: Option<serde_json::Value>,
     scopes: Vec<&'static str>,
     since: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirm: Option<settings_confirm::CatalogueConfirm>,
 }
 
 impl SettingCatalogueEntry {
@@ -18862,6 +18865,9 @@ impl SettingCatalogueEntry {
             preset: setting.preset_value(),
             scopes: setting.scopes.iter().map(|scope| scope.as_wire()).collect(),
             since: setting.since,
+            confirm: setting
+                .confirm
+                .map(settings_confirm::CatalogueConfirm::from),
         }
     }
 }
@@ -18875,7 +18881,8 @@ impl SettingCatalogueEntry {
                                       takes — a choice's values, or a whole number's min, max \
                                       and unit — its default and the value a new store is given \
                                       (each as the node carries it), the scopes it may be written \
-                                      at, and the first release that honours it"),
+                                      at, the first release that honours it, and any value it \
+                                      writes only with a recorded confirmation (confirm)"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
     ),
@@ -37259,6 +37266,7 @@ mod settings_catalogue_tests {
             },
             scopes: &[SettingScope::Store],
             since: "0.15.0",
+            confirm: None,
             summary: "How long to wait.",
         }
     }
@@ -37273,6 +37281,7 @@ mod settings_catalogue_tests {
             },
             scopes: &[SettingScope::Tenant, SettingScope::Store],
             since: "0.15.0",
+            confirm: None,
             summary: "Whether to print.",
         }
     }
