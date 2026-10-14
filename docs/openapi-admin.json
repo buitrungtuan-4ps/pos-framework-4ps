@@ -396,7 +396,7 @@
             "description": "The release is scheduled, and the body is its node × store report. Every pair is `PENDING` until its instant arrives"
           },
           "400": {
-            "description": "An id is not a ULID, or the node is not one of the batchable kinds",
+            "description": "An id is not a ULID, the node is not one of the batchable kinds, or a pair would make its store run a value that needs a recorded confirmation, which it does not run now (the setting key, CONFIRMATION_REQUIRED; confirm it on Settings). Nothing is written",
             "content": {
               "application/json": {
                 "schema": {
