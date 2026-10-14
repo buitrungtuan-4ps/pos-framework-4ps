@@ -43,3 +43,6 @@ cc96b577880f638942616eae3be801f09ebc4a86
 
 # #779 — the settings and reason-code routes and their tests move into their own modules
 3a4668168d96b0aa3c59a0c626f076d69e0fdb2d
+
+# #780 — the per-store config publishes and their tests move into their own modules
+ac5ed387df46d51333366e12989d510776edabb3
