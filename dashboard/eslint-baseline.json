@@ -42,8 +42,8 @@
     "max-lines-per-function": 156
   },
   "src/installers.mjs": {
-    "max-lines": 1184,
-    "max-lines-per-function": 430
+    "max-lines": 1178,
+    "max-lines-per-function": 427
   },
   "src/screens/Activation.tsx": {
     "max-lines-per-function": 350

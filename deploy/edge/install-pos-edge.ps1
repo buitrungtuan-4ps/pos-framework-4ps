@@ -38,7 +38,7 @@
     The port the edge listens on. Defaults to 8787.
 
 .PARAMETER Root
-    Where the store's state lives.
+    Where the store's state lives: only %ProgramData%\pos-edge is accepted (ADR-0174).
 
 .PARAMETER CarriedVersion
     The release -Binary is, which the one-file installer (pos-edge install) passes. The summary
@@ -77,7 +77,7 @@ param(
 
     [switch] $AskSyncKey,
 
-    [string] $Root = 'C:\ProgramData\pos-edge'
+    [string] $Root = (Join-Path $env:ProgramData 'pos-edge')
 )
 
 Set-StrictMode -Version Latest
@@ -100,6 +100,66 @@ if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
 }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 
+# ONE PATH, AND ONLY ONE (ADR-0174). The store's state lives at %ProgramData%\pos-edge, resolved from
+# the system. -Root is still accepted so a script that passes it keeps working, but any other value
+# stops here, before anything is written: this installer resets permissions, and must never do that
+# to a directory somebody typed by mistake.
+$fixedRoot = Join-Path $env:ProgramData 'pos-edge'
+if ([System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/') -ne $fixedRoot) {
+    throw "refusing -Root $($Root): a store's state lives only at $fixedRoot (ADR-0174). Nothing was changed."
+}
+$Root = $fixedRoot
+$bin = Join-Path $Root 'bin'
+$data = Join-Path $Root 'data'
+$logs = Join-Path $Root 'logs'
+$systemSid = 'S-1-5-18'
+$adminsSid = 'S-1-5-32-544'
+$usersSid = 'S-1-5-32-545'
+
+# A directory that is a link to somewhere else, or that another account made and so can change the
+# permissions of, is refused the same way. Under ProgramData a standard user can create a folder, so
+# this is how one planted before the install is caught.
+foreach ($path in @($Root, $bin, $data, $logs)) {
+    if (-not (Test-Path -LiteralPath $path)) { continue }
+    if ((Get-Item -LiteralPath $path -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        throw "refusing $($path): it is a link or junction to another place. Remove it, then run this installer again. Nothing was changed."
+    }
+    $owner = (Get-Acl -LiteralPath $path).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($owner -ne $systemSid -and $owner -ne $adminsSid) {
+        throw "refusing $($path): it is owned by $owner, not by SYSTEM or Administrators, so another account could open it again. Remove it, then run this installer again. Nothing was changed."
+    }
+}
+
+# Every sc.exe and icacls call is checked (ADR-0174 decision 4); this is the check.
+function Assert-Exit([string] $What, [int[]] $Allow = @(0)) {
+    if ($Allow -contains $LASTEXITCODE) { return $true }
+    Add-Check 'FAIL' "$What failed with exit code $LASTEXITCODE"
+    return $false
+}
+
+# sc.exe stop returns once SCM has sent the control, not once the edge has drained, and a start sent
+# while the old process is still stopping is refused. So this waits for STOPPED, bounded.
+function Stop-Edge {
+    & sc.exe stop $service | Out-Null
+    $null = Assert-Exit "sc.exe stop $service" @(0, 1062)
+    try {
+        (Get-Service -Name $service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# SCM reports RUNNING before the edge has opened its store and bound the port; /healthz is the answer
+# that counts. Bounded, and $null when nothing answered.
+function Wait-Health([int] $Seconds) {
+    $until = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $until) {
+        try { return Invoke-RestMethod -Uri "http://127.0.0.1:$BindPort/healthz" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }
+    }
+    return $null
+}
+
 # The state directory and the update slot layout (ADR-0055 Amendment 1). `current` is what the
 # service runs and what the edge retargets on a successful update; without it the box never
 # self-updates.
@@ -111,7 +171,6 @@ $Binary = (Resolve-Path -LiteralPath $Binary).Path
 # without touching the running binary. That is what makes running this twice safe. The one
 # exception is a re-run carrying a newer release than the one running, which goes in through the
 # edge's own update steps once the service has stopped (below), never by overwriting a slot here.
-$bin = Join-Path $Root 'bin'
 New-Item -ItemType Directory -Force -Path $Root, $bin | Out-Null
 
 $current = Join-Path $bin 'current'
@@ -129,45 +188,7 @@ if ($kept) {
 # the service runs.
 Copy-Item -LiteralPath $Binary -Destination (Join-Path $Root 'pos-edge.exe') -Force
 
-# The bootstrap config: which store this is and which cloud to dial. No credential in it.
-$config = @"
-# pos_edge bootstrap configuration
-# Store:  $StoreId
-#
-# This file tells the store server WHICH store it is and WHICH cloud to dial. It carries no
-# credential — that lives in the environment file (or the OS keyring), never here.
-# Save it as config.toml beside the pos_edge binary, or point POS_EDGE_CONFIG at its path.
-
-store_id = "$StoreId"
-cloud_url = "$CloudUrl"
-
-bind = "0.0.0.0:$BindPort"
-
-# Optional — the LAN IP to advertise in the pairing QR; pin it with a DHCP reservation:
-# advertised_ip = "192.168.1.50"
-
-# Absolute on purpose. The Service Control Manager starts a service in C:\Windows\System32,
-# and a relative store_path is resolved against the working directory — so the default
-# ``store.sqlite`` would put this store's database, and the bin\ update slots beside it, under
-# System32. The systemd unit sets WorkingDirectory= and has no such problem.
-store_path = "C:\\ProgramData\\pos-edge\\store.sqlite"
-
-# Where this store publishes its committed events. Both values are the whole fleet's, not this
-# store's, and they must match the [nats] section of cloud.toml on the cloud box — which is why
-# they are generated rather than typed. The server URL is NOT here: it carries the broker token,
-# so it lives in the env file below.
-#
-# Keep this table LAST. Everything above it is a top-level key, and a commented line moved below
-# this header would be read as part of [nats] and refused at load.
-[nats]
-stream = "POS_FLEET"
-subject = "pos.fleet.events"
-
-"@
 $configPath = Join-Path $Root 'config.toml'
-# UTF-8 without a BOM: the TOML parser reads a leading BOM as part of the first key and refuses
-# the file. Set-Content -Encoding utf8 writes one on Windows PowerShell 5.1, which is what ships.
-[System.IO.File]::WriteAllText($configPath, $config, (New-Object System.Text.UTF8Encoding $false))
 
 # THE PORT, WHICH ON WINDOWS IS NOT OPEN.
 #
@@ -216,10 +237,136 @@ if (Get-Command -Name New-NetFirewallRule -ErrorAction SilentlyContinue) {
 $exists = $null -ne (Get-Service -Name $service -ErrorAction SilentlyContinue)
 if ($exists) {
     & sc.exe config $service binPath= "`"$current`"" start= auto | Out-Null
+    $null = Assert-Exit "sc.exe config $service"
 } else {
     & sc.exe create $service binPath= "`"$current`"" start= auto | Out-Null
+    $null = Assert-Exit "sc.exe create $service"
 }
 & sc.exe description $service "Pizza 4P's POS edge (store server)" | Out-Null
+$null = Assert-Exit "sc.exe description $service"
+$key = "HKLM:\SYSTEM\CurrentControlSet\Services\$service"
+
+# NOT OPTIONAL. This is the Windows counterpart of the unit's Restart=always, and without it the
+# store does not come back from an update or a crash. SCM has no always-restart setting — it has
+# failure actions, applied when a service looks like it failed:
+#
+#   * an install retargets bin\current and exits 1, which SCM reads as a failure and restarts
+#     five seconds later on the new binary. Exiting 0 would look like a deliberate stop and the
+#     shop would stay dark until somebody drove there;
+#   * an operator's `sc.exe stop` exits 0 and the service stays stopped, which is what was asked;
+#   * a failed start — unreadable config, port already bound, a database that will not open —
+#     also exits 1, so the same action retries it rather than leaving a dead service.
+#
+# reset= 86400 clears the failure count after a day, so three bad days do not exhaust the list.
+& sc.exe failure $service reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
+$null = Assert-Exit "sc.exe failure $service"
+
+# Which release this store runs, asked while the old process still answers. A re-run keeps that
+# binary unless this installer carries a newer release, which is then put in place below; an
+# older or equal one never is (ADR-0140 Amendment 1). Only an answer for this store counts: a
+# stray pos-edge for another store says nothing about what bin\current is.
+$runningBefore = $null
+if ($kept -and $exists) {
+    try {
+        $before = Invoke-RestMethod -Uri "http://127.0.0.1:$BindPort/healthz" -TimeoutSec 2
+        $beforeStore = $before.PSObject.Properties['store_id']
+        $beforeVersion = $before.PSObject.Properties['version']
+        if ($null -ne $beforeStore -and $beforeStore.Value -eq $expectedStore -and $null -ne $beforeVersion) {
+            $runningBefore = [string]$beforeVersion.Value
+        }
+    } catch {
+        $runningBefore = $null
+    }
+}
+$promote = $false
+try { $promote = $kept -and ([version][string]$installerVersion) -gt ([version][string]$runningBefore) } catch { $promote = $false }
+
+# Restart rather than start: on a re-run the service is already up on the old environment. A service
+# that has not stopped is reported and started anyway, and its files are left where they are.
+$stopped = $true
+if ($exists -and -not (Stop-Edge)) {
+    $stopped = $false
+    Add-Check 'WARN' "the old $service process did not stop within 60 seconds, so the start below may be refused. If the service is not running afterwards: sc.exe start $service"
+}
+
+# THE SPLIT LAYOUT (ADR-0174). The database, its WAL files and the pairing file go in data\, which only
+# the service and administrators can read; the log goes in logs\, which a standard-user till account
+# can still read (ADR-0117). A box installed before kept all of it in the root, so it is moved here.
+# The database moves with its WAL files or not at all: a database without its WAL loses the last
+# sales written to it. A move that fails puts back what it moved, and the store keeps its old layout.
+New-Item -ItemType Directory -Force -Path $data, $logs | Out-Null
+$storeDir = $data
+$databaseFiles = @('store.sqlite', 'store.sqlite-wal', 'store.sqlite-shm', 'store.sqlite.pre-update', 'drain-status.json')
+if (Test-Path -LiteralPath (Join-Path $data 'store.sqlite')) {
+    if (Test-Path -LiteralPath (Join-Path $Root 'store.sqlite')) {
+        Add-Check 'WARN' "an older database is still at $Root\store.sqlite; the store uses the one in $data. Delete the old one once you are sure nothing in it is missing."
+    }
+} elseif (-not $stopped) {
+    $storeDir = $Root
+    Add-Check 'FAIL' "the database stays in $Root, because the old process had not stopped and its files are open. Run this installer again once sc.exe query $service says STOPPED."
+} else {
+    $moved = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($name in $databaseFiles) {
+            $from = Join-Path $Root $name
+            if (-not (Test-Path -LiteralPath $from)) { continue }
+            if (Test-Path -LiteralPath (Join-Path $data $name)) { throw "$data already has a $name" }
+            Move-Item -LiteralPath $from -Destination (Join-Path $data $name)
+            $moved.Add($name)
+        }
+    } catch {
+        foreach ($name in $moved) { Move-Item -LiteralPath (Join-Path $data $name) -Destination (Join-Path $Root $name) -ErrorAction SilentlyContinue }
+        $storeDir = $Root
+        Add-Check 'FAIL' "could not move the database into $data ($($_.Exception.Message)), so it stays in $Root and the service stays on LocalSystem. Run this installer again once that is fixed."
+    }
+}
+foreach ($name in @('pos-edge.log', 'pos-edge.log.1')) {
+    $from = Join-Path $Root $name
+    if (Test-Path -LiteralPath $from) { Move-Item -LiteralPath $from -Destination (Join-Path $logs $name) -Force -ErrorAction SilentlyContinue }
+}
+# The old pairing file names a code only the stopped process could redeem.
+Remove-Item -LiteralPath (Join-Path $Root 'pairing-url.txt') -Force -ErrorAction SilentlyContinue
+# TOML doubles the separator.
+$storeToml = (Join-Path $storeDir 'store.sqlite').Replace('\', '\\')
+
+# The bootstrap config: which store this is and which cloud to dial. No credential in it.
+$config = @"
+# pos_edge bootstrap configuration
+# Store:  $StoreId
+#
+# This file tells the store server WHICH store it is and WHICH cloud to dial. It carries no
+# credential — that lives in the environment file (or the OS keyring), never here.
+# Save it as config.toml beside the pos_edge binary, or point POS_EDGE_CONFIG at its path.
+
+store_id = "$StoreId"
+cloud_url = "$CloudUrl"
+
+bind = "0.0.0.0:$BindPort"
+
+# Optional — the LAN IP to advertise in the pairing QR; pin it with a DHCP reservation:
+# advertised_ip = "192.168.1.50"
+
+# Absolute on purpose. The Service Control Manager starts a service in C:\Windows\System32,
+# and a relative store_path is resolved against the working directory — so the default
+# ``store.sqlite`` would put this store's database, and the bin\ update slots beside it, under
+# System32. The systemd unit sets WorkingDirectory= and has no such problem.
+store_path = "$storeToml"
+
+# Where this store publishes its committed events. Both values are the whole fleet's, not this
+# store's, and they must match the [nats] section of cloud.toml on the cloud box — which is why
+# they are generated rather than typed. The server URL is NOT here: it carries the broker token,
+# so it lives in the env file below.
+#
+# Keep this table LAST. Everything above it is a top-level key, and a commented line moved below
+# this header would be read as part of [nats] and refused at load.
+[nats]
+stream = "POS_FLEET"
+subject = "pos.fleet.events"
+
+"@
+# UTF-8 without a BOM: the TOML parser reads a leading BOM as part of the first key and refuses
+# the file. Set-Content -Encoding utf8 writes one on Windows PowerShell 5.1, which is what ships.
+[System.IO.File]::WriteAllText($configPath, $config, (New-Object System.Text.UTF8Encoding $false))
 
 # WITHOUT THESE TWO PATHS A WINDOWS STORE CANNOT BE PAIRED WITH AT ALL (ADR-0117).
 #
@@ -234,8 +381,8 @@ if ($exists) {
 #   * POS_EDGE_PAIRING_FILE is where the pairing URL itself is written, and the edge DELETES it the
 #     moment a device redeems the code. Treat it as a five-minute password: read it, pair, and it
 #     is gone.
-$logPath = Join-Path $Root 'pos-edge.log'
-$pairingPath = Join-Path $Root 'pairing-url.txt'
+$logPath = Join-Path $logs 'pos-edge.log'
+$pairingPath = Join-Path $storeDir 'pairing-url.txt'
 
 # The environment, service-scoped rather than machine-wide. A machine environment variable is
 # readable by every local administrator and shows up in process listings of unrelated services;
@@ -248,6 +395,13 @@ $environment = @(
     "POS_EDGE_PAIRING_FILE=$pairingPath",
     'RUST_LOG=info'
 )
+# The vault: the store server seals its secrets in data\vault under a key it makes on its first start
+# and protects with DPAPI for this machine (ADR-0174). Never set on the old layout, where data\ is
+# not where the store's files are.
+if ($storeDir -eq $data) {
+    $environment += "POS_EDGE_VAULT_KEY=$(Join-Path $data 'vault.key')"
+    $environment += "POS_EDGE_VAULT_DIR=$(Join-Path $data 'vault')"
+}
 # Asked for only when -AskSyncKey is given: pasted into this elevated window, the key goes only
 # into the service's registry key below — never onto the network, and never into shell history.
 if (-not $SyncKey -and $AskSyncKey) {
@@ -270,60 +424,7 @@ if ($SyncKey) {
 #
 #   $env = 'POS_EDGE_NATS_URL=tls://:<that token>@<your cloud host>:4222'
 
-$key = "HKLM:\SYSTEM\CurrentControlSet\Services\$service"
 New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null
-
-# NOT OPTIONAL. This is the Windows counterpart of the unit's Restart=always, and without it the
-# store does not come back from an update or a crash. SCM has no always-restart setting — it has
-# failure actions, applied when a service looks like it failed:
-#
-#   * an install retargets bin\current and exits 1, which SCM reads as a failure and restarts
-#     five seconds later on the new binary. Exiting 0 would look like a deliberate stop and the
-#     shop would stay dark until somebody drove there;
-#   * an operator's `sc.exe stop` exits 0 and the service stays stopped, which is what was asked;
-#   * a failed start — unreadable config, port already bound, a database that will not open —
-#     also exits 1, so the same action retries it rather than leaving a dead service.
-#
-# reset= 86400 clears the failure count after a day, so three bad days do not exhaust the list.
-& sc.exe failure $service reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null
-
-# Which release this store runs, asked while the old process still answers. A re-run keeps that
-# binary unless this installer carries a newer release, which is then put in place below; an
-# older or equal one never is (ADR-0140 Amendment 1). Only an answer for this store counts: a
-# stray pos-edge for another store says nothing about what bin\current is.
-$runningBefore = $null
-if ($kept -and $exists) {
-    try {
-        $before = Invoke-RestMethod -Uri "http://127.0.0.1:$BindPort/healthz" -TimeoutSec 2
-        $beforeStore = $before.PSObject.Properties['store_id']
-        $beforeVersion = $before.PSObject.Properties['version']
-        if ($null -ne $beforeStore -and $beforeStore.Value -eq $expectedStore -and $null -ne $beforeVersion) {
-            $runningBefore = [string]$beforeVersion.Value
-        }
-    } catch {
-        $runningBefore = $null
-    }
-}
-$promote = $false
-try { $promote = $kept -and ([version][string]$installerVersion) -gt ([version][string]$runningBefore) } catch { $promote = $false }
-
-# Restart rather than start: on a re-run the service is already up on the old environment.
-# `sc.exe stop` returns once SCM has sent the control, not once the edge has drained, and a start
-# sent while the old process is still stopping is refused. So this waits for STOPPED, bounded; a
-# service that has not stopped by then is reported and started anyway.
-if ($exists) {
-    & sc.exe stop $service | Out-Null
-    try {
-        (Get-Service -Name $service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
-    } catch {
-        Add-Check 'WARN' "the old $service process did not stop within 60 seconds, so the start below may be refused. If the service is not running afterwards: sc.exe start $service"
-    }
-}
-
-# The pairing file the previous process wrote names a code only that process could redeem, and
-# nothing deletes it when the service stops. Left in place, the wait below takes it for this
-# start's file: it prints a dead code and moves on before the new process is listening.
-Remove-Item -LiteralPath $pairingPath -Force -ErrorAction SilentlyContinue
 
 # A program already listening on the port is a failure the edge can only report by exiting and
 # being restarted, over and over. With the service stopped, whatever holds the port now is
@@ -368,6 +469,143 @@ if ($promote) {
     }
 }
 
+# ONE START AS LOCALSYSTEM, ON A BOX THAT RAN AS LOCALSYSTEM (ADR-0174 decision 7, step 3). Its
+# secrets are in LocalSystem's Credential Manager, which the service's own account cannot see. On this
+# start the store server makes its vault key, seals each secret into data\vault, reads it back, and
+# only then deletes the Credential Manager copy. Moving the account first would leave this box
+# looking as if it had never been activated.
+$harden = $storeDir -eq $data
+$account = $null
+if ($exists) {
+    try { $account = [string](Get-ItemProperty -Path $key -Name ObjectName -ErrorAction Stop).ObjectName } catch { $account = $null }
+}
+if ($harden -and $account -eq 'LocalSystem') {
+    Write-Host 'starting once as LocalSystem, so the store server seals its secrets into data\vault'
+    & sc.exe start $service | Out-Null
+    $first = $null
+    if (Assert-Exit "sc.exe start $service" @(0, 1056)) { $first = Wait-Health 60 }
+    $null = Stop-Edge
+    $firstStore = if ($null -ne $first) { $first.PSObject.Properties['store_id'] } else { $null }
+    $firstLog = if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Raw } else { '' }
+    if ($null -eq $firstStore -or $firstStore.Value -ne $expectedStore) {
+        $harden = $false
+        Add-Check 'FAIL' "the store did not answer on its first start as LocalSystem, so its secrets were not moved and it stays on LocalSystem. The first error in $logPath is the cause; run this installer again once it is fixed."
+    } elseif ("$firstLog" -match 'could not move a secret from the OS keyring') {
+        $harden = $false
+        Add-Check 'FAIL' "the store could not move every secret out of Credential Manager, so it stays on LocalSystem, where it still reads them. $logPath says which; run this installer again."
+    } elseif (-not (Test-Path -LiteralPath (Join-Path $data 'vault.key'))) {
+        # A release from before ADR-0174 ignores the vault settings; a vault key DPAPI would not protect
+        # is the other reason. Either way the secrets stay where this account reads them.
+        $harden = $false
+        $environment = @($environment | Where-Object { $_ -notlike 'POS_EDGE_VAULT_*' })
+        New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null
+        Add-Check 'FAIL' "the store made no vault key in $data on its first start (a release older than this installer cannot), so it stays on LocalSystem with its secrets in Credential Manager. Update it, then run this installer again."
+    }
+}
+
+# THE SERVICE'S OWN ACCOUNT, AND STATE ONLY IT CAN READ (ADR-0174). Each step throws on a failure, and
+# the catch puts the service back on LocalSystem, which can read everything, so the store keeps
+# trading whatever went wrong here.
+function Invoke-Icacls {
+    $output = (& icacls.exe @args | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "icacls $($args[0]) $($args[1]) failed with exit code $($LASTEXITCODE): $output" }
+}
+
+# Read back, never assumed: the ACL on $Path, against the table in ADR-0174. SYSTEM and
+# Administrators may hold anything; every other account must be a reader or a writer here. A reader
+# must be able to read and nothing more; a writer must be able to modify.
+function Test-StateAcl([string] $Path, [bool] $Protected, [string[]] $Readers, [string[]] $Writers) {
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    if ($owner -ne $systemSid -and $owner -ne $adminsSid) { return "$Path is owned by $owner" }
+    if ($acl.AreAccessRulesProtected -ne $Protected) { return "$Path does not have inheritance $(if ($Protected) { 'off' } else { 'on' })" }
+    $granted = @{}
+    foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+        if ([string]$rule.AccessControlType -ne 'Allow') { continue }
+        $granted[$rule.IdentityReference.Value] = [int64]$granted[$rule.IdentityReference.Value] -bor ([int64]$rule.FileSystemRights -band 4294967295)
+    }
+    foreach ($sid in @($granted.Keys)) {
+        if ($sid -eq $systemSid -or $sid -eq $adminsSid) { continue }
+        if ($Readers -notcontains $sid -and $Writers -notcontains $sid) { return "$Path grants access to $sid" }
+        # Write, append, delete, change permissions, take ownership, and the generic write and all.
+        if ($Writers -notcontains $sid -and ($granted[$sid] -band 0x500D0156)) { return "$Path lets $sid write" }
+    }
+    foreach ($sid in $Readers) { if (-not ([int64]$granted[$sid] -band 1)) { return "$Path does not let $sid read" } }
+    foreach ($sid in $Writers) { if (([int64]$granted[$sid] -band 0x301BF) -ne 0x301BF) { return "$Path does not let $sid modify" } }
+    return $null
+}
+
+# SeCreateSymbolicLinkPrivilege, granted in local security policy: the edge retargets bin\current
+# with a symbolic link on an update (ADR-0055), and the service's account holds no privilege unless
+# it was granted. Added beside whoever holds it already, never in place of them.
+function Grant-SymbolicLinkRight([string] $Sid) {
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ('pos-edge-rights-' + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $exported = Join-Path $work 'exported.inf'
+        & secedit.exe /export /cfg $exported /areas USER_RIGHTS /quiet | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "secedit /export failed with exit code $LASTEXITCODE" }
+        $line = @(Get-Content -LiteralPath $exported | Where-Object { $_ -match '^SeCreateSymbolicLinkPrivilege\s*=' }) | Select-Object -First 1
+        $holders = @()
+        if ($line) { $holders = @(($line -split '=', 2)[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+        if ($holders -contains "*$Sid") { return }
+        $holders += "*$Sid"
+        $policy = Join-Path $work 'grant.inf'
+        Set-Content -LiteralPath $policy -Encoding Unicode -Value @('[Unicode]', 'Unicode=yes', '[Version]', 'signature="$CHICAGO$"', 'Revision=1', '[Privilege Rights]', "SeCreateSymbolicLinkPrivilege = $($holders -join ',')")
+        & secedit.exe /configure /db (Join-Path $work 'grant.sdb') /cfg $policy /areas USER_RIGHTS /quiet | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "secedit /configure failed with exit code $LASTEXITCODE" }
+    } finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($harden) {
+    try {
+        if (-not (Stop-Edge)) { throw "$service did not stop within 60 seconds" }
+        & sc.exe sidtype $service unrestricted | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sc.exe sidtype $service failed with exit code $LASTEXITCODE" }
+        $sidText = (& sc.exe showsid $service | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $sidText -notmatch '(S-1-5-80(-\d+){5})') { throw "sc.exe showsid $service named no service SID" }
+        $serviceSid = $Matches[1]
+
+        # Owners first, so no file a standard user planted before this run keeps the owner's right to
+        # change its permissions; then every child back to inheriting; then the four directories.
+        # /L acts on bin\current itself, never on the file it points at.
+        Invoke-Icacls $Root /setowner "*$adminsSid" /T /C /L /Q
+        Invoke-Icacls (Join-Path $Root '*') /reset /T /C /L /Q
+        Invoke-Icacls $Root /inheritance:r /grant:r "*$($systemSid):(OI)(CI)F" "*$($adminsSid):(OI)(CI)F" "*$($serviceSid):(OI)(CI)RX" "*$($usersSid):(OI)(CI)RX" /Q
+        Invoke-Icacls $bin /grant:r "*$($serviceSid):(OI)(CI)M" /Q
+        Invoke-Icacls $logs /grant:r "*$($serviceSid):(OI)(CI)M" /Q
+        Invoke-Icacls $data /inheritance:r /grant:r "*$($systemSid):(OI)(CI)F" "*$($adminsSid):(OI)(CI)F" "*$($serviceSid):(OI)(CI)M" /Q
+
+        # An array even when empty, which Set-StrictMode needs for .Count.
+        $wrong = @(@(
+            Test-StateAcl $Root $true @($serviceSid, $usersSid) @()
+            Test-StateAcl $bin $false @($usersSid) @($serviceSid)
+            Test-StateAcl $logs $false @($usersSid) @($serviceSid)
+            Test-StateAcl $data $true @() @($serviceSid)
+            Get-ChildItem -LiteralPath $data -Recurse -Force | ForEach-Object { Test-StateAcl $_.FullName $false @() @($serviceSid) }
+        ) | Where-Object { $_ })
+        if ($wrong.Count -gt 0) { throw "the permissions did not come out as ADR-0174 sets them: $($wrong -join '; ')" }
+
+        Grant-SymbolicLinkRight $serviceSid
+        & sc.exe config $service obj= "NT SERVICE\$service" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sc.exe config $service obj= NT SERVICE\$service failed with exit code $LASTEXITCODE" }
+        & sc.exe privs $service SeChangeNotifyPrivilege/SeCreateSymbolicLinkPrivilege | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "sc.exe privs $service failed with exit code $LASTEXITCODE" }
+        Add-Check 'ok' "pos-edge runs as NT SERVICE\$service, and only it and administrators can read $data"
+    } catch {
+        & sc.exe config $service obj= LocalSystem | Out-Null
+        $back = if ($LASTEXITCODE -eq 0) { 'The service stays on LocalSystem, which can still read everything, so the store keeps trading' } else { "Putting the service back on LocalSystem failed too (exit code $LASTEXITCODE): run sc.exe config $service obj= LocalSystem" }
+        Add-Check 'FAIL' "$($_.Exception.Message). $back. Run this installer again once that is fixed (ADR-0174)."
+    }
+}
+
+# The pairing file the previous process wrote names a code only that process could redeem, and
+# nothing deletes it when the service stops. Left in place, the wait below takes it for this
+# start's file: it prints a dead code and moves on before the new process is listening.
+Remove-Item -LiteralPath $pairingPath -Force -ErrorAction SilentlyContinue
+
 $startOutput = (& sc.exe start $service | Out-String).Trim()
 # 1056: already running, which is what a start racing a slow stop answers; the checks below say
 # whether the store came up.
@@ -376,6 +614,7 @@ if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1056) {
 }
 
 & sc.exe query $service
+$null = Assert-Exit "sc.exe query $service"
 Write-Host ''
 Write-Host "pos_edge installed for $StoreId."
 Write-Host ''
@@ -398,11 +637,7 @@ while (-not (Test-Path -LiteralPath $pairingPath) -and (Get-Date) -lt $deadline)
 # over the air rather than the one this installer was handed, so this is the one place that can
 # say what the store runs. It is also what the setup page waits for: SCM reports RUNNING before
 # the edge has opened its store and bound the port. Bounded like the wait above.
-$health = $null
-$deadline = (Get-Date).AddSeconds(30)
-while ($null -eq $health -and (Get-Date) -lt $deadline) {
-    try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:$BindPort/healthz" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }
-}
+$health = Wait-Health 30
 if ($null -ne $health) {
     $version = $health.PSObject.Properties['version']
     $version = if ($null -ne $version) { $version.Value } else { 'unknown' }

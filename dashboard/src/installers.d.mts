@@ -26,8 +26,6 @@ export interface InstallerValues {
    * correct, so it is left commented.
    */
   readonly storePath?: string | undefined;
-  /** Overrides the Windows state root. Defaults to `WINDOWS_ROOT`. */
-  readonly windowsRoot?: string | undefined;
 }
 
 export declare const DEFAULT_BIND_PORT: string;

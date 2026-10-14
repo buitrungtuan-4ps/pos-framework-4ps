@@ -1117,7 +1117,7 @@
   "handoff.step5": "Ngắt máy cũ khỏi mạng, và thu hồi key của nó. Hôm nay hai máy trên cùng một cửa hàng vẫn bán được cả hai — lease chỉ chặn máy cũ cập nhật, không chặn nó bán.",
   "handoff.stepsTitle": "Trên máy mới",
   "handoff.title": "Chuyển cửa hàng này sang máy khác",
-  "handoff.windowsHint": "Chạy trong PowerShell quyền admin kèm file binary. Dựng update slot, ghi config, mở port lắng nghe trên firewall profile Private, đăng ký service kèm failure action, rồi khởi động.",
+  "handoff.windowsHint": "Chạy trong PowerShell quyền admin kèm file binary. Dựng update slot, ghi config, mở port lắng nghe trên firewall profile Private, đăng ký service kèm failure action, rồi khởi động dưới tài khoản dịch vụ riêng, dữ liệu chỉ tài khoản đó và quản trị viên đọc được.",
   "handoff.withoutKey": "Các file bên dưới không có khoá. Máy mới đồng bộ bằng thông tin xác thực nó nhận được khi nhập mã kích hoạt ở màn /setup của nó.",
   "hub.alerts.link": "Mở cảnh báo",
   "hub.alerts.newest": "Gần nhất: {summary}",
