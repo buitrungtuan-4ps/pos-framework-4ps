@@ -43,6 +43,7 @@ pub mod claim;
 pub mod clock;
 pub mod cloud_http;
 pub mod config;
+pub mod config_changes;
 pub mod config_client;
 pub mod countries;
 #[cfg(feature = "demo-fixtures")]

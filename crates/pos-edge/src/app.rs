@@ -4109,9 +4109,13 @@ impl<S: EventStore> Edge<S> {
     /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// item 7), so an open till reloads its floor, menu, layout, locale and reason codes without a
     /// new sign-in. Numbered on the fan-out like any frame, so a till that reconnects is replayed it.
-    pub fn announce_config(&self, config_version_id: &str) {
+    ///
+    /// `changed_nodes` names the top-level nodes that changed, where the caller knows them, so a
+    /// till re-reads only what derives from them; `None` has every till re-read everything.
+    pub fn announce_config(&self, config_version_id: &str, changed_nodes: Option<Vec<String>>) {
         self.fanout.publish(&ServerMessage::ConfigApplied {
             config_version_id: config_version_id.to_owned(),
+            changed_nodes,
         });
     }
 

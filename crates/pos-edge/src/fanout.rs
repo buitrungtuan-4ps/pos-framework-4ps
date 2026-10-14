@@ -352,6 +352,13 @@ pub enum ServerMessage {
     ConfigApplied {
         /// The cloud's id for the configuration version the edge now runs.
         config_version_id: String,
+        /// The top-level nodes whose content differs from the document the edge ran before, sorted
+        /// ([ADR-0173](../../../docs/adr/0173-the-till-declares-each-piece-of-store-data-once.md)
+        /// decision 2), so a till re-reads only what derives from them. Absent where the edge
+        /// cannot say, such as the first document it applies after it starts, and a till then
+        /// re-reads everything it draws from configuration, as before this field existed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        changed_nodes: Option<Vec<String>>,
     },
 }
 

@@ -10,6 +10,10 @@
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+
+#[cfg(not(feature = "dev-ui"))]
+use super::revalidate::hex_etag;
+use super::revalidate::none_match;
 #[cfg(not(feature = "dev-ui"))]
 use rust_embed::RustEmbed;
 
@@ -133,31 +137,6 @@ const VARY: &str = "accept-encoding";
 /// by a client, so it cannot match anything, and `none_match` is never reached without one.
 const EMPTY: HeaderValue = HeaderValue::from_static("");
 
-/// Whether the client's `If-None-Match` already holds this asset.
-///
-/// A list, because a client may offer several, and `*` matches anything it has. Compared **weakly**
-/// (RFC 9110 §13.1.2), as `If-None-Match` always is: `W/` is not part of the value. That is also
-/// what lets a tablet still holding the strong tag an older edge sent revalidate against this one
-/// instead of downloading the bundle again.
-fn none_match(request: &HeaderMap, etag: &str) -> bool {
-    let Some(header) = request
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return false;
-    };
-    let ours = opaque(etag);
-    header
-        .split(',')
-        .map(str::trim)
-        .any(|candidate| candidate == "*" || opaque(candidate) == ours)
-}
-
-/// An entity tag without its weakness marker.
-fn opaque(etag: &str) -> &str {
-    etag.strip_prefix("W/").unwrap_or(etag)
-}
-
 /// The bytes of a UI asset, from the binary or (under `dev-ui`) from disk. `None` if absent.
 #[cfg(not(feature = "dev-ui"))]
 fn asset_at(path: &str) -> Option<Asset> {
@@ -165,28 +144,6 @@ fn asset_at(path: &str) -> Option<Asset> {
         etag: Some(hex_etag(file.metadata.sha256_hash())),
         bytes: file.data.into_owned(),
     })
-}
-
-/// The build-time content hash as a **weak** `ETag`.
-///
-/// Weak because the hash is of the file, and the compression layer serves that file gzip or plain
-/// under whatever tag this sets. A strong tag promises byte-identical representations (RFC 9110
-/// §8.8.3), so one strong tag on both let a cache hand gzip bytes to a client that never asked
-/// for them. Nothing here needs the strong kind: it is only for `If-Match` and `If-Range`, and
-/// these routes serve no ranges.
-#[cfg(not(feature = "dev-ui"))]
-fn hex_etag(hash: [u8; 32]) -> String {
-    use std::fmt::Write as _;
-    // Sixteen bytes of SHA-256 is far past any collision a build could produce, and keeps the
-    // header short enough to read in a trace.
-    let mut etag = String::with_capacity(36);
-    etag.push_str("W/\"");
-    for byte in &hash[..16] {
-        // Infallible: writing to a `String` cannot fail.
-        let _ = write!(etag, "{byte:02x}");
-    }
-    etag.push('"');
-    etag
 }
 
 /// The bytes of a UI asset read from `ui/dist` on disk, for `dev-ui`. `None` if absent.
