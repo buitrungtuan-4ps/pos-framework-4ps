@@ -174,10 +174,21 @@ pub fn growth_allowed(body: &str) -> Option<&str> {
 }
 
 /// One finding per baseline entry that is new since `base`, or whose figure grew.
+///
+/// A function that moved to another file is not new: its entry is keyed by path, so a move reads as
+/// one entry gone and one added. An added function entry counts as that move, not as growth, when
+/// `base` lists a function of the same name under a path `now` no longer lists it at, with figures
+/// at least as large. Each such entry covers one move.
 #[must_use]
 pub fn grown_entries(base: &Baseline, now: &Baseline) -> Vec<Finding> {
     let hint = HINT_GROW;
     let mut findings = Vec::new();
+    let mut moved_from: Vec<(&str, &Recorded)> = base
+        .functions
+        .iter()
+        .filter(|(key, _)| !now.functions.contains_key(*key))
+        .map(|(key, figures)| (key.as_str(), figures))
+        .collect();
     for (path, lines) in &now.files {
         match base.files.get(path) {
             None => findings.push(Finding::new(
@@ -195,6 +206,7 @@ pub fn grown_entries(base: &Baseline, now: &Baseline) -> Vec<Finding> {
     }
     for (key, figures) in &now.functions {
         match base.functions.get(key) {
+            None if take_move(&mut moved_from, key, figures) => {}
             None => findings.push(Finding::new(
                 BASELINE,
                 RULE,
@@ -220,6 +232,18 @@ pub fn grown_entries(base: &Baseline, now: &Baseline) -> Vec<Finding> {
         .into_iter()
         .map(|finding| finding.with_hint(hint))
         .collect()
+}
+
+/// Whether `key` is a function `moved_from` lists under another path, no larger than it was there;
+/// if so, that entry is used up.
+fn take_move(moved_from: &mut Vec<(&str, &Recorded)>, key: &str, figures: &Recorded) -> bool {
+    let name = |entry: &str| entry.split_once("::").map(|(_, name)| name.to_owned());
+    let found = moved_from.iter().position(|(was, recorded)| {
+        name(was) == name(key)
+            && figures.lines <= recorded.lines
+            && figures.params <= recorded.params
+    });
+    found.map(|index| moved_from.remove(index)).is_some()
 }
 
 fn file_limits(file: &FileStat) -> (usize, usize) {
@@ -696,6 +720,48 @@ mod tests {
         );
         assert!(
             found.iter().any(|m| m.starts_with("adds `a.rs::g`")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_function_that_moved_file_is_not_growth() {
+        let recorded = |lines, params| Recorded { lines, params };
+        let base = Baseline {
+            files: BTreeMap::new(),
+            functions: BTreeMap::from([
+                ("a.rs::f".into(), recorded(120, 3)),
+                ("a.rs::g".into(), recorded(110, 2)),
+            ]),
+        };
+        // `f` moved to b.rs unchanged, and `g` to c.rs one line shorter: neither is growth.
+        let moved = Baseline {
+            files: BTreeMap::new(),
+            functions: BTreeMap::from([
+                ("b.rs::f".into(), recorded(120, 3)),
+                ("c.rs::g".into(), recorded(109, 2)),
+            ]),
+        };
+        assert!(grown_entries(&base, &moved).is_empty());
+        // A move that grew, a second copy, or a function still listed at its old path is growth.
+        let grown = Baseline {
+            files: BTreeMap::new(),
+            functions: BTreeMap::from([
+                ("a.rs::g".into(), recorded(110, 2)),
+                ("b.rs::f".into(), recorded(121, 3)),
+                ("c.rs::g".into(), recorded(100, 2)),
+            ]),
+        };
+        let found: Vec<String> = grown_entries(&base, &grown)
+            .into_iter()
+            .map(|finding| finding.message)
+            .collect();
+        assert_eq!(
+            found,
+            [
+                "adds `b.rs::f` (121 lines, 3 parameters)",
+                "adds `c.rs::g` (100 lines, 2 parameters)"
+            ],
             "{found:?}"
         );
     }
