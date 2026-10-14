@@ -17,12 +17,11 @@ import {
   loadLiveOrders,
   modifierNames,
   noteLost,
-  queueNumberFor,
-  refreshQueueNumbers,
   setItemSoldOut,
   state,
   type KitchenTicket,
 } from "../state/store";
+import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
 
 // The kitchen display: fired lines gathered into tickets — one per order, station and course, the
 // unit a cook makes together — large, on a dark panel, oldest first. Bumping a ticket records the

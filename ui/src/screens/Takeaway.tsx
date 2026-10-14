@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from "../api/types";
 import { Keypad } from "../components/Keypad";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
@@ -22,6 +23,7 @@ import {
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
+import { createScreenRead } from "../state/screen-read";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -63,24 +65,23 @@ export function Takeaway() {
   const explain = (caught: unknown) =>
     setError(errorMessage(caught));
 
-  const refresh = () =>
-    api
-      .openOrders()
-      .then((waiting) => {
-        setOrders(waiting);
-        const wanted = search.charge;
-        if (wanted !== undefined) {
-          setSearch({ charge: undefined });
-          const order = waiting.find((candidate) => candidate.order_id === wanted);
-          if (order !== undefined) {
-            void charge(order);
-          }
+  // The counter list, retried with the engine's backoff and shown in place when it fails.
+  const listRead = createScreenRead(
+    () => api.openOrders(),
+    (waiting) => {
+      setOrders(waiting);
+      const wanted = search.charge;
+      if (wanted !== undefined) {
+        setSearch({ charge: undefined });
+        const order = waiting.find((candidate) => candidate.order_id === wanted);
+        if (order !== undefined) {
+          void charge(order);
         }
-      })
-      .catch((caught: unknown) => {
-        setOrders([]);
-        explain(caught);
-      });
+      }
+    },
+    { onFailure: () => setOrders([]) },
+  );
+  const refresh = () => listRead.run();
 
   // A walk-in guest (ADR-0146, finding F12): the counter opens its own order and goes straight to
   // it. Before this, a store without tables could charge an order someone else started and could
@@ -284,6 +285,7 @@ export function Takeaway() {
                 </p>
               )}
             </Show>
+            <ReadFailed read={listRead} />
 
             <Show
               when={(orders()?.length ?? 0) > 0}

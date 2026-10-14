@@ -2,8 +2,10 @@ import { Match, Switch, createSignal, onCleanup, onMount } from "solid-js";
 
 import { api } from "../api/client";
 import type { ClaimStatus } from "../api/types";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { createScreenRead } from "../state/screen-read";
 
 // A box installed from the one image for every store, waiting to be claimed (ADR-0148). `pos-edge
 // claim` serves this page on the box's own screen: it shows the code a person types at the console
@@ -19,14 +21,14 @@ export function Claim() {
   const [status, setStatus] = createSignal<ClaimStatus | null>(null);
   const [now, setNow] = createSignal(Date.now());
 
+  // Asked on a timer, and between those with the engine's backoff after a failure, which is shown
+  // in place with a Retry.
+  const statusRead = createScreenRead(() => api.claimStatus(), setStatus);
   let timer: ReturnType<typeof setInterval> | undefined;
   onMount(() => {
     const ask = () => {
       setNow(Date.now());
-      void api
-        .claimStatus()
-        .then(setStatus)
-        .catch(() => undefined);
+      void statusRead.run();
     };
     ask();
     timer = setInterval(ask, POLL_MS);
@@ -39,6 +41,7 @@ export function Claim() {
   return (
     <section class="mx-auto max-w-md p-4">
       <PageHeader title={t("claim.title")} />
+      <ReadFailed read={statusRead} />
       <Switch>
         <Match when={status()?.state === "WAITING" && status()}>
           {(waiting) => {

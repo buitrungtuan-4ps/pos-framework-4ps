@@ -1022,45 +1022,9 @@ export function modifierNames(line: OrderLine): string[] {
   return line.modifierMenuItemIds.map((id) => named(id) ?? id);
 }
 
-// How long a board waits before asking the counter list again for a number it has not got. A
-// counter order is numbered when it is opened, so one read almost always answers; the wait only
-// stops an order that has no number from being asked about on every change to the board.
-const QUEUE_NUMBER_READ_MS = 5_000;
-let queueNumbersReadAt = 0;
-
-// The number the guest was given for a counter order, or undefined when the till has not read it,
-// or the order was never given one.
-export function queueNumberFor(orderId: string): number | undefined {
-  return state.queueNumbers[orderId];
-}
-
-// Reads the counter list for the numbers of the counter orders on a board, keeping only those.
-// A failed read keeps what the board had: it goes on showing the order's reference until the next
-// read answers.
-export async function refreshQueueNumbers(onBoard: readonly string[]): Promise<void> {
-  const now = Date.now();
-  if (now - queueNumbersReadAt < QUEUE_NUMBER_READ_MS) {
-    return;
-  }
-  queueNumbersReadAt = now;
-  try {
-    const counter = await api.openOrders();
-    const wanted = new Set(onBoard);
-    const next: Record<string, number> = {};
-    for (const [orderId, number] of Object.entries(state.queueNumbers)) {
-      if (wanted.has(orderId)) {
-        next[orderId] = number;
-      }
-    }
-    for (const order of counter) {
-      if (order.queue_number !== undefined && wanted.has(order.order_id)) {
-        next[order.order_id] = order.queue_number;
-      }
-    }
-    setState("queueNumbers", reconcile(next));
-  } catch {
-    // Kept as it was; see above.
-  }
+// Replaces the queue numbers the boards show (`./queue-numbers`).
+export function setQueueNumbers(next: Record<string, number>): void {
+  setState("queueNumbers", reconcile(next));
 }
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.

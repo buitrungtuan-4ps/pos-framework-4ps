@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type {
   IntegrationEntry,
   MintedCode,
@@ -9,11 +9,13 @@ import type {
   TerminalsResponse,
 } from "../api/types";
 import { QrCode } from "../components/QrCode";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
+import { createScreenRead, onStatus } from "../state/screen-read";
 import { loadDrawers, loadShift, loadSync, state } from "../state/store";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
@@ -139,17 +141,12 @@ function ThisDevice() {
   const [releasing, setReleasing] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
 
-  const load = async () => {
-    try {
-      setRead(await api.terminals());
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 403) {
-        setRefused(true);
-        return;
-      }
-      setFailure(errorMessage(caught));
-    }
-  };
+  // A person who may not bind a till is refused, and the card is not drawn; anything else is
+  // retried with the engine's backoff and shown in place.
+  const tillsRead = createScreenRead(() => api.terminals(), setRead, {
+    handled: onStatus(403, () => setRefused(true)),
+  });
+  const load = () => tillsRead.run();
   onMount(() => void load());
 
   const terminals = () => read()?.terminals ?? null;
@@ -329,9 +326,26 @@ function ThisDevice() {
             </p>
           )}
         </Show>
+        <ReadFailed read={tillsRead} />
       </div>
     </Show>
   );
+}
+
+// An edge that predates a route lists none: printers that are none, and every integration family
+// on its offline path. Anything else is retried and shown in place.
+function createListReads(
+  setPrinters: (printers: PrinterEntry[]) => void,
+  setIntegrations: (integrations: IntegrationEntry[]) => void,
+) {
+  return [
+    createScreenRead(() => api.printers(), setPrinters, {
+      handled: onStatus(404, () => setPrinters([])),
+    }),
+    createScreenRead(() => api.integrations(), setIntegrations, {
+      handled: onStatus(404, () => setIntegrations([])),
+    }),
+  ] as const;
 }
 
 export function Devices() {
@@ -351,16 +365,15 @@ export function Devices() {
   // The last test page's outcome, per printer.
   const [tested, setTested] = createSignal<Record<string, string>>({});
 
-  const load = async () => {
-    try {
-      const state = await api.pairedDevices();
-      setDevices(state.paired);
-      setDurable(state.durable);
-      setError(null);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+  const devicesRead = createScreenRead(
+    () => api.pairedDevices(),
+    (paired) => {
+      setDevices(paired.paired);
+      setDurable(paired.durable);
+    },
+  );
+  const load = () => devicesRead.run();
+  const [printersRead, integrationsRead] = createListReads(setPrinters, setIntegrations);
 
   // The store server's clock, as it last measured it against a time server (roadmap-v3 PF4). It
   // rides `GET /api/sync`, which the status bar already polls, so this reads the bar's answer rather
@@ -382,17 +395,8 @@ export function Devices() {
   onMount(() => {
     void load();
     void loadSync();
-    // Forgiving: an edge that predates the route, or a store with nothing published, lists none.
-    void api
-      .printers()
-      .then(setPrinters)
-      .catch(() => setPrinters([]));
-    // The same forgiveness: an edge that predates the route lists none, which reads as what it is —
-    // every family on its offline path.
-    void api
-      .integrations()
-      .then(setIntegrations)
-      .catch(() => setIntegrations([]));
+    void printersRead.run();
+    void integrationsRead.run();
   });
 
   // Print a page on one printer (manager only — the edge refuses anyone else, and says so).
@@ -467,6 +471,9 @@ export function Devices() {
           </p>
         )}
       </Show>
+      <ReadFailed read={devicesRead} />
+      <ReadFailed read={printersRead} />
+      <ReadFailed read={integrationsRead} />
 
       <ul class="mt-4 flex flex-col gap-2">
         <For

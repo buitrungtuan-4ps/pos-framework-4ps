@@ -6,10 +6,10 @@
     "max-lines-per-function": 156
   },
   "src/screens/Confirm.tsx": {
-    "max-lines-per-function": 144
+    "max-lines-per-function": 142
   },
   "src/screens/Devices.tsx": {
-    "max-lines-per-function": 316
+    "max-lines-per-function": 312
   },
   "src/screens/Floor.tsx": {
     "max-lines-per-function": 114
@@ -33,13 +33,13 @@
     "max-lines-per-function": 129
   },
   "src/screens/Takeaway.tsx": {
-    "max-lines-per-function": 459
+    "max-lines-per-function": 458
   },
   "src/screens/Today.tsx": {
-    "max-lines-per-function": 166
+    "max-lines-per-function": 163
   },
   "src/state/store.ts": {
-    "max-lines": 1586,
+    "max-lines": 1560,
     "max-lines-per-function": 311
   }
 }

@@ -5,7 +5,9 @@ import { For, Show, type ParentProps } from "solid-js";
 import { useLocation } from "@solidjs/router";
 
 import { t, type MessageKey } from "../i18n";
+import { errorMessage } from "../lib/errors";
 import { notLoaded, retryFailing, storeReady, unavailable, waitingFor } from "../state/engine";
+import type { ScreenRead } from "../state/screen-read";
 
 // The screens that draw nothing of the store's: pairing, signing in and activating a box. A device
 // there has not started the store's load, and must reach it without it.
@@ -115,6 +117,26 @@ export function WhyUnavailable(props: { entry: string; id: string }) {
           {t(reason(), { name: nameOf(props.entry) })}
         </span>
       )}
+    </Show>
+  );
+}
+
+// A screen's own read that failed (`state/screen-read.ts`): what went wrong, in place, and a Retry
+// that reads again now rather than at the next step of the backoff.
+export function ReadFailed(props: { read: ScreenRead }) {
+  return (
+    <Show when={props.read.failure() !== null}>
+      <div class="my-3 flex flex-wrap items-center gap-3" role="alert" data-outcome="read-failed">
+        <p class="flex-1 text-sm text-danger">{errorMessage(props.read.failure())}</p>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold text-ink"
+          data-step="retryRead"
+          onClick={() => void props.read.retry()}
+        >
+          {t("data.retry")}
+        </button>
+      </div>
     </Show>
   );
 }

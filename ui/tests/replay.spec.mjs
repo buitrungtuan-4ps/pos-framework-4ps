@@ -4481,6 +4481,59 @@ test("a signed-in till that reloads reads its session once", async ({ page }) =>
   }
 });
 
+test("a screen's own read that fails says so in place, and its Retry reads again", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let failing = true;
+    const refused = await refuseWhile(page, "**/api/bills/settled", () => failing);
+    await navigateTo(page, "/today");
+
+    const failed = page.locator('[data-outcome="read-failed"]');
+    await expect(failed).toBeVisible();
+    expect(refused.count).toBeGreaterThan(0);
+
+    failing = false;
+    await failed.locator('[data-step="retryRead"]').click();
+    await expect(failed).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a store server that does not answer is not told it has no cloud", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    // The app's own boot check answers first, "not activated", which keeps the browser on the
+    // setup screen; the screen's read after it is the one that is refused.
+    let failing = true;
+    let asked = 0;
+    await page.route("**/api/activation", async (route) => {
+      asked += 1;
+      if (asked === 1) {
+        await route.fulfill({ json: { activated: false } });
+      } else if (failing) {
+        await route.fulfill({ status: 503, body: "busy" });
+      } else {
+        await route.fulfill({ json: { activated: false } });
+      }
+    });
+    await page.goto(`${edge.baseURL}/setup`);
+    await expect(page.getByText("Checking whether this store is activated…")).toBeVisible();
+    await expect(page.locator('[data-outcome="read-failed"]')).toBeVisible();
+    await expect(page.getByText(/runs without a cloud/)).toHaveCount(0);
+
+    failing = false;
+    await page.locator('[data-step="retryRead"]').click();
+    await expect(page.locator('[data-outcome="read-failed"]')).toHaveCount(0);
+    await expect(page.getByText("Checking whether this store is activated…")).toHaveCount(0);
+    await expect(page.locator("input").first()).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

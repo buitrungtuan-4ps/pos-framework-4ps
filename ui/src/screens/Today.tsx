@@ -1,13 +1,16 @@
 import { For, Show, createEffect, createSignal, on, onMount } from "solid-js";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { ReprintResponse, SettledBill, TakingsResponse } from "../api/types";
+import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can, holdsOwn } from "../state/permissions";
+import { retryable } from "../state/engine";
+import { createScreenRead } from "../state/screen-read";
 import { formatAmount, openBillCount, state, tableCounts, tableLabel } from "../state/store";
 
 const ORDER = [
@@ -49,6 +52,17 @@ function paidAt(bill: SettledBill): string {
 // (ADR-0164): a tap on the bill, then *Reprint*. Choosing first, rather than a button on every row,
 // so a tap on a crowded list prints the receipt that was meant. The copy is the original under the
 // same number, marked COPY, and each one is counted — so there is no confirmation to tap through.
+// The takings tile's read. A refusal, or an edge too old to answer, hides the tile rather than
+// putting an error on a working screen; a blip is retried, quietly.
+function createTakingsRead(setTakings: (takings: TakingsResponse | null) => void) {
+  return createScreenRead(() => api.takings(), setTakings, {
+    handled: (caught) => {
+      setTakings(null);
+      return caught instanceof ApiError && !retryable(caught);
+    },
+  });
+}
+
 export function Today() {
   const counts = () => tableCounts();
   const shiftState = () =>
@@ -69,6 +83,7 @@ export function Today() {
 
   // Read when the person may see it, and again if that changes while the screen is open. A refusal,
   // or an edge too old to answer, hides the tile rather than putting an error on a working screen.
+  const takingsRead = createTakingsRead(setTakings);
   createEffect(
     on(
       () => holdsOwn("reports.takings.view"),
@@ -77,18 +92,14 @@ export function Today() {
           setTakings(null);
           return;
         }
-        api.takings().then(setTakings, () => setTakings(null));
+        void takingsRead.run();
       },
     ),
   );
 
-  onMount(async () => {
-    try {
-      setBills(await api.settledBills());
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  });
+  // Retried with the engine's backoff while the screen is open, and shown in place when it fails.
+  const billsRead = createScreenRead(() => api.settledBills(), setBills);
+  onMount(() => void billsRead.run());
 
   const copiesOf = (bill: SettledBill) => copied()[bill.bill_id] ?? bill.copies;
 
@@ -164,6 +175,7 @@ export function Today() {
           </p>
         )}
       </Show>
+      <ReadFailed read={billsRead} />
       <Show when={bills()}>
         {(listed) => (
           <Show
