@@ -52,3 +52,6 @@ ac5ed387df46d51333366e12989d510776edabb3
 
 # #786 — the config publish machinery, preview, version history and releases move into their own modules
 a7b61c90e9345195d63abcf7bae5aa6919a04a69
+
+# #787 — the country and translation routes and their tests move into their own modules
+cced71c608b38ca8fb6318e57f1ba99b791ba194
