@@ -35,6 +35,17 @@ import { expect, test } from "@playwright/test";
 import { TASKS } from "../scripts/step-tasks.mjs";
 import { startEdge } from "./edge.mjs";
 
+/**
+ * The edge's whole answer to an intercepted request, for a stub that rewrites it. The till names
+ * the tag of the copy it keeps (ADR-0173), and the edge answers a tag it recognises with a `304`
+ * and no body to rewrite, so the stub asks without one.
+ */
+async function fetchWhole(route) {
+  const headers = { ...route.request().headers() };
+  delete headers["if-none-match"];
+  return route.fetch({ headers });
+}
+
 /** A declared route as a regular expression: `:param` matches one path segment. */
 function routePattern(route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1850,7 +1861,7 @@ test("a store's own tip keys are offered in its order, and a store that hides th
 
     let hidden = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.tip_percents = [];
       hidden += 1;
@@ -1899,7 +1910,7 @@ test("a store that sets nothing, and an edge too old to send the settings, offer
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.tip_percents;
       delete book.split_ways_max;
@@ -1959,7 +1970,7 @@ test("a store that splits up to twelve ways keeps one row that scrolls, and the 
 
     let rewritten = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.split_ways_max = 8;
       rewritten += 1;
@@ -1994,7 +2005,7 @@ test("a bill larger than the largest note takes any amount handed over", async (
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({
         response,
@@ -2063,7 +2074,7 @@ test("a bill split three ways settles with each guest's own tender, and the cash
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({
         response,
@@ -2857,7 +2868,7 @@ test("the counter's pay pad offers the store's own tip keys, and no tip row wher
 
     let hidden = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.tip_percents = [];
       hidden += 1;
@@ -2898,7 +2909,7 @@ test("a store that sets no tip keys, and an edge too old to send them, offer tod
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.tip_percents;
       older += 1;
@@ -2966,7 +2977,7 @@ test("a store that sets no walk-in channel, and an edge too old to send one, sel
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.walk_in_channel;
       older += 1;
@@ -3030,7 +3041,7 @@ test("a store that asks each walk-in guest opens the order eaten in or taken awa
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.walk_in_channel;
       older += 1;
@@ -3064,7 +3075,7 @@ test("the till draws money with the exponent the store published", async ({ page
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({ response, json: { ...body, currency_exponent: 2 } });
     });
@@ -3244,7 +3255,7 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
 // three fields and nothing else; `granted()` is asked on every read, so a test can change it.
 async function aSessionThatSays(page, enforced, granted, withApproval = []) {
   await page.route("**/api/session", async (route) => {
-    const response = await route.fetch();
+    const response = await fetchWhole(route);
     if (!response.ok()) {
       await route.fulfill({ response });
       return;
@@ -4110,7 +4121,7 @@ test("a drawer open past its business day is flagged, and a change of model wait
   try {
     const ended = (shift) => (shift === null ? null : { ...shift, day_ended: true });
     await page.route("**/api/shifts/current", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       await route.fulfill({ response, json: ended(await response.json()) });
     });
     await page.route("**/api/shifts", async (route) => {
@@ -4118,7 +4129,7 @@ test("a drawer open past its business day is flagged, and a change of model wait
         await route.fallback();
         return;
       }
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const read = await response.json();
       await route.fulfill({
         response,
@@ -4164,7 +4175,7 @@ test("an assigned drawer says whose it is and asks for the override on another p
     const another = (shift) =>
       shift === null ? null : { ...shift, assigned_employee_id: "01ANOTHERPERS0NAAAAAAAAAAA" };
     await page.route("**/api/shifts/current", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       await route.fulfill({ response, json: another(await response.json()) });
     });
     await page.route("**/api/shifts", async (route) => {
@@ -4172,7 +4183,7 @@ test("an assigned drawer says whose it is and asks for the override on another p
         await route.fallback();
         return;
       }
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const read = await response.json();
       await route.fulfill({
         response,
@@ -4529,6 +4540,152 @@ test("a store server that does not answer is not told it has no cloud", async ({
     await expect(page.locator('[data-outcome="read-failed"]')).toHaveCount(0);
     await expect(page.getByText("Checking whether this store is activated…")).toHaveCount(0);
     await expect(page.locator("input").first()).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till keeps a snapshot of the store's configuration, and nothing else (ADR-0173 decision 3).
+
+/** Every record in the till's snapshot, as `{ key, etag, ... }`, or `[]` where there is none. */
+async function snapshotRecords(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const request = indexedDB.open("pos-till-snapshot", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("entries", { keyPath: "key" });
+        request.onerror = () => resolve([]);
+        request.onsuccess = () => {
+          const read = request.result.transaction("entries", "readonly").objectStore("entries").getAll();
+          read.onsuccess = () => {
+            request.result.close();
+            resolve(read.result);
+          };
+          read.onerror = () => resolve([]);
+        };
+      }),
+  );
+}
+
+/** The configuration entries the snapshot may hold on the demo store, whose walk-ins are takeaway. */
+const KEPT = ["layout", "locale", "menu", "menu_takeaway", "reason_codes"];
+
+test("the snapshot holds the store's configuration and nothing about anyone", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect
+      .poll(async () => (await snapshotRecords(page)).map((record) => record.key).sort())
+      .toEqual(KEPT);
+    const records = await snapshotRecords(page);
+    const held = JSON.stringify(records);
+    // Never the session, the person, the token, a drawer, a shift, an order or the floor: none of
+    // the fields that carry them appears anywhere in it.
+    for (const field of [
+      "signed_in",
+      "employee_id",
+      "permissions",
+      "assigned_employee_id",
+      "drawer_model",
+      "shift_id",
+      "order_id",
+      "order_line_id",
+      "table_states",
+      "seated_times",
+    ]) {
+      expect(held, field).not.toContain(`"${field}"`);
+    }
+    expect(held).not.toContain(await page.evaluate(() => localStorage.getItem("pos-edge.device-token")));
+    for (const record of records) {
+      expect(record.schema).toBe(1);
+      expect(record.etag).toMatch(/^W\/"/);
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a reload confirms the snapshot's price book before anything is sold against it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(KEPT.length);
+
+    // The edge cannot be reached for the price book: the snapshot's copy is never drawn, and the
+    // till waits for the edge rather than sell against it.
+    let failing = true;
+    await refuseWhile(page, "**/api/menu", () => failing);
+    await page.reload();
+    await expect(page.locator('[data-outcome="store-loading"]')).toContainText("Could not load: Price book");
+    await expect(page.locator('[data-step="onCard"]')).toHaveCount(0);
+
+    // Once it answers, the snapshot's tag is confirmed with a `304`, and the till sells.
+    failing = false;
+    const confirmed = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/menu" && new URL(response.url()).search === "",
+    );
+    await page.locator('[data-step="retryLoad"]').click();
+    const answer = await confirmed;
+    expect(answer.status()).toBe(304);
+    expect(answer.request().headers()["if-none-match"]).toMatch(/^W\/"/);
+    await seatTable(page);
+    await addItem(page);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("signing out clears the snapshot, and a new pairing never reads the old one", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(KEPT.length);
+
+    // Another pairing: whatever the snapshot holds is not this one's, and no tag of it is sent.
+    await page.evaluate(() => localStorage.setItem("pos-edge.pairing-id", "a-later-pairing"));
+    const tags = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/")) {
+        tags.push(request.headers()["if-none-match"]);
+      }
+    });
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    expect(tags.filter((tag) => tag !== undefined)).toEqual([]);
+
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(/\/signin$/);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a till with no IndexedDB, as in a private window, works and says nothing about it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "indexedDB", {
+        get() {
+          throw new Error("blocked");
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect(page.locator('[data-outcome="store-data-missing"]')).toHaveCount(0);
+    await seatTable(page);
+    await addItem(page);
+    await page.reload();
+    await expect(page.locator('[data-outcome="line-added"], [data-outcome="floor"]').first()).toBeAttached();
+    await expect(page.locator('[data-outcome="store-loading"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }
