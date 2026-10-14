@@ -4281,12 +4281,15 @@ test("a till hears a new configuration and reads again what the person may do", 
     );
     await pair(page, edge);
     await signIn(page, edge);
+    // The link's first attempt was refused before the device paired, and it retries on a back-off,
+    // so it can still be down when the till reaches the floor. A line added then is announced to no
+    // one and never carried. Seated and added once the link is open, the line's event is.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await seatTable(page);
     await addItem(page);
     await expect(page.locator('[data-step="fireOrder"]')).toHaveCount(0);
-    // The link is open and has carried the line's own event, so the frame below is the next one
-    // after everything the edge has said, rather than one that races the line's.
-    await expect(page.getByText("Store connected")).toBeVisible();
+    // The link has carried the line's own event, so the frame below is the next one after
+    // everything the edge has said, rather than one that races the line's.
     await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
 
     granted.push("sales.line.fire");
@@ -4915,6 +4918,10 @@ test("the edge's event arriving before its answer confirms the line once, never 
   try {
     await pair(page, edge);
     await signIn(page, edge);
+    // The event can confirm the line only on a link that is open when the table is seated and the
+    // line added: the link retries on a back-off after its refusal before pairing, and what the
+    // edge announces while it is down is never carried.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await seatTable(page);
     // The edge makes the line and the live link carries its event at once; the answer is held
     // until the event has confirmed the line.
