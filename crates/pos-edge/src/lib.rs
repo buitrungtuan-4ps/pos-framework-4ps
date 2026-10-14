@@ -80,6 +80,7 @@ pub mod server;
 pub mod setup;
 pub mod sntp;
 pub mod state;
+pub mod state_access;
 pub mod sync_status;
 pub mod telemetry;
 pub mod trusted_keys;

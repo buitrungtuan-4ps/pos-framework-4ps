@@ -368,6 +368,7 @@
   "setup.submit": "Kích hoạt",
   "setup.title": "Kích hoạt cửa hàng này",
   "setup.unavailable": "Máy chủ cửa hàng này chạy không có đám mây nên không có gì để kích hoạt.",
+  "setup.state_too_open": "Các tài khoản khác trên máy tính này có thể đọc dữ liệu của cửa hàng. Hãy chạy lại trình cài đặt máy chủ cửa hàng trên máy tính này với quyền quản trị để khóa lại.",
   "shift.approver_code": "Mã quản lý",
   "shift.approver_pin": "PIN quản lý",
   "shift.assignee_code": "Mã nhân viên của người nhận ngăn kéo",

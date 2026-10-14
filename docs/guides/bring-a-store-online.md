@@ -312,6 +312,13 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
    (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the counter
    rather than after a round-trip.
 
+   **If the screen warns that other accounts can read this store's data,** the directory that holds
+   the database is open to other accounts on the store server's computer. On Windows that is any box
+   not yet set up as [ADR-0174](../adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)
+   describes; on Linux, a state directory that grants anything to group or others. Run the installer
+   again on that computer, as an administrator. The store server checks at every start and every time
+   this screen asks, and says it once in its log at start; it never names the file or the account.
+
 > **One credential per box, not one per device.** This is the thing to get right, because the console
 > will happily issue a code per named device and only the first one typed can ever be redeemed. The box
 > holds a single `DeviceCredential`; a second code presented to an already-activated store is refused

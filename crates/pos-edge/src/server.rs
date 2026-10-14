@@ -356,6 +356,8 @@ where
     let public_origin = config.public_origin.clone();
     let store_id = config.store_id;
     let drain_status_path = crate::drain_status::path_beside(&config.store_path);
+    // Whether the store's data is closed to other local accounts, said once at start (ADR-0174).
+    crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
     // The outbox depth is read from the store once the last drain is over, which is after `edge`
     // has moved into the composition.
     let drained_edge = Arc::clone(&edge);
@@ -705,6 +707,8 @@ where
     P: crate::print_agent::PrintAgents + 'static,
     J: crate::print_queue::PrintQueue + 'static,
 {
+    // Read before `config` moves: the directory whose access the activation standing reports.
+    let state_dir = crate::state_access::state_dir(&config.store_path);
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
@@ -897,8 +901,11 @@ where
             &origins,
             &revocations,
             backup,
-            shutdown_rx,
-            restart,
+            Lifecycle {
+                shutdown_rx,
+                restart,
+                state_dir,
+            },
         )
         .await;
         app = surface.app;
@@ -964,6 +971,16 @@ where
     revocations
 }
 
+/// How the cloud surface is stopped, restarted and told where the store's data is: what
+/// [`compose_cloud_surface`] passes through to the loops and the activation routes.
+struct Lifecycle<'a> {
+    shutdown_rx: &'a tokio::sync::watch::Receiver<bool>,
+    restart: Option<Arc<dyn RestartRequest>>,
+    /// The directory the database lives in, whose access the activation standing reports
+    /// (ADR-0174).
+    state_dir: std::path::PathBuf,
+}
+
 /// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
 /// the two things whose lifetime outlives composing — the keyed client the OTA loop dials on, and
 /// the publish loop a stop has to wait for.
@@ -1001,8 +1018,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     origins: &Arc<crate::origins::Origins>,
     revocations: &Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-    restart: Option<Arc<dyn RestartRequest>>,
+    lifecycle: Lifecycle<'_>,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -1010,6 +1026,11 @@ where
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
 {
+    let Lifecycle {
+        shutdown_rx,
+        restart,
+        state_dir,
+    } = lifecycle;
     // The device credential (activation) and the scoped sync key: sealed under the vault key when the
     // unit's vault drop-in gave the service one (ADR-0151), in the OS keyring otherwise (ADR-0086).
     let vault = Arc::new(OsVault::from_env());
@@ -1048,6 +1069,7 @@ where
         Some(Arc::clone(&lease_watch)),
         origins,
         restart,
+        Some(state_dir),
     ));
 
     // Boot gate: start the cloud loops only once the box holds a device credential (ADR-0086). Reading

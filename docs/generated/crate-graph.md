@@ -125,6 +125,7 @@ flowchart LR
   pos_edge --> printer_escpos
   pos_edge --> store_sqlite
   pos_edge --> updater_minisign
+  pos_edge --> windows_protect
   pos_fakes --> pos_contract_tests
   pos_fakes --> pos_ports
   pos_fakes --> pos_proto
@@ -183,5 +184,5 @@ flowchart LR
 | `store-postgres` | adapter | `crates/adapters/store-postgres` | The cloud EventStore and the cloud's own stores over PostgreSQL (tokio-postgres, deadpool, monthly partitions, RLS). | `pos-cloud`, `pos-cloud-api`, `pos-cloud-reports` | — |
 | `store-sqlite` | adapter | `crates/adapters/store-sqlite` | The edge store over SQLite: event, config, device, subject and intake stores on one single-writer thread. | `pos-edge` | — |
 | `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-edge` | — |
-| `windows-protect` | adapter | `crates/adapters/windows-protect` | Windows' own protection for a store box's state: DPAPI for the vault key. | `key-vault-keyring` | — |
+| `windows-protect` | adapter | `crates/adapters/windows-protect` | Windows' own protection for a store box's state: DPAPI for the vault key, and who may read the state directory. | `key-vault-keyring`, `pos-edge` | — |
 | `xtask` | tool | `xtask` | Repository checks run by just preflight and CI: dependency rule, snapshots, migrations, links, changelog, code size. | — | — |

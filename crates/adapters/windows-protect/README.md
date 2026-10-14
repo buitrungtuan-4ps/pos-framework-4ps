@@ -5,24 +5,28 @@
 ## What it is
 
 Windows' own protection for a store box's state: DPAPI in machine scope for the vault key the edge's
-secrets are sealed under. Only this machine can decrypt it, and the `data\` directory's ACL keeps
-other local accounts from reading the file it is in. It is the one crate where the workspace lifts
+secrets are sealed under, and the check of who may read the state directory. Only this machine can
+decrypt the key, and the `data\` directory's ACL keeps other local accounts from reading it. It is the one crate where the workspace lifts
 `unsafe_code` for FFI, on Windows only.
 
 ## Owns
 
 - `protect_for_machine` and `unprotect` (DPAPI, `CRYPTPROTECT_LOCAL_MACHINE`), on Windows
+- `dir_readers`: who may read a directory, from its access-control list, on Windows
+- `access::readers`: the judgement itself (SYSTEM, Administrators and the store server's own account only), everywhere
 - `ProtectError`, everywhere
 
 ## Depends on / used by
 
 - **Depends on** (workspace crates): no workspace crate.
-- **Used by** (workspace crates): `key-vault-keyring`.
+- **Used by** (workspace crates): `key-vault-keyring`, `pos-edge`.
 
 ## Entry points
 
 - `src/lib.rs`: `ProtectError`, and the Windows re-exports
 - `src/dpapi.rs`: `protect_for_machine`, `unprotect`
+- `src/acl.rs`: `dir_readers`
+- `src/access.rs`: `readers`, `Readers`, `Entry`
 
 ## Rules
 
@@ -36,4 +40,4 @@ other local accounts from reading the file it is in. It is the one crate where t
 cargo test -p windows-protect   # on Windows: protect, unprotect, and damaged bytes refused
 ```
 
-On Linux the crate is empty but for `ProtectError`, and its one test runs there too.
+On Linux the crate holds `ProtectError` and the judgement in `access`, and their tests run there too.

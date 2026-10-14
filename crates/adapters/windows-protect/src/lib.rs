@@ -6,10 +6,14 @@
 //! on Windows (`key-vault-keyring`): a copied disk or backup cannot open it, and the `data\`
 //! directory's ACL keeps every other local account from reading the file it is in.
 //!
+//! **Who may read the state.** [`access::readers`] judges a directory's access-control list:
+//! SYSTEM, the Administrators group and the store server's own account may read it, and nobody
+//! else. [`dir_readers`] reads a real list on Windows; the judgement itself is tested everywhere.
+//!
 //! **The one place FFI is allowed.** This crate is the adapter the workspace lint table reserves
 //! for it: `unsafe_code` is lifted here, on Windows only, and nowhere else. Every `unsafe` block is
-//! as small as the call it makes and says why it is sound. On every other platform the crate is
-//! empty but for [`ProtectError`], so a Linux build compiles none of it.
+//! as small as the call it makes and says why it is sound. On every other platform the crate holds
+//! only [`ProtectError`] and the judgement in [`access`], so a Linux build compiles no FFI.
 
 #![cfg_attr(
     windows,
@@ -22,9 +26,14 @@
 
 use std::fmt;
 
+pub mod access;
+#[cfg(windows)]
+mod acl;
 #[cfg(windows)]
 mod dpapi;
 
+#[cfg(windows)]
+pub use acl::dir_readers;
 #[cfg(windows)]
 pub use dpapi::{protect_for_machine, unprotect};
 

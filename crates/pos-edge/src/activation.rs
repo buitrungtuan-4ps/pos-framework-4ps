@@ -26,6 +26,7 @@
 //! box that already holds one is a conflict, not a re-exchange — the cloud would refuse the spent
 //! code anyway ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Json;
@@ -47,6 +48,7 @@ use crate::app::Edge;
 use crate::http::ERROR_REASON_HEADER;
 use crate::lease_state::LeaseWatch;
 use crate::ota_client::RestartRequest;
+use crate::state_access::StateAccess;
 
 /// The collaborators the activation routes compose: the [`Edge`] (to append the completion event),
 /// the [`CloudSync`] channel (to exchange the code), and the [`KeyVault`] (to store the credential).
@@ -64,6 +66,9 @@ struct ActivationState<S, C, V> {
     /// installed update asks for. `None` on a router built without one — the tests and a box with no
     /// service manager to start it again.
     restart: Option<Arc<dyn RestartRequest>>,
+    /// The directory the database lives in, whose access the standing reports (ADR-0174). `None`
+    /// on a router built without one, which reports nothing.
+    state_dir: Option<PathBuf>,
 }
 
 // Hand-written rather than derived, so the state is `Clone` whatever `S`/`C`/`V` are (they sit behind
@@ -76,6 +81,7 @@ impl<S, C, V> Clone for ActivationState<S, C, V> {
             lease: self.lease.clone(),
             vault: Arc::clone(&self.vault),
             restart: self.restart.clone(),
+            state_dir: self.state_dir.clone(),
         }
     }
 }
@@ -103,6 +109,10 @@ struct ActivateAccepted {
 struct StandingResponse {
     /// `true` once a device credential is in the vault.
     activated: bool,
+    /// Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent
+    /// from a router that was given no state directory, and from an edge older than the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state_access: Option<StateAccess>,
 }
 
 /// Builds the activation sub-router: `POST /api/activate` and `GET /api/activation`.
@@ -116,6 +126,7 @@ pub fn activation_router<S, C, V>(
     lease: Option<Arc<LeaseWatch>>,
     origins: &Arc<crate::origins::Origins>,
     restart: Option<Arc<dyn RestartRequest>>,
+    state_dir: Option<PathBuf>,
 ) -> Router
 where
     S: EventStore + Send + Sync + 'static,
@@ -142,6 +153,7 @@ where
         vault,
         lease,
         restart,
+        state_dir,
     };
     Router::new()
         .route("/api/activate", post(activate::<S, C, V>))
@@ -266,11 +278,16 @@ where
     C: CloudSync + Send + Sync + 'static,
     V: KeyVault + Send + Sync + 'static,
 {
+    let state_access = match state.state_dir.clone() {
+        Some(dir) => Some(crate::state_access::check_off_the_workers(dir).await),
+        None => None,
+    };
     match boot_standing(state.vault.as_ref()).await {
         Ok(standing) => (
             StatusCode::OK,
             Json(StandingResponse {
                 activated: matches!(standing, ActivationStanding::Activated),
+                state_access,
             }),
         )
             .into_response(),
