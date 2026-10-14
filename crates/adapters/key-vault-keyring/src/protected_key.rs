@@ -14,7 +14,7 @@
 use std::io;
 use std::path::Path;
 
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::BackendError;
 use crate::sealed::{VAULT_KEY_LEN, VaultKey, create_private_dir, read_capped, write_atomically};
@@ -42,6 +42,10 @@ pub trait KeyProtection {
 /// Opens the vault key at `path`, or, where there is none yet, makes one, keeps it there and proves
 /// it opens.
 ///
+/// A file of exactly [`VAULT_KEY_LEN`] bytes is a raw key, as a box configured by hand before this
+/// kept it; a protected key is never that short. It is adopted: protected, proven to open to the
+/// same key, and only then written over the raw file, so a failure leaves the raw key as it was.
+///
 /// # Errors
 ///
 /// [`BackendError::Unavailable`] if the file cannot be read or written, does not open, or opens to
@@ -52,8 +56,18 @@ pub fn open_or_create(
     protection: &impl KeyProtection,
 ) -> Result<VaultKey, BackendError> {
     match read_capped(path, PROTECTED_CAP) {
+        Ok(raw) if raw.len() == VAULT_KEY_LEN => adopt(path, &Zeroizing::new(raw), protection),
         Ok(protected) => open(&protected, protection),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => create(path, protection),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if let Some(dir) = path.parent() {
+                create_private_dir(dir)?;
+            }
+            let mut fresh = Zeroizing::new(vec![0_u8; VAULT_KEY_LEN]);
+            getrandom::fill(&mut fresh).map_err(|error| {
+                BackendError::Unavailable(format!("no randomness for a new vault key: {error}"))
+            })?;
+            adopt(path, &fresh, protection)
+        }
         Err(error) => Err(BackendError::Unavailable(format!(
             "could not read the vault key at {}: {error}",
             path.display()
@@ -62,42 +76,36 @@ pub fn open_or_create(
 }
 
 fn open(protected: &[u8], protection: &impl KeyProtection) -> Result<VaultKey, BackendError> {
-    let mut plain = protection.unprotect(protected)?;
-    let key = VaultKey::from_bytes(&plain);
-    plain.zeroize();
-    key
+    let plain = Zeroizing::new(protection.unprotect(protected)?);
+    VaultKey::from_bytes(&plain)
 }
 
-fn create(path: &Path, protection: &impl KeyProtection) -> Result<VaultKey, BackendError> {
-    if let Some(dir) = path.parent() {
-        create_private_dir(dir)?;
+/// Keeps `plain` at `path` protected: proven to open in memory before anything is written, written
+/// atomically, and read back as written.
+fn adopt(
+    path: &Path,
+    plain: &[u8],
+    protection: &impl KeyProtection,
+) -> Result<VaultKey, BackendError> {
+    let protected = protection.protect(plain)?;
+    let opened = Zeroizing::new(protection.unprotect(&protected)?);
+    if opened.as_slice() != plain {
+        return Err(BackendError::Unavailable(format!(
+            "the vault key for {} did not open as it was protected; nothing was written",
+            path.display()
+        )));
     }
-    let mut plain = [0_u8; VAULT_KEY_LEN];
-    getrandom::fill(&mut plain).map_err(|error| {
-        BackendError::Unavailable(format!("no randomness for a new vault key: {error}"))
+    write_atomically(path, &protected)?;
+    let back = read_capped(path, PROTECTED_CAP).map_err(|error| {
+        BackendError::Unavailable(format!("could not read back {}: {error}", path.display()))
     })?;
-    let written = protection
-        .protect(&plain)
-        .and_then(|protected| write_atomically(path, &protected));
-    let proven = written.and_then(|()| {
-        let back = read_capped(path, PROTECTED_CAP).map_err(|error| {
-            BackendError::Unavailable(format!("could not read back {}: {error}", path.display()))
-        })?;
-        let mut opened = protection.unprotect(&back)?;
-        let same = opened == plain;
-        opened.zeroize();
-        if same {
-            Ok(())
-        } else {
-            Err(BackendError::Unavailable(format!(
-                "the new vault key at {} did not open as it was made",
-                path.display()
-            )))
-        }
-    });
-    let key = proven.and_then(|()| VaultKey::from_bytes(&plain));
-    plain.zeroize();
-    key
+    if back != protected {
+        return Err(BackendError::Unavailable(format!(
+            "the vault key at {} did not read back as it was written",
+            path.display()
+        )));
+    }
+    VaultKey::from_bytes(plain)
 }
 
 /// DPAPI in machine scope, through `windows-protect`.
@@ -186,6 +194,43 @@ mod tests {
         std::fs::write(&path, b"from another machine").expect("write");
         assert!(open_or_create(&path, &Xor::new()).is_err());
         assert_eq!(std::fs::read(&path).expect("kept"), b"from another machine");
+    }
+
+    #[test]
+    fn a_raw_key_is_adopted_protected_and_opens_to_the_same_key() {
+        let path = scratch("raw");
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("dir");
+        std::fs::write(&path, [3_u8; VAULT_KEY_LEN]).expect("raw");
+        let adopted = open_or_create(&path, &Xor::new()).expect("adopted");
+        assert_eq!(adopted.bytes(), &[3_u8; VAULT_KEY_LEN]);
+        assert!(
+            std::fs::read(&path).expect("kept").starts_with(b"XOR:"),
+            "now protected"
+        );
+        let again = open_or_create(&path, &Xor::new()).expect("reopened");
+        assert_eq!(again.bytes(), &[3_u8; VAULT_KEY_LEN]);
+    }
+
+    /// A protection that cannot be trusted: what it protects does not open to the same bytes.
+    struct Lossy;
+
+    impl KeyProtection for Lossy {
+        fn protect(&self, plain: &[u8]) -> Result<Vec<u8>, BackendError> {
+            Ok([b"L:", plain].concat())
+        }
+
+        fn unprotect(&self, protected: &[u8]) -> Result<Vec<u8>, BackendError> {
+            Ok(protected.iter().map(|byte| byte ^ 1).collect())
+        }
+    }
+
+    #[test]
+    fn a_raw_key_whose_protection_does_not_prove_is_left_as_it_was() {
+        let path = scratch("lossy");
+        std::fs::create_dir_all(path.parent().expect("dir")).expect("dir");
+        std::fs::write(&path, [4_u8; VAULT_KEY_LEN]).expect("raw");
+        assert!(open_or_create(&path, &Lossy).is_err());
+        assert_eq!(std::fs::read(&path).expect("kept"), [4_u8; VAULT_KEY_LEN]);
     }
 
     #[test]
