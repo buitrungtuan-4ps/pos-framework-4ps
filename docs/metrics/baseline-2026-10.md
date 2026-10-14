@@ -21,7 +21,9 @@ How it counts:
   `xtask/`, `examples/` and `apps/pos-station/src-tauri/`. A test file is one under a `tests/` or
   `benches/` directory.
 - **Functions:** every `fn` with a body, test functions included. "Outside test code" leaves out
-  test files and everything below a file's first `#[cfg(test)]`.
+  test files and everything below a file's first `#[cfg(test)]`. The tool has since narrowed that
+  rule: only the item a `#[cfg(test)]` gates is test code (see `xtask/README.md`), which brought
+  294 functions of `pos-edge/src/app.rs` back into the count.
 - **Lengths** run from the `fn` line to the closing brace.
 - **Parameters** include `self`, as clippy's `too_many_arguments` counts them.
 

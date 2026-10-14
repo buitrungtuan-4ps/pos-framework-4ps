@@ -8,7 +8,8 @@
 //! renders them, so the rules gate a later phase adds reads the same [`Stats`] this prints. The
 //! numbers it reports are recorded in `docs/metrics/baseline-2026-10.md`.
 //!
-//! - every `.rs` file's line count, a test file being one under a `tests/` or `benches/` directory;
+//! - every `.rs` file's line count, a test file being one under a `tests/` or `benches/` directory
+//!   or the file of a module a `#[cfg(test)]` gates;
 //! - every function with a body: its length and parameters ([`scan`]), and whether it is test code;
 //! - each workspace crate's lines and whether it has a `README.md`;
 //! - each front-end root's files and lines.
@@ -61,7 +62,8 @@ pub struct FileStat {
     pub path: String,
     /// Lines in the file.
     pub lines: usize,
-    /// Whether it sits under a `tests/` or `benches/` directory.
+    /// Whether it is test code: under a `tests/` or `benches/` directory, or the file of a module
+    /// a `#[cfg(test)]` gates.
     pub test: bool,
 }
 
@@ -81,7 +83,8 @@ pub struct FunctionStat {
     pub lines: usize,
     /// Its parameters, `self` included.
     pub params: usize,
-    /// Whether it is test code: in a test file, or below the file's first `#[cfg(test)]`.
+    /// Whether it is test code: in a test file, or inside the item a `#[cfg(test)]` gates (a whole
+    /// module when that item is a `mod`). A gated `use` gates only itself ([`scan::test_gated`]).
     pub test: bool,
 }
 
@@ -136,16 +139,24 @@ pub fn run(args: &[String]) -> Result<(), Error> {
 pub fn collect(root: &Path) -> Result<Stats, Error> {
     let mut rust = Vec::new();
     walk(root, &["rs"], &mut rust)?;
-    let mut files = Vec::new();
-    let mut functions = Vec::new();
+    let mut sources = Vec::new();
     for path in &rust {
         let source = fs::read_to_string(path)?;
-        let relative = relative(root, path);
-        let test = is_test_path(&relative);
-        let test_from = source
-            .lines()
-            .position(|line| line.trim() == "#[cfg(test)]")
-            .map_or(usize::MAX, |index| index + 1);
+        let gated = scan::test_gated(&source);
+        sources.push((relative(root, path), source, gated));
+    }
+    let gated_files: std::collections::HashSet<String> = sources
+        .iter()
+        .flat_map(|(relative, _, gated)| {
+            gated.module_files.iter().flat_map(move |(name, path)| {
+                module_file_candidates(relative, name, path.as_deref())
+            })
+        })
+        .collect();
+    let mut files = Vec::new();
+    let mut functions = Vec::new();
+    for (relative, source, gated) in sources {
+        let test = is_test_path(&relative) || gated_files.contains(&relative);
         let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for span in scan::functions(&source) {
             let count = seen.entry(span.qualified.clone()).or_default();
@@ -157,7 +168,7 @@ pub fn collect(root: &Path) -> Result<Stats, Error> {
             };
             functions.push(FunctionStat {
                 path: relative.clone(),
-                test: test || span.line > test_from,
+                test: test || gated.covers(span.line),
                 qualified,
                 name: span.name,
                 line: span.line,
@@ -209,6 +220,32 @@ fn relative(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// The files the out-of-line module `name`, declared in the file at `parent`, may live in: the
+/// `#[path]` it names (relative to `parent`'s directory), or `name.rs` and `name/mod.rs` beside a
+/// `mod.rs`, `lib.rs` or `main.rs`, and under the directory named after any other file.
+fn module_file_candidates(parent: &str, name: &str, path: Option<&str>) -> Vec<String> {
+    let (dir, file) = parent.rsplit_once('/').unwrap_or(("", parent));
+    let join = |base: &str, rest: &str| {
+        if base.is_empty() {
+            rest.to_owned()
+        } else {
+            format!("{base}/{rest}")
+        }
+    };
+    if let Some(path) = path {
+        return vec![join(dir, path)];
+    }
+    let base = if matches!(file, "mod.rs" | "lib.rs" | "main.rs") {
+        dir.to_owned()
+    } else {
+        join(dir, file.trim_end_matches(".rs"))
+    };
+    vec![
+        join(&base, &format!("{name}.rs")),
+        join(&base, &format!("{name}/mod.rs")),
+    ]
 }
 
 fn is_test_path(relative: &str) -> bool {
@@ -384,4 +421,32 @@ fn frontend_table(stats: &Stats) -> String {
     }
     out.push('\n');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module_file_candidates;
+
+    #[test]
+    fn a_gated_module_file_sits_beside_a_mod_rs_and_under_any_other_file() {
+        assert_eq!(
+            module_file_candidates("crates/a/src/lib.rs", "tests", None),
+            ["crates/a/src/tests.rs", "crates/a/src/tests/mod.rs"]
+        );
+        assert_eq!(
+            module_file_candidates("crates/a/src/events.rs", "tests", None),
+            [
+                "crates/a/src/events/tests.rs",
+                "crates/a/src/events/tests/mod.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_path_attribute_names_the_file_from_the_declaring_files_directory() {
+        assert_eq!(
+            module_file_candidates("crates/a/tests/cloud.rs", "media", Some("cloud/media.rs")),
+            ["crates/a/tests/cloud/media.rs"]
+        );
+    }
 }
