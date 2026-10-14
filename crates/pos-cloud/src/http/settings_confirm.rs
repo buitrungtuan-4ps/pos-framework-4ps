@@ -125,4 +125,27 @@ mod tests {
         let message = body["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains("example.drawer_owner"), "{message}");
     }
+
+    /// The console the cloud embeds ships each notice in every language it ships (ADR-0169 decision
+    /// 4): a confirmation is asked in words, never under a bare key.
+    #[test]
+    fn every_notice_is_in_every_console_language() {
+        let packs = [
+            ("en", include_str!("../../../../dashboard/src/i18n/en.json")),
+            ("vi", include_str!("../../../../dashboard/src/i18n/vi.json")),
+        ];
+        for (language, pack) in packs {
+            let pack: std::collections::BTreeMap<String, String> =
+                serde_json::from_str(pack).expect("a console language pack");
+            for setting in pos_proto::settings::register() {
+                if let Some(confirm) = setting.confirm {
+                    assert!(
+                        pack.contains_key(confirm.notice),
+                        "the console's {language} pack has no `{}`",
+                        confirm.notice
+                    );
+                }
+            }
+        }
+    }
 }

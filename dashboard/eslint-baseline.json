@@ -3,10 +3,10 @@
     "max-depth": 5
   },
   "src/api/client.ts": {
-    "max-lines": 2081
+    "max-lines": 2083
   },
   "src/api/types.ts": {
-    "max-lines": 1203
+    "max-lines": 1204
   },
   "src/components/AccountMenu.tsx": {
     "max-lines-per-function": 154
@@ -126,7 +126,7 @@
     "max-lines-per-function": 477
   },
   "src/screens/Settings.tsx": {
-    "max-lines-per-function": 811
+    "max-lines-per-function": 804
   },
   "src/screens/Stations.tsx": {
     "max-lines-per-function": 557

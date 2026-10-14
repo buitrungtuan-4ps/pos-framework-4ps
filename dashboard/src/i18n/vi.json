@@ -1929,6 +1929,8 @@
   "settings.clear": "Xóa giá trị này",
   "settings.clearHint": "Xóa cũng phát hành lại: các cửa hàng đang nhận giá trị này sẽ chạy giá trị của cấp cụ thể kế tiếp, hoặc giá trị mặc định.",
   "settings.cleared": "Đã xóa {setting} ở cấp này và phát hành lại.",
+  "settings.confirmCovers": "Tên của bạn và thời điểm được ghi lại cùng xác nhận này. Xác nhận áp dụng cho {target}, kể cả cửa hàng tham gia sau này.",
+  "settings.confirmFirst": "Đánh dấu ô xác nhận ở trên để lưu giá trị này.",
   "settings.defaultIs": "Mặc định: {value}",
   "settings.description": "Mỗi giá trị mà cửa hàng có thể chạy khác nhau, đặt một lần cho mọi cửa hàng, một thương hiệu, một nhóm cửa hàng hoặc một cửa hàng.",
   "settings.empty": "Chưa có cài đặt nào",

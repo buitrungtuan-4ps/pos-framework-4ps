@@ -1929,6 +1929,8 @@
   "settings.clear": "Clear this value",
   "settings.clearHint": "Clearing publishes too: the stores it reached then run the next most specific value, or the default.",
   "settings.cleared": "{setting}: cleared here and published.",
+  "settings.confirmCovers": "Your name and the time are recorded with this confirmation. It covers {target}, and any store that joins later.",
+  "settings.confirmFirst": "Tick the confirmation above to save this value.",
   "settings.defaultIs": "Default: {value}",
   "settings.description": "Each value a store may run differently, set once for every store, a brand, a store group or one store.",
   "settings.empty": "No settings yet",
