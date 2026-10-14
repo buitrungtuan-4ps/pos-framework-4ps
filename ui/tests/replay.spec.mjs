@@ -1223,8 +1223,12 @@ test("a kitchen board that drops its link gets the food fired meanwhile, without
     await expect(board.getByText("Store connected")).toBeVisible();
     await seatTable(till);
     await addItem(till);
-    await expect.poll(() => link.heard[0].length).toBeGreaterThan(0);
-    const seen = JSON.parse(link.heard[0][0]);
+    // The board's first socket named no position, so the edge first said `resync`; the frames after
+    // it are the stream's.
+    const events = () =>
+      link.heard[0].map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "event");
+    await expect.poll(() => events().length).toBeGreaterThan(0);
+    const seen = events()[0];
     expect(typeof seen.stream_id, "every frame says which stream it is on").toBe("string");
     expect(typeof seen.sequence, "and where on it").toBe("number");
     await expect(board.locator('[data-outcome="ticket-waiting"]')).toHaveCount(0);
@@ -1265,7 +1269,10 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
     await board.goto(`${edge.baseURL}/kds`);
     await expect(board.getByText("Store connected")).toBeVisible();
     await expect.poll(link.reads).toBeGreaterThan(0);
-    expect(link.heard[0], "the board has heard nothing it could name").toHaveLength(0);
+    const named = link.heard[0]
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => typeof frame.sequence === "number");
+    expect(named, "the board has heard nothing it could name").toHaveLength(0);
 
     await link.drop();
     await seatTable(till);
@@ -1282,6 +1289,65 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
       "resync",
     );
     expect(link.readsSinceRestore(), "so the board reloaded").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A till that has just paired can be on the floor before its live link is up, and what happens
+// meanwhile still reaches it.
+//
+// The link's first attempt is refused until the device pairs, and the retry that succeeds can come
+// after the sign-in has read the store. Here that retry is held while a second screen seats a table
+// and starts its order. The till names no position it does not have: the edge answers `resync` once
+// the socket is subscribed, and the till reads again what is open, so its floor shows the table
+// taken — with no reload of the page. Before, it asked for the live stream alone, and showed the
+// table free until something reloaded it.
+test("a till whose link opens after it reached the floor still hears what happened meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const sockets = [];
+    // Only a paired device's socket is held: the refusal before pairing reaches the edge as before.
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          sockets.push(socket);
+          await opened;
+        }
+        socket.connectToServer();
+      },
+    );
+    let loads = 0;
+    till.on("load", () => {
+      loads += 1;
+    });
+    await pair(till, edge);
+    await signIn(till, edge);
+    await expect.poll(() => sockets.length).toBeGreaterThan(0);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+    const loadsBefore = loads;
+
+    // Another screen on the store takes the first table while the till's link is down.
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await addItem(other);
+
+    open();
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+    const asked = new URL(sockets[0].url()).searchParams;
+    expect(asked.get("stream_id"), "it has no position to name").toBeNull();
+    expect(asked.get("after_sequence")).toBe("0");
+    expect(loads, "read again, not reloaded").toBe(loadsBefore);
   } finally {
     await edge.stop();
   }

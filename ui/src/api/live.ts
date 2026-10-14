@@ -14,6 +14,11 @@
 // Whenever that cannot be done completely the answer is the reload a `resync` already makes: the
 // edge says `resync` when it cannot replay from the position (the device was away too long, or the
 // edge restarted), and this treats as a gap any frame that does not continue the stream it holds.
+//
+// A socket that holds no position — every first connect, and a reconnect before the first frame —
+// asks for the same answer, because it cannot know what was published before it was subscribed: a
+// till that has just paired may reach the floor, seat a table and add a line while its link is
+// still retrying, and those events were sent to no one.
 
 import { deviceToken, liveSocketUrl } from "./credentials";
 
@@ -83,18 +88,17 @@ function skipped(held: Position | null, next: Position | null): boolean {
 
 // The `/ws` URL for a (re)connect.
 //
-// The first connect names nothing, and is served from the next frame as every device always was —
-// the boot gate has just read what is open. A reconnect names the position it holds. One that holds
-// none — its link dropped before it saw a single frame — cannot say what it missed, so it asks to
-// resume from nothing: `after_sequence=0` with no stream, which the edge answers `resync` once the
-// socket is subscribed. That, and not a reload started on `open`, is what makes the read land after
-// the subscription, so a frame published while it runs is not lost between the two.
-function socketUrl(reconnecting: boolean, position: Position | null): string {
-  const base = liveSocketUrl();
-  if (!reconnecting) {
-    return base;
-  }
-  const url = new URL(base);
+// A socket that holds a position names it, and the edge sends what happened after it. One that holds
+// none cannot say what it missed, so it asks to resume from nothing: `after_sequence=0` with no
+// stream, which the edge answers `resync` once the socket is subscribed. That is every first
+// connect, and a reconnect whose link dropped before it saw a single frame. A first connect cannot
+// assume it is subscribed before the store is read: a till's first attempt is refused until it
+// pairs, and the retry that succeeds can come after the sign-in has read the store and the floor
+// has been used. The `resync` and the read it starts, and not a reload started on `open`, are what
+// make the read land after the subscription, so a frame published in between is not lost. Where
+// the store has not been read yet, the `resync` asks for nothing (`readAgain` waits for the load).
+function socketUrl(position: Position | null): string {
+  const url = new URL(liveSocketUrl());
   if (position === null) {
     url.searchParams.set("after_sequence", "0");
   } else {
@@ -109,9 +113,6 @@ export class LiveLink {
   #closed = false;
   #retry = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
-  // Whether a socket of this link has been open before, so the next one is a reconnect that may
-  // have missed something.
-  #wasOpen = false;
   #position: Position | null = null;
   readonly #handlers: LiveLinkHandlers;
 
@@ -146,12 +147,11 @@ export class LiveLink {
     // expression unchanged, and a device paired against a named edge opens the socket there rather
     // than against whatever origin happened to serve the page. The position rides in the query and
     // not beside the token: it is not a secret, and the edge logs the path, never the query.
-    const socket = new WebSocket(socketUrl(this.#wasOpen, this.#position), protocols);
+    const socket = new WebSocket(socketUrl(this.#position), protocols);
     this.#socket = socket;
 
     socket.addEventListener("open", () => {
       this.#retry = 0;
-      this.#wasOpen = true;
       this.#handlers.onStatus("open");
     });
 

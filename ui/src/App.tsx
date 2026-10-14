@@ -4,7 +4,7 @@ import { Route, Router } from "@solidjs/router";
 import { ApiError, api, deviceToken } from "./api/client";
 import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
-import { LiveLink, type LinkStatus } from "./api/live";
+import { LiveLink } from "./api/live";
 import { IdleLock } from "./components/IdleLock";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
@@ -134,7 +134,6 @@ export function App() {
     );
   }
 
-  let lastStatus: LinkStatus = "connecting";
   const link = new LiveLink({
     onEvent: fold,
     onResync: () => {
@@ -147,14 +146,9 @@ export function App() {
     // A new configuration is live on the edge: read again what it changed, without a new sign-in
     // (ADR-0160, ADR-0173).
     onConfigApplied: (changed) => void loadConfiguration(changed),
-    onStatus: (status) => {
-      // Back after a drop: everything held is revalidated, and what did not change costs a `304`.
-      if (status === "open" && lastStatus === "closed") {
-        void readAgain();
-      }
-      lastStatus = status;
-      setLink(status);
-    },
+    // What a link that was down missed comes back on the link itself: the edge replays it after the
+    // position the link names, or says `resync`, which reads everything again (`./api/live`).
+    onStatus: setLink,
   });
   // The device half of the boot gate, once the store server itself is known to be usable: pair, then
   // sign in, then draw the store.

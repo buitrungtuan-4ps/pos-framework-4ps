@@ -12,7 +12,8 @@
 //   device to pair and a `403` to sign in, as every other call does.
 // - **Revalidation.** Each read names the tag of the copy it holds, and an unchanged copy costs a
 //   bodiless `304`.
-// - **When it reads again.** On a reconnect of the live link; on a `resync`, the live entries; and
+// - **When it reads again.** On a `resync`, every entry: the edge's answer to a live link that
+//   cannot be resumed, which is every link that holds no position, its first connect included; and
 //   on `config_applied`, only the entries that derive from the nodes the frame names, or every one
 //   where it names none.
 // - **The boot gate.** Once the store's load starts, the till is drawn when every required entry
@@ -210,7 +211,7 @@ export function load(key: string): Promise<void> {
 }
 
 // Reads every entry but those in `except`: the store's load at the boot gate and at sign-in, and a
-// reconnect, where each read that names a tag costs a `304` when nothing changed.
+// `resync`, where each read that names a tag costs a `304` when nothing changed.
 export async function loadAll(except: readonly string[] = []): Promise<void> {
   setStarted(true);
   await restore();
