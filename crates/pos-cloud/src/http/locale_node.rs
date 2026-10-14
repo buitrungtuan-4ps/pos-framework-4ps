@@ -13,7 +13,8 @@ use pos_proto::money::CurrencyCode;
 
 use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
-use super::{PackedFacts, PublishLocaleRequest, api_error_with_details, checked_denominations};
+use super::api_error_with_details;
+use super::config_nodes::locale::{PackedFacts, PublishLocaleRequest, checked_denominations};
 
 /// The request's country and currency, parsed, and its cash denominations sorted and deduplicated;
 /// or the AIP-193 `400` naming the first field that does not parse.
