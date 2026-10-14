@@ -116,7 +116,7 @@ use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
 use pos_proto::session::PublishedSession;
-use pos_proto::settings::{SettingScope, ValueRefusal};
+use pos_proto::settings::SettingScope;
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -200,7 +200,11 @@ use crate::openapi::ApiDoc;
 mod lease_bump;
 mod locale_node;
 mod release_schedule;
+mod setting_refusal;
 mod settings_confirm;
+
+use setting_refusal::setting_refusal_response;
+
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
 use crate::openapi_admin::AdminApiDoc;
@@ -18992,6 +18996,9 @@ struct PutSettingRequest {
     /// The tenant, brand, store group or store the value is for.
     scope_id: String,
     value: serde_json::Value,
+    /// Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2).
+    #[serde(default)]
+    notice_confirmed: bool,
 }
 
 #[utoipa::path(
@@ -18999,7 +19006,9 @@ struct PutSettingRequest {
     path = "/admin/settings",
     request_body(
         description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
-                       _STORE_GROUP or _STORE), the id it is for, and the value",
+                       _STORE_GROUP or _STORE), the id it is for, the value, and \
+                       notice_confirmed (default false), true when the person confirmed the \
+                       notice of a value its catalogue entry's confirm names",
         content_type = "application/json",
     ),
     responses(
@@ -19009,8 +19018,9 @@ struct PutSettingRequest {
                                       SETTING_PUBLISH_FAILED"),
         (status = 400, description = "An id is not a ULID, the scope is not a scope, the setting \
                                       is not in the register, the setting cannot be set at that \
-                                      scope, the value is not one it takes, or a tenant-scope \
-                                      value names another tenant", body = crate::openapi_admin::ErrorResponse),
+                                      scope, the value is not one it takes, the value needs its \
+                                      notice confirmed and notice_confirmed is not true, or a \
+                                      tenant-scope value names another tenant", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no such brand, store group or store", body = crate::openapi_admin::ErrorResponse),
@@ -19053,9 +19063,13 @@ where
         Ok(scope) => scope,
         Err(refusal) => return refusal,
     };
-    if let Err(refusal) = crate::settings::validate(&request.setting_key, scope, &request.value) {
-        return setting_refusal_response(&refusal);
-    }
+    let notice = match crate::settings::validate(&request.setting_key, scope, &request.value)
+        .and_then(|setting| {
+            crate::settings::confirmation(&setting, &request.value, request.notice_confirmed)
+        }) {
+        Ok(notice) => notice,
+        Err(refusal) => return setting_refusal_response(&refusal),
+    };
     let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
         Ok(layout) => layout,
         Err(refusal) => return refusal,
@@ -19101,7 +19115,7 @@ where
         "setting",
         &setting_audit_id(&request.setting_key, scope, &scope_id),
         before.map(|value| serde_json::json!({ "value": value })),
-        Some(serde_json::json!({ "value": request.value })),
+        Some(settings_confirm::audit_after(&request.value, notice)),
     )
     .await;
     publish_results_response(&results)
@@ -19900,27 +19914,6 @@ fn setting_scope_refusal() -> Response {
             .iter()
             .filter(|scope| **scope != SettingScope::Unspecified)
             .map(|scope| scope.as_wire()),
-    )
-}
-
-/// The `400` a value the register refuses becomes, naming the field at fault.
-fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Response {
-    let (field, reason) = match refusal {
-        crate::settings::SettingRefusal::UnknownSetting(_) => ("setting_key", "UNKNOWN_SETTING"),
-        crate::settings::SettingRefusal::ScopeNotAllowed { .. } => ("scope", "SCOPE_NOT_ALLOWED"),
-        crate::settings::SettingRefusal::ValueNotAllowed { refusal, .. } => (
-            "value",
-            match refusal {
-                ValueRefusal::NotOneOfItsValues => "INVALID_ENUM_VALUE",
-                ValueRefusal::OutOfRange => "OUT_OF_RANGE",
-                ValueRefusal::NotAWholeNumber | ValueRefusal::NotTrueOrFalse => "INVALID_VALUE",
-            },
-        ),
-    };
-    api_error_with_details(
-        ErrorStatus::InvalidArgument,
-        refusal.to_string(),
-        &[(field, reason)],
     )
 }
 

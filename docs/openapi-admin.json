@@ -2577,7 +2577,7 @@
         "summary": "`PUT /admin/settings` — writes one value and republishes every store it reaches.",
         "operationId": "admin_put_setting",
         "requestBody": {
-          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, and the value",
+          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, the value, and notice_confirmed (default false), true when the person confirmed the notice of a value its catalogue entry's confirm names",
           "content": {
             "application/json": {}
           }
@@ -2587,7 +2587,7 @@
             "description": "Written, and every store it reaches republished. The body lists each store with SETTING_PUBLISH_APPLIED and the new config version, SETTING_PUBLISH_UNCHANGED, or SETTING_PUBLISH_FAILED"
           },
           "400": {
-            "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, or a tenant-scope value names another tenant",
+            "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, the value needs its notice confirmed and notice_confirmed is not true, or a tenant-scope value names another tenant",
             "content": {
               "application/json": {
                 "schema": {
