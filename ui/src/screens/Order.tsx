@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/r
 import { api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { t } from "../i18n";
-import { WhyUnavailable } from "../components/StoreData";
+import { WhyUnavailable, WritesPendingNote } from "../components/StoreData";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
@@ -16,7 +16,6 @@ import type {
   ModifierGroup,
 } from "../api/types";
 import {
-  addItem,
   chooseSeat,
   groupsFor,
   holdWalkIn,
@@ -25,11 +24,9 @@ import {
   fireOrder,
   floorTables,
   linesForTable,
-  setQuantity,
   loadCheck,
   modifierNames,
   noteLost,
-  moveTable,
   openBill,
   openBillFor,
   openBillsFor,
@@ -43,6 +40,7 @@ import {
   tableState,
   unfiredLinesForTable,
   unsentCoursesForTable,
+  PENDING,
   voidLine,
   waiveFee,
   walkInAsks,
@@ -52,6 +50,7 @@ import {
   type OrderLine,
   formatAmount,
 } from "../state/store";
+import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
@@ -110,8 +109,10 @@ export function Order() {
   //
   // Written below `params` deliberately: a `createMemo` runs when it is created, so one placed above
   // the `const`s it reads dies in their temporal dead zone and takes the screen down (`.jules/bolt.md`).
+  // A line still sending is left out: the edge has not priced it, and its confirmation re-reads.
   const priceable = createMemo(() =>
     linesForTable(key())
+      .filter((line) => line.pending !== true)
       .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
       .join(","),
   );
@@ -173,17 +174,17 @@ export function Order() {
     setMoveError(null);
     setMoving(true);
   };
-  const moveTo = async (to: string) => {
+  // Painted at once (ADR-0173 decision 4): the screen goes to the new table on the tap, and a
+  // refusal brings it back to this one with the refusal's own sentence.
+  const moveTo = (to: string) => {
     const from = params.id;
     setMoveError(null);
-    try {
-      await moveTable(from, to);
-    } catch (caught) {
-      setMoveError(errorMessage(caught));
-      return;
-    }
     setMoving(false);
     navigate(`/table/${to}?moved_from=${from}`);
+    moveTable(from, to).catch((caught: unknown) => {
+      navigate(`/table/${from}`);
+      setError(errorMessage(caught));
+    });
   };
 
   // A pre-bill: what the order comes to, on paper, before anyone pays (roadmap-v3 B2.1). No bill
@@ -247,6 +248,8 @@ export function Order() {
   // verified PIN — the food exists, and stock has moved. An unfired line is an ordinary cancel. Where
   // the store enforces each person's own set, only a person holding the void with approval is asked;
   // one holding it directly voids alone (ADR-0158).
+  // A line painted before the edge answered: nothing can be done to it until the edge has it.
+  const provisional = (line: OrderLine) => line.orderLineId.startsWith(PENDING);
   const needsApproval = (line: OrderLine) =>
     line.state === "ORDER_LINE_STATE_FIRED" && asksApprover("sales.line.void_fired");
   // Whether this person may void this line at all. The act follows the line, as on the edge: one
@@ -815,7 +818,7 @@ export function Order() {
                       Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
                       no order — that is a void, which carries a reason and, after a fire, a manager.
                       Letting the stepper walk into it would give that act a second, quieter spelling. */}
-                  <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add")}>
+                  <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add") && !provisional(line)}>
                     <span class="inline-flex items-center gap-1">
                       <button
                         type="button"
@@ -863,8 +866,9 @@ export function Order() {
                       {t("order.seat_short", { seat: line.seat ?? 0 })}
                     </span>
                   </Show>
-                  <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) }}>
-                    {formatAmount(line.lineTotal)}
+                  {/* No figure until the edge's own: a line sending shows that it is (ADR-0173). */}
+                  <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) || line.pending }} data-outcome={line.pending ? "line-sending" : undefined}>
+                    {line.pending ? t("order.sending") : formatAmount(line.lineTotal)}
                   </span>
                   {/* A line waiting to be sent says so and nothing more: the Send button below acts on
                       every one of them at once, so a control per row would be one tap out of six
@@ -895,7 +899,7 @@ export function Order() {
                       </span>
                     }
                   >
-                    <Show when={canVoid(line)}>
+                    <Show when={canVoid(line) && !provisional(line)}>
                     <button
                       type="button"
                       class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
@@ -1341,12 +1345,15 @@ export function Order() {
                 <Show when={billed() || can("billing.bill.open")}>
                 <button
                   type="button"
-                  class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
+                  class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink disabled:opacity-50 tablet:mt-0 terminal:mt-3"
+                  disabled={writesPending()}
+                  aria-describedby="why-pending"
                   data-step="takePayment"
                   onClick={() => void takePayment()}
                 >
                   {t("order.take_payment")}
                 </button>
+                <WritesPendingNote />
                 </Show>
               }
             >

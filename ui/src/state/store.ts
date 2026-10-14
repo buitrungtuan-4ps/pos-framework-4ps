@@ -18,8 +18,6 @@ import type {
   CheckResponse,
   CourseResponse,
   DiscountResponse,
-  LineRequest,
-  OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
   MenuResponse,
@@ -48,6 +46,7 @@ import {
 } from "../lib/money";
 
 export interface OrderLine {
+  // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
   orderLineId: string;
   orderId: string;
   name: string;
@@ -84,6 +83,11 @@ export interface OrderLine {
   // `noteLost` is that case, and every screen says it rather than drawing nothing.
   notePresent?: boolean;
   note?: string;
+  // The item it sells, where this device added it: how the edge's event finds the line it confirms.
+  menuItemId?: string;
+  // Painted before the edge confirmed it (ADR-0173 decision 4): no amount is shown, and payment
+  // waits, until the edge's event or a read of the open orders brings the line's own figures.
+  pending?: boolean;
 }
 
 // A kitchen station the store published (`GET /api/floor`), for the board's station filter.
@@ -140,7 +144,7 @@ export interface ShiftInfo {
   assignee?: string;
 }
 
-interface StoreShape {
+export interface StoreShape {
   link: LinkStatus;
   // The floor the app draws — the store's published tables once `applyFloor` applies them, and a
   // sensible default until it does (the never-blank config contract, ADR-0072).
@@ -470,17 +474,43 @@ export function tableState(tableId: string): string {
 }
 
 export function linesForTable(tableId: string): OrderLine[] {
-  const orderId = state.tableOrder[tableId];
-  if (orderId === undefined) {
-    return [];
-  }
+  // A line added before the table's order was known waits under a provisional order of its own.
+  const orderId = state.tableOrder[tableId] ?? `${PENDING}order:${tableId}`;
   return Object.values(state.lines).filter((line) => line.orderId === orderId);
+}
+
+// The prefix of a provisional id: a line, or an order, this device painted before the edge answered
+// (`./optimistic`).
+export const PENDING = "pending:";
+
+// Changes the store as one draft. For `./optimistic`, which paints and rolls back its own acts.
+export function updateStore(change: (draft: StoreShape) => void): void {
+  setState(produce(change));
+}
+
+// Drops the provisional line the edge's event confirms: the same item, choices and note, added on
+// this device to the same order (or before its order was known), oldest first.
+function confirmProvisional(draft: StoreShape, line: OrderLine): void {
+  const ghost = Object.values(draft.lines).find(
+    (held) =>
+      held.orderLineId.startsWith(PENDING) &&
+      held.menuItemId === line.menuItemId &&
+      (held.orderId === line.orderId || held.orderId.startsWith(PENDING)) &&
+      held.note === line.note &&
+      held.modifierMenuItemIds.join() === line.modifierMenuItemIds.join(),
+  );
+  if (ghost !== undefined) {
+    delete draft.lines[ghost.orderLineId];
+  }
 }
 
 // The lines on this table that the kitchen has not been told about yet — what one tap on Send acts
 // on, and the number the button carries. `docs/ui-ux.md` §3 has asked for that count since P6.
 export function unfiredLinesForTable(tableId: string): OrderLine[] {
-  return linesForTable(tableId).filter((line) => line.state === "ORDER_LINE_STATE_ADDED");
+  // Not a line still sending: the edge has nothing to fire for it yet.
+  return linesForTable(tableId).filter(
+    (line) => line.state === "ORDER_LINE_STATE_ADDED" && line.pending !== true,
+  );
 }
 
 // The bill the pay screen settles next on this table: the oldest one still open, so a split table's
@@ -522,7 +552,7 @@ function orderStillOwes(draft: StoreShape, orderId: string): boolean {
 // and the seat a server was ringing for go with them, and the table they left waits to be cleared —
 // the same move the edge folds from `sales.table.transferred`. The states are the caller's: the edge's
 // answer on this device, and what that answer always is on the fan-out.
-function moveOrder(
+export function moveOrder(
   draft: StoreShape,
   orderId: string,
   from: string,
@@ -712,6 +742,7 @@ export function fold(event: ServerEvent): void {
       if (line !== null) {
         setState(
           produce((draft) => {
+            confirmProvisional(draft, line);
             draft.lines[line.orderLineId] = line;
             draft.liveOrders[line.orderId] = true;
           }),
@@ -754,9 +785,8 @@ export function fold(event: ServerEvent): void {
         if (quantity !== null && typeof quantity["milli"] === "number") {
           setState("lines", lineId, "quantityMilli", quantity["milli"]);
         }
-        if (lineTotal !== null) {
-          setState("lines", lineId, "lineTotal", lineTotal);
-        }
+        // The edge's figure is here, so a quantity this device changed is confirmed.
+        setState("lines", lineId, { pending: false, ...(lineTotal === null ? {} : { lineTotal }) });
       }
       break;
     }
@@ -978,6 +1008,7 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
   return {
     orderLineId,
     orderId,
+    menuItemId: str(payload, "menu_item_id") ?? undefined,
     name,
     quantityMilli: milli,
     lineTotal,
@@ -1216,28 +1247,7 @@ export async function releaseTable(tableId: string): Promise<void> {
   );
 }
 
-// Moves the guests at a table, and their order, to a free table. The fan-out brings the same move to
-// every other device; this one shows it at once.
-export async function moveTable(from: string, to: string): Promise<void> {
-  const response = await api.transferTable(from, to);
-  setState(
-    produce((draft) =>
-      moveOrder(
-        draft,
-        response.order_id,
-        from,
-        to,
-        response.from_table.state,
-        response.to_table.state,
-      ),
-    ),
-  );
-}
 
-// Adds one of the store's own menu items to a table. Every amount on the line is the edge's, passed
-// straight back rather than recomputed here: the price and the rate are what the store published and
-// what the guest was shown (roadmap-v3 E5). An item the edge reported unavailable is refused before
-// the round-trip — the button is disabled too, but the guard belongs with the action.
 /// The groups this item attaches, in the order it names them (ADR-0127).
 ///
 /// A group the item names and the store has not published is skipped rather than blocking the sale,
@@ -1267,68 +1277,6 @@ export function modifiersSatisfied(
   });
 }
 
-export async function addItem(
-  tableId: string,
-  item: MenuItemResponse,
-  modifiers: string[] = [],
-  note?: string,
-): Promise<void> {
-  if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
-    throw new Error(`${item.display_name} is not sellable`);
-  }
-  const walkIn = walkInOrder(tableId);
-  if (walkIn !== undefined) {
-    return addItemToWalkIn(walkIn, tableId, item, modifiers, note);
-  }
-  const line: LineRequest = {
-    menu_item_id: item.menu_item_id,
-    display_name: item.display_name,
-    quantity: { milli: 1000 },
-    unit_price: item.unit_price,
-    // One unit, so the line total is the unit price — the only quantity the till offers today, and
-    // the edge is the authority on the figure either way.
-    line_total: item.unit_price,
-    tax_class_id: item.tax_class_id,
-    tax_rate: item.tax_rate,
-    // Whose dish it is, when the store assigns seats and a server has said. Left off otherwise —
-    // the edge refuses a seat on a store with the capability off, so sending one unasked would turn
-    // every add into a refusal on the stores that make up most of them.
-    seat: state.seatsEnabled ? state.seatForTable[tableId] : undefined,
-    // The course the *catalog* says this item goes out on (ADR-0130) — a pizza is a main, and making
-    // a server say so on every tap would be a tap per dish for a fact the store already published.
-    //
-    // Gated the way the seat is, and for the same reason: the edge refuses a fire-by-course on a
-    // store with courses off, so a line stamped on such a store would carry an id nothing can act
-    // on. `?? undefined` because the wire form is nullable and `null` is not an absent field.
-    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
-    // The choices a guest made, which the edge validates against the published groups before it
-    // writes anything (ADR-0127 decision 5). Empty on every item that attaches none.
-    modifier_menu_item_ids: modifiers,
-    // The flag as well as the text, so an edge older than the note still records that one exists.
-    note_present: note !== undefined,
-    note,
-  };
-  const response = await api.addLine(tableId, line);
-  setState(
-    produce((draft) => {
-      draft.tableOrder[tableId] = response.order_id;
-      draft.orderTable[response.order_id] = tableId;
-      draft.lines[response.order_line_id] = {
-        orderLineId: response.order_line_id,
-        orderId: response.order_id,
-        name: item.display_name,
-        quantityMilli: 1000,
-        lineTotal: item.unit_price,
-        state: response.state,
-        seat: line.seat,
-        modifierMenuItemIds: modifiers,
-        courseId: line.course_id,
-        notePresent: note !== undefined,
-        note,
-      };
-    }),
-  );
-}
 
 // ---- counter orders the till starts itself (ADR-0146) ----------------------
 
@@ -1372,41 +1320,6 @@ export async function startWalkIn(channel?: string): Promise<string> {
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
 // edge's figure; the counter shows the book of the channel its walk-ins open on (`walkInMenu`), the
 // one the edge prices a walk-in from, so the two agree.
-async function addItemToWalkIn(
-  orderId: string,
-  key: string,
-  item: MenuItemResponse,
-  modifiers: string[],
-  note: string | undefined,
-): Promise<void> {
-  const line: OrderLineRequest = {
-    menu_item_id: item.menu_item_id,
-    quantity: { milli: 1000 },
-    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
-    modifier_menu_item_ids: modifiers,
-    note_present: note !== undefined,
-    note,
-  };
-  const response = await api.addOrderLine(orderId, line);
-  setState(
-    produce((draft) => {
-      draft.tableOrder[key] = response.order_id;
-      draft.lines[response.order_line_id] = {
-        orderLineId: response.order_line_id,
-        orderId: response.order_id,
-        name: item.display_name,
-        quantityMilli: 1000,
-        lineTotal: item.unit_price,
-        state: response.state,
-        seat: undefined,
-        modifierMenuItemIds: modifiers,
-        courseId: line.course_id,
-        notePresent: note !== undefined,
-        note,
-      };
-    }),
-  );
-}
 
 // The currency every amount on screen is in, as the edge reported it with the price book.
 //
@@ -1950,17 +1863,6 @@ export async function fireCourse(tableId: string, courseId: string): Promise<voi
 // Sends a quantity and no money: the edge holds the unit price captured when the line was added and
 // extends the line itself, so this cannot quote the guest a total that does not follow from the
 // price on the menu they were shown.
-export async function setQuantity(lineId: string, quantityMilli: number): Promise<void> {
-  const line = await api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } });
-  setState(
-    produce((draft) => {
-      const held = draft.lines[line.order_line_id];
-      if (held !== undefined) {
-        held.state = line.state;
-      }
-    }),
-  );
-}
 
 export async function fire(lineId: string): Promise<void> {
   // The edge derives the fired line's station from the published routing (ADR-0072); the station we
