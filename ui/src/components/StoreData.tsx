@@ -7,6 +7,7 @@ import { useLocation } from "@solidjs/router";
 import { t, type MessageKey } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { notLoaded, retryFailing, storeReady, unavailable, waitingFor } from "../state/engine";
+import { writesPending } from "../state/optimistic";
 import type { ScreenRead } from "../state/screen-read";
 
 // The screens that draw nothing of the store's: pairing, signing in and activating a box. A device
@@ -137,6 +138,18 @@ export function ReadFailed(props: { read: ScreenRead }) {
           {t("data.retry")}
         </button>
       </div>
+    </Show>
+  );
+}
+
+// Why payment waits: a write this device painted has not been confirmed by the edge yet (ADR-0173
+// decision 4). The payment button names it in `aria-describedby`.
+export function WritesPendingNote() {
+  return (
+    <Show when={writesPending()}>
+      <span id="why-pending" class="text-sm text-ink-muted" data-outcome="writes-pending">
+        {t("order.writes_pending")}
+      </span>
     </Show>
   );
 }

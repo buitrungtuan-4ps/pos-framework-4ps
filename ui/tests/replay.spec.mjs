@@ -4691,6 +4691,164 @@ test("a till with no IndexedDB, as in a private window, works and says nothing a
   }
 });
 
+// Three acts are painted before the edge answers (ADR-0173 decision 4): adding a line, changing a
+// quantity and moving a table. Each rolls back on a refusal, with the refusal's own sentence.
+
+/** Answers `pattern`'s POST with a refusal carrying `reason`, as the edge does. */
+async function refusePost(page, pattern, reason) {
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({ status: 409, headers: { "pos-error-reason": reason }, body: reason });
+  });
+}
+
+/** Holds `pattern`'s POST answer back for `ms` after the edge has made it. */
+async function delayAnswer(page, pattern, ms) {
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const response = await fetchWhole(route);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    await route.fulfill({ response });
+  });
+}
+
+test("an added line shows at once, sending, and payment waits until the edge confirms it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    // The answer, and the live link's event with it, held back: only the till's own paint is left.
+    await page.route("**/api/tables/*/lines", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
+    await expect(page.locator('[data-step="takePayment"]')).toBeDisabled();
+    await expect(page.locator("#why-pending")).toHaveText(
+      "Waiting for the store to confirm the last change.",
+    );
+
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await refusePost(page, "**/api/tables/*/lines", "ITEM_NOT_SELLABLE");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByText("That item cannot be sold right now", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator("#why-pending")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till greys the menu once it knows a bill is open, so the edge refuses a line only when
+// another device opened one in the instant before the tap. The edge's answer is stubbed with its
+// own status and token for that instant.
+test("a line refused because a bill is already open is taken back off, with no ghost", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await refusePost(page, "**/api/tables/*/lines", "BILL_ALREADY_OPEN");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByText("A bill is already open for this order.")).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a refused quantity goes back to what it was, with the refusal's sentence", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await refusePost(page, "**/api/lines/*/quantity", "ALREADY_FIRED");
+    await page.locator('[data-step="setQuantity"]').first().click();
+    await expect(page.getByText("Already sent to the kitchen", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-quantity"]').first()).toHaveText("1");
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a refused move brings the guests back to their table, with the refusal's sentence", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const from = new URL(page.url()).pathname;
+    await refusePost(page, "**/api/tables/*/transfer", "UNKNOWN_ORDER");
+    await page.locator('[data-step="openMove"]').click();
+    await page.locator('[data-step="moveTo"]').first().click();
+    await page.waitForURL((url) => url.pathname === from);
+    await expect(page.locator('[data-outcome="order-open"]')).toHaveText("Table 1");
+    await expect(page.getByText("That item, order or bill has changed on another device", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("the edge's event arriving before its answer confirms the line once, never twice", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    // The edge makes the line and the live link carries its event at once; the answer is late.
+    await delayAnswer(page, "**/api/tables/*/lines", 1_500);
+    await page.locator('[data-step="onItem"]').first().click();
+    // Confirmed by the event, with the edge's figure, while the answer is still on its way.
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0, { timeout: 1_200 });
+    // And once the answer lands, still the one line.
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

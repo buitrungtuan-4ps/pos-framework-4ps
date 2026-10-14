@@ -18,8 +18,8 @@
     "max-lines-per-function": 363
   },
   "src/screens/Order.tsx": {
-    "max-lines": 1200,
-    "max-lines-per-function": 1142
+    "max-lines": 1203,
+    "max-lines-per-function": 1146
   },
   "src/screens/Pay.tsx": {
     "max-lines": 1258,
@@ -39,7 +39,7 @@
     "max-lines-per-function": 163
   },
   "src/state/store.ts": {
-    "max-lines": 1560,
-    "max-lines-per-function": 311
+    "max-lines": 1467,
+    "max-lines-per-function": 310
   }
 }

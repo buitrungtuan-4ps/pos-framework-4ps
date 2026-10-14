@@ -277,6 +277,8 @@
   "order.waive_reason": "Vì sao miễn?",
   "order.waive_title": "Miễn {fee}",
   "order.walk_in": "Đơn tại quầy",
+  "order.sending": "Đang gửi…",
+  "order.writes_pending": "Đang chờ cửa hàng xác nhận thay đổi vừa rồi.",
   "pair.hint": "Nhập mã sáu chữ số hiển thị trên máy chủ cửa hàng.",
   "pair.paired": "Đã ghép nối",
   "pair.paired_hint": "Thiết bị này đã được cửa hàng tin cậy. Đăng nhập để bắt đầu.",
