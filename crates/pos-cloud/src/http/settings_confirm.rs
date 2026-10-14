@@ -43,7 +43,8 @@ mod tests {
     use pos_proto::settings::{Confirm, Setting, SettingScope, SettingShape};
     use serde_json::json;
 
-    use super::super::{SettingCatalogueEntry, setting_refusal_response};
+    use super::super::setting_refusal::setting_refusal_response;
+    use super::super::settings::catalogue::SettingCatalogueEntry;
     use super::audit_after;
     use crate::settings::SettingRefusal;
 
