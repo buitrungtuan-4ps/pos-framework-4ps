@@ -429,3 +429,280 @@ fn tempdir_beside(destination: &std::path::Path) -> Result<PathBuf, EdgeError> {
 fn parse_ulid(text: &str) -> Option<pos_proto::ulid::Ulid> {
     text.parse().ok()
 }
+
+/// `run` driven end to end on a temporary directory, before it is split
+/// ([ADR-0170](../../../docs/adr/0170-repository-layout-code-naming-and-size-rules.md), phase 7:
+/// tests first). It is the real composition — `SqliteStore` on a file in the directory, the real
+/// router on a loopback port — with nothing that leaves the machine: no `cloud_url`, so no cloud
+/// loops, no NATS, and the SNTP server pointed at loopback. The stop is a future the test resolves,
+/// standing in for the signal handler.
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as _, Write as _};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use pos_core::decision::Actor;
+    use pos_edge::{
+        DeviceToken, Edge, EdgeError, EdgeSession, ServeOutcome, StoreIdentity, SystemClock,
+    };
+    use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice};
+    use pos_proto::ClockSource as _;
+    use pos_proto::ids::{DeviceId, EmployeeId, StoreId};
+    use pos_proto::money::{CurrencyCode, Money};
+    use store_sqlite::SqliteStore;
+    use tokio::sync::oneshot;
+
+    use super::run;
+
+    const STORE_ID: &str = "01JQ0000000000000000000001";
+    const DEVICE: &str = "01JQ0000000000000000000002";
+    const EMPLOYEE: &str = "01JQ0000000000000000000003";
+    /// A bearer token in the form the edge issues: 32 lowercase hex characters.
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    /// A loopback address nothing is listening on: bound, read, released.
+    fn free_address() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        listener.local_addr().expect("its address")
+    }
+
+    /// Writes a `config.toml` for one store into `dir`, binding `bind` and keeping its database in
+    /// `dir`, and returns its path.
+    fn config_in(dir: &Path, bind: SocketAddr) -> PathBuf {
+        let store = dir.join("store.sqlite");
+        let text = format!(
+            "store_id = \"{STORE_ID}\"\nbind = \"{bind}\"\nstore_path = {store:?}\nsntp_server = \"127.0.0.1\"\n"
+        );
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).expect("write config.toml");
+        path
+    }
+
+    /// `GET /healthz` over a plain socket, retried until the server answers or ten seconds pass.
+    async fn healthz(bind: SocketAddr) -> String {
+        get(bind, "/healthz", None).await
+    }
+
+    /// `GET path` over a plain socket, as the device holding `token` where one is given, retried
+    /// until the server answers or ten seconds pass.
+    async fn get(bind: SocketAddr, path: &'static str, token: Option<&'static str>) -> String {
+        let authorization = token.map_or_else(String::new, |token| {
+            format!("Authorization: Bearer {token}\r\n")
+        });
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{authorization}Connection: close\r\n\r\n"
+        );
+        for _ in 0..200 {
+            let request = request.clone();
+            let answer = tokio::task::spawn_blocking(move || {
+                let mut stream =
+                    TcpStream::connect_timeout(&bind, Duration::from_millis(200)).ok()?;
+                stream.write_all(request.as_bytes()).ok()?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response).ok()?;
+                Some(response)
+            })
+            .await
+            .expect("the request task");
+            if let Some(response) = answer {
+                return response;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("the edge never answered on {bind}");
+    }
+
+    /// Leaves on a stopped store's database what a day's trading would: a paired till, a person
+    /// signed in on it, and a shift that person opened. Written through the library, not `run`,
+    /// so the shift exists only as events in the log and in nothing a restart reads directly.
+    /// Returns the shift's id.
+    async fn an_open_shift_on(store_path: &Path) -> String {
+        let store = SqliteStore::open(store_path).expect("open the stopped store's database");
+        let device_id = DeviceId::new(DEVICE.parse().expect("a device ulid"));
+        let employee_id = EmployeeId::new(EMPLOYEE.parse().expect("an employee ulid"));
+        let now = SystemClock.now();
+        let token = DeviceToken::parse(TOKEN).expect("a well-formed token");
+        DeviceRegistry::record_pairing(
+            &store,
+            PairedDevice {
+                device_id,
+                token_digest: token.digest(),
+                paired_at: now,
+                admitted_by: None,
+            },
+        )
+        .await
+        .expect("record the pairing");
+        DeviceRegistry::record_sign_in(
+            &store,
+            DeviceSession {
+                device_id,
+                employee_id,
+                signed_in_at: now,
+                last_seen_at: now,
+            },
+        )
+        .await
+        .expect("record the sign-in");
+        let store_id = StoreId::new(STORE_ID.parse().expect("a store ulid"));
+        let receipts = Arc::new(store.clone());
+        let edge = Edge::new(
+            store,
+            StoreIdentity::for_store(store_id),
+            EdgeSession::bootstrap(),
+            receipts,
+        )
+        .expect("an edge on the stopped store");
+        let shift = edge
+            .open_shift(
+                Actor {
+                    employee_id,
+                    device_id,
+                },
+                Money::new(CurrencyCode::VND, 500_000),
+            )
+            .await
+            .expect("open a shift");
+        shift.shift_id.to_string()
+    }
+
+    /// Awaits a stopped `run`, failing rather than hanging if the stop never reaches it.
+    async fn stopped(
+        handle: tokio::task::JoinHandle<Result<ServeOutcome, EdgeError>>,
+    ) -> ServeOutcome {
+        tokio::time::timeout(Duration::from_secs(30), handle)
+            .await
+            .expect("the edge stops within thirty seconds of being told to")
+            .expect("the run task")
+            .expect("a clean stop")
+    }
+
+    /// Runs `config` expecting a refusal, failing rather than hanging if the edge serves instead.
+    async fn refused(config: PathBuf) -> EdgeError {
+        let result =
+            tokio::time::timeout(Duration::from_secs(30), run(config, std::future::pending()))
+                .await
+                .expect("the edge refuses within thirty seconds rather than serving");
+        match result {
+            Err(error) => error,
+            Ok(outcome) => panic!("the edge ran and stopped ({outcome:?}) instead of refusing"),
+        }
+    }
+
+    /// Starts `run` on `config`, returning the handle and the sender that stops it.
+    fn start(
+        config: PathBuf,
+    ) -> (
+        tokio::task::JoinHandle<Result<ServeOutcome, EdgeError>>,
+        oneshot::Sender<()>,
+    ) {
+        let (stop, stopped) = oneshot::channel::<()>();
+        let handle = tokio::spawn(run(config, async move {
+            let _ignored = stopped.await;
+        }));
+        (handle, stop)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_is_opened_served_and_stopped_cleanly() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let bind = free_address();
+        let (handle, stop) = start(config_in(dir.path(), bind));
+
+        let response = healthz(bind).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "got {response}");
+        assert!(
+            response.contains(STORE_ID),
+            "the edge serves the store its config names: {response}"
+        );
+        assert!(
+            dir.path().join("store.sqlite").exists(),
+            "the store's database is created where the config says"
+        );
+
+        stop.send(()).expect("the edge is still running");
+        let outcome = stopped(handle).await;
+        assert_eq!(
+            outcome,
+            ServeOutcome::Stopped,
+            "a LAN-only store has no outbox to drain, so a stop is just a stop"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_store_started_again_on_its_own_database_rebuilds_and_serves() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let bind = free_address();
+        let (handle, stop) = start(config_in(dir.path(), bind));
+        assert!(healthz(bind).await.starts_with("HTTP/1.1 200"));
+        stop.send(()).expect("the edge is still running");
+        assert_eq!(stopped(handle).await, ServeOutcome::Stopped);
+
+        let shift_id = an_open_shift_on(&dir.path().join("store.sqlite")).await;
+
+        // Started again, the shift is known only because the log was replayed before serving.
+        let bind = free_address();
+        let (handle, stop) = start(config_in(dir.path(), bind));
+        let response = get(bind, "/api/shifts/current", Some(TOKEN)).await;
+        assert!(response.starts_with("HTTP/1.1 200"), "got {response}");
+        assert!(
+            response.contains(&shift_id),
+            "the shift opened before the restart is the current one: {response}"
+        );
+        stop.send(()).expect("the edge is still running");
+        assert_eq!(stopped(handle).await, ServeOutcome::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_missing_config_file_is_refused_before_anything_opens() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let error = refused(dir.path().join("absent.toml")).await;
+        assert!(
+            matches!(error, EdgeError::ConfigRead { .. }),
+            "got {error:?}"
+        );
+        assert!(
+            !dir.path().join("store.sqlite").exists(),
+            "no database is created for a store that could not be configured"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_config_with_an_unknown_key_is_refused() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            format!("store_id = \"{STORE_ID}\"\nlisten = \"127.0.0.1:0\"\n"),
+        )
+        .expect("write config.toml");
+        let error = refused(path).await;
+        assert!(matches!(error, EdgeError::ConfigParse(_)), "got {error:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_that_cannot_be_opened_is_a_store_error() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let bind = free_address();
+        let path = config_in(dir.path(), bind);
+        // A directory where the database file should be: SQLite cannot open it.
+        std::fs::create_dir(dir.path().join("store.sqlite")).expect("make the directory");
+        let error = refused(path).await;
+        assert!(matches!(error, EdgeError::Store(_)), "got {error:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_address_already_in_use_is_a_bind_error() {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let taken = TcpListener::bind("127.0.0.1:0").expect("hold a port");
+        let bind = taken.local_addr().expect("its address");
+        let error = refused(config_in(dir.path(), bind)).await;
+        assert!(
+            matches!(error, EdgeError::Bind { addr, .. } if addr == bind),
+            "got {error:?}"
+        );
+    }
+}
