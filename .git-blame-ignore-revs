@@ -64,3 +64,6 @@ d1a5008e818ae5ce8db67d58b1e55e3030d7cb91
 
 # #790 — the registry, fleet, alert, health and subject routes and their tests move into their own modules
 c188487521b485ab1ba01d77c5c75e14213de4bd
+
+# #791 — the store-sync, reconcile, chain and OTA routes and their tests move into their own modules
+cf79d45af82eb57c382047eddc15b8aea38d1721

@@ -32,6 +32,7 @@ use crate::devices::{DeviceProposalId, DeviceProposalStore, DeviceWriteOutcome};
 use crate::http::{not_found, version_mismatch};
 
 mod activation;
+mod admitted;
 mod claims;
 mod printers;
 mod proposals;
@@ -41,6 +42,9 @@ pub(super) mod revoke;
 mod terminals;
 
 pub use activation::activation_router;
+// The admitted-device roster the main router mounts.
+pub(crate) use admitted::__path_admin_admitted_devices;
+pub(super) use admitted::admin_admitted_devices;
 pub use claims::claim_router;
 pub use publish::device_publish_router;
 pub use revoke::device_revoke_router;

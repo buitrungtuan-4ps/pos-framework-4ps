@@ -31,6 +31,7 @@ mod preview;
 pub(super) mod redaction;
 mod release_actions;
 mod release_create;
+mod store_config;
 mod versions;
 
 pub use config_releases::config_release_router;
@@ -43,9 +44,11 @@ pub(super) use if_match::{if_match_config, if_match_lease};
 pub(super) use preview::preview_config_node;
 pub(super) use redaction::{staff_redacted_for, without_prices};
 pub(super) use release_actions::release_report_response;
+// The raw config-tree write and read the main router mounts.
 pub(super) use release_create::{
     release_target_stores, release_target_timezones, unresolvable_moment,
 };
+pub(super) use store_config::{admin_config_effective, admin_config_publish};
 pub(super) use versions::{
     admin_config_nodes, admin_config_rollback, admin_config_version_effective,
     admin_config_versions,
