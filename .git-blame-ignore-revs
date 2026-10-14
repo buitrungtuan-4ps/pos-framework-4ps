@@ -55,3 +55,6 @@ a7b61c90e9345195d63abcf7bae5aa6919a04a69
 
 # #787 — the country and translation routes and their tests move into their own modules
 cced71c608b38ca8fb6318e57f1ba99b791ba194
+
+# #788 — the integration routes and their tests move into their own modules
+b09438312281c6d14686d40b8dc854114dc93418
