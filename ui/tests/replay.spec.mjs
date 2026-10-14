@@ -1448,6 +1448,9 @@ test("the kitchen marks a dish sold out, a till stops selling it, and the kitche
     const till = await context.newPage();
     await pair(till, edge);
     await signIn(till, edge);
+    // The till hears the board's mark on its live link, which retries on a back-off after its
+    // refusal before pairing and can still be down here; a mark made then never reaches it.
+    await expect(till.getByText("Store connected")).toBeVisible();
     await seatTable(till);
     await till.locator("#menu-search").fill("iced");
     const tea = till.locator('[data-step="onItem"]');
@@ -2495,13 +2498,16 @@ test("a guest's line that joins the table's order is on the table's order as it 
     );
     await pair(page, edge);
     await signIn(page, edge);
+    // The link's first attempt was refused before the device paired, and it retries on a back-off,
+    // so it can still be down when the till reaches the floor. A line added then is announced to no
+    // one and never carried. Seated and added once the link is open, the line's event is.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await seatTable(page);
     await addItem(page);
     const lines = page.locator('[data-outcome="line-added"]');
     await expect(lines).toHaveCount(1);
-    // The link is open and has carried the line's own event, so the frames below are the next ones
-    // after everything the edge has said, rather than ones that race the line's.
-    await expect(page.getByText("Store connected")).toBeVisible();
+    // The link has carried the line's own event, so the frames below are the next ones after
+    // everything the edge has said, rather than ones that race the line's.
     await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
     const live = await page.evaluate(() =>
       fetch("/api/orders/live", {
@@ -3775,6 +3781,10 @@ test("a till's own drawer comes first on its own float, and another till's shift
   try {
     await pair(page, edge);
     await signIn(page, edge);
+    // This till hears the counter's drawer open on its live link, which retries on a back-off
+    // after its refusal before pairing and can still be down here; an event sent then never
+    // reaches it.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await bindTill(page, "Bar till");
     await expect(page.locator('[data-outcome="own-drawer"]')).toHaveText(
       "Bar till — this till's drawer",
