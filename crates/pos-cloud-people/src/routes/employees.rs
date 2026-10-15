@@ -22,17 +22,17 @@ use super::requests::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
-use crate::http::catalog::page_shaping_needs_a_limit_refusal;
-use crate::http::{
-    entity_status_refusal, enum_refusal, if_match, not_found, paged_ok, parse_entity_status,
-    parse_page, present_param, version_mismatch, versioned_ok, with_etag,
-};
 use crate::people::{
     AssignmentStore, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
     EmployeeStoreError, EmployeeUpdate, NewEmployee, RoleTemplateStore,
 };
 use crate::registry::{EntityStatus, RegistryStore};
 use crate::version::UpdateOutcome;
+use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
+use pos_cloud_api::paged::{paged_ok, parse_page};
+use pos_cloud_api::refusal::{enum_refusal, not_found, present_param};
+use pos_cloud_catalog::routes::catalog::page_shaping_needs_a_limit_refusal;
+use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
 /// A super-admin lists a tenant's employees. Behind [`ConsolePermission::ReadPeople`]: every row
 /// carries a person's name and staff code.

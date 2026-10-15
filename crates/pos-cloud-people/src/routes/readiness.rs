@@ -20,11 +20,12 @@ use serde::{Deserialize, Serialize};
 use super::requests::people_error_response;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::http::{TenantLayout, not_found, settings_store_error_response};
 use crate::people::{AssignmentStore, Employee, EmployeeStore, RoleTemplate, RoleTemplateStore};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::refusal::not_found;
+use pos_cloud_config::route::{TenantLayout, settings_store_error_response};
 
 // --- Permissions readiness (`/admin/stores/{store_id}/permissions/readiness`, ADR-0158) ---------
 
@@ -149,12 +150,12 @@ fn enforced_at(
                                       risk first and catalogue order within a level; and \
                                       `people_without_role`, how many people at the store hold no \
                                       active role there. No person is named"),
-        (status = 400, description = "store_id or tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.people.read", body = crate::openapi_admin::ErrorResponse),
-        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 400, description = "store_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The people store, the settings store, the registry or the \
-                                      store groups is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      store groups is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "people",
 )]

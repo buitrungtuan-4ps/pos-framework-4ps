@@ -22,7 +22,8 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
-use crate::http::{PublishedConfig, publish_config_nodes};
+use pos_cloud_config::publish::publish_config_nodes;
+use pos_cloud_config::route::PublishedConfig;
 
 // --- Capability catalogue (`/admin/capabilities`, ADR-0071) -------------------------------------
 
@@ -242,12 +243,16 @@ where
 /// this keeps a typo from writing a stray boolean into the config document. Extracted so the batch
 /// fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) validates
 /// by the same rule as the single-store route rather than by a second copy of it.
+///
+/// # Errors
+///
+/// A `400` naming the `flags` field when a key is not a known capability flag.
 #[expect(
     clippy::result_large_err,
     reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
               batch fan-out refuses identically rather than by a second copy of the rule"
 )]
-pub(in crate::http) fn capability_flag_nodes(
+pub fn capability_flag_nodes(
     flags: &std::collections::BTreeMap<String, bool>,
 ) -> Result<Vec<(String, serde_json::Value)>, Response> {
     for key in flags.keys() {

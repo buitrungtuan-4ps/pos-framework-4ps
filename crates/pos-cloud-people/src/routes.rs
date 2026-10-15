@@ -31,12 +31,14 @@ use roles::{
 use crate::audit::AuditRecorder;
 use crate::auth::admin::{AdminContext, AdminStore};
 use crate::config_tree::ConfigTreeStore;
-use crate::http::{BoxFuture, registry_error_response, store_group_error_response, with_etag};
 use crate::people::{AssignmentScope, AssignmentStore, EmployeeStore, RoleTemplateStore};
 use crate::registry::{EntityStatus, RegistryStore};
 use crate::settings::{SettingsStore, SettingsStoreError};
 use crate::store_groups::{StoreGroupId, StoreGroupStore, StoreGroupStoreError};
 use crate::version::Version;
+use pos_cloud_api::conditional::with_etag;
+use pos_cloud_config::route::{registry_error_response, store_group_error_response};
+use pos_ports::dynamic::BoxFuture;
 
 mod assignment_scope;
 mod assignments;
@@ -54,11 +56,11 @@ pub use readiness::permissions_readiness_router;
 
 // What the batch fan-out, the store groups and the people republisher use, and the handler the
 // console's OpenAPI document names.
-pub(super) use capabilities::capability_flag_nodes;
-pub(crate) use publish::republish_people;
-pub(super) use publish::{PermissionsPublishResult, PermissionsPublisher, permissions_nodes};
-pub(crate) use readiness::__path_admin_permissions_readiness;
-pub(super) use requests::people_error_response;
+pub use capabilities::capability_flag_nodes;
+pub use publish::republish_people;
+pub use publish::{PermissionsPublishResult, PermissionsPublisher, permissions_nodes};
+pub use readiness::__path_admin_permissions_readiness;
+pub use requests::people_error_response;
 
 // --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------
 

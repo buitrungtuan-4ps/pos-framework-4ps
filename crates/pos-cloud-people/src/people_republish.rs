@@ -12,7 +12,7 @@
 //! [`DRAIN_INTERVAL`].
 //!
 //! Each queued store's people are published again the way **Publish** on People publishes them
-//! ([`crate::http::republish_people`]): the same compile, the same validation, the same node,
+//! ([`crate::routes::republish_people`]): the same compile, the same validation, the same node,
 //! recorded as `permissions.publish` under the system actor with the queue's reason beside the
 //! version and the staff count, and never a name, a code or a PIN hash. A store whose node is
 //! already what its people compile to is given no new version. A store whose configuration holds
@@ -232,7 +232,7 @@ where
         let full = batch.len() == DRAIN_BATCH;
         for queued in batch {
             after = Some((queued.tenant_id, queued.store_id));
-            let republished = crate::http::republish_people(
+            let republished = crate::routes::republish_people(
                 people,
                 config_trees,
                 clock,

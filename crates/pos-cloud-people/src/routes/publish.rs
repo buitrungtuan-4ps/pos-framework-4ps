@@ -22,10 +22,11 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::{AdminContext, AdminStore, system_actor};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
-use crate::http::{PublishedConfig, publish_config_nodes, publish_config_nodes_with};
 use crate::people::{AssignmentStore, Employee, EmployeeStore, RoleTemplate, RoleTemplateStore};
 use crate::people_compiler::compile_permissions;
 use crate::people_republish::Republished;
+use pos_cloud_config::publish::{publish_config_nodes, publish_config_nodes_with};
+use pos_cloud_config::route::PublishedConfig;
 
 // --- People publish (`/admin/people/publish`, ADR-0070 slice 5) ---------------------------------
 
@@ -90,7 +91,11 @@ struct PublishPermissionsRequest {
 /// compiling once and fanning out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
 /// The instruction is still store-agnostic — "recompile each of these shops' own rosters" — which
 /// is what makes it batchable at all.
-pub(in crate::http) async fn permissions_nodes<P>(
+///
+/// # Errors
+///
+/// A `503` when the people store fails or the node does not serialise.
+pub async fn permissions_nodes<P>(
     people: &P,
     tenant_id: TenantId,
     store_id: StoreId,
@@ -204,11 +209,25 @@ where
 /// One publish for both is the point. A store is sent the node its people compile to, written and
 /// audited the same way, whether someone pressed publish or offboarded a person; two copies of the
 /// steps could drift until the two sent different nodes.
-pub(in crate::http) struct PermissionsPublisher<'a, P, Cfg, C> {
-    pub(in crate::http) people: &'a P,
-    pub(in crate::http) config_trees: &'a Cfg,
-    pub(in crate::http) clock: &'a C,
-    pub(in crate::http) audit: &'a Arc<dyn AuditRecorder>,
+pub struct PermissionsPublisher<'a, P, Cfg, C> {
+    /// The people the `permissions` node compiles from.
+    pub people: &'a P,
+    /// The config trees the node is written onto.
+    pub config_trees: &'a Cfg,
+    /// The clock each write is stamped with.
+    pub clock: &'a C,
+    /// The audit trail each write is recorded in.
+    pub audit: &'a Arc<dyn AuditRecorder>,
+}
+
+// By hand, because the audit recorder is a trait object with no `Debug`; the collaborators are
+// borrowed, so naming the type says all a log needs.
+impl<P, Cfg, C> core::fmt::Debug for PermissionsPublisher<'_, P, Cfg, C> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PermissionsPublisher")
+            .finish_non_exhaustive()
+    }
 }
 
 impl<P, Cfg, C> PermissionsPublisher<'_, P, Cfg, C>
@@ -404,7 +423,7 @@ where
     /// published again with `POST /admin/people/publish`. The write that caused this has already
     /// been saved by then, so a failure here is reported rather than refused — taking the write
     /// back would be a second change nobody asked for.
-    pub(in crate::http) async fn publish_all(
+    pub async fn publish_all(
         &self,
         context: &AdminContext,
         tenant_id: TenantId,
@@ -444,7 +463,7 @@ where
 ///
 /// The refusal the publish would have answered with, when the store's people or its tree could
 /// not be read or the tree refused the write. The store stays queued.
-pub(crate) async fn republish_people<P, Cfg, C>(
+pub async fn republish_people<P, Cfg, C>(
     people: &P,
     config_trees: &Cfg,
     clock: &C,
@@ -470,7 +489,7 @@ where
 
 /// How one store's `permissions` publish went, as a write that publishes at once reports it.
 #[derive(Debug, Clone, serde::Serialize)]
-pub(in crate::http) struct PermissionsPublishResult {
+pub struct PermissionsPublishResult {
     store_id: String,
     /// `PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`.
     outcome: &'static str,

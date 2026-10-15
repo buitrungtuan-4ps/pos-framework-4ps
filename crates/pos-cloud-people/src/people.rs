@@ -172,9 +172,10 @@ impl EmployeeSort {
 
 /// What a caller wants of a page of employees beyond its bounds: which rows, in what order.
 ///
-/// Separate from [`PageRequest`] for the reason [`ItemListFilter`](crate::catalog::ItemListFilter)
-/// gives: `PageRequest` is the vocabulary every paged read shares, and the reads that cannot search
-/// or sort would silently ignore these — the class of quiet wrong answer ADR-0098 exists to prevent.
+/// Separate from [`PageRequest`] for the reason
+/// [`ItemListFilter`](pos_cloud_catalog::catalog::ItemListFilter) gives: `PageRequest` is the
+/// vocabulary every paged read shares, and the reads that cannot search or sort would silently
+/// ignore these — the class of quiet wrong answer ADR-0098 exists to prevent.
 ///
 /// **This is T1 personal data on both sides.** The search runs over a person's name and code, and
 /// the page it shapes carries them back. Neither the filter nor the order reaches a log: an audit

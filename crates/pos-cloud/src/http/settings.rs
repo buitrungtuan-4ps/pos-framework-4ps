@@ -40,9 +40,7 @@ mod values;
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
 pub(crate) use effective::__path_admin_effective_settings;
 pub(crate) use presets::__path_admin_apply_setting_presets;
-// What the permissions readiness read uses.
 pub(crate) use publish::__path_admin_publish_settings;
-pub(super) use publish::TenantLayout;
 // Moved to pos-cloud-config with the tenant layout; imported here, so the settings routes and
 // their callers keep reaching them through `super` and `crate::http`.
 use pos_cloud_config::route::setting_scope_refusal;

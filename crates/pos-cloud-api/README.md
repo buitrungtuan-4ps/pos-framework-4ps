@@ -22,7 +22,7 @@ What every cloud route module stands on, whichever business area it serves: who 
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`, `store-postgres`; in tests, `pos-fakes`.
-- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-reports`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports`.
 
 ## Entry points
 
