@@ -68,6 +68,8 @@ pub use pos_cloud_devices::{activation, claim, devices};
 pub use pos_cloud_catalog::{
     catalog, catalog_compiler, export, fees, images, import, media, tax, translations,
 };
+// Moved to pos-cloud-floor (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_floor::{floor_compiler, floorplan, qr};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
@@ -83,8 +85,6 @@ pub mod countries;
 pub mod cursor;
 pub mod dashboard;
 pub mod fleet;
-pub mod floor_compiler;
-pub mod floorplan;
 pub mod health;
 pub mod http;
 pub mod lease;
@@ -99,7 +99,6 @@ pub mod people_readiness;
 pub mod people_republish;
 mod persistence;
 pub mod providers;
-pub mod qr;
 pub mod qr_http;
 pub mod reason_codes;
 pub mod reconcile;

@@ -18,9 +18,10 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
 use crate::floorplan::{NewRoutingRule, RoutingRule, RoutingRuleId, RoutingRuleStore};
-use crate::http::catalog::catalog_error_response;
-use crate::http::{Json, not_found, parse_optional_ulid};
 use crate::registry::EntityStatus;
+use axum::Json;
+use pos_cloud_api::refusal::{not_found, parse_optional_ulid};
+use pos_cloud_catalog::routes::catalog::catalog_error_response;
 
 pub(super) async fn admin_list_routing<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,

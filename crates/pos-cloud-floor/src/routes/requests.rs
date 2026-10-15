@@ -11,7 +11,7 @@ use pos_proto::display::GridPosition;
 use pos_proto::printing::ReceiptLanguage;
 use serde::Deserialize;
 
-use crate::http::optional_choice;
+use pos_cloud_api::refusal::optional_choice;
 
 /// The (tenant, store) a floor/kitchen list is scoped to — a floor is per-store, so both are required.
 #[derive(Debug, Clone, Deserialize)]

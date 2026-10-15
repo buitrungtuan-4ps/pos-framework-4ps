@@ -54,6 +54,7 @@ pos-cloud-reports = { path = "../pos-cloud-reports" }
 # and the others keep their paths.
 pos-cloud-config = { path = "../pos-cloud-config" }
 pos-cloud-catalog = { path = "../pos-cloud-catalog" }
+pos-cloud-floor = { path = "../pos-cloud-floor" }
 # The inventory: its records, routes and store (ADR-0170 decision 4). Re-exported, so
 # `pos_cloud::inventory` and the inventory routers keep their paths.
 pos-cloud-inventory = { path = "../pos-cloud-inventory" }
