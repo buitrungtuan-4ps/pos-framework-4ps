@@ -650,6 +650,8 @@ fn a_second_bill_on_one_order_is_refused_from_the_counter_and_from_the_floor() {
     });
 }
 
+/// An order id the edge has never seen buys nothing. The floor path proves an order exists by
+/// finding it on a table; a counter order has no table, so its lines are the proof.
 #[test]
 fn an_order_the_edge_does_not_know_cannot_be_billed() {
     pos_fakes::executor::run_ready(async {

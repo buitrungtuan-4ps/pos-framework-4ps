@@ -3054,13 +3054,6 @@ fn device_app(admin: FakeAdmin, keys: FakeKeys, devices: FakeDevices) -> axum::R
     ))
 }
 
-/// The approved devices compile into the `devices` config node, and only the approved ones
-/// (**ADR-0100**, C2 slice 2b).
-///
-/// The store learns where its printers are through the config-pull it already runs, which is what
-/// makes the knowledge survive a reboot with the WAN down. Asserted end to end — propose, approve,
-/// publish, read the tree — because the value of this slice is precisely that the three sit on one
-/// path; each half passing in isolation would prove nothing about the join.
 /// The propose+approve surface and the publish surface over one device store and one config tree —
 /// production's two `merge`s, in a test.
 fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {

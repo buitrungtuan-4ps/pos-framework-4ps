@@ -129,8 +129,6 @@ mod tests {
     use crate::app::tests::{a_counter_order, a_line, actor, cash, edge, edge_with_menu, vnd};
     use crate::queue::{InMemoryQueueNumbers, QueueNumberAuthority};
 
-    /// An order id the edge has never seen buys nothing. The floor path proves an order exists by
-    /// finding it on a table; a counter order has no table, so its lines are the proof.
     /// The counter's order list: what the takeaway screen renders
     /// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
     ///
