@@ -235,7 +235,99 @@ fn accepted_modes(script: &str) -> Option<BTreeSet<String>> {
 
 #[cfg(test)]
 mod tests {
-    use super::accepted_modes;
+    use std::collections::BTreeSet;
+
+    use super::{accepted_modes, check};
+
+    const SHARED_OK: &str = "handle /internal/* {\n  respond 404\n}\n";
+    const MODE_OK: &str = "example.com {\n  import /etc/caddy/Caddyfile.d/site.caddy\n}\n";
+    const K8S_OK: &str = "location ^~ /internal/ {\n  return 404;\n}\n";
+
+    fn modes(names: &[&str]) -> BTreeSet<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn files(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+        entries
+            .iter()
+            .map(|(name, text)| ((*name).to_owned(), (*text).to_owned()))
+            .collect()
+    }
+
+    /// Each finding as `file: message`, in the order the check reported them.
+    fn reported(accepted: &[&str], caddyfiles: &[(&str, &str)], k8s: Option<&str>) -> Vec<String> {
+        check(&modes(accepted), &files(caddyfiles), k8s)
+            .iter()
+            .map(|finding| format!("{}: {}", finding.file, finding.message))
+            .collect()
+    }
+
+    #[test]
+    fn modes_that_agree_with_their_files_have_no_finding() {
+        let caddyfiles = [("site.caddy", SHARED_OK), ("acme.caddy", MODE_OK)];
+        assert!(reported(&["acme"], &caddyfiles, Some(K8S_OK)).is_empty());
+        assert!(
+            reported(&["acme"], &caddyfiles, None).is_empty(),
+            "a lane without k8s/ is not a finding"
+        );
+    }
+
+    #[test]
+    fn the_shared_block_may_hold_no_tls_directive_and_must_deny_internal() {
+        let tls_block = [("site.caddy", "tls {\n  internal\n}\n")];
+        assert_eq!(
+            reported(&[], &tls_block, None),
+            [
+                "deploy/Caddyfile.d/site.caddy: the shared site block declares a `tls` directive",
+                "deploy/Caddyfile.d/site.caddy: the shared site block does not deny `/internal/*`",
+            ]
+        );
+
+        // Both spellings at once are still one finding.
+        let both = format!("  tls internal\ntls {{\n}}\n{SHARED_OK}");
+        assert_eq!(
+            reported(&[], &[("site.caddy", both.as_str())], None),
+            ["deploy/Caddyfile.d/site.caddy: the shared site block declares a `tls` directive"]
+        );
+    }
+
+    #[test]
+    fn the_shared_block_is_not_a_mode() {
+        // `site` is neither missing from the accept-list nor required to import itself.
+        assert!(reported(&[], &[("site.caddy", SHARED_OK)], None).is_empty());
+    }
+
+    #[test]
+    fn a_mode_file_must_import_the_shared_block() {
+        let caddyfiles = [
+            ("site.caddy", SHARED_OK),
+            ("byo.caddy", "example.com {\n}\n"),
+        ];
+        assert_eq!(
+            reported(&["byo"], &caddyfiles, None),
+            ["deploy/Caddyfile.d/byo.caddy: does not `import /etc/caddy/Caddyfile.d/site.caddy`"]
+        );
+    }
+
+    #[test]
+    fn the_accept_list_and_the_files_are_compared_both_ways_after_the_files() {
+        let caddyfiles = [
+            ("stray.caddy", "x {\n}\n"),
+            ("site.caddy", SHARED_OK),
+            ("acme.caddy", MODE_OK),
+        ];
+        assert_eq!(
+            reported(&["acme", "ghost"], &caddyfiles, Some("location /x {}\n")),
+            [
+                "deploy/Caddyfile.d/stray.caddy: does not `import /etc/caddy/Caddyfile.d/site.caddy`",
+                "deploy/bootstrap.sh: TLS_MODE `ghost` is accepted but \
+                 deploy/Caddyfile.d/ghost.caddy is missing",
+                "deploy/Caddyfile.d/stray.caddy: no TLS_MODE `stray` is accepted, so this file can \
+                 never be selected",
+                "k8s/pos-cloud.yaml: the Kubernetes Ingress does not deny `/internal/*`",
+            ]
+        );
+    }
 
     #[test]
     fn the_accept_list_is_read_out_of_the_case_arm() {

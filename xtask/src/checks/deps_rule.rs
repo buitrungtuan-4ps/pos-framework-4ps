@@ -715,6 +715,69 @@ mod tests {
     }
 
     #[test]
+    fn a_procedural_macro_declared_directly_is_not_flagged() {
+        // The declared layer applies the closure walk's reasoning: a macro expands in the compiler
+        // and is never linked, whether pos-core names it or reaches it through serde.
+        let fixture =
+            Fixture::new()
+                .proc_macro("serde_derive")
+                .declares("serde_derive", false, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.is_empty(),
+            "a declared proc macro was flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_development_dependency_is_not_the_declared_layers_business() {
+        let fixture = Fixture::new();
+        let mut meta = fixture.metadata();
+        let core = meta
+            .packages
+            .iter_mut()
+            .find(|package| package.name == "pos-core")
+            .expect("the fixture is rooted at pos-core");
+        for kind in ["dev", "build"] {
+            core.dependencies.push(super::Dependency {
+                name: "tokio".to_owned(),
+                kind: Some(kind.to_owned()),
+                uses_default_features: Some(true),
+                features: Vec::new(),
+            });
+        }
+        let findings = check(&meta, &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.is_empty(),
+            "a dev or build dependency was flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn findings_are_sorted_by_file_and_message_and_reported_once() {
+        // Declared in the order tokio, reqwest, and tokio a second time (a target-specific
+        // table names a crate again): each finding is still reported once, alphabetically.
+        let fixture = Fixture::new()
+            .declares("tokio", false, &[])
+            .declares("reqwest", false, &[])
+            .declares("tokio", false, &[]);
+        let messages: Vec<String> =
+            check(&fixture.metadata(), &allowlist(), &fixture.all_activated())
+                .into_iter()
+                .map(|finding| finding.message)
+                .collect();
+        assert_eq!(
+            messages,
+            [
+                "`pos-core` declares `reqwest`, which is not allow-listed",
+                "`pos-core` declares `tokio`, which is not allow-listed",
+                "`pos-core` links `reqwest`, which is not allow-listed",
+                "`pos-core` links `tokio`, which is not allow-listed",
+            ]
+        );
+    }
+
+    #[test]
     fn does_not_traverse_into_a_procedural_macro() {
         // serde's `derive` feature pulls serde_derive, and through it syn. Both run
         // inside the compiler and neither is linked, so requiring the allow-list to
