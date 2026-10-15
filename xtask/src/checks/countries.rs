@@ -103,109 +103,138 @@ fn read_tree(root: &std::path::Path, countries_dir: &std::path::Path) -> Result<
     })
 }
 
-/// The findings for every country directory in `tree`.
+/// The findings for every country directory in `tree`, in the order the directories were read.
 fn check(tree: &Tree) -> Vec<Finding> {
+    tree.countries
+        .iter()
+        .flat_map(|(name, manifest)| country_findings(tree, name, manifest.as_deref()))
+        .collect()
+}
+
+/// One directory's findings: rules 1–4 in order. A directory that is not a code, or has no
+/// manifest, is reported for that alone, because every later rule derives from both.
+fn country_findings(tree: &Tree, name: &str, manifest: Option<&str>) -> Vec<Finding> {
+    let rel = format!("{COUNTRIES_DIR}/{name}");
+    if !is_country_code(name) {
+        return vec![not_a_code(&rel, name)];
+    }
+    let Some(manifest) = manifest else {
+        return vec![no_manifest(&rel)];
+    };
+
+    let expected_package = format!("pos-country-{name}");
     let mut findings = Vec::new();
+    findings.extend(misnamed_package(&rel, manifest, &expected_package));
+    findings.extend(not_a_member(&rel, &tree.members));
+    findings.extend(not_selectable(
+        &rel,
+        name,
+        &expected_package,
+        &tree.binaries,
+    ));
+    findings
+}
 
-    for (name, manifest) in &tree.countries {
-        let rel = format!("{COUNTRIES_DIR}/{name}");
-        if !is_country_code(name) {
-            findings.push(
-                Finding::new(
-                    format!("{rel}/Cargo.toml"),
-                    RULE,
-                    format!("`{name}` is not a lower-case ISO 3166-1 alpha-2 country code"),
-                )
-                .with_hint(
-                    "rename the directory to two lower-case letters, e.g. `countries/vn`. The \
-                     feature name, the package name and the registry all derive from it"
-                        .to_owned(),
-                ),
-            );
-            continue;
-        }
+/// Rule 1: the directory name is a country code.
+fn not_a_code(rel: &str, name: &str) -> Finding {
+    Finding::new(
+        format!("{rel}/Cargo.toml"),
+        RULE,
+        format!("`{name}` is not a lower-case ISO 3166-1 alpha-2 country code"),
+    )
+    .with_hint(
+        "rename the directory to two lower-case letters, e.g. `countries/vn`. The \
+         feature name, the package name and the registry all derive from it"
+            .to_owned(),
+    )
+}
 
-        let manifest = match manifest {
-            Some(text) => text,
-            None => {
-                findings.push(
-                    Finding::new(
-                        format!("{rel}/Cargo.toml"),
-                        RULE,
-                        format!("`{rel}` has no Cargo.toml, so nothing there is compiled"),
-                    )
-                    .with_hint("add a crate, or delete the directory".to_owned()),
-                );
-                continue;
-            }
-        };
+/// Rule 2, first half: there is a manifest at all.
+fn no_manifest(rel: &str) -> Finding {
+    Finding::new(
+        format!("{rel}/Cargo.toml"),
+        RULE,
+        format!("`{rel}` has no Cargo.toml, so nothing there is compiled"),
+    )
+    .with_hint("add a crate, or delete the directory".to_owned())
+}
 
-        let expected_package = format!("pos-country-{name}");
-        match package_name(manifest) {
-            Some(actual) if actual == expected_package => {}
-            Some(actual) => findings.push(
-                Finding::new(
-                    format!("{rel}/Cargo.toml"),
-                    RULE,
-                    format!("package is `{actual}`, expected `{expected_package}`"),
-                )
-                .with_hint(
-                    "the feature name `country-<cc>` and the registry macro both derive from the \
-                     directory code, so the package has to agree with it"
-                        .to_owned(),
-                ),
-            ),
-            None => findings.push(Finding::new(
+/// Rule 2, second half: the package is named `pos-country-<cc>`.
+fn misnamed_package(rel: &str, manifest: &str, expected_package: &str) -> Option<Finding> {
+    match package_name(manifest) {
+        Some(actual) if actual == expected_package => None,
+        Some(actual) => Some(
+            Finding::new(
                 format!("{rel}/Cargo.toml"),
                 RULE,
-                "no `[package] name` found".to_owned(),
-            )),
-        }
-
-        if !tree.members.contains(rel.as_str()) {
-            findings.push(
-                Finding::new(
-                    "Cargo.toml",
-                    RULE,
-                    format!(
-                        "`{rel}` is not a workspace member, so it is never compiled, linted or \
-                         tested — and `cargo test` will report success without it"
-                    ),
-                )
-                .with_hint(format!(
-                    "add \"{rel}\" to `members` in the workspace Cargo.toml"
-                )),
-            );
-        }
-
-        // Rule 4. Skipped, loudly, until there is a binary to check against.
-        if tree.binaries.is_empty() {
-            continue;
-        }
-        let feature = format!("country-{name}");
-        let selectable = tree
-            .binaries
-            .iter()
-            .any(|(_, manifest)| declares_feature(manifest, &feature, &expected_package));
-        if !selectable {
-            findings.push(
-                Finding::new(
-                    format!("{rel}/Cargo.toml"),
-                    RULE,
-                    format!(
-                        "no binary declares a `{feature}` feature enabling `{expected_package}`, so \
-                         this country compiles but can never be selected"
-                    ),
-                )
-                .with_hint(format!(
-                    "add `{feature} = [\"{expected_package}\"]` to the `[features]` table of \
-                     pos_edge, pos_cloud, or both, and an arm to their `country_registry!` call"
-                )),
-            );
-        }
+                format!("package is `{actual}`, expected `{expected_package}`"),
+            )
+            .with_hint(
+                "the feature name `country-<cc>` and the registry macro both derive from the \
+                 directory code, so the package has to agree with it"
+                    .to_owned(),
+            ),
+        ),
+        None => Some(Finding::new(
+            format!("{rel}/Cargo.toml"),
+            RULE,
+            "no `[package] name` found".to_owned(),
+        )),
     }
+}
 
-    findings
+/// Rule 3: the directory is a workspace member.
+fn not_a_member(rel: &str, members: &BTreeSet<String>) -> Option<Finding> {
+    if members.contains(rel) {
+        return None;
+    }
+    Some(
+        Finding::new(
+            "Cargo.toml",
+            RULE,
+            format!(
+                "`{rel}` is not a workspace member, so it is never compiled, linted or \
+                 tested — and `cargo test` will report success without it"
+            ),
+        )
+        .with_hint(format!(
+            "add \"{rel}\" to `members` in the workspace Cargo.toml"
+        )),
+    )
+}
+
+/// Rule 4: some binary declares a `country-<cc>` feature enabling the package. Skipped, loudly
+/// (see [`run`]), until there is a binary to check against.
+fn not_selectable(
+    rel: &str,
+    name: &str,
+    expected_package: &str,
+    binaries: &[(String, String)],
+) -> Option<Finding> {
+    if binaries.is_empty() {
+        return None;
+    }
+    let feature = format!("country-{name}");
+    let selectable = binaries
+        .iter()
+        .any(|(_, manifest)| declares_feature(manifest, &feature, expected_package));
+    if selectable {
+        return None;
+    }
+    Some(
+        Finding::new(
+            format!("{rel}/Cargo.toml"),
+            RULE,
+            format!(
+                "no binary declares a `{feature}` feature enabling `{expected_package}`, so \
+                 this country compiles but can never be selected"
+            ),
+        )
+        .with_hint(format!(
+            "add `{feature} = [\"{expected_package}\"]` to the `[features]` table of \
+             pos_edge, pos_cloud, or both, and an arm to their `country_registry!` call"
+        )),
+    )
 }
 
 /// Whether `name` is two lower-case ASCII letters.
