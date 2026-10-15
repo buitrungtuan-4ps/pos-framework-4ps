@@ -79,3 +79,6 @@ e14828d075c16e9b5e2603e3ec80321898124973
 
 # #802 — the edge's order commands and their tests move into their own modules
 348e222fb3f7fc01ff6c941196216a88c76d43cc
+
+# #803 — the edge's bill, settle and receipt commands and their tests move into their own modules
+c8754d354a581dc7d13eacf786f032eaf14b9b49
