@@ -16,7 +16,7 @@ use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::{BillState, TableState};
 
 /// One row of a receipt: what was sold, how many, at what each, for how much
-/// ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+/// ([ADR-0129](../../../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
 ///
 /// The name and the price are the **snapshot** `sales.order_line.added` captured, not what the menu
 /// says now — a settled bill does not change because somebody renamed an item next week (§14.2).
@@ -38,7 +38,7 @@ pub struct ReceiptLine {
     /// The extended amount for the row. The rows sum to the bill's `subtotal`.
     pub line_total: Money,
     /// The modifiers' names as the guest saw them when the line was added, printed `  + name` under
-    /// the row ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)).
+    /// the row ([ADR-0144](../../../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)).
     ///
     /// Empty for a line recorded before `sales.order_line.added` carried them: such a receipt
     /// prints neither an id nor a name looked up today, so an old receipt reprints as it was.
@@ -61,7 +61,7 @@ pub struct PreBill {
 }
 
 /// The buyer a corporate invoice is issued to, as the cashier typed it
-/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+/// ([ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md)).
 ///
 /// Personal data, every field of it. It never enters an event — `pos_proto::pii` makes that a
 /// compile error — and [`Edge::settle_bill`] files it in the store's subject store under a freshly
@@ -137,7 +137,7 @@ impl BuyerDetails {
 }
 
 /// A bill this store settled today, as the till's list of recent bills shows it
-/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+/// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettledBillView {
     /// The bill.
@@ -158,7 +158,7 @@ pub struct SettledBillView {
 
 /// What this store has taken in one business day: the sum of its settled bills and how many there
 /// were, for the Today screen's tile
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 ///
 /// The store's figure and nothing finer: no person, no till and no shift, because takings per person
@@ -221,7 +221,7 @@ pub struct BillView {
     /// What the guest owed, present once settled.
     pub total_due: Option<Money>,
     /// The settled bill's totals in full, present once settled — what the receipt is composed from
-    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+    /// ([ADR-0106](../../../../../docs/adr/0106-the-store-is-a-legal-person.md)).
     ///
     /// `total_due` above is the same figure and stays, because the till and the response shape read
     /// it and neither needs the tax lines. This carries what a *legal* document needs and the till
@@ -235,12 +235,12 @@ pub struct BillView {
     /// Whether the settle asked for a receipt to be printed, for the caller to run after commit.
     pub print_receipt: bool,
     /// Whether the settle took cash, so the caller opens the cash drawer after commit
-    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4). Cash is what the drawer holds: a card, a QR payment or a
+    /// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4). Cash is what the drawer holds: a card, a QR payment or a
     /// voucher does not open it.
     pub open_drawer: bool,
     /// The till whose drawer the cash went into, where the store keeps a drawer per till, and
     /// `None` for the store's one drawer: the drawer the caller opens
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     pub drawer_till: Option<DeviceId>,
     /// The rows that receipt lists, present once settled and empty otherwise (ADR-0129).
     ///
@@ -252,7 +252,7 @@ pub struct BillView {
 }
 
 /// One bill as the till reads it back: where it has got to, the lines it covers, and what they come
-/// to ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+/// to ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillCheckView {
     /// Open while it still owes. A settled, voided, split or merged bill owes nothing more, and its

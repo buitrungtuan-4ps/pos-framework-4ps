@@ -65,7 +65,7 @@ struct FeesState<F, Rg, Cat, Cfg, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// Builds the fee sub-router ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+/// Builds the fee sub-router ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md)
 /// decision 1).
 ///
 /// A rule is written once, at the tenant, a brand or one store, and every store it reaches is

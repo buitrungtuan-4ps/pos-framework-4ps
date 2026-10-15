@@ -48,7 +48,7 @@ struct RevokeDeviceRequest {
 }
 
 /// Builds the device-revoke sub-router
-/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+/// ([ADR-0118](../../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
 ///
 /// Its own router rather than a route on the config publishes, because it takes
 /// `console.stores.manage` rather than the `PublishConfig` those share.
@@ -100,7 +100,7 @@ where
     tag = "devices",
 )]
 /// Retires one till on a store the console cannot otherwise reach
-/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+/// ([ADR-0118](../../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
 ///
 /// **Appends to the `revoked_devices` node, never replaces it**, and the append happens *inside* the
 /// conditional-write retry (see [`publish_config_nodes_with`]). Two admins each retiring a different

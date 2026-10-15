@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The materialised rollup: maintained incrementally, read cheaply
-//! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+//! ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 //!
 //! A dashboard cannot re-scan the whole event log on every view and still answer in the <10 ms the
 //! P7 exit criterion asks for. So the rollup is **materialised**: [`project`] folds each new event
@@ -57,7 +57,7 @@ pub struct StoredRollups {
     #[serde(default)]
     pub cash: BTreeMap<String, DailyCash>,
     /// The store's **admitted-device roster**, keyed by the edge-minted local device id
-    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4). The
+    /// ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4). The
     /// one map here that is not per-trading-day, because *which tills does this store have* is a
     /// question about the present; see [`fold_devices`].
     ///
@@ -208,7 +208,7 @@ where
 
 /// Answers a store's **admitted-device roster** from the materialised rollup — which devices this
 /// store admitted, which it has retired, and when
-/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+/// ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
 ///
 /// No window: the roster is a handful of rows per store, at the rate a store commissions tills, and
 /// the question it answers is about the present rather than about a date range. Unwindowed and

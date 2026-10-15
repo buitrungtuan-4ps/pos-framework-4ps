@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The concrete TLS webhook sender ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)).
+//! The concrete TLS webhook sender ([ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md)).
 //!
 //! One HTTPS `POST` per delivery, over the rustls/hyper stack already in the tree
-//! ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). The one thing this does that an
+//! ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)). The one thing this does that an
 //! ordinary HTTP client does not: it **owns the dial**. A [`super::ssrf::VettedUrl`] carries both the
 //! destination and the exact addresses the SSRF vet already approved, so the sender opens a TCP
 //! connection to one of *those* addresses and performs the TLS handshake against the URL's hostname —

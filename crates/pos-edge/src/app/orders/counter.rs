@@ -15,7 +15,7 @@ use crate::queue::QueueNumberAuthority;
 
 impl<S: EventStore> Edge<S> {
     /// Opens a tableless order at the counter for the signed-in member of staff
-    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    /// ([ADR-0146](../../../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
     ///
     /// What a store without tables was missing: until now the only way a tableless order began was
     /// the relay intake, so a kiosk could charge an order somebody else started and could not start
@@ -59,7 +59,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Every counter order still owing money, for the takeaway screen
-    /// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+    /// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
     ///
     /// The counter's equivalent of the floor plan: without it a cashier has no way to *find* a
     /// relayed order, and the routes that charge one are unreachable in practice even though they
@@ -132,7 +132,7 @@ mod tests {
     /// An order id the edge has never seen buys nothing. The floor path proves an order exists by
     /// finding it on a table; a counter order has no table, so its lines are the proof.
     /// The counter's order list: what the takeaway screen renders
-    /// ([ADR-0093](../../docs/adr/0093-bill-keyed-on-order.md)).
+    /// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
     ///
     /// Four properties in one test because they are one question — "which orders should a cashier
     /// see?" — and separating them would hide the interactions between them.

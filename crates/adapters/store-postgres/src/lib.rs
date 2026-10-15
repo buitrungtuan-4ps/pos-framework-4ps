@@ -4,14 +4,14 @@
 //! The cloud [`EventStore`](pos_ports::event_store::EventStore) over PostgreSQL (P7).
 //!
 //! `tokio-postgres` behind a `deadpool` pool, hand-written SQL, no build-time database
-//! ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). The event log is range-partitioned
+//! ([ADR-0016](../../../../docs/adr/0016-postgres-access.md)). The event log is range-partitioned
 //! monthly on `business_date` and idempotent by `event_id`
-//! ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md)); tenant isolation is row-level
-//! security on `tenant_id` ([ADR-0008](../../../docs/adr/0008-postgres-partitioning.md)), orthogonal
+//! ([ADR-0022](../../../../docs/adr/0022-events-partition-strategy.md)); tenant isolation is row-level
+//! security on `tenant_id` ([ADR-0008](../../../../docs/adr/0008-postgres-partitioning.md)), orthogonal
 //! to the partition key, so a query that forgets the tenant sees nothing.
 //!
 //! Correctness is a test obligation, not a compiler one: `store-postgres` runs the shared port
-//! contract suite ([ADR-0026](../../../docs/adr/0026-port-shapes.md)) and cloud-specific RLS and
+//! contract suite ([ADR-0026](../../../../docs/adr/0026-port-shapes.md)) and cloud-specific RLS and
 //! partition-routing tests **against a real PostgreSQL**. Those tests are gated behind the
 //! `integration` Cargo feature (off by default), so the pull-request build neither compiles nor
 //! runs them; the merge-to-`main` integration job turns the feature on against a pinned

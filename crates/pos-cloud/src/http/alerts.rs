@@ -80,7 +80,7 @@ struct AlertListQuery {
     limit: Option<u32>,
 }
 
-/// The fleet-wide alert list, acknowledge, and resolve routes ([ADR-0073](../../../docs/adr/0073-alerting.md)).
+/// The fleet-wide alert list, acknowledge, and resolve routes ([ADR-0073](../../../../docs/adr/0073-alerting.md)).
 /// Reads are behind [`ConsolePermission::Read`] (every console role); acknowledge and resolve are behind
 /// [`ConsolePermission::ManageAlerts`] (Owner/Admin/Ops) and are audited.
 pub fn alerts_router<Al, A, C>(

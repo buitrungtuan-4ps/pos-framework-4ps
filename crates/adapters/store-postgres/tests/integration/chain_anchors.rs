@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The cloud's half of the chained event log, against a real planner
-//! ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+//! ([ADR-0131](../../../../../docs/adr/0131-a-chained-event-log.md) decision 4).
 //!
 //! These cases exist because the refusal is enforced by the **schema**, not by the application
 //! layer above it: `chain_anchors` is keyed `(tenant_id, store_id, chain_seq)` and written with

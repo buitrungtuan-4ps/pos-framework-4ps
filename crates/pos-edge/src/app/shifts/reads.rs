@@ -59,7 +59,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Whether `shift_id`'s drawer is still open past its day's end: it opened on an earlier
     /// business date than today's, at the store's cutoff
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11). The
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11). The
     /// first time a day finds a drawer so, the edge warns, once, naming the shift and its till and
     /// no person. A clock it cannot read finds no drawer so.
     fn day_ended(&self, shift_id: ShiftId, record: &ShiftRecord) -> bool {

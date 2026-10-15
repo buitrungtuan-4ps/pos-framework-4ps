@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The Grab Express [`ShippingDispatch`](pos_ports::shipping::ShippingDispatch) adapter, over HTTPS
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //!
 //! Grab Express is the second of the two couriers `docs/architecture.md` §6.1 names (Ahamove is the
 //! other). It is the `templates/adapter-template` extraction's first consumer: the same transport-seam
@@ -37,7 +37,7 @@ use pos_proto::locale::CountryCode;
 use pos_providers::{Family, ProviderDescriptor, fields};
 
 /// This adapter as the provider catalogue lists it
-/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)): the
+/// ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)): the
 /// Grab Express courier a tenant connects to from the console, and what they fill in to do it.
 ///
 /// Only the settings [`HttpGrabExpress`] and its transport read today — the base URL and a request timeout.

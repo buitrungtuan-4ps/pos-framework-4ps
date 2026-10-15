@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Off-console alert delivery ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2 slice 4).
+//! Off-console alert delivery ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2 slice 4).
 //!
 //! # Why a seam and not just an HTTP call
 //!

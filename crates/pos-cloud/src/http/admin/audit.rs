@@ -114,14 +114,14 @@ impl AuditEntryView {
     }
 }
 
-/// Builds the audit-read sub-router ([ADR-0069](../../../docs/adr/0069-audit-trail.md) slice 4).
+/// Builds the audit-read sub-router ([ADR-0069](../../../../../docs/adr/0069-audit-trail.md) slice 4).
 ///
 /// One read, `GET /admin/audit`, behind [`ConsolePermission::Read`] (every console role may read the
 /// trail). An entry about an employee records the person's staff code, so a role without
 /// [`ConsolePermission::ReadPeople`] reads that entry without it
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 /// It names its tenant the admin-is-global way — a `?tenant_id=` query
-/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)); absent, it is the fleet-wide
+/// ([ADR-0060](../../../../../docs/adr/0060-cloud-back-office-dashboard.md)); absent, it is the fleet-wide
 /// read. Like the other reads it carries its own state and is merged into the main router.
 pub fn audit_router<Au, A, C>(audit: Au, admin: A, clock: C) -> Router
 where
@@ -270,7 +270,7 @@ pub(in crate::http) fn audit_views(
 
 /// Removes the staff code, and a name if one is there, from the `before` and `after` of an audit
 /// entry about an employee, for a reader without [`ConsolePermission::ReadPeople`]
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// `employee.create` and `employee.update` record the person's id, staff code and status
 /// (ADR-0070), and the trail is behind [`ConsolePermission::Read`], which every console role holds.

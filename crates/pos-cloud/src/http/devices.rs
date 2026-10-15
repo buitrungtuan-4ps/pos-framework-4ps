@@ -68,7 +68,7 @@ struct DeviceState<D, A, K, C> {
 }
 
 /// Builds the device-onboarding sub-router, stated independently of [`CloudApp`]
-/// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+/// ([ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
 ///
 /// A store proposes a discovered printer/KDS and reads back its approved devices on the store-facing
 /// `/sync` surface (API key, `manage_devices` scope); a super-admin lists the pending queue and
@@ -164,7 +164,7 @@ struct DeviceTenantQuery {
     /// The tenant whose proposals to act on (a 26-character ULID).
     tenant_id: String,
     /// How an **approved** device is attached: `usb`, `network` or `serial`
-    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)). Required on approve,
+    /// ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)). Required on approve,
     /// ignored on reject. Discovery cannot find this out, and it decides whether a cash drawer may
     /// be opened at all, so approval is where a human states it.
     #[serde(default)]
@@ -176,7 +176,7 @@ struct DeviceTenantQuery {
     /// Narrow a **listing** to one store (a ULID). Absent lists the tenant's whole fleet, which is
     /// what the onboarding queue wants; the print-agent picker wants one store's devices, because an
     /// agent may only be a terminal standing in the same shop
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     #[serde(default)]
     store_id: Option<String>,
     /// Which **status** to list: `pending` (the default, and the onboarding queue's whole subject),

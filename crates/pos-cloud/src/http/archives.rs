@@ -32,7 +32,7 @@ pub use console::store_archive_admin_router;
 pub(crate) use console::__path_admin_list_store_archives;
 
 // ---------------------------------------------------------------------------------------------
-// Store archives ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md))
+// Store archives ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md))
 // ---------------------------------------------------------------------------------------------
 
 /// The largest sealed archive the cloud accepts from a store.
@@ -40,7 +40,7 @@ pub(crate) use console::__path_admin_list_store_archives;
 /// The same number `pos_edge::backup::MAX_ARCHIVE_BYTES` refuses to *write*, so a store cannot
 /// produce an archive this rejects — the two must move together, and a mismatch shows up as a
 /// store whose backups have silently stopped. On the route rather than the reverse proxy, for the
-/// reason the release upload gives: a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
+/// reason the release upload gives: a fork terminating TLS elsewhere ([ADR-0090](../../../../docs/adr/0090-tls-postures.md)'s
 /// `external` posture) still gets the limit.
 const MAX_STORE_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
 
@@ -82,7 +82,7 @@ struct ArchiveAcceptedResponse {
 }
 
 /// Builds the store-archive sub-router
-/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+/// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 ///
 /// Merged only when **both** an object store and `archive_key_secret` are configured, exactly like
 /// [`ota_artifact_router`]: with no object store there is nowhere for the bytes to go, and with no
@@ -242,7 +242,7 @@ where
 ///
 /// The cloud is a **sink for bytes it cannot read**. It does not open the archive, does not parse
 /// it, and holds no key material for it beyond the wrapped column — the seal happened at the till
-/// precisely so that a store's buyer details ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md))
+/// precisely so that a store's buyer details ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md))
 /// never exist here in plaintext.
 ///
 /// What it *does* check is the header: eight magic bytes and a format version, so an obviously

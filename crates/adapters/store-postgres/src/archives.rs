@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Store archives over PostgreSQL ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+//! Store archives over PostgreSQL ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 //!
 //! Rows only, for the reason `ota.rs` gives about release artifacts and more sharply: the archives
 //! are whole store databases, and a store database in the transactional database would ride along
@@ -11,7 +11,7 @@
 //! **The key is stored wrapped and this adapter cannot unwrap it.** `pos_cloud::archive` holds
 //! `ArchiveSecret` and does the wrapping; this type moves an opaque string. That is deliberate:
 //! `deploy/backup.sh` ships a `pg_dump` of this database to the same off-box tier the archives sync
-//! to ([ADR-0046](../../../docs/adr/0046-backups-and-restore.md)), so a usable key in a column
+//! to ([ADR-0046](../../../../docs/adr/0046-backups-and-restore.md)), so a usable key in a column
 //! would put the key and the ciphertext it opens in one bucket (ADR-0124 Amendment 1). Keeping the
 //! secret out of this crate makes that a property of the layering rather than a rule to remember.
 //!

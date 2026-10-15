@@ -29,7 +29,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Opens a cash shift with a starting float (`cash.shift.opened`) on the drawer `scope` names
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2 and 3).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2 and 3).
     ///
     /// Where the store keeps one drawer it is every device's, and one shift is open at a time.
     /// Where it keeps one per till, each opens on its own: the device's own till's drawer, or the

@@ -248,7 +248,7 @@ impl PostgresStoreDirectory {
     /// answers for a box that has traded but never been configured. It also carries the brand, which
     /// the config tree does not. Archived stores are included — a reconciliation re-push of a closed
     /// store's history still has to be filed under its owner
-    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// ([ADR-0101](../../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
     ///
     /// Read as the trusted role, spanning every tenant: the caller is resolving a store it cannot yet
     /// name a tenant for, the same posture as the webhook delivery task's fleet-wide load.

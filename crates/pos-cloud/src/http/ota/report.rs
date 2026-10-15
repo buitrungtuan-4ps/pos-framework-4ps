@@ -18,17 +18,17 @@ use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::fleet::OtaReportStore;
 use crate::http::internal_guard;
 
-/// Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
+/// Records one store's OTA report ([ADR-0078](../../../../../docs/adr/0078-sync-and-ota-closure.md)).
 /// Internal (the reporting partner of `/internal/ingest`), so it is absent from the public OpenAPI
 /// and requires the `X-Pos-Internal-Key` shared secret
-/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies.
+/// ([ADR-0097](../../../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies.
 /// A malformed id or an empty version is a `400`; a store failure is a retryable `503`; success is
 /// `204`. The key does not make the report *attributable* — the store id rides in the body — which is
 /// A **store** reports the version it is running, on the route that can say who it is.
 ///
 /// The tenant comes from the scoped key and the store from the path, so a report is
 /// tenant-attributable — which the `/internal` shape could not be at any strength of secret, because
-/// it read both out of the body ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+/// it read both out of the body ([ADR-0097](../../../../../docs/adr/0097-internal-route-authentication.md)).
 ///
 /// **What this does not close.** A [`Grant`](crate::auth::apikey::Grant) pins a tenant, not a store,
 /// so a key issued to one store can still name a sibling store of the *same tenant* in the path.

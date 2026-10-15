@@ -328,7 +328,7 @@ async fn seed_two_logins(admin: &store_postgres::PostgresAdmin) {
 }
 
 /// Sign-in reads *this* admin's own credential, by email
-/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+/// ([ADR-0119](../../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
 ///
 /// Against the real database deliberately: `password_phc`, `totp_secret` and
 /// `last_used_totp_step` have existed on `admin_users` since migration 0018 and nothing has
@@ -383,7 +383,7 @@ fn a_login_reads_one_admins_own_credential_by_email() {
 }
 
 /// The TOTP step is per admin and moves only forward
-/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §5).
+/// ([ADR-0119](../../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §5).
 ///
 /// Burning it globally — which is what the single-row `super_admin` column did — would refuse a
 /// second admin's perfectly valid code in the same 30-second window as a replay.
@@ -432,7 +432,7 @@ fn the_totp_step_is_per_admin_and_moves_only_forward() {
 }
 
 /// Re-enrolment replaces one admin's secret and resets their step, and nobody else's
-/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §6).
+/// ([ADR-0119](../../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §6).
 #[test]
 fn re_enrolment_replaces_one_admins_secret_and_nobody_elses() {
     block_on(async {

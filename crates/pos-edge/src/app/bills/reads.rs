@@ -25,7 +25,7 @@ impl<S: EventStore> Edge<S> {
     /// until a store publishes a second tax class. A table with no open order owes nothing.
     ///
     /// A table whose bill has been split owes what its **open parts** owe together
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). It used to answer with the
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)). It used to answer with the
     /// newest part alone, so a table split two ways quoted half of what it owed until the other half
     /// was paid.
     ///
@@ -107,7 +107,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// One bill read back: its state, the lines it covers and what they come to
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
     /// The read a split needs. Once a table's bill is split, the table-keyed check answers for the
     /// table as a whole, and each guest at the till is asking about **their** part — so the till
@@ -160,7 +160,7 @@ impl<S: EventStore> Edge<S> {
 
     /// What a pre-bill for this order prints — one per open bill once it has bills, which is what a
     /// split table asks for: each guest takes the part they are paying
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
     /// Before any bill is opened it is the order itself, priced the way [`Self::order_totals`]
     /// prices it. Empty when the order has nothing on it or its bill is already settled.
@@ -230,7 +230,7 @@ impl<S: EventStore> Edge<S> {
     /// What an **order** owes right now — the primitive [`Self::check_totals`] delegates to.
     ///
     /// Keyed on the order because that is what a bill bills
-    /// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)); a counter order has no table to
+    /// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)); a counter order has no table to
     /// ask about, so the table-keyed read cannot answer for it. Same `billing::assemble`, same
     /// projection, same session as the settle path.
     ///

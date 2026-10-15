@@ -169,7 +169,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Waives one of a bill's fees, citing a reason from the store's managed list
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    /// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
     ///
     /// An act, not an edit: the rule stays published and every other bill is charged it, while
     /// this one is charged nothing and taxed nothing for it from now on, through every split and

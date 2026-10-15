@@ -52,7 +52,7 @@ pub(super) struct RetireHandoverRequest {
 /// closing a handover that will never close itself. Behind [`ConsolePermission::ManageStores`].
 ///
 /// The automatic path is a heartbeat from the outgoing machine reporting that generation with an
-/// empty outbox ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). This
+/// empty outbox ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). This
 /// route is for the machine that will never send one: a box already powered off, or one whose disk
 /// an operator has read directly. It is an attestation, so it is audited with the attester's name.
 ///
@@ -136,7 +136,7 @@ where
 ///
 /// Nothing transitions into this on its own and nothing ever will: it is a judgement about money and
 /// risk that no fact in this system implies
-/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). It refuses while a
+/// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). It refuses while a
 /// handover is in flight, because a machine that may hold the only copy of a night's sales is not
 /// one anybody can decide is unnecessary — settle it first, by draining it or by attesting it empty.
 ///

@@ -256,7 +256,7 @@ impl Projection {
     /// refreshes rather than reshuffling with the hash map).
     ///
     /// A counter order is one with lines and no table: a relayed marketplace order, the public API,
-    /// a takeaway guest ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Floor orders are
+    /// a takeaway guest ([ADR-0064](../../../../../docs/adr/0064-edge-order-in.md)). Floor orders are
     /// excluded because the floor screen already shows them — listing a table's order here would
     /// give staff two places to charge one meal.
     ///

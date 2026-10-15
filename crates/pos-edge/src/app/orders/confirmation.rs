@@ -19,7 +19,7 @@ use crate::app::{AppError, Edge, StaffDecision, WaitingLine};
 
 impl<S: EventStore> Edge<S> {
     /// Every guest order still waiting for a member of staff, oldest first
-    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+    /// ([ADR-0116](../../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
     ///
     /// Derived from the log and the live `qr` policy, so a store that turns the hold off sees this
     /// list empty on the next read rather than having to release each order by hand.
@@ -147,7 +147,7 @@ impl<S: EventStore> Edge<S> {
     /// ADR-0116.
     ///
     /// The reason is validated against the store's managed list before the event is written
-    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)), for the
+    /// ([ADR-0115](../../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)), for the
     /// `REASON_ACTION_REJECT_ORDER` action — which is what makes the event's own doc comment
     /// (*"the mandatory reason, from the cloud-managed list"*) true rather than aspirational.
     ///

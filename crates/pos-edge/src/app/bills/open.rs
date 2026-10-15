@@ -51,7 +51,7 @@ impl<S: EventStore> Edge<S> {
     /// it has one. The primitive [`Self::open_bill`] delegates to.
     ///
     /// Keyed on the order because that is what a bill bills
-    /// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). `BillingBillOpened` has always
+    /// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)). `BillingBillOpened` has always
     /// carried `{bill_id, order_id}` and no billing event mentions a table at all, so the durable
     /// truth already said this; what was table-shaped was the edge's in-memory reach for the order,
     /// and it made takeaway revenue uncollectable — a tableless order (ADR-0064) had no table to

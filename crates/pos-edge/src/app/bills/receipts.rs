@@ -23,7 +23,7 @@ use crate::app::{
 impl<S: EventStore> Edge<S> {
     /// The bills this store settled in the current business day, newest first, at most
     /// [`MAX_SETTLED_LISTED`] of them: what the till lists to reprint a receipt from
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    /// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
     ///
     /// A bill voided after it settled has no receipt to copy, so it is not listed.
     ///
@@ -78,7 +78,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Counts a copy of a settled bill's receipt (`billing.receipt.reprinted`) and hands back what
     /// to print, marked as a copy under the receipt's own number
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    /// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
     ///
     /// Under `billing.receipt.reprint`, which asks no PIN: every copy is counted, and flagging the
     /// outliers is the dashboard's job. The copy is counted when it is asked for, not when paper
@@ -177,8 +177,8 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Scrubs every personal record past the store's retention period, and says how many went
-    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md),
-    /// [ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+    /// ([ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md),
+    /// [ADR-0035](../../../../../docs/adr/0035-retention-and-pii-masking.md)).
     ///
     /// The cutoff is `now − retention_days`, from the store's own published locale. One-way and
     /// idempotent: a record the sweep has already scrubbed is never touched again, so this is safe

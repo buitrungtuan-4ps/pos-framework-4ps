@@ -13,7 +13,7 @@ use crate::paper_labels::PaperLabels;
 use crate::printing::language::{item_name, ticket_language};
 
 /// What a kitchen ticket says about a line's guest note
-/// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+/// ([ADR-0157](../../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum TicketNote {
     /// No note was written.

@@ -97,7 +97,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Closes several counted drawers in one act: a `cash.shift.closed` for each, all in one
     /// append, so every one closes or none does
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
     ///
     /// Each drawer closes as [`Self::close_shift_at`] closes one: counted already, under
     /// `cash.shift.close`, and another till's under `cash.shift.manage_other_till` too. One approval
@@ -313,7 +313,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Publishes the head of this store's hash chain
-    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    /// ([ADR-0131](../../../../../docs/adr/0131-a-chained-event-log.md) decision 4).
     ///
     /// The anchor, and the reason the chain is worth anything against a determined hand. A chain
     /// verifies happily after its tail has been cut off, and after an edit whose later links were

@@ -28,7 +28,7 @@ use crate::http::{
 /// Loads the store's tree for the query's tenant, replaces the named `level`'s document with the
 /// request body, and publishes — composing, validating, and (only if valid) appending a new version,
 /// which is then persisted. A rejected version is a `422` carrying the violations; nothing is stored
-/// and the last good version stays current ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+/// and the last good version stays current ([ADR-0033](../../../../../docs/adr/0033-config-tree.md)).
 pub(in crate::http) async fn admin_config_publish<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,

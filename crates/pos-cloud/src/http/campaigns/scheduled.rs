@@ -70,7 +70,7 @@ struct ScheduledListQuery {
     store_id: String,
 }
 
-/// Builds the scheduled-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+/// Builds the scheduled-publish sub-router ([ADR-0077](../../../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
 ///
 /// `POST /admin/config/campaigns/schedule` snapshots the tenant's campaigns and schedules them to
 /// publish to a store at a future instant (the Tết-menu case) — behind [`ConsolePermission::PublishConfig`],
@@ -170,7 +170,7 @@ where
         effective_at_ms: request.effective_at_ms,
         created_by: context.admin.id.clone(),
         // Authored one node at a time from the Campaigns screen, so it belongs to no release
-        // ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+        // ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
         release_id: None,
         // This route takes an instant directly, so no wall-clock time was resolved against any
         // store's clock and there is none to name.

@@ -2,9 +2,9 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The staff-confirmation queue: list the guest orders waiting, then confirm or refuse one
-//! ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+//! ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
 //!
-//! ADR-0012 and [ADR-0057](../../../docs/adr/0057-qr-ordering.md) made staff confirmation the
+//! ADR-0012 and [ADR-0057](../../../../docs/adr/0057-qr-ordering.md) made staff confirmation the
 //! protection on a printed QR code — *"what stops a passer-by ordering forty pizzas to a table they
 //! are not sitting at"*. Until these routes existed there was nothing for a member of staff to press:
 //! the hold was reported to the cloud and written to the idempotency ledger, and no code read it
@@ -12,7 +12,7 @@
 //! is now enforced.
 //!
 //! A rejection cites a reason from the managed list
-//! ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)), validated for
+//! ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)), validated for
 //! `REASON_ACTION_REJECT_ORDER` before the event is written. `GET /api/orders/awaiting-confirmation`
 //! carries the reasons the picker may offer, in the store's display language, so the till needs no
 //! second read and no hardcoded list.

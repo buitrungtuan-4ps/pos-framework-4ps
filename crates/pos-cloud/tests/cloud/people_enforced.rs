@@ -78,7 +78,7 @@ async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, Role
 }
 
 /// The assignment route checks every id it binds before writing
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7,
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7,
 /// and ADR-0070's route check). An employee, store or role the tenant does not have is `404`, one
 /// it has archived is `409`, and each refusal names the field that carried the id.
 #[tokio::test]
@@ -492,7 +492,7 @@ async fn a_person_with_a_stores_role_and_a_tenant_wide_role_holds_both_there() {
 }
 
 /// A role grants each permission directly or with approval
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 4), and a create says which in two lists. One that leaves `permissions_with_approval`
 /// out grants every permission it lists directly, as before the list existed, and reads back as
 /// it was sent, PIN-flagged ids included: only a direct holder approves, so a script or an old

@@ -21,7 +21,7 @@ use crate::printing::devices::TillPrinting;
 use crate::printing::documents::centred;
 
 /// A receipt's second language
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2): what a bilingual receipt, its copy and a pre-bill print after each of their labels,
 /// and under each name the menu or a fee's rule translates into it.
 ///

@@ -29,7 +29,7 @@ use crate::printing::PrintOutcome;
 ///
 /// The binding answers one more question, and this is where a route can ask it: which terminal a
 /// paired device is, which decides where that till's guests' paper prints
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4).
 pub trait AgentDispatch: Send + Sync {
     /// Offers `job` to `agent` for `printer`, answering with what the till should say.
@@ -45,7 +45,7 @@ pub trait AgentDispatch: Send + Sync {
 
     /// Offers a kick, a job that is [`PrintDocument::kick`] alone, to `agent` for `printer`, under
     /// the same rules as [`Self::enqueue`] but deliverable only for [`KICK_WAIT`]
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     ///
     /// A dispatch that cannot carry one refuses it, which is what the default does.
     fn kick<'a>(

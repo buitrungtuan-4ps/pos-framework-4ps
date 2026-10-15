@@ -108,7 +108,7 @@ fn replaces_wholesale_under_its_version_and_stays_tenant_scoped() {
 }
 
 /// A rate's named parts survive the round trip through the `components` column (migration 0050,
-/// [ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+/// [ADR-0104](../../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
 ///
 /// India is the case: an intra-state invoice must print CGST and SGST separately, because the
 /// halves go to different governments. A row saved with no breakdown reads back as `[]` — which

@@ -32,7 +32,7 @@ use crate::http::{Json, PublishedConfig, publish_config_nodes};
 /// Every field is text the operator supplies. A registered address is written differently in every
 /// country, so the framework imposes no shape on it; the one field with a checkable shape is the tax
 /// registration number, and the check is the **country module's**
-/// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+/// ([ADR-0106](../../../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 #[derive(Debug, Clone, Deserialize)]
 struct PublishStoreProfileRequest {
     tenant_id: String,
@@ -69,7 +69,7 @@ struct ConfigStoreProfileState<Cfg, A, C> {
     countries: Arc<CountryRegistry>,
 }
 
-/// Builds the store-profile publish sub-router ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+/// Builds the store-profile publish sub-router ([ADR-0106](../../../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 ///
 /// One route, behind [`ConsolePermission::PublishConfig`]: write the store's registered identity as
 /// its `store_profile` config node. The edge applies it to `EdgeSession::profile` and the receipt is

@@ -79,7 +79,7 @@ struct OtaRolloutQuery {
 
 /// A `POST /admin/config/lease/bump` body: the `(tenant, store)` whose next generation to issue, and
 /// optionally where the machine taking it runs
-/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// `edge_placement` absent means "replace the machine where the store already is" — ADR-0003's swap,
 /// and every bump this route served before the field existed, which is why it defaults rather than
@@ -92,7 +92,7 @@ struct BumpLeaseRequest {
     #[serde(default)]
     edge_placement: Option<String>,
     /// Where in the world the machine taking this generation is — its ISO 3166-1 alpha-2 country
-    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// Required together with `region_label` when `edge_placement` names a hosted mode, and refused
     /// on any other bump: an in-store machine is in the shop, and a bump that names no placement is
@@ -126,7 +126,7 @@ struct PublishPlacementRequest {
     canary_bucket: u8,
 }
 
-/// Builds the OTA rollout sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), O3).
+/// Builds the OTA rollout sub-router ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md), O3).
 ///
 /// The first-class levers that replace hand-editing a `fleet_update` node: `PUT /admin/config/ota`
 /// publishes a rollout from typed fields, `POST /admin/config/ota/halt` flips its kill switch, and
@@ -139,8 +139,8 @@ struct PublishPlacementRequest {
 /// *which* devices are eligible; a placement says *where this store sits* — its ring and its stable
 /// canary bucket. A store with no placement is placed nowhere, and `decide_rollout` finds it eligible
 /// for nothing: safe, but it never updates. Both halves have to be authored for a fleet to move
-/// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md),
-/// [ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)).
+/// ([ADR-0048](../../../../docs/adr/0048-ota-rollout-model.md),
+/// [ADR-0052](../../../../docs/adr/0052-ota-rollout-config.md)).
 pub fn ota_config_router<Cfg, A, C, L>(
     config_trees: Cfg,
     admin: A,
@@ -197,7 +197,7 @@ where
 }
 
 /// `412` for a bump whose `If-Match` does not match the row
-/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+/// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)).
 ///
 /// `current` is read *after* the refusal, so it can already be stale by the time it is rendered.
 /// That is fine and deliberate: it is for the message, never for a decision. The decision was the
@@ -217,7 +217,7 @@ fn lease_moved_response(current: Option<LeaseGeneration>) -> Response {
 }
 
 /// `422` for a bump that would abandon a machine still holding events
-/// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+/// ([ADR-0096](../../../../docs/adr/0096-unprocessable-status.md)).
 ///
 /// You do not move a store off a machine whose events are still on it — not without a person
 /// saying, by name and in the trail, that those events are being abandoned. The detail names the
@@ -231,8 +231,8 @@ fn lease_undrained_response(superseded: LeaseGeneration) -> Response {
     )
 }
 
-/// Turns a region refusal into its [AIP-193](../../../docs/naming-and-api.md) envelope
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// Turns a region refusal into its [AIP-193](../../../../docs/naming-and-api.md) envelope
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Extracted from [`admin_bump_lease`] rather than inlined: five messages is most of a screen, and
 /// the handler it sits in already carries the generation, the placement, the acknowledgement and

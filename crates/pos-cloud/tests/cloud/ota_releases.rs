@@ -31,7 +31,7 @@ use crate::{
 
 /// A well-formed minisign signature line: the 74-byte blob (`algorithm ∥ key_id ∥ ed25519`) as
 /// base64, which is what line 2 of a `.minisig` holds. The bytes are arbitrary — the cloud never
-/// verifies, it only checks the shape ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)).
+/// verifies, it only checks the shape ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md)).
 fn minisig_line() -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(minisig_bytes())

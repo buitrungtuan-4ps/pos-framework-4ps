@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! First-boot super-admin enrolment ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+//! First-boot super-admin enrolment ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)).
 //!
 //! The pure half of the `/admin/setup` route: the request/response shapes, a constant-time token
 //! compare, and the TOTP enrolment rendering — RFC 4648 base32 and the `otpauth://` URI an
@@ -17,12 +17,12 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// The shortest password first-boot will accept, so a fork cannot mint a trivially weak super-admin
-/// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+/// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)).
 pub const MIN_PASSWORD_LEN: usize = 12;
 
 /// The length of a freshly-minted TOTP shared secret, in bytes — 256 bits, well above RFC 4226's
 /// 160-bit floor and independent of the HMAC hash the verifier uses
-/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+/// ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 pub const TOTP_SECRET_BYTES: usize = 32;
 
 /// The issuer label the `otpauth://` URI carries — deliberately free of characters that would need
@@ -88,7 +88,7 @@ pub fn build_enrolment(secret: &[u8]) -> Enrolment {
 }
 
 /// The `otpauth://totp` provisioning URI for `secret`, fixing the parameters the verifier expects
-/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): HMAC-SHA1, 6 digits, a 30-second step.
+/// ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)): HMAC-SHA1, 6 digits, a 30-second step.
 /// `algorithm=SHA1` is stated explicitly even though it is the default, so a URI-honouring app agrees
 /// with the ones (Google/Microsoft Authenticator) that assume it regardless.
 #[must_use]

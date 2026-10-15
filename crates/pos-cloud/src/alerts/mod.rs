@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Operational alerting ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+//! Operational alerting ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
 //!
 //! The cloud watches the read models O1 built — fleet liveness, background-task health, JetStream
 //! capacity, webhook state — and raises an alert when a condition fires, storing it with an

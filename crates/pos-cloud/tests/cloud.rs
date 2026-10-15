@@ -7406,7 +7406,7 @@ async fn a_malformed_ota_report_is_refused_and_records_nothing() {
     );
 }
 
-/// The router with the OTA levers merged in ([ADR-0052](../../docs/adr/0052-ota-rollout-config.md),
+/// The router with the OTA levers merged in ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md),
 /// ADR-0078) — the rollout publish/halt/read and the placement publish/read.
 fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
     ota_app_hosting(admin, config_trees, &["1.4.0"])
@@ -7414,7 +7414,7 @@ fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
 
 /// The OTA levers, with `hosted` releases already in the registry.
 ///
-/// A rollout naming a version the cloud does not host is refused ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)
+/// A rollout naming a version the cloud does not host is refused ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2), so a test about *publishing* has to host its version first. Pass an empty slice to
 /// exercise the refusal itself.
 fn ota_app_hosting(

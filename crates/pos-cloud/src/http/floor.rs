@@ -54,7 +54,7 @@ struct FloorState<F, A, C, Cat> {
     /// The tenant's catalog, for the one thing a floor write has to ask it: does this course exist?
     ///
     /// A routing rule matching on a course was accepted after checking only that it did not also
-    /// name an item, because there was nowhere to look ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)
+    /// name an item, because there was nowhere to look ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)
     /// decision 6). Now there is, and the rule is refused at the write the way the menu graph's
     /// cycle is — a rule that can never match is a rule an operator will never find out about.
     catalog: Cat,
@@ -72,7 +72,7 @@ fn floor_entropy_unavailable() -> Response {
     api_error(ErrorStatus::Unavailable, "the floor service is unavailable")
 }
 
-/// Builds the floor & kitchen master-data sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+/// Builds the floor & kitchen master-data sub-router ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 ///
 /// Reads are behind [`ConsolePermission::Read`]; every write is behind [`ConsolePermission::ManageFloor`]
 /// (Owner/Admin) and is audited. The tenant is named the admin-is-global way (a `?tenant_id=` /

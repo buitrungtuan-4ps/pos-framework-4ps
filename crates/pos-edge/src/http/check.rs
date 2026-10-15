@@ -10,7 +10,7 @@
 //!
 //! It is a pure read of [`Edge::check_totals`](crate::app::Edge::check_totals), which runs the same
 //! `billing::assemble` the settle path runs, over the same projection and the same session. One
-//! calculation, in one place, with the domain as its home ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)):
+//! calculation, in one place, with the domain as its home ([ADR-0028](../../../../docs/adr/0028-settlement-and-payment-invariant.md)):
 //! the till displays, it does not decide.
 
 use std::sync::Arc;
@@ -49,7 +49,7 @@ pub(crate) struct CheckResponse {
     tax_total: Money,
     /// What the guest owes — the figure the bill will settle against.
     total_due: Money,
-    /// Each fee charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
+    /// Each fee charged ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
     /// in rule order: the rule, its code and its name, what it charged and the tax on it, as the
     /// settle records them, except that the name is the store's display language where the
     /// current rule translates it. Part by part for a table whose bill is split, as each part
@@ -65,7 +65,7 @@ pub(crate) struct CheckFeeLine {
     #[serde(flatten)]
     line: BillFeeLine,
     /// Whether the fee's rule, as the bill froze it, lets staff waive it on one bill
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
+    /// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
     /// **Waive** only on an open bill's waivable fee, and the edge refuses any other.
     waivable: bool,
 }
@@ -107,7 +107,7 @@ pub(crate) struct BillCheckResponse {
     /// `BILL_STATE_OPEN` while it still owes. A settled, voided, split or merged bill owes nothing
     /// more, and the figures are then what its lines came to rather than a sum to collect.
     state: String,
-    /// The order lines it covers ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)
+    /// The order lines it covers ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)
     /// decision 1), so a till can show a guest what their part of a split table is for.
     order_line_ids: Vec<String>,
     /// The same figures and fee lines the table and order reads answer with, so a till draws all
@@ -142,7 +142,7 @@ where
 /// `GET /api/orders/{id}/check` — the running check for one order, table or no table.
 ///
 /// The counter's read. A takeaway order sits on no table
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above
+/// ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above
 /// cannot answer for it, and the cashier needs the figure before taking money as much on a counter
 /// order as on a floor one. Same [`Edge::order_totals`](crate::app::Edge::order_totals) the settle
 /// path assembles from.
@@ -168,7 +168,7 @@ where
 
 /// `GET /api/bills/{id}/check` — what one bill owes, where it has got to, and the lines it covers.
 ///
-/// The read a split needs ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
+/// The read a split needs ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
 /// table's bill is split, the table read answers for every part still open, and the guest at the
 /// till is asking about **theirs** — so the till reads the part it is about to settle, by its id.
 /// Same [`Edge::bill_totals`](crate::app::Edge::bill_totals) the settle path assembles from.

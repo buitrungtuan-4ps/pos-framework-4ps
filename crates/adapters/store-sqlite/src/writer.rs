@@ -35,7 +35,7 @@ pub(crate) struct IntakeWrite {
 }
 
 /// A job the edge has rendered and is handing to an agent's queue
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// The document arrives pre-serialised to JSON, like [`IntakeWrite`] and [`SubjectWrite`], so the
 /// writer thread stays free of `pos_ports` types — and so this file never has to know that the JSON
@@ -121,7 +121,7 @@ pub struct PrintAgentStanding {
 }
 
 /// Every binding in the store, each with the queued job that has waited longest behind it
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// One row per *binding*, never per job: this answers "is anything stuck behind this terminal", and
 /// the oldest unacknowledged job is the only job that can answer it. A binding with an empty queue
@@ -140,7 +140,7 @@ pub struct PrintAgentBacklog {
 }
 
 /// A subject row buffered for the settle's transaction
-/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
+/// ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
 /// to JSON by the store, so the writer thread stays free of `pos_ports` types — and so this file
 /// never has to know that the JSON it is moving is somebody's name.
 #[derive(Debug)]
@@ -834,7 +834,7 @@ fn read_chain_anchor(
 /// How many records one [`Command::VerifyChainChunk`] walks before handing the writer thread back.
 ///
 /// The walk is a read, but it is dispatched on the single writer thread
-/// ([ADR-0015](../../../docs/adr/0015-sqlite-access.md)), so whatever it does, every sale queued
+/// ([ADR-0015](../../../../docs/adr/0015-sqlite-access.md)), so whatever it does, every sale queued
 /// behind it waits. Measured at ~22 µs a record in a release build, a thousand records is ~22 ms:
 /// about the cost of one ordinary write, and the most a bill can be delayed by a verification
 /// running beside it. A whole-log walk in one command would hold the thread for seconds — nearly
@@ -895,7 +895,7 @@ pub(crate) enum ChainChunk {
 
 /// Walks up to `limit` records of a store's chain from `cursor`, and reports the first break.
 ///
-/// Reads by `seq`, not by `event_id` ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)
+/// Reads by `seq`, not by `event_id` ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md)
 /// decision 6): a walk ordered by ULID would re-link itself the moment two transactions
 /// interleaved, and report a break that never happened.
 ///
@@ -1800,7 +1800,7 @@ fn take_lease(conn: &Connection, store_id: StoreId, generation: i64) -> Result<i
 
 /// Deletes this store's held lease generation, so the next
 /// [`take_lease`] is a first sight again
-/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+/// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
 ///
 /// # The one caller, and why the take-once rule survives it
 ///
@@ -1829,7 +1829,7 @@ fn forget_lease(conn: &Connection, store_id: StoreId) -> Result<(), PortError> {
 }
 
 /// Puts a rendered job on an agent's queue, unless that printer is already at `cap`
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// **The cap is counted per printer and over unexpired rows only.** Per printer, because one jammed
 /// kitchen printer must not consume the receipt printer's budget on the same terminal. Over unexpired
@@ -1890,7 +1890,7 @@ fn enqueue_print_job(
 }
 
 /// Leases the oldest unexpired, claimable job for **each** printer this agent owns
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// One job per printer, never one job per agent: ESC/POS is a byte stream and two concurrent writers
 /// to one printer interleave garbage, so a printer holds at most one job in doubt at a time — which
@@ -1962,7 +1962,7 @@ fn claim_print_jobs(
 }
 
 /// Deletes an acknowledged job, reporting whether it was still there
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// `false` is not an error and is a case that happens in service: an acknowledgement that arrives
 /// after the job expired, or a second acknowledgement of a job whose first one was lost on the wire
@@ -1984,7 +1984,7 @@ fn acknowledge_print_job(
 }
 
 /// Deletes every job past its TTL, reporting how many
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 ///
 /// Deleted rather than delivered late, and that is the whole argument for the TTL: a ticket printed
 /// an hour late is cooked against a bill that settled and walks out to a table that left, which costs

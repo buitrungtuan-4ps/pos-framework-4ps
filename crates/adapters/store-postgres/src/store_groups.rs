@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Store groups and their config batches over PostgreSQL
-//! ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md), migration 0061).
+//! ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md), migration 0061).
 //!
 //! Four tables and the SQL over them: the cohort (`store_groups`, `store_group_members`) and the
 //! durable record of what a fan-out did at each of its members (`config_batches`,

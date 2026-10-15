@@ -2,10 +2,10 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The fleet stream's ceiling and its fill
-//! ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2, roadmap
+//! ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2, roadmap
 //! **A·P4 O4**).
 //!
-//! [ADR-0073](../../../docs/adr/0073-alerting.md) shipped `AlertKind::JetstreamCapacity` and
+//! [ADR-0073](../../../../docs/adr/0073-alerting.md) shipped `AlertKind::JetstreamCapacity` and
 //! [`evaluate`](super::eval::evaluate)'s arm for it, and the evaluator has fed them `None` ever
 //! since — the probe was a flagged follow-up. This is that probe, and it does two jobs in one call
 //! because they read the same `stream.info()`:

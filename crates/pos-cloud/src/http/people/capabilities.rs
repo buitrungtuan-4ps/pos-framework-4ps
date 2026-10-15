@@ -40,7 +40,7 @@ struct CapabilityFlagView {
 }
 
 /// Whether the console offers `capability` as a switch
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 5: every switch the console offers changes behaviour at the edge).
 ///
 /// `false` for the four nothing reads yet: no domain rule, edge route or till screen acts on
@@ -100,7 +100,7 @@ fn preset_keys(context: pos_core::capability::CapabilityContext) -> Vec<&'static
         .collect()
 }
 
-/// Builds the capability-catalogue sub-router ([ADR-0071](../../../docs/adr/0071-config-without-json.md)).
+/// Builds the capability-catalogue sub-router ([ADR-0071](../../../../../docs/adr/0071-config-without-json.md)).
 ///
 /// One read, behind [`ConsolePermission::Read`] (every console role): the §10 capability flags, the
 /// presets, and the inter-flag rules, so the Config screen's form editor renders toggles and previews
@@ -205,7 +205,7 @@ struct PublishCapabilitiesRequest {
     flags: std::collections::BTreeMap<String, bool>,
 }
 
-/// Builds the capability-publish sub-router ([ADR-0071](../../../docs/adr/0071-config-without-json.md)).
+/// Builds the capability-publish sub-router ([ADR-0071](../../../../../docs/adr/0071-config-without-json.md)).
 ///
 /// One route: merge a store's capability flag booleans into its Store config layer and version it
 /// through the config tree — the node-merge the catalog/people publishes use, so the other Store-level
@@ -240,7 +240,7 @@ where
 ///
 /// Every key must be a known §10 capability flag — the console form only sends catalogue keys, and
 /// this keeps a typo from writing a stray boolean into the config document. Extracted so the batch
-/// fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) validates
+/// fan-out ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) validates
 /// by the same rule as the single-store route rather than by a second copy of it.
 #[expect(
     clippy::result_large_err,

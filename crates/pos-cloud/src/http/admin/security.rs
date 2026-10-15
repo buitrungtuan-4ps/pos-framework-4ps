@@ -68,7 +68,7 @@ struct RecoveryCodesStatus {
 
 /// A signed-in admin re-enrols their authenticator.
 ///
-/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Re-confirms the current
+/// [ADR-0067](../../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Re-confirms the current
 /// password (the knowledge factor) before rotating the TOTP secret (the possession factor), so a
 /// session-only attacker — one holding the cookie but not the password — cannot lock the owner out by
 /// re-enrolling. On success the new one-time enrolment (QR + base32 secret) is returned once; existing
@@ -152,7 +152,7 @@ where
 
 /// (Re)generates the acting admin's one-time recovery codes.
 ///
-/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Self-service, so it is
+/// [ADR-0067](../../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6. Self-service, so it is
 /// gated by the session guard, not a role permission. Mints [`RECOVERY_CODE_COUNT`] codes at the
 /// edge, stores only their hashes (replacing any previous set), and returns the plaintext once.
 #[utoipa::path(

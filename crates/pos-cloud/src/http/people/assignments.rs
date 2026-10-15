@@ -137,7 +137,7 @@ where
 }
 
 /// A super-admin assigns an employee with a role, at one store, a store group or every store of the
-/// tenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// tenant ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the
 /// scope ([`assignment_audit`]).
 ///
@@ -259,7 +259,7 @@ where
 /// The removal publishes the `permissions` node at once to every store the assignment reached — its
 /// store, the open stores its group holds, or every open store of the tenant — so the person cannot
 /// sign in there a moment longer
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7), and answers `200` with each store's outcome.
 pub(super) async fn admin_remove_assignment<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,

@@ -145,7 +145,7 @@ async fn tax_rates_set_lists_and_validates() {
 }
 
 /// An Indian rate authored as CGST + SGST survives the round trip, and one whose parts miss the
-/// total is refused where it is typed ([ADR-0104](../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+/// total is refused where it is typed ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
 #[tokio::test]
 async fn tax_rate_components_round_trip_and_must_sum_to_their_rate() {
     let catalog = FakeCatalog::default();
@@ -256,7 +256,7 @@ async fn tax_rate_components_round_trip_and_must_sum_to_their_rate() {
 }
 
 /// A component's name is a token, or its row is refused where it is typed, by its class and channel
-/// and with the rule ([ADR-0168](../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
+/// and with the rule ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)
 /// decision 2).
 #[tokio::test]
 async fn a_tax_component_name_that_is_not_a_token_is_refused_where_it_is_typed() {

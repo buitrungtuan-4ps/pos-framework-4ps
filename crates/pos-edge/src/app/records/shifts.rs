@@ -20,7 +20,7 @@ use crate::app::views::{ShiftReport, ShiftView, TillScope};
 #[derive(Debug, Clone)]
 pub(in crate::app) struct ShiftRecord {
     /// The till whose drawer the shift counts, the `TERMINAL` entry's id, or `None` for the store's
-    /// one drawer ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
+    /// one drawer ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
     pub(in crate::app) till: Option<DeviceId>,
     /// The person the drawer is assigned to for this session, as its `cash.shift.opened` records,
     /// where the store assigns drawers (decision 9); `None` where they are shared.
@@ -116,7 +116,7 @@ pub(in crate::app) fn is_till(device: &pos_proto::devices::PublishedDevice) -> b
 }
 
 /// Whether a shift is another till's drawer's than the till `scope` says the device is
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 3). The store's
+/// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 3). The store's
 /// one drawer is every till's, so it is never another's.
 pub(in crate::app) fn another_till(scope: TillScope, record: &ShiftRecord) -> bool {
     record.till.is_some() && scope.own != record.till

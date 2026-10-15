@@ -53,13 +53,13 @@ struct ConfigLocaleState<Cfg, A, C> {
 #[derive(Debug, Default)]
 pub(in crate::http) struct PackedFacts {
     /// How many decimal places each currency the platform has a pack for has
-    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    /// ([ADR-0134](../../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
     pub(in crate::http) exponents: std::collections::BTreeMap<CurrencyCode, u8>,
     /// How long each country's pack says a store keeps a personal record, in days
-    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+    /// ([ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md)).
     pub(in crate::http) retention_days: std::collections::BTreeMap<CountryCode, u16>,
     /// How each country writes a number — its decimal mark, its group mark, and how many digits go
-    /// in a group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+    /// in a group ([ADR-0136](../../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
     ///
     /// Keyed on the country, like the retention period: what marks a figure carries is a convention
     /// of the place, not of the money. Vietnam writes `1.234.567,50` whether the amount is in đồng
@@ -67,7 +67,7 @@ pub(in crate::http) struct PackedFacts {
     pub(in crate::http) number_formats: std::collections::BTreeMap<CountryCode, NumberFormat>,
     /// The language each country's pack starts a store in, as a BCP 47 tag, which a receipt set to
     /// `RECEIPT_LANGUAGE_COUNTRY` prints in
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     /// Keyed on the country: it is the language of the place, whatever the store trades in.
     pub(in crate::http) languages: std::collections::BTreeMap<CountryCode, String>,
 }
@@ -107,10 +107,10 @@ pub(in crate::http) struct PublishLocaleRequest {
     pub(in crate::http) tenant_id: String,
     pub(in crate::http) store_id: String,
     /// Which country this store is in, as an ISO 3166-1 alpha-2 code
-    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// **Required, and that is a deliberate break** from the shape this route had before. It sits
-    /// beside `currency_code` and `timezone` because [D21](../../../docs/roadmap-v3.md) puts all
+    /// beside `currency_code` and `timezone` because [D21](../../../../../docs/roadmap-v3.md) puts all
     /// three in the same place — attributes of a *store* — and this node already carried the other
     /// two. It was simply missing.
     ///
@@ -123,7 +123,7 @@ pub(in crate::http) struct PublishLocaleRequest {
     ///
     /// `#[serde(default)]` and *not* a bare required field, deliberately. A missing field makes
     /// axum's `Json` extractor answer `422` with its own plain body, which is off the
-    /// [AIP-193](../../../docs/naming-and-api.md) envelope the whole `/admin` surface was moved
+    /// [AIP-193](../../../../../docs/naming-and-api.md) envelope the whole `/admin` surface was moved
     /// onto. Defaulting to the empty string routes "absent" through the same check as "malformed",
     /// so both answer one `400` naming `country_code` and saying what it accepts.
     #[serde(default)]
@@ -137,14 +137,14 @@ pub(in crate::http) struct PublishLocaleRequest {
     #[serde(default)]
     pub(in crate::http) display_language: Option<String>,
     /// Whether this store's menu prices already contain their tax
-    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)): Japan's 税込 and
+    /// ([ADR-0104](../../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)): Japan's 税込 and
     /// India's MRP are `true`, Vietnam's `++` is `false`. Defaults to `false`, which is what every
     /// store did before the field existed.
     #[serde(default)]
     pub(in crate::http) prices_include_tax: bool,
     /// What the grand total is rounded to in cash, in minor units — `1000` for Vietnam's thousand
     /// đồng, `100` for India's rupee, absent for Japan
-    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    /// ([ADR-0105](../../../../../docs/adr/0105-a-country-pack-is-values.md)).
     #[serde(default)]
     pub(in crate::http) cash_rounding_increment: Option<i64>,
     /// The notes the till offers as quick-cash keys, in minor units. Absent or empty means the exact
@@ -153,7 +153,7 @@ pub(in crate::http) struct PublishLocaleRequest {
     pub(in crate::http) cash_denominations: Vec<i64>,
 }
 
-/// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
+/// Builds the locale-publish sub-router ([ADR-0074](../../../../../docs/adr/0074-localization-and-tax.md), M4).
 ///
 /// One route: validate a store's currency / IANA timezone / cutoff hour with the domain constructors,
 /// write them as the store's `locale` config node, and version it through the config tree — the
@@ -187,7 +187,7 @@ where
 }
 
 /// Checks the till-money half of a locale publish and returns the denominations to store
-/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+/// ([ADR-0105](../../../../../docs/adr/0105-a-country-pack-is-values.md)).
 ///
 /// Both refusals are about a number that cannot mean what it says. A rounding increment of zero or
 /// less is a typo rather than a posture — `round_to_increment` needs a non-zero step, and "round to

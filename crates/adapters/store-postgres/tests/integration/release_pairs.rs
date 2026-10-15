@@ -33,7 +33,7 @@ fn pair<'a>(
 /// its reason until it succeeds.
 ///
 /// Both halves are what a release's `partial` is *derived* from
-/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §4): a failure
+/// ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §4): a failure
 /// only the log can see is a release that reports itself as still trying, and a reason that
 /// outlived its failure is a release that looks broken after it recovered.
 #[test]

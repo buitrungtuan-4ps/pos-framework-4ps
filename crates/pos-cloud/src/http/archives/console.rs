@@ -63,7 +63,7 @@ struct StoreArchivesResponse {
 }
 
 /// Builds the console-facing archive read
-/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) slice 3).
+/// ([ADR-0124](../../../../../docs/adr/0124-a-store-that-can-be-restored.md) slice 3).
 ///
 /// Mounted **unconditionally**, unlike [`store_archive_router`], and that is the decision: the
 /// store-facing routes need an object store and `archive_key_secret` to do anything at all, but

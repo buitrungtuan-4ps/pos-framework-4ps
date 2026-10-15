@@ -20,9 +20,9 @@ use crate::printing::{DrawerOutcome, KICKING_AGENTS, KICKS_AWAITED, PrintOutcome
 
 impl Printers {
     /// The paper choices of the till `device` is
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 4): what the `TERMINAL` entry it is bound to names, through the print-agent binding
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     ///
     /// [`TillPrinting::STORE`] when no terminal in the store's `devices` node names anything of its
     /// own, without reading the binding at all, so a store that names nothing prints as before
@@ -49,7 +49,7 @@ impl Printers {
     }
 
     /// The terminal `device` is bound to through the print-agent binding
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), which is the till it is: `None` for one
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), which is the till it is: `None` for one
     /// bound to none, and in a composition with no binding record.
     ///
     /// # Errors
@@ -64,8 +64,8 @@ impl Printers {
 
     /// Opens a cash drawer through the printer [`drawer_printer`] picks for it: the store's one
     /// drawer where `till` is `None`, and that till's otherwise
-    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
-    /// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
+    /// [ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     ///
     /// The caller asks only after the act the drawer is for has committed: a cash payment, a paid in
     /// or out, a no-sale opening. Never an error, for the reason a receipt is never one: the money is
@@ -74,7 +74,7 @@ impl Printers {
     ///
     /// Behind a print agent that carries the kick, the kick is a job on its queue under `kick_id`,
     /// and the till waits up to [`KICK_WAIT`] for the agent to say it wrote it
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A fresh
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6). A fresh
     /// id, as a test page's is: a cash payment's receipt already prints under the payment's.
     pub async fn open_drawer(
         &self,

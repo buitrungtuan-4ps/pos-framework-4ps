@@ -89,14 +89,14 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
 }
 
 /// The handover state reaches the console as a word, and `null` really is one of the answers
-/// ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// The `null` cases are the ones worth a route test rather than only a unit test: they are what the
 /// console renders for most of the fleet, and reading ADR-0110's `taking-over` definition literally
 /// would have put a mid-handover badge on every one of them.
 /// The single-store read compares a store's region against the country it publishes, and says
 /// "country not recorded" rather than letting absence read as agreement
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Three answers and no fourth, derived on the server so the console never re-implements the rule.
 /// The third is the one that matters: a store that has never published a country has *nothing* to
@@ -158,7 +158,7 @@ async fn the_single_store_read_compares_the_region_against_the_stores_own_countr
 }
 
 /// A person can answer the region warning, the answer reaches the read, and the trail records who
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// The whole point of the record: a mismatch that warns forever with no way to say why it is correct
 /// is a warning people learn to ignore. Three things have to be true together — the row is written,
@@ -258,7 +258,7 @@ async fn a_region_difference_can_be_answered_and_the_answer_is_audited() {
 }
 
 /// An answer is about **one** difference: it stops standing the moment either country moves
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// This is the property the stored country pair exists for, and it is the one a simpler design
 /// would get wrong: a boolean "acknowledged" flag would silence the warning for a store that has
@@ -347,7 +347,7 @@ async fn an_answer_stops_standing_when_the_store_moves_somewhere_else() {
 }
 
 /// The reason is required, bounded, and counted in characters
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// A warning silenced with no explanation is a warning deleted. The ceiling is counted in Unicode
 /// scalar values so a Vietnamese or Japanese reason is measured the way the person who typed it
@@ -431,7 +431,7 @@ async fn the_reason_is_required_and_its_ceiling_counts_characters() {
 }
 
 /// A store with nothing to answer cannot be acknowledged
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Refused rather than stored, because a row saying somebody approved a transfer that is not
 /// happening is a record of a decision nobody made — and a fleet that accumulates them teaches its
@@ -485,7 +485,7 @@ async fn a_store_with_no_difference_has_nothing_to_acknowledge() {
 }
 
 /// An in-store store has no region, so there is nothing to compare and no badge to draw
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// `null` here is a real answer and deliberately *not* `agrees`: an in-store machine and a hosted
 /// machine that happens to be in the right country are different facts, and only one of them is a
@@ -524,7 +524,7 @@ async fn a_store_with_no_region_reports_no_agreement_rather_than_agreeing() {
 }
 
 /// Where a store's data rests reaches the console on the read it already runs
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// The fleet page is where somebody is already looking when the question is asked, and the region
 /// rides the `LEFT JOIN store_lease` the placement beside it already uses — so this costs no extra

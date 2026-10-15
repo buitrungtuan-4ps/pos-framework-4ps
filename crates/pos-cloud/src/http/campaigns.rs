@@ -97,7 +97,7 @@ impl CampaignAuditSummary {
     }
 }
 
-/// Builds the campaigns sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+/// Builds the campaigns sub-router ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
 ///
 /// Per-campaign CRUD over a tenant's promotions. `GET` (list and by-id) is behind
 /// [`ConsolePermission::Read`]; `POST`/`PUT`/`DELETE` are behind [`ConsolePermission::ManageCampaigns`]

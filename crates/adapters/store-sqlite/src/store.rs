@@ -110,7 +110,7 @@ impl SqliteStore {
     }
 
     /// Raises the receipt counter so the next number is above `floor`, and returns that next number
-    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    /// ([ADR-0149](../../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
     ///
     /// The cloud publishes the highest receipt number it has seen from this store with every lease
     /// bump, so a replacement box never reuses one. Monotonic: a counter already above the floor is
@@ -491,7 +491,7 @@ impl SqliteStore {
     ///
     /// Read once per heartbeat, not per request: this is what the store tells the cloud so silence
     /// behind a terminal becomes visible to an operator before the night ends
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     ///
     /// # Errors
     ///
@@ -601,11 +601,11 @@ impl Transactional for SqliteStore {
 
 impl SqliteStore {
     /// Walks this store's hash chain and reports the first break
-    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    /// ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md)).
     ///
     /// Inherent rather than on `EventStore`, because it is a diagnostic a store runs on itself at
     /// startup and not a capability every caller of the port needs. It reads with no internet, per
-    /// [ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md): a store that cannot
+    /// [ADR-0001](../../../../docs/adr/0001-offline-first-store-autonomy.md): a store that cannot
     /// reach the cloud must still be able to detect its own corruption.
     ///
     /// A break is a **report**, not a refusal. Nothing here stops the store trading — a till that
@@ -654,7 +654,7 @@ impl SqliteStore {
 
 impl SqliteStore {
     /// Deletes this store's events that are synced and older than `before`, oldest first, and
-    /// returns how many went ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+    /// returns how many went ([ADR-0145](../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
     ///
     /// Inherent, like [`Self::verify_chain`]: it is housekeeping a store does to itself, not a
     /// capability the port's callers need, and no other adapter keeps a chained log to prune.

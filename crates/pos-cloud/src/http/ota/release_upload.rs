@@ -55,7 +55,7 @@ pub(super) struct OtaReleaseAdminState<B, L, A, C> {
 /// Which release and target the uploaded bytes are.
 ///
 /// `release` is spelled the way a rollout's `target_version` and the binary's own version spell it —
-/// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// bare, without a leading `v` ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). The uploader passes the string it will promote.
 #[derive(Debug, Clone, Deserialize)]
 struct ReleaseUploadQuery {
@@ -82,7 +82,7 @@ struct HostedArtifactResponse {
 /// `POST /admin/ota/releases?release=&arch=` takes the **bare executable** as its body and minisign's
 /// signature line in [`UPLOAD_SIGNATURE_HEADER`]. The bare executable, not the release tarball,
 /// because `UpdateInstaller::apply` writes the bytes it is handed as the next binary — so the
-/// signature the edge checks has to cover *these* bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// signature the edge checks has to cover *these* bytes ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). Unpacking a tarball server-side would hand `apply` bytes nobody signed.
 pub fn ota_release_admin_router<B, L, A, C>(
     blobs: B,
@@ -122,7 +122,7 @@ where
 
 /// Decodes minisign's base64 signature line into the raw 74-byte blob the edge verifies against.
 ///
-/// [ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md) Correction 2 put the decode here: every
+/// [ADR-0092](../../../../../docs/adr/0092-artifact-trust-chain.md) Correction 2 put the decode here: every
 /// type in the tree holds raw signature bytes, minisign's on-disk form is base64, and the boundary
 /// where one becomes the other is this upload. The edge never sees base64.
 ///
@@ -248,7 +248,7 @@ fn parse_release_upload(
 /// Puts one artifact's bytes in the object store and its row in the registry.
 ///
 /// Shared by both intake paths — the upload and the release fetch
-/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4) — so that whichever door
+/// ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4) — so that whichever door
 /// an artifact arrives through, the same immutability rule, the same keys and the same write order
 /// apply. Only the audit entry differs, and that stays in the handlers where the source is known.
 ///
@@ -331,7 +331,7 @@ where
 /// The `409` a release already hosted with different bytes earns.
 ///
 /// A version a ring may have installed has to keep meaning the same thing, or a rollback target
-/// stops being a known quantity ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
+/// stops being a known quantity ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)).
 fn already_hosted_refusal(error: ArtifactStoreError) -> Response {
     match error {
         ArtifactStoreError::Immutable { release, target } => api_error_with_details(

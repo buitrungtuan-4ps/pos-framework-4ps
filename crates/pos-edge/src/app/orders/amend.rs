@@ -18,7 +18,7 @@ use crate::app::{AppError, Approval, Edge, LineView};
 
 impl<S: EventStore> Edge<S> {
     /// Voids one order line, citing a reason from the store's managed list (`docs/pos-spec.md` §5,
-    /// §11 item 2; [ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap
+    /// §11 item 2; [ADR-0115](../../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap
     /// B2.2).
     ///
     /// # The two shapes of a void

@@ -60,7 +60,7 @@ impl<S: EventStore> Edge<S> {
     /// # The buyer, when the sale is a B2B one
     ///
     /// `buyer` is the corporate customer a tax invoice is issued to
-    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)) and is `None` on every
+    /// ([ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md)) and is `None` on every
     /// ordinary retail sale. When it is present a [`SubjectId`] is minted, the buyer's details are
     /// filed in the store's subject store **in this settle's own transaction**, and the settled
     /// event carries the identifier alone — never the name or the registration number, which
@@ -76,7 +76,7 @@ impl<S: EventStore> Edge<S> {
     /// Where the store keeps one drawer, every till's cash goes into it. Where it keeps one per till,
     /// the cash goes into the drawer of the till `scope` says the device is, and the payments are
     /// stamped with that drawer's shift, which is how a replay puts them back
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). A
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 5 and 6). A
     /// device that is no till takes any other tender, and no cash. Cash into a drawer assigned to
     /// somebody else takes the override, held directly or approved for this settle (decision 9);
     /// any other tender is the sale's, not the drawer's, and takes none.

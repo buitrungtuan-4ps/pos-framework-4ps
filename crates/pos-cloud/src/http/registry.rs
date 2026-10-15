@@ -42,14 +42,14 @@ struct RegistryState<Rg, A, C> {
     clock: C,
     audit: Arc<dyn AuditRecorder>,
     /// Gives a tenant created here its six starting roles
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
     starting_roles: Arc<dyn StartingRoles>,
 }
 
-/// Builds the org-registry sub-router ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+/// Builds the org-registry sub-router ([ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)).
 ///
 /// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
-/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
+/// ([ADR-0060](../../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
 /// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]). A tenant created
 /// here is given its six starting roles through `starting_roles`

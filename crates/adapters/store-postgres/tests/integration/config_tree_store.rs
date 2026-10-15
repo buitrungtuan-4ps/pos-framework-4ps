@@ -12,7 +12,7 @@ fn parsed(json: &str) -> serde_json::Value {
 }
 
 /// A tree state saves, loads back at the version it was written at, and replaces in place under
-/// that version ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// that version ([ADR-0095](../../../../../docs/adr/0095-conditional-writes-for-collections.md)).
 #[test]
 fn saves_loads_and_replaces_under_the_version_it_was_read_at() {
     block_on(async {
@@ -489,14 +489,14 @@ fn a_reported_outbox_depth_is_recorded_and_never_erased_by_silence() {
 
 /// The print-agent standings follow the same `COALESCE`, and the case that separates them from
 /// their neighbours is the one those columns cannot express: an **empty** report
-/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../../../docs/adr/0112-print-agents.md)).
 ///
 /// `NULL` is a box that did not look, and leaves the stored list standing. `'[]'` is a box that
 /// looked and has no bound agent — what a manager releasing the last terminal produces — and it
 /// must *replace* the list, because a console still showing an agent nobody is bound to is the
 /// stale answer the column exists to prevent. Only a real database tells the two apart, because
 /// The region the bump wrote comes back out of the fleet read
-/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Two tables and one join, which is exactly what neither the unit tests nor the in-process
 /// suite can prove: they hand the view a `FleetRow` that already holds a region. This asserts

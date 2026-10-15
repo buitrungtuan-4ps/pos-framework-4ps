@@ -46,7 +46,7 @@ impl<S> Edge<S> {
     }
 
     /// Swaps in a rebuilt session — the config-pull loop's apply step
-    /// ([ADR-0039](../../../docs/adr/0039-config-delivery.md)). Commands already in flight keep the
+    /// ([ADR-0039](../../../../docs/adr/0039-config-delivery.md)). Commands already in flight keep the
     /// [`Arc`] snapshot they took; the next command sees the new session. Cloud-owned configuration
     /// (ADR-0004): the store never edits this, it only receives it.
     #[expect(
@@ -62,7 +62,7 @@ impl<S> Edge<S> {
     }
 
     /// The lease standing this box is acting on
-    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
     /// Lent as the shared cell rather than copied out, because the config-pull loop writes it and
     /// the request path reads it, and a second copy is a second answer.
@@ -81,7 +81,7 @@ impl<S> Edge<S> {
     }
 
     /// Refuses a command that would **open** something new when a replacement machine has taken this
-    /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    /// store ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
     /// Called by the four commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
     /// no others — `open_shift`, `seat_table`, `open_inbound_order` and `open_counter_order`, which
@@ -157,7 +157,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The cloud-link and outbox-depth cell the status bar reads
-    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+    /// ([ADR-0137](../../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
     #[must_use]
     pub const fn sync(&self) -> &SyncStatus {
         &self.sync
@@ -196,7 +196,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Tells every connected device that a new store configuration is live
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// item 7), so an open till reloads its floor, menu, layout, locale and reason codes without a
     /// new sign-in. Numbered on the fan-out like any frame, so a till that reconnects is replayed it.
     ///
@@ -218,7 +218,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Makes sure this box never issues a receipt number at or below `floor`, the highest the cloud
     /// has seen from this store
-    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    /// ([ADR-0149](../../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
     /// A counter already above it is left alone.
     ///
     /// # Errors
@@ -231,7 +231,7 @@ impl<S: EventStore> Edge<S> {
     /// The event log this edge owns, lent read-only.
     ///
     /// The one caller is the outbox drain
-    /// ([`event_publish`](crate::event_publish), [ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)),
+    /// ([`event_publish`](crate::event_publish), [ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)),
     /// which needs an [`EventStore`] handle to read `outbox_batch` and acknowledge what the cloud
     /// accepted. Lending the store beats threading a second handle through `serve()` — the `Edge`
     /// already owns it, and a borrow cannot append behind the application layer's back: every write
@@ -242,7 +242,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Records that this box completed device activation and may now trade
-    /// (`device.activation.completed`, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+    /// (`device.activation.completed`, [ADR-0050](../../../../docs/adr/0050-activation-code-exchange.md)).
     ///
     /// A system event, not a domain decision: there is no signed-in employee at first boot, so the
     /// envelope carries none, and the box's own new identity is both the reporting and the activated
@@ -265,7 +265,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Records that the store admitted a device by pairing it (`device.admission.granted`,
-    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    /// [ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
     ///
     /// `admitted_by_device_id` is the paired device whose signed-in manager minted the code, and
     /// `None` for the code a boot announces — nothing authorised that one, because nothing could.
@@ -299,7 +299,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Records that the store retired a device's admission (`device.admission.revoked`,
-    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    /// [ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
     ///
     /// One call per device, including for the break-glass that retires every device at once, so a
     /// reader never has to interpret an absent field as *all of them*.

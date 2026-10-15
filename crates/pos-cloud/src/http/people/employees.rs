@@ -292,7 +292,7 @@ fn code_in_use() -> Response {
 ///
 /// Archiving the person publishes the `permissions` node at once to every store they are assigned
 /// to, so they cannot sign in at any of them a moment longer
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7), and the answer is then `200` with each store's outcome. Any other update — a
 /// rename, or restoring an archived person — publishes as before, and answers `204`.
 pub(super) async fn admin_update_employee<P, R, Cfg, A, C>(

@@ -37,7 +37,7 @@ use crate::app::roster::StaffRoster;
 mod reads;
 
 /// The session defaults a decision reads — normally the store's synced configuration
-/// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
+/// ([ADR-0004](../../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
 /// is config-driven; the values arrive from the cloud config tree in P7.
 #[derive(Debug, Clone)]
 pub struct EdgeSession {
@@ -46,7 +46,7 @@ pub struct EdgeSession {
     /// The store's capability profile (§10).
     pub capabilities: CapabilityContext,
     /// The capability flags the store's published configuration sets, each with the value it sets
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 5), read through [`Self::explicit`].
     ///
     /// [`Self::capabilities`] reads a flag the document leaves out as its declared default, which
@@ -56,7 +56,7 @@ pub struct EdgeSession {
     /// [`Capability::ALL`].
     pub published_flags: BTreeMap<Capability, bool>,
     /// The store's display language, from the `locale` node
-    /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)), or `None` when the store has
+    /// ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)), or `None` when the store has
     /// set none.
     ///
     /// The menu is already resolved into this language at config-apply time, so nothing needed the
@@ -71,7 +71,7 @@ pub struct EdgeSession {
     /// The store's currency.
     pub currency: CurrencyCode,
     /// How many decimal places that currency has
-    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    /// ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
     ///
     /// Beside `currency` because it is the same fact: an `amount_minor` means nothing without it.
     /// Published by the country pack and applied from the `locale` node, like every other value
@@ -91,14 +91,14 @@ pub struct EdgeSession {
     /// what avoids a migration across every line ever written.
     pub tax_rates: TaxRateTable,
     /// Whether this store's menu prices already contain their tax
-    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    /// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     ///
     /// `false` — the bootstrap default and Vietnam's posture — adds tax on top of the price. `true`
     /// is Japan's 税込 and India's MRP: the price is what the guest pays and the tax is extracted
     /// from inside it. Published on the `locale` node, so a store changes posture without a release.
     pub prices_include_tax: bool,
     /// What the grand total is rounded to in cash, in minor units, or `None` for no rounding
-    /// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+    /// ([ADR-0105](../../../../docs/adr/0105-a-country-pack-is-values.md)).
     ///
     /// A fact about the country's coinage: India rounds to the rupee because no smaller coin settles
     /// the difference, Vietnam to the thousand đồng because that is the smallest note, Japan not at
@@ -107,7 +107,7 @@ pub struct EdgeSession {
     pub cash_rounding_increment: Option<i64>,
     /// How each tax amount and each fee rounds to the minor unit: the `locale` node's
     /// `tax_rounding`, a setting
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2), read through `LocaleSettings::tax_rounding`.
     ///
     /// Half-up in the bootstrap and wherever the node does not say otherwise, which is what every
@@ -116,8 +116,8 @@ pub struct EdgeSession {
     pub tax_rounding: TaxRounding,
     /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
     /// the `default_retention_days` a `LocalePack` has carried since
-    /// [ADR-0027](../../../docs/adr/0027-country-modules.md) and which, until
-    /// [ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md), no edge read.
+    /// [ADR-0027](../../../../docs/adr/0027-country-modules.md) and which, until
+    /// [ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md), no edge read.
     ///
     /// The clock the store's own subject store runs on: a B2B invoice's buyer is scrubbed this many
     /// days after the sale, whether or not the box has ever reached the cloud — which is the point,
@@ -126,7 +126,7 @@ pub struct EdgeSession {
     /// no locale still forgets.
     pub retention_days: u16,
     /// How many days the edge keeps a **synced** event before retention may delete it
-    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+    /// ([ADR-0145](../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
     ///
     /// Per store, from the cloud's `retention` node, within [`EVENT_LOG_DAYS`]; 90 until one
     /// arrives, the figure the documents have always promised. It is a floor, never a deadline: an
@@ -134,7 +134,7 @@ pub struct EdgeSession {
     /// says. Not [`Self::retention_days`], which is how long *personal data* lives, set by law.
     pub event_log_days: u16,
     /// How this store writes a number: its decimal mark, its group mark, and how many digits go in a
-    /// group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+    /// group ([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
     ///
     /// A convention of the place rather than of the money, which is why it arrives with the country
     /// and not with the currency: Vietnam writes `1.234.567,50` whether the figure is in đồng or in
@@ -147,7 +147,7 @@ pub struct EdgeSession {
     /// country nobody has filled in: an unhelpful key on a till is worse than no key.
     pub cash_denominations: Vec<i64>,
     /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
-    /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
+    /// ([ADR-0063](../../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
     /// through the config tree (WS-B), which is a safe default — it never guesses a price.
     ///
@@ -155,20 +155,20 @@ pub struct EdgeSession {
     /// from [`menu_for`](Self::menu_for), which reads [`menu_book`](Self::menu_book).
     pub menu: MenuCatalog,
     /// Every channel's price book as the cloud compiled it
-    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), with names resolved to the store's
+    /// ([ADR-0066](../../../../docs/adr/0066-cloud-catalog.md)), with names resolved to the store's
     /// language as `menu`'s are. Empty until a `menu` node is applied.
     pub menu_book: MenuBook,
     /// The channel a walk-in bill's order came in on, which selects the tax rate. `DineIn` for a
     /// full-service store; a marketplace order overrides it per bill (P11).
     pub sales_channel: SalesChannel,
     /// The store's staff and what each may do, as published from the cloud on the `permissions` config
-    /// node ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). Empty in the bootstrap: a store
+    /// node ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)). Empty in the bootstrap: a store
     /// authorises no one from a roster until the console publishes its people, the same
     /// safe-by-default shape as the menu.
     pub staff: StaffRoster,
     /// Whether the store decides every command with the signed-in person's own permissions rather
     /// than the store-wide [`Self::granted`]
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 1 and Rollout), from the `permissions` node's `enforced`.
     ///
     /// `false` in the bootstrap and for every node published without it: the store-wide set, as
@@ -177,17 +177,17 @@ pub struct EdgeSession {
     /// somebody other than the person acting (decision 5).
     pub permissions_enforced: bool,
     /// The store's floor plan — its areas and tables, as published on the `floor` config node
-    /// ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the bootstrap: the store
+    /// ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the bootstrap: the store
     /// carries no roster of tables until the console publishes one (the in-store UI shows its own
     /// fallback until then).
     pub floor: FloorPlan,
     /// The store's kitchen plan — its stations and item→station routing, as published on the
-    /// `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the
+    /// `stations` config node ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the
     /// bootstrap; `resolve_station` returns `None` until a plan is published, so the caller keeps its
     /// own fallback.
     pub stations: StationPlan,
     /// How the till groups and orders its buttons, from the `layout` config node
-    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), resolved for this store's sales
+    /// ([ADR-0066](../../../../docs/adr/0066-cloud-catalog.md)), resolved for this store's sales
     /// channel.
     ///
     /// The layout half of the catalog, deliberately apart from the price half: `menu` is what the
@@ -199,7 +199,7 @@ pub struct EdgeSession {
     /// existed (production-readiness **C4**).
     pub layout: DisplayPlan,
     /// The printers and kitchen displays this store may address, as published on the `devices`
-    /// config node ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    /// config node ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)).
     ///
     /// Empty in the bootstrap, and an empty node is an ordinary state rather than a fault: a
     /// LAN-only box that has never synced, and a shop with no printer at all, both look like this.
@@ -207,7 +207,7 @@ pub struct EdgeSession {
     /// "Printing receipt…" while nothing is wired.
     pub devices: PublishedDevices,
     /// The tenant's vendor connections that serve this store, from the published `integrations`
-    /// node ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+    /// node ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
     ///
     /// Empty in the bootstrap, and empty is the ordinary state: every family then runs its offline
     /// path — an invoice from the local range, a QR transfer confirmed by hand. It holds no secret
@@ -215,7 +215,7 @@ pub struct EdgeSession {
     /// a credential could travel in.
     pub integrations: PublishedIntegrations,
     /// Who this store legally is, as the receipt prints it
-    /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
+    /// ([ADR-0106](../../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
     /// address, and the tax registration number a Japanese qualified invoice or an Indian tax
     /// invoice is not one without.
     ///
@@ -223,14 +223,14 @@ pub struct EdgeSession {
     /// then starts at its number, as it always did.
     pub profile: StoreProfile,
     /// How the store runs its shifts, from the `shift` config node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     ///
     /// The defaults in the bootstrap, and every default is what the edge did before the node
     /// existed: a store sells with or without an open shift.
     pub shift: PublishedShift,
     /// How long a sign-in lasts on an idle device and how many wrong PINs lock a person out, from
     /// the `session` config node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     ///
     /// The defaults in the bootstrap, which are what the edge did before the node existed: five
     /// wrong PINs lock a person out for five minutes, and the sign-in window is the local file's
@@ -245,21 +245,21 @@ pub struct EdgeSession {
     /// before the node carried them.
     pub qr: PublishedQr,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
-    /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
+    /// config node ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
     /// promotions until the console publishes them, the same safe default as the menu. (The node is
     /// delivered to the session here; wiring `evaluate` into the live bill flow is the flagged M3
     /// follow-up.)
     pub campaigns: Vec<Campaign>,
     /// The per-item auto-86 threshold (§8) from the `inventory` config node
-    /// ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6): an item is 86'd at or below
+    /// ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md), M6): an item is 86'd at or below
     /// this many makeable. Empty in the bootstrap, and an item absent here defaults to `0` (86 only when
     /// nothing can be made). Paired with [`Self::recipes`]; [`Self::item_sellable`] reads both against a
     /// stock projection. The live projection that drives auto-86 arrives with the flagged
     /// goods-in/stocktake follow-up, so nothing 86s a trading store's menu on this slice alone.
     pub recipe_thresholds: BTreeMap<MenuItemId, i64>,
     /// The sales channels this store accepts, from the `channels` config node
-    /// ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7). `None` means no restriction —
+    /// ([ADR-0080](../../../../docs/adr/0080-channels-and-payments.md), M7). `None` means no restriction —
     /// the bootstrap default and the behaviour of a store that has never published the node, so a
     /// channel is enabled unless a published node says otherwise. `Some(set)` is authoritative.
     pub enabled_channels: Option<BTreeSet<SalesChannel>>,
@@ -267,17 +267,17 @@ pub struct EdgeSession {
     /// means no restriction (any known method), exactly as before M7; `Some(set)` is authoritative.
     pub accepted_tender: Option<BTreeSet<PaymentMethod>>,
     /// The keys the pay screen offers, from the `tender_keys` node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2): its tip keys and how many guests its even split offers. The defaults, five, ten
     /// and fifteen percent and up to six guests, in the bootstrap and wherever the node sets none.
     pub tender_keys: PublishedTenderKeys,
     /// How the counter opens an order for a walk-in guest, from the `counter` node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
     /// before the setting, in the bootstrap and wherever the node sets none.
     pub counter: PublishedCounter,
     /// How often the store archives its database off the box, from the `backup` node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
     /// archive loop on this box's own interval ([`crate::backup_client`]).
     pub backup: PublishedBackup,
@@ -293,7 +293,7 @@ pub struct EdgeSession {
     /// ([`Self::qr_ordering_switched_off`]).
     pub qr_enabled_published: Option<bool>,
     /// The managed reason-code list this store validates a rejection against
-    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    /// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///
     /// Starts as [`PublishedReasonCodes::framework_default`] and not as an empty list, which is the
     /// one node where absence must not mean "feature off": a store that has published nothing must
@@ -302,7 +302,7 @@ pub struct EdgeSession {
     /// (ADR-0115 slice 4).
     pub reason_codes: PublishedReasonCodes,
     /// The fee rules a bill may apply, from the `fees` config node
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
+    /// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
     ///
     /// Empty in the bootstrap and whenever the node is absent, and empty charges no fee, which is
     /// what every bill charged before the node existed. A bill does not read this as it goes: it
@@ -310,10 +310,10 @@ pub struct EdgeSession {
     /// (decision 3), so a publish during a meal reaches the next bill, not the one on the table.
     pub fees: PublishedFees,
     /// The rollout the cloud has published for the fleet, from the `fleet_update` config node
-    /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
+    /// ([ADR-0048](../../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
     /// itself against — target version, lowest eligible ring, canary ramp, signing key, kill switch
     /// — together with the signing keys revocation has retired
-    /// ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)).
+    /// ([ADR-0047](../../../../docs/adr/0047-minisign-verification.md)).
     ///
     /// Held as one value rather than as an update beside a key list, because the node validates as
     /// one: `FleetUpdateConfig::validate` either yields both halves or neither, and splitting them
@@ -332,7 +332,7 @@ pub struct EdgeSession {
     /// which is why the OTA path was dark at the rollout decision as well as at the fetch.
     pub fleet_update: Option<FleetRollout>,
     /// Where the cloud has placed *this* device in the rollout, from the `device_ota` config node
-    /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): its ring and its stable canary
+    /// ([ADR-0048](../../../../docs/adr/0048-ota-rollout-model.md)): its ring and its stable canary
     /// bucket.
     ///
     /// `None` means the cloud has not placed this device, and an unplaced device is eligible for
@@ -345,7 +345,7 @@ pub struct EdgeSession {
     /// above zero. There is no safe placement to invent, so none is invented.
     pub device_ota: Option<DeviceOtaAssignment>,
     /// The store's **authoritative** lease generation, from the `lease` config node
-    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)) — the number this
+    /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)) — the number this
     /// box's own held generation is compared against to decide whether it is still the store.
     ///
     /// `None` means the cloud has never issued this store a lease, which is every store until an

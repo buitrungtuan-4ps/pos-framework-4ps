@@ -14,7 +14,7 @@
 //!    decoded batch *and* the message handles; the caller acknowledges only after ingest has
 //!    committed ([`ConsumedBatch::ack`]), and returns the batch for redelivery otherwise
 //!    ([`ConsumedBatch::nak`]). Combined with ingest being idempotent by `event_id`
-//!    ([ADR-0026](../../../docs/adr/0026-port-shapes.md) §4), that is at-least-once with exactly-once
+//!    ([ADR-0026](../../../../docs/adr/0026-port-shapes.md) §4), that is at-least-once with exactly-once
 //!    effect: a redelivered batch is stored once and reported as duplicates.
 //!
 //! A message whose bytes are not a valid envelope can never be ingested, so it would wedge the cursor

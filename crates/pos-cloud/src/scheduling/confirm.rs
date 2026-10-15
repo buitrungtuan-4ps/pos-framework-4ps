@@ -3,7 +3,7 @@
 
 //! What a scheduled node makes a store run, and whether that is a value that needs a recorded
 //! confirmation the store does not run now
-//! ([ADR-0169](../../../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+//! ([ADR-0169](../../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
 //! decision 3).
 
 use pos_proto::settings::Setting;

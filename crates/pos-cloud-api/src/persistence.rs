@@ -360,7 +360,7 @@ fn admin_user_from_row(row: AdminUserRow) -> Result<AdminUser, AdminStoreError> 
 
 /// Converts a stored `admin_users` row *with its credential* into the domain [`AdminLogin`] — the
 /// per-admin sign-in read
-/// ([ADR-0119](../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
 ///
 /// Delegates the identity half to [`admin_user_from_row`], so an unknown role or status token fails
 /// here exactly as it does on a listing read rather than silently authenticating someone whose role

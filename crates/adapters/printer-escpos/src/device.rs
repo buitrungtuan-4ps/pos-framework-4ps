@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The directly-attached transport: ESC/POS bytes to a device file
-//! ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)).
+//! ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md)).
 //!
 //! # Why a file, and not a USB library
 //!

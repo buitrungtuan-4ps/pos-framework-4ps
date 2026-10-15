@@ -29,7 +29,7 @@ struct ProviderCatalogueState<A, C> {
 }
 
 /// Builds the provider-catalogue sub-router
-/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+/// ([ADR-0153](../../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
 ///
 /// One read, behind [`ConsolePermission::Read`]: every vendor this binary can talk to, with the
 /// settings schema the console draws a connection form from. Tenant-independent, like the capability

@@ -23,7 +23,7 @@ use crate::ota::{ArtifactKind, ArtifactStore, TargetTriple, artifact_key, valida
 /// Reads a release's two blobs — the executable and its raw detached signature.
 ///
 /// Buffered, not streamed: [`BlobStore::get`] returns a `Vec<u8>`, so a 30 MB artifact is held in
-/// memory for the length of the response. [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// memory for the length of the response. [ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)
 /// flags that deliberately — a streaming `get` is a port change with its own contract-suite work and
 /// belongs to the performance wave. Tolerable for a ring of a few boxes, wrong for a fleet-wide push.
 ///
@@ -74,12 +74,12 @@ pub(super) async fn read_one_artifact_blob<B: BlobStore>(
 }
 
 /// `POST /sync/stores/{store_id}/artifact` — hands a store the signed release bytes it decided to
-/// install ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
+/// install ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)).
 ///
 /// **The cloud is a dumb host.** It stores bytes an operator uploaded and hands them back; it never
 /// signs, and it never verifies the minisign signature. The edge verifies against a trust anchor
-/// baked into its own binary ([ADR-0047](../../../docs/adr/0047-minisign-verification.md),
-/// [ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)), so a compromised cloud, a swapped
+/// baked into its own binary ([ADR-0047](../../../../../docs/adr/0047-minisign-verification.md),
+/// [ADR-0092](../../../../../docs/adr/0092-artifact-trust-chain.md)), so a compromised cloud, a swapped
 /// blob or a spoofed host can make an update *fail* — never make a box install code.
 ///
 /// **`read_config`, the owner's call (2026-09-04).** Every provisioned box already carries that

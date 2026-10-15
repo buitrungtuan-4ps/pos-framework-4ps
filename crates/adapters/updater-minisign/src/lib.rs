@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Minisign signature verification for over-the-air updates
-//! ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)).
+//! ([ADR-0047](../../../../docs/adr/0047-minisign-verification.md)).
 //!
 //! The concrete [`Signer`] the P2 port anticipated: it verifies that a release artifact was signed by
 //! an offline key before the binary trusts it, over the audited [`ed25519_dalek`] and [`blake2`]
@@ -22,7 +22,7 @@
 //! Verification runs at startup on bytes an attacker chose, so every parse is a checked
 //! `slice.get(..)` — never an index — and the crate inherits the backbone's denials of `panic`,
 //! `indexing_slicing`, `unwrap_used`, and `expect_used`. The three status distinctions the port fixed
-//! are honoured exactly ([ADR-0026](../../../docs/adr/0026-port-shapes.md) §5): a wrong key is
+//! are honoured exactly ([ADR-0026](../../../../docs/adr/0026-port-shapes.md) §5): a wrong key is
 //! `invalid_argument` ("try the other one"), a bad signature for the right key is `permission_denied`
 //! (terminal — never auto-retried into an install), and malformed bytes are `invalid_argument`.
 
@@ -42,7 +42,7 @@ const SIGNATURE_LEN: usize = 74;
 const PUBLIC_KEY_LEN: usize = 32;
 
 /// Verifies minisign signatures over the [`Signer`] port
-/// ([ADR-0047](../../../docs/adr/0047-minisign-verification.md)).
+/// ([ADR-0047](../../../../docs/adr/0047-minisign-verification.md)).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MinisignVerifier;
 

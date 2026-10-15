@@ -52,7 +52,7 @@ fn admin_service_unavailable() -> Response {
 }
 
 /// Refuses a change that would remove the **last active owner** — a demotion or a suspension of the
-/// sole remaining `owner` ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). `removes_owner`
+/// sole remaining `owner` ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). `removes_owner`
 /// is true when the pending change would stop the target being an active owner; otherwise the guard
 /// is a no-op. An absent target passes through, so the caller's own update returns the `404`.
 async fn guard_last_owner_change<A>(

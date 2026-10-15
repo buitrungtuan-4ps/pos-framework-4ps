@@ -126,7 +126,7 @@ impl ConnectionAuditSummary {
 }
 
 /// Builds the connection sub-router
-/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decisions 3–4).
+/// ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decisions 3–4).
 ///
 /// Per-record CRUD over a tenant's vendor connections. Reads are behind [`ConsolePermission::Read`]
 /// and answer no secret value, ever — only which secret fields are set. Writes are behind

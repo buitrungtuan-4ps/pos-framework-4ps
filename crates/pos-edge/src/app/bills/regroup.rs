@@ -15,7 +15,7 @@ use crate::app::{AppError, BillRecord, Edge, LineRecord};
 
 impl<S: EventStore> Edge<S> {
     /// Partitions a bill's lines into two or more new bills
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
     /// The source moves to `SPLIT`, which is terminal: it stops owing anything and the parts owe it
     /// instead, so the same food cannot be charged twice. Each part becomes an ordinary bill on the
@@ -130,7 +130,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Folds `absorbed` into `bill_id`, which takes their lines and survives
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
     ///
     /// The target keeps its identity because it is the bill the cashier is standing in front of, so
     /// a merge is not a split in reverse and does not need to be. Every absorbed bill must be open,

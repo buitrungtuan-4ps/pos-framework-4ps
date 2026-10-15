@@ -27,7 +27,7 @@ use crate::app::{
 
 impl<S: EventStore> Edge<S> {
     /// The instant before which retention may delete a synced event
-    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)):
+    /// ([ADR-0145](../../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)):
     /// the store's [`EdgeSession::event_log_days`] ago, or a day before the oldest business still
     /// open, whichever is earlier.
     ///
@@ -209,7 +209,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Folds a split or a merge back onto the projection
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)), with what each does to the
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)), with what each does to the
     /// bills' fees (ADR-0159 decision 6). Extracted from [`fold`](Self::fold) to keep it inside its
     /// line budget, as [`Self::fold_void`] was.
     fn fold_regroup(

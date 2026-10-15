@@ -2,18 +2,18 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The HTTP transport seam and its production TLS implementation
-//! ([ADR-0059](../../../docs/adr/0059-erp-adapter.md)).
+//! ([ADR-0059](../../../../docs/adr/0059-erp-adapter.md)).
 //!
 //! [`ErpTransport`] is the one thing that touches a socket; [`TlsErpTransport`] is the concrete
 //! sender, on the rustls/hyper stack already in the tree
-//! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md), [ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md), [ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //! An ERP's API base URL is operator configuration — one fixed, trusted host — so this dials the
 //! ordinary way; there is no SSRF surface to defend.
 //!
 //! A posting is created (`POST`) and read back (`GET`), so the seam carries a [`Method`] rather than
 //! fixing one verb; the body is optional. Keeping the seam to one method keeps the stub the contract
 //! suite runs against trivial. This is the same seam shape the courier adapters use
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)) — the duplication both crates share is
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)) — the duplication both crates share is
 //! the input to the `templates/adapter-template` extraction the rule of three schedules at the third
 //! integration adapter.
 

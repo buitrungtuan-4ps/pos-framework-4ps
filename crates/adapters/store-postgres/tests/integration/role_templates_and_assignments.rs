@@ -810,7 +810,7 @@ fn existing_approvers_who_close_a_shift_see_takings_once_and_no_other_role_does(
 ///
 /// The console used to turn an assignment's `employee_id` into a name by searching the tenant's
 /// whole roster, which is the read that stops working once the roster is paged
-/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4). The resolution is a join
+/// ([ADR-0098](../../../../../docs/adr/0098-paged-admin-reads.md), B3-4). The resolution is a join
 /// on the read that needs it.
 ///
 /// The second half is why that join is `LEFT`. Nothing declares a foreign key from an assignment
@@ -994,7 +994,7 @@ fn assignments_bind_read_and_remove_with_delete_grant() {
 }
 
 /// The two reads a removal and a role's archive need to know which stores to tell
-/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7): one assignment by its id, and every assignment granting a role. Both are
 /// tenant-scoped, and both name the person the way every assignment read does.
 #[test]
@@ -1091,7 +1091,7 @@ fn ids_of(rows: Vec<store_postgres::AssignmentRow>) -> Vec<String> {
 }
 
 /// The wider scopes of migration 0077
-/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 3). An assignment to a store group or to every store is a row of
 /// `employee_scope_assignments`, and every assignment read lists it beside the one-store rows. A
 /// store's read lists every row that reaches it — its own, its groups' through

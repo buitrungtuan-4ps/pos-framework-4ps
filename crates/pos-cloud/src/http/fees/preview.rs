@@ -229,7 +229,7 @@ impl SampleBillView {
     tag = "fees",
 )]
 /// `POST /admin/fees/preview` — a sample bill at one store with rules in place, before they are
-/// written ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md): "the console previews a
+/// written ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md): "the console previews a
 /// sample bill before publishing").
 ///
 /// A read: it writes nothing and publishes nothing, so it stands behind the fee reads' permission.

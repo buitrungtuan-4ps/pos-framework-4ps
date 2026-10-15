@@ -2,8 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The edge's [`KeyVault`] adapter: a machine's own credentials in the operating system's protected
-//! store ([ADR-0086](../../../docs/adr/0086-edge-keyvault-and-activation.md),
-//! [ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)).
+//! store ([ADR-0086](../../../../docs/adr/0086-edge-keyvault-and-activation.md),
+//! [ADR-0003](../../../../docs/adr/0003-cattle-not-pets.md)).
 //!
 //! A store server is activated once with a short code, exchanges it for a long-lived device
 //! credential, and keeps that credential in the OS credential store — never a file beside the binary
@@ -23,7 +23,7 @@
 //! (`tests/integration.rs`, `--features integration`) — the same split `store-postgres` and
 //! `cloud-sync-http` draw.
 //!
-//! The port is async because a DPAPI/TPM/keyring call is genuinely I/O ([ADR-0026](../../../docs/adr/0026-port-shapes.md)).
+//! The port is async because a DPAPI/TPM/keyring call is genuinely I/O ([ADR-0026](../../../../docs/adr/0026-port-shapes.md)).
 //! The `linux-native` keyutils path (and Credential Manager) is a fast local syscall, so
 //! [`KeyringVault`] performs it inline and returns a ready future.
 //!
@@ -31,7 +31,7 @@
 //!
 //! [`OsVault`] is what the edge runs on. Given a vault key that `systemd-creds` kept and a root
 //! helper unsealed for this start, it keeps each secret sealed on disk ([`sealed`],
-//! [ADR-0151](../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)),
+//! [ADR-0151](../../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)),
 //! so a headless box's activation survives a power cut; that is file I/O, so it runs on the blocking
 //! pool. Given no key, it is the OS keyring as above.
 

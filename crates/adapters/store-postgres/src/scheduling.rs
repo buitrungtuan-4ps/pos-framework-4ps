@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Scheduled config publishes over PostgreSQL (Track M3, [ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
+//! Scheduled config publishes over PostgreSQL (Track M3, [ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md)).
 //!
 //! One row per scheduled publish (`scheduled_publishes`, migration 0034). This adapter keeps only the
 //! SQL and returns plain rows; `pos-cloud` implements its `ScheduledPublishStore` seam over this type.
@@ -218,7 +218,7 @@ impl PostgresScheduledPublishes {
 
     /// Records why a pending publish last failed. The row stays pending and the activator retries it;
     /// this is what a release's report reads to say which pairs are struggling
-    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    /// ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
     ///
     /// Only a pending row is written, so a late failure from a pass that raced a successful one
     /// cannot put a reason on a publish that has already landed — and `mark_applied` clears the

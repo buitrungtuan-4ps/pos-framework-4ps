@@ -16,9 +16,9 @@ use pos_proto::ulid::Ulid;
 ///
 /// Only the store id is the box's own knowledge. The tenant and brand are
 /// [`UNASSIGNED`](Self::UNASSIGNED): a box has no way to learn them (activation hands it a device id
-/// and a credential, [ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)), and the cloud stamps
+/// and a credential, [ADR-0003](../../../../docs/adr/0003-cattle-not-pets.md)), and the cloud stamps
 /// both from its store registry as it ingests
-/// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)). This doc used to say
+/// ([ADR-0101](../../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)). This doc used to say
 /// activation supplied them; it never did.
 #[derive(Debug, Clone, Copy)]
 pub struct StoreIdentity {
@@ -33,7 +33,7 @@ pub struct StoreIdentity {
 impl StoreIdentity {
     /// The tenant and brand a store puts on its own events: **neither**.
     ///
-    /// The nil ULID, and deliberately so ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// The nil ULID, and deliberately so ([ADR-0101](../../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
     /// A box does not know which tenant owns it and has no way to find out — activation hands it a
     /// device id and a credential, not an org chart — so the honest value is one that reads as
     /// "nobody". Until that ADR this was `ULID(1)`, which reads as a tenant that might exist, and
@@ -46,7 +46,7 @@ impl StoreIdentity {
     pub const UNASSIGNED: Ulid = Ulid::from_u128(0);
 
     /// The identity for a store: its own id, and a tenant and brand it does not claim to know
-    /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
+    /// ([ADR-0101](../../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
     #[must_use]
     pub fn for_store(store_id: StoreId) -> Self {
         Self {
@@ -57,14 +57,14 @@ impl StoreIdentity {
     }
 }
 
-/// One staff member as the store authorises them ([ADR-0070](../../../docs/adr/0070-people-and-access.md)):
+/// One staff member as the store authorises them ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)):
 /// the permission set their assigned role grants, and the Argon2id PIN hash the edge verifies against
-/// offline ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)). Both arrive in the store's
+/// offline ([ADR-0030](../../../../docs/adr/0030-pairing-and-offline-auth.md)). Both arrive in the store's
 /// published `permissions` config node — the store never invents them.
 #[derive(Debug, Clone)]
 pub struct StaffAuth {
     /// The employee this badge code signs in as — the identity a command runs under once they sign in
-    /// (S0b, [ADR-0084](../../../docs/adr/0084-device-authentication.md)). `None` if the published node
+    /// (S0b, [ADR-0084](../../../../docs/adr/0084-device-authentication.md)). `None` if the published node
     /// carried no (or a malformed) id, in which case the member cannot sign in — the edge never invents
     /// an identity to act as.
     pub employee_id: Option<EmployeeId>,
@@ -72,7 +72,7 @@ pub struct StaffAuth {
     pub permissions: PermissionSet,
     /// What their roles grant only **with approval**: each act needs another person, who holds the
     /// permission directly, to approve it with their code and PIN
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 4). Read only where the store enforces each person's own set
     /// ([`EdgeSession::permissions_enforced`]); never overlaps [`Self::permissions`].
     pub permissions_with_approval: PermissionSet,
@@ -89,7 +89,7 @@ pub struct StaffAuth {
 }
 
 /// The store's staff, keyed by the badge `code` a person types, as published from the cloud
-/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). This is the roster the edge authorises
+/// ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)). This is the roster the edge authorises
 /// against — replacing any local, out-of-band staff list with the set the console published.
 #[derive(Debug, Clone, Default)]
 pub struct StaffRoster {

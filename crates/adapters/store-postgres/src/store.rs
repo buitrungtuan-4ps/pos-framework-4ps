@@ -16,38 +16,38 @@ use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-/// The cloud schema, applied idempotently at start-up ([ADR-0017](../../../docs/adr/0017-migrations.md)).
+/// The cloud schema, applied idempotently at start-up ([ADR-0017](../../../../docs/adr/0017-migrations.md)).
 const MIGRATION_0001: &str = include_str!("../migrations/0001_cloud_events.sql");
 
 /// The rollup read model and the API-key table (P7), applied after 0001 and on the same idempotent
 /// terms.
 const MIGRATION_0002: &str = include_str!("../migrations/0002_cloud_rollups_apikeys.sql");
 
-/// The super-admin credential and session schema ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+/// The super-admin credential and session schema ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 const MIGRATION_0003: &str = include_str!("../migrations/0003_cloud_admin.sql");
 
-/// The four-level configuration-tree schema ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+/// The four-level configuration-tree schema ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 const MIGRATION_0004: &str = include_str!("../migrations/0004_cloud_config_trees.sql");
 
-/// The subject store: where personal data lives and is masked ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+/// The subject store: where personal data lives and is masked ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 const MIGRATION_0005: &str = include_str!("../migrations/0005_cloud_subjects.sql");
 
-/// The webhook-endpoint table ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+/// The webhook-endpoint table ([ADR-0032](../../../../docs/adr/0032-webhooks.md)).
 const MIGRATION_0006: &str = include_str!("../migrations/0006_cloud_webhooks.sql");
 
-/// The device-proposal table ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+/// The device-proposal table ([ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
 const MIGRATION_0007: &str = include_str!("../migrations/0007_cloud_device_proposals.sql");
 
-/// The translation-grid table ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+/// The translation-grid table ([ADR-0043](../../../../docs/adr/0043-translation-grid.md)).
 const MIGRATION_0008: &str = include_str!("../migrations/0008_cloud_translations.sql");
 
-/// The activation-code and device-credential tables ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+/// The activation-code and device-credential tables ([ADR-0050](../../../../docs/adr/0050-activation-code-exchange.md)).
 const MIGRATION_0009: &str = include_str!("../migrations/0009_cloud_activation.sql");
 
 /// The cloud order-queue table (P7).
 const MIGRATION_0010: &str = include_str!("../migrations/0010_cloud_order_queue.sql");
 
-/// The cloud org registry — named Tenant/Brand/Store/Device ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+/// The cloud org registry — named Tenant/Brand/Store/Device ([ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)).
 const MIGRATION_0011: &str = include_str!("../migrations/0011_cloud_registry.sql");
 /// The catalog authoring model (Phase 2a, ADR-0066).
 const MIGRATION_0012: &str = include_str!("../migrations/0012_cloud_catalog.sql");
@@ -67,98 +67,98 @@ const MIGRATION_0016: &str = include_str!("../migrations/0016_catalog_modifier_g
 /// Menu sections (Phase 2a, ADR-0066 entity 7).
 const MIGRATION_0017: &str = include_str!("../migrations/0017_catalog_menu_sections.sql");
 
-/// Multi-admin console identities with roles ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// Multi-admin console identities with roles ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 const MIGRATION_0018: &str = include_str!("../migrations/0018_cloud_admin_users.sql");
 
-/// Sliding idle TTL + absolute cap on admin sessions ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+/// Sliding idle TTL + absolute cap on admin sessions ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
 const MIGRATION_0019: &str = include_str!("../migrations/0019_admin_session_sliding.sql");
 
-/// Fleet liveness read model — last-seen + config-version-held per store ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
+/// Fleet liveness read model — last-seen + config-version-held per store ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)).
 const MIGRATION_0020: &str = include_str!("../migrations/0020_store_liveness.sql");
 
-/// Background-task health — last-tick per loop ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
+/// Background-task health — last-tick per loop ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 4).
 const MIGRATION_0021: &str = include_str!("../migrations/0021_task_health.sql");
 
-/// The console audit trail — append-only record of who changed what ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
+/// The console audit trail — append-only record of who changed what ([ADR-0069](../../../../docs/adr/0069-audit-trail.md)).
 const MIGRATION_0022: &str = include_str!("../migrations/0022_audit_log.sql");
 
-/// People & access, foundation — the `employees` table ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// People & access, foundation — the `employees` table ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 const MIGRATION_0023: &str = include_str!("../migrations/0023_employees.sql");
 
-/// People & access — `role_templates` + `employee_store_assignments` ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// People & access — `role_templates` + `employee_store_assignments` ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 const MIGRATION_0024: &str = include_str!("../migrations/0024_role_templates_and_assignments.sql");
 
-/// Floor master data — `floor_areas` + `floor_tables` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+/// Floor master data — `floor_areas` + `floor_tables` ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 const MIGRATION_0025: &str = include_str!("../migrations/0025_floor_areas_and_tables.sql");
 
-/// Kitchen master data — `kitchen_stations` + `station_routing_rules` ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+/// Kitchen master data — `kitchen_stations` + `station_routing_rules` ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 const MIGRATION_0026: &str = include_str!("../migrations/0026_kitchen_stations_and_routing.sql");
-/// Operational alerts ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+/// Operational alerts ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
 const MIGRATION_0027: &str = include_str!("../migrations/0027_alerts.sql");
 
-/// The per-(tax class × channel) tax rate table ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+/// The per-(tax class × channel) tax rate table ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md), Track M4).
 const MIGRATION_0028: &str = include_str!("../migrations/0028_catalog_tax_rates.sql");
 
-/// Per-locale item names on `catalog_items` ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+/// Per-locale item names on `catalog_items` ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md), Track M4).
 const MIGRATION_0029: &str = include_str!("../migrations/0029_catalog_item_name_translations.sql");
 
-/// Media renditions in Postgres `bytea` ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+/// Media renditions in Postgres `bytea` ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md), Track M5).
 const MIGRATION_0030: &str = include_str!("../migrations/0030_media_assets.sql");
 
-/// An image reference on a catalog item ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+/// An image reference on a catalog item ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md), Track M5).
 const MIGRATION_0031: &str = include_str!("../migrations/0031_catalog_item_image_ref.sql");
 
-/// The campaign authoring table ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+/// The campaign authoring table ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0032: &str = include_str!("../migrations/0032_campaigns.sql");
 
-/// Voucher instances minted for a voucher-kind campaign ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+/// Voucher instances minted for a voucher-kind campaign ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0033: &str = include_str!("../migrations/0033_vouchers.sql");
 
-/// Scheduled, effective-dated config publishes ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+/// Scheduled, effective-dated config publishes ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
 const MIGRATION_0034: &str = include_str!("../migrations/0034_scheduled_publishes.sql");
 
-/// OTA report columns on the liveness read model ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
+/// OTA report columns on the liveness read model ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
 const MIGRATION_0035: &str = include_str!("../migrations/0035_ota_report.sql");
 
-/// Reconciliation run history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
+/// Reconciliation run history ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md), Track O3).
 const MIGRATION_0036: &str = include_str!("../migrations/0036_reconcile_runs.sql");
 
-/// Inventory authoring: ingredients, recipes, suppliers ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
+/// Inventory authoring: ingredients, recipes, suppliers ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
 const MIGRATION_0037: &str = include_str!("../migrations/0037_inventory.sql");
 
-/// The OTA release registry ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
+/// The OTA release registry ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
 const MIGRATION_0038: &str = include_str!("../migrations/0038_ota_releases.sql");
 
-/// A version row per tenant for the tax-rate table ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md), Q3c slice 5b).
+/// A version row per tenant for the tax-rate table ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md), Q3c slice 5b).
 const MIGRATION_0039: &str = include_str!("../migrations/0039_tax_rate_versions.sql");
 
 /// An index serving the voucher list's own sort order, so a page of it is cheap
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 1).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 1).
 const MIGRATION_0040: &str = include_str!("../migrations/0040_voucher_page_index.sql");
 
 /// An index covering the media library's total order, so a page of it is correct as well as cheap
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
 const MIGRATION_0041: &str = include_str!("../migrations/0041_media_page_index.sql");
 
 /// An index covering the audit trail's whole order, including the `id` tiebreaker its read already
 /// asks for, so a page and its total are both index-only
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
 const MIGRATION_0042: &str = include_str!("../migrations/0042_audit_page_index.sql");
 
 /// An index covering the item master's total order, so a page of it is correct as well as cheap
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md) decision 9, F2 item B3 slice 2).
 const MIGRATION_0043: &str = include_str!("../migrations/0043_catalog_item_page_index.sql");
 
 /// An index covering the item master's name order, the second order the paged read offers
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 3).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), F2 item B3 slice 3).
 const MIGRATION_0044: &str = include_str!("../migrations/0044_catalog_item_name_index.sql");
 
 /// An index covering the employee roster's order, so a page of it stops the scan rather than
-/// truncating a completed sort ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+/// truncating a completed sort ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md)).
 const MIGRATION_0045: &str = include_str!("../migrations/0045_employee_page_index.sql");
 
 /// An index covering the roster's *name* order, the second order the paged read offers
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md)).
 const MIGRATION_0046: &str = include_str!("../migrations/0046_employee_name_index.sql");
 
 /// Binds a store's API key to that store, so a sibling store's key can no longer read its
@@ -193,37 +193,37 @@ const MIGRATION_0054: &str = include_str!("../migrations/0054_lease_retired.sql"
 const MIGRATION_0055: &str = include_str!("../migrations/0055_device_connection_spelling.sql");
 const MIGRATION_0056: &str = include_str!("../migrations/0056_device_agent.sql");
 
-/// Print-agent standings on the liveness read model ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+/// Print-agent standings on the liveness read model ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 const MIGRATION_0057: &str = include_str!("../migrations/0057_print_agent_standings.sql");
 
 /// Where in the world a hosted edge placement's machine is
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)). On `store_lease`
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)). On `store_lease`
 /// beside the placement it qualifies, for the reason 0052 put the placement there: that table's
 /// only write is the bump, so a region cannot drift from the placement it describes.
 const MIGRATION_0058: &str = include_str!("../migrations/0058_edge_placement_region.sql");
 
 /// A person's answer to the region warning
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)). One row per store
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)). One row per store
 /// carrying the two country codes that were being compared, so an answer stops counting the moment
 /// either of them moves — a reason written about one difference must not silence a different one.
 const MIGRATION_0059: &str = include_str!("../migrations/0059_store_region_acknowledgement.sql");
 
 /// A tenant's managed reason codes
-/// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2). The list
+/// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2). The list
 /// `docs/pos-spec.md` §11 item 2 requires and eleven event fields cite. An entry is *retired*
 /// (`active: false`) rather than deleted once anything may have cited it, so a historic void stays
 /// resolvable.
 const MIGRATION_0060: &str = include_str!("../migrations/0060_reason_codes.sql");
 
 /// Store groups and the batches published to them
-/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The cohort an
+/// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The cohort an
 /// operator publishes to, and one durable row per `(batch, store)` saying what the publish did
 /// there — `applied`, `skipped`, or `failed`. Not a fifth config layer: a batch writes the same
 /// document into *N* per-store trees, so composition and the sync hot path are untouched.
 const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql");
 
 /// The per-store archive key and the index of what each store has shipped
-/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). The key is **wrapped**
+/// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)). The key is **wrapped**
 /// under the box's `archive_key_secret` rather than stored as itself: `deploy/backup.sh` ships a
 /// `pg_dump` of this database to the same off-box tier the archives sync to, so a plaintext column
 /// would carry the key to the same place as the ciphertext it opens (Amendment 1).
@@ -231,7 +231,7 @@ const MIGRATION_0062: &str = include_str!("../migrations/0062_store_archives.sql
 const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expiry.sql");
 
 /// Releases: one decision, many writes
-/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)). The table holds the
+/// ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)). The table holds the
 /// identity and the roll-up; the writes themselves stay `scheduled_publishes` rows, which gain a
 /// nullable `release_id` so ADR-0077's per-store schedule keeps working unchanged.
 const MIGRATION_0064: &str = include_str!("../migrations/0064_releases.sql");
@@ -244,107 +244,107 @@ const MIGRATION_0065: &str = include_str!("../migrations/0065_role_discount_ceil
 
 /// The course entity every `course_id` in the tree already pointed at, and the column that lets an
 /// item declare which course it is on
-/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+/// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 const MIGRATION_0066: &str = include_str!("../migrations/0066_catalog_courses.sql");
 
 /// The chain heads a store publishes, and the contradictions among them
-/// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4). The primary key on
+/// ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md) decision 4). The primary key on
 /// `(tenant_id, store_id, chain_seq)` is the refusal: one head per chain length, for ever.
 const MIGRATION_0067: &str = include_str!("../migrations/0067_chain_anchors.sql");
 
 /// The clock a scheduled publish was timed against
-/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26). The instant was
+/// ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26). The instant was
 /// already written per store; the zone it was read in was not, so the console could print the moment
 /// but not the sentence an operator approved.
 const MIGRATION_0068: &str = include_str!("../migrations/0068_scheduled_publish_timezone.sql");
 
 /// The claims a box installed with no store opens, and a console user binds to a device slot
-/// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+/// ([ADR-0148](../../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
 const MIGRATION_0069: &str = include_str!("../migrations/0069_device_claims.sql");
 
 /// A tenant's vendor connections, their secrets sealed before they arrive
-/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+/// ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
 const MIGRATION_0070: &str = include_str!("../migrations/0070_integration_connections.sql");
 
 /// Whether a cash drawer is wired to a printer, which the console marks and the edge reads before it
-/// opens one ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+/// opens one ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 const MIGRATION_0071: &str = include_str!("../migrations/0071_device_drawer.sql");
 
 /// The values a tenant writes for its settings, at tenant, brand, store-group or store scope
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 const MIGRATION_0072: &str = include_str!("../migrations/0072_setting_values.sql");
 
 /// Every role that exists gains the seven till permissions ADR-0158 named, once, behind a marker in
 /// `data_migrations` so a later boot does not hand back one an owner removed
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 const MIGRATION_0073: &str = include_str!("../migrations/0073_roles_keep_every_till_action.sql");
 
 /// A role grants each permission directly or with approval, and every role that exists is given,
 /// once, each PIN-flagged permission it does not grant directly, with approval
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4).
 const MIGRATION_0074: &str = include_str!("../migrations/0074_role_permissions_with_approval.sql");
 
 /// The fee rules a tenant writes, at tenant, brand or store scope, merged by fee id down the tree
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+/// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md)).
 const MIGRATION_0075: &str = include_str!("../migrations/0075_fee_rules.sql");
 
 /// Every role that exists is given, once, `billing.fee.waive` on the terms it grants
 /// `billing.discount.override_ceiling`: directly where it grants that directly, and with approval
-/// otherwise ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+/// otherwise ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
 const MIGRATION_0076: &str = include_str!("../migrations/0076_roles_can_waive_a_fee.sql");
 
 /// An assignment reaches a store group or every store of the tenant, beside the one-store rows
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
 const MIGRATION_0077: &str = include_str!("../migrations/0077_employee_scope_assignments.sql");
 
 /// What paper a printer takes and whether it cuts it, which the console sets and the edge lays a
-/// receipt out for ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// receipt out for ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 const MIGRATION_0078: &str = include_str!("../migrations/0078_device_paper.sql");
 
 /// Every role that exists, closes a shift directly and grants a PIN-flagged permission directly is
 /// given, once, `reports.takings.view`, and no other role is: the approvers who close shifts, as a new
-/// tenant's are ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// tenant's are ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 const MIGRATION_0079: &str =
     include_str!("../migrations/0079_approvers_who_close_a_shift_see_takings.sql");
 
 /// How long a kitchen station's tickets wait before its display marks them late, which the console
-/// sets per station ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// sets per station ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 const MIGRATION_0080: &str = include_str!("../migrations/0080_station_late_after.sql");
 
 /// The language a kitchen station's tickets print in, which the console sets per station
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 const MIGRATION_0081: &str = include_str!("../migrations/0081_station_ticket_language.sql");
 
 /// A till's own receipt printer and receipt languages, which the console sets per terminal
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4).
 const MIGRATION_0082: &str = include_str!("../migrations/0082_terminal_receipts.sql");
 
 /// The stores whose people the cloud publishes again by itself after a migration changes what
 /// their roles grant, and, once, every store whose people have been published
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). A later
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). A later
 /// migration that changes what roles grant queues its stores here too: the file's header states how.
 const MIGRATION_0083: &str = include_str!("../migrations/0083_people_republishes.sql");
 
 /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
 /// `cash.drawer.open_no_sale`: directly where it grants that directly, and with approval otherwise,
 /// and every store whose people have been published is queued for the cloud to publish them again
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 3).
+/// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 3).
 const MIGRATION_0084: &str =
     include_str!("../migrations/0084_roles_can_manage_another_tills_drawer.sql");
 
 /// A till's own default float, which the console sets per terminal
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+/// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
 const MIGRATION_0085: &str = include_str!("../migrations/0085_terminal_opening_float.sql");
 
 /// Every role that exists is given, once, `cash.drawer.override_assignment` on the terms it grants
 /// `cash.drawer.open_no_sale`, as 0084 gave `cash.shift.manage_other_till`, and every store whose
 /// people have been published is queued for the cloud to publish them again
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9).
+/// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9).
 const MIGRATION_0086: &str =
     include_str!("../migrations/0086_roles_can_override_an_assigned_drawer.sql");
 
@@ -352,7 +352,7 @@ const MIGRATION_0086: &str =
 const POOL_SIZE: usize = 16;
 
 /// An `EventStore` and its onward outbox over PostgreSQL, behind a `deadpool` pool
-/// ([ADR-0016](../../../docs/adr/0016-postgres-access.md)). Cloneable and shareable: every clone
+/// ([ADR-0016](../../../../docs/adr/0016-postgres-access.md)). Cloneable and shareable: every clone
 /// draws from the same pool.
 #[derive(Clone, Debug)]
 pub struct PostgresStore {
@@ -754,7 +754,7 @@ impl PostgresStore {
             .map_err(unavailable)
     }
 
-    /// The materialised-rollup store over this pool ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+    /// The materialised-rollup store over this pool ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `RollupStore` seam over it.
     #[must_use]
@@ -763,7 +763,7 @@ impl PostgresStore {
     }
 
     /// The store-archive registry over this pool
-    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    /// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ArchiveStore` seam over
     /// it. The key it moves is **wrapped** — this crate holds no secret that could open one.
@@ -772,7 +772,7 @@ impl PostgresStore {
         crate::archives::PostgresArchives::new(self.pool.clone())
     }
 
-    /// The API-key store over this pool ([ADR-0037](../../../docs/adr/0037-api-keys.md)).
+    /// The API-key store over this pool ([ADR-0037](../../../../docs/adr/0037-api-keys.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ApiKeyStore` seam over it.
     #[must_use]
@@ -780,7 +780,7 @@ impl PostgresStore {
         crate::apikeys::PostgresApiKeys::new(self.pool.clone())
     }
 
-    /// The activation-code store over this pool ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+    /// The activation-code store over this pool ([ADR-0050](../../../../docs/adr/0050-activation-code-exchange.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ActivationCodeStore` seam
     /// over it.
@@ -790,13 +790,13 @@ impl PostgresStore {
     }
 
     /// The device-claim store over this pool
-    /// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+    /// ([ADR-0148](../../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
     #[must_use]
     pub fn claims(&self) -> crate::claims::PostgresClaims {
         crate::claims::PostgresClaims::new(self.pool.clone())
     }
 
-    /// The super-admin credential and session store over this pool ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+    /// The super-admin credential and session store over this pool ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `AdminStore` seam over it.
     #[must_use]
@@ -804,7 +804,7 @@ impl PostgresStore {
         crate::admin::PostgresAdmin::new(self.pool.clone())
     }
 
-    /// The configuration-tree store over this pool ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+    /// The configuration-tree store over this pool ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConfigTreeStore` seam over it.
     #[must_use]
@@ -812,7 +812,7 @@ impl PostgresStore {
         crate::config_trees::PostgresConfigTrees::new(self.pool.clone())
     }
 
-    /// The subject store over this pool ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+    /// The subject store over this pool ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `SubjectStore` seam over it.
     #[must_use]
@@ -820,7 +820,7 @@ impl PostgresStore {
         crate::subjects::PostgresSubjects::new(self.pool.clone())
     }
 
-    /// The webhook-endpoint store over this pool ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+    /// The webhook-endpoint store over this pool ([ADR-0032](../../../../docs/adr/0032-webhooks.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `WebhookEndpointStore` seam
     /// over it.
@@ -846,7 +846,7 @@ impl PostgresStore {
         crate::order_queue::PostgresStoreDirectory::new(self.pool.clone())
     }
 
-    /// The reconciliation query over this pool ([ADR-0040](../../../docs/adr/0040-reconciliation.md)).
+    /// The reconciliation query over this pool ([ADR-0040](../../../../docs/adr/0040-reconciliation.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReconcileStore` seam over it.
     #[must_use]
@@ -854,7 +854,7 @@ impl PostgresStore {
         crate::reconcile::PostgresReconcile::new(self.pool.clone())
     }
 
-    /// The chain-anchor ledger over this pool ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    /// The chain-anchor ledger over this pool ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `AnchorLedger` seam over it.
     #[must_use]
@@ -862,7 +862,7 @@ impl PostgresStore {
         crate::anchors::PostgresAnchors::new(self.pool.clone())
     }
 
-    /// The OTA release registry over this pool ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
+    /// The OTA release registry over this pool ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ArtifactStore` seam over it.
     #[must_use]
@@ -870,7 +870,7 @@ impl PostgresStore {
         crate::ota::PostgresArtifacts::new(self.pool.clone())
     }
 
-    /// The device-proposal store over this pool ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+    /// The device-proposal store over this pool ([ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `DeviceProposalStore` seam
     /// over it.
@@ -879,7 +879,7 @@ impl PostgresStore {
         crate::devices::PostgresDeviceProposals::new(self.pool.clone())
     }
 
-    /// The translation-grid store over this pool ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+    /// The translation-grid store over this pool ([ADR-0043](../../../../docs/adr/0043-translation-grid.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `TranslationStore` seam over
     /// it.
@@ -888,7 +888,7 @@ impl PostgresStore {
         crate::translations::PostgresTranslations::new(self.pool.clone())
     }
 
-    /// The org-registry store over this pool ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+    /// The org-registry store over this pool ([ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `RegistryStore` seam over it.
     #[must_use]
@@ -896,7 +896,7 @@ impl PostgresStore {
         crate::registry::PostgresRegistry::new(self.pool.clone())
     }
 
-    /// The fleet read model over this pool ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
+    /// The fleet read model over this pool ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `FleetStore` seam over it. A
     /// read-only join across `stores`, `store_liveness`, `config_trees`, and `order_queue`.
@@ -905,7 +905,7 @@ impl PostgresStore {
         crate::fleet::PostgresFleet::new(self.pool.clone())
     }
 
-    /// The background-task health store over this pool ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
+    /// The background-task health store over this pool ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 4).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `TaskHealthStore` seam over
     /// it. Each background loop records its tick here; the `/admin` health route reads it.
@@ -914,7 +914,7 @@ impl PostgresStore {
         crate::task_health::PostgresTaskHealth::new(self.pool.clone())
     }
 
-    /// The console audit trail over this pool ([ADR-0069](../../../docs/adr/0069-audit-trail.md)).
+    /// The console audit trail over this pool ([ADR-0069](../../../../docs/adr/0069-audit-trail.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `AuditStore` seam over it. An
     /// append-only record of who changed what across the `/admin` write routes.
@@ -923,7 +923,7 @@ impl PostgresStore {
         crate::audit::PostgresAudit::new(self.pool.clone())
     }
 
-    /// The operational-alert store over this pool ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+    /// The operational-alert store over this pool ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `AlertStore` seam over it. The
     /// alert evaluator opens/refreshes/resolves alerts here; the `/admin` alerts route reads them.
@@ -932,7 +932,7 @@ impl PostgresStore {
         crate::alerts::PostgresAlerts::new(self.pool.clone())
     }
 
-    /// The employee store over this pool (Track M1, [ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+    /// The employee store over this pool (Track M1, [ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `EmployeeStore` seam over it.
     /// Tenant-scoped, RLS-isolated; the PIN is held only as its Argon2id hash and never read out.
@@ -941,7 +941,7 @@ impl PostgresStore {
         crate::people::PostgresPeople::new(self.pool.clone())
     }
 
-    /// The floor master-data store over this pool (Track M2, [ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    /// The floor master-data store over this pool (Track M2, [ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `AreaStore`/`TableStore` seams
     /// over it. Tenant-scoped and per-store; areas and tables are archived, never deleted.
@@ -950,7 +950,7 @@ impl PostgresStore {
         crate::floor::PostgresFloor::new(self.pool.clone())
     }
 
-    /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+    /// The catalog authoring store over this pool (Phase 2a, [ADR-0066](../../../../docs/adr/0066-cloud-catalog.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `CatalogStore` seam over it and
     /// compiles the authored model into a `MenuBook`.
@@ -959,7 +959,7 @@ impl PostgresStore {
         crate::catalog::PostgresCatalog::new(self.pool.clone())
     }
 
-    /// The per-(tax class × channel) tax-rate store over this pool ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4).
+    /// The per-(tax class × channel) tax-rate store over this pool ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md), Track M4).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `TaxRateStore` seam over it.
     #[must_use]
@@ -967,7 +967,7 @@ impl PostgresStore {
         crate::tax_rates::PostgresTaxRates::new(self.pool.clone())
     }
 
-    /// The media-rendition store over this pool ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+    /// The media-rendition store over this pool ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md), Track M5).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `MediaStore` seam over it.
     #[must_use]
@@ -975,7 +975,7 @@ impl PostgresStore {
         crate::media::PostgresMedia::new(self.pool.clone())
     }
 
-    /// The campaign authoring store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    /// The campaign authoring store over this pool ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `CampaignStore` seam over it.
     #[must_use]
@@ -983,7 +983,7 @@ impl PostgresStore {
         crate::campaigns::PostgresCampaigns::new(self.pool.clone())
     }
 
-    /// The inventory authoring store over this pool ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
+    /// The inventory authoring store over this pool ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md), Track M6).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `InventoryStore` seam over it.
     #[must_use]
@@ -992,7 +992,7 @@ impl PostgresStore {
     }
 
     /// A tenant's vendor connections over this pool
-    /// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+    /// ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConnectionStore` seam over
     /// it, and seals every secret before a document reaches it.
@@ -1002,7 +1002,7 @@ impl PostgresStore {
     }
 
     /// A tenant's setting values over this pool
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `SettingsStore` seam over it.
     #[must_use]
@@ -1030,7 +1030,7 @@ impl PostgresStore {
     }
 
     /// A tenant's fee rules over this pool
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+    /// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `FeeRuleStore` seam over it.
     #[must_use]
@@ -1039,7 +1039,7 @@ impl PostgresStore {
     }
 
     /// The reason-code authoring store over this pool
-    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
+    /// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReasonCodeStore` seam over it.
     #[must_use]
@@ -1048,7 +1048,7 @@ impl PostgresStore {
     }
 
     /// The store-group tables over this pool
-    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+    /// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `StoreGroupStore` seam over
     /// it. Four tables behind one handle because they are one subject — a cohort and what was
@@ -1059,7 +1059,7 @@ impl PostgresStore {
         crate::store_groups::PostgresStoreGroups::new(self.pool.clone())
     }
 
-    /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    /// The voucher store over this pool ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `VoucherStore` seam over it.
     #[must_use]
@@ -1067,7 +1067,7 @@ impl PostgresStore {
         crate::vouchers::PostgresVouchers::new(self.pool.clone())
     }
 
-    /// The scheduled-publish store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
+    /// The scheduled-publish store over this pool ([ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `ScheduledPublishStore` seam
     /// over it, and the activator loop reads its due rows.
@@ -1077,7 +1077,7 @@ impl PostgresStore {
     }
 
     /// The config-release store over this pool
-    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    /// ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
     ///
     /// Holds the identity and the roll-up only; a release's writes are the `scheduled_publishes` rows
     /// carrying its id, read through [`Self::scheduled_publishes`].
@@ -1087,7 +1087,7 @@ impl PostgresStore {
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
-    /// current ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+    /// current ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
     ///
     /// The fleet the rollup projector maintains: every **Active** store in the registry
     /// ([ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)), read as the trusted role so it
@@ -1359,7 +1359,7 @@ impl EventStore for PostgresStore {
 }
 
 /// What a conditional `UPDATE` did
-/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+/// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)).
 ///
 /// Every conditional write in this crate has the same shape:
 ///

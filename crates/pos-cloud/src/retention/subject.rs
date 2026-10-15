@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The personal-data record the retention cron masks, and the masking itself
-//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+//! ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 //!
 //! Personal data never enters the event log ([`pos_proto::pii`]): events carry a
 //! [`SubjectId`] and the person's details — a marketplace order's

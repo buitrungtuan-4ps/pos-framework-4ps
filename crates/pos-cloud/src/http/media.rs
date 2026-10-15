@@ -57,7 +57,7 @@ struct UploadedMedia {
     detail_bytes: u64,
 }
 
-/// Builds the media sub-router ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md), Track M5).
+/// Builds the media sub-router ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md), Track M5).
 ///
 /// Four routes on the tenant's media library. `POST` uploads an image as a raw binary body (under an
 /// 8 MB limit), re-encodes it through the ADR-0042 pipeline, and stores the two bounded renditions;

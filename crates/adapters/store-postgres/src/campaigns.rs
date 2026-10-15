@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The campaign authoring table over PostgreSQL (Track M3, [ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
+//! The campaign authoring table over PostgreSQL (Track M3, [ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md)).
 //!
 //! One row per `(tenant, campaign)`; the `campaign` column is the whole authored campaign (the wire
 //! `PublishedCampaign`) held as `jsonb` (`campaigns`, migration 0032). This adapter keeps only the SQL

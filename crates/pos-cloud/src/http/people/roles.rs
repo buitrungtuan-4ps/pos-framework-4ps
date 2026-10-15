@@ -141,7 +141,7 @@ fn first_unknown_permission(permissions: &[String]) -> Option<&str> {
 }
 
 /// What a role write stores as granted with approval, or why it is refused
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 4). `permissions` is what the role grants directly, stored as sent; it has already
 /// passed [`first_unknown_permission`].
 ///
@@ -304,7 +304,7 @@ where
 ///
 /// An archived role grants nothing, so archiving one publishes the `permissions` node at once to
 /// every store where someone holds it
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7), and the answer is then `200` with each store's outcome. Any other update — a
 /// rename, a changed permission set or ceiling, or restoring the role — publishes as before, and
 /// answers `204`.

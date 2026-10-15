@@ -21,7 +21,7 @@ use crate::line_notes::NoteText;
 
 impl<S: EventStore> Edge<S> {
     /// Opens an order that arrived from **outside** the store — a marketplace order, the public API,
-    /// or a QR guest ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Emits `sales.order.opened`
+    /// or a QR guest ([ADR-0064](../../../../../docs/adr/0064-edge-order-in.md)). Emits `sales.order.opened`
     /// (tableless-capable) and one `sales.order_line.added` per already-priced line, in **one**
     /// transaction, then folds them into the projection; returns the new order's id and the business
     /// date it was stamped with — the caller keys the daily queue number on that same date so the
@@ -215,7 +215,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
-    /// this store, or `None` ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). The intake path
+    /// this store, or `None` ([ADR-0064](../../../../../docs/adr/0064-edge-order-in.md)). The intake path
     /// reads this to return the same order on a retry rather than opening a second one.
     ///
     /// # Errors

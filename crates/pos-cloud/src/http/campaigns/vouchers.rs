@@ -59,7 +59,7 @@ struct VoucherView {
     status: crate::vouchers::VoucherStatus,
 }
 
-/// Builds the voucher sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+/// Builds the voucher sub-router ([ADR-0077](../../../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
 ///
 /// `POST /admin/campaigns/{id}/vouchers` mints a batch of codes for a voucher-kind campaign and returns
 /// them once; `GET` lists a campaign's codes. Both behind [`ConsolePermission::ManageCampaigns`] — a

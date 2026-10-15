@@ -59,7 +59,7 @@ struct SubjectExportView {
     fields: std::collections::BTreeMap<String, String>,
 }
 
-/// Builds the subject-request sub-router ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md),
+/// Builds the subject-request sub-router ([ADR-0076](../../../../docs/adr/0076-subject-request-tooling.md),
 /// Track M5) — the Data Protection contact's instrument for a PDPD/GDPR access, portability, or erasure
 /// request. Three routes, each **per-subject** and tenant-scoped (`?tenant_id=`), behind the owner-only
 /// [`ConsolePermission::ManageSubjects`] and audited: `GET /admin/subjects/{id}` looks one up (status,
@@ -234,7 +234,7 @@ where
     }
 }
 
-/// Erases a subject — masks every personal field value in place ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)),
+/// Erases a subject — masks every personal field value in place ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)),
 /// keeping the id and `collected_at` so the books still reconcile. Irreversible and idempotent: erasing
 /// an already-masked subject is a no-op that still returns `200`. Audited as an erasure.
 async fn admin_erase_subject<Su, A, C>(

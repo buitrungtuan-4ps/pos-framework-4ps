@@ -219,7 +219,7 @@ async fn a_node_the_registry_does_not_carry_is_refused_by_name() {
 
 /// A preview of the `permissions` node names the store's staff only to a role holding
 /// `console.people.read`, and carries a PIN hash to nobody
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// The preview needs only `console.config.publish`, which Ops holds, and the node it compiles is
 /// the store's roster: each member's name, staff code and PIN hash. Its diff gets the config

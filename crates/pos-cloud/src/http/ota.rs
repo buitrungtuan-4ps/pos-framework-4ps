@@ -42,7 +42,7 @@ struct OtaReportState<R, C, K> {
     internal_shared_secret: Option<InternalSecret>,
 }
 
-/// An edge's OTA report body ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)): which store
+/// An edge's OTA report body ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)): which store
 /// reported, the version it is now running, and whether the post-install self-test passed. Identity is
 /// in the body because `/internal` is trusted-network and unauthenticated, exactly like `/internal/reconcile`.
 #[derive(Debug, Clone, Deserialize)]
@@ -60,9 +60,9 @@ struct OtaReportRequest {
     self_test_passed: Option<bool>,
 }
 
-/// What a **store** reports about itself ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// What a **store** reports about itself ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)),
 /// on the `/sync` route that replaced the `/internal` one for store-originated reporting
-/// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).
+/// ([ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md)).
 ///
 /// No `tenant_id` and no `store_id`: the tenant comes from the scoped key and the store from the
 /// path. That is the entire point of the move — the `/internal` shape took both in the body, so it
@@ -78,7 +78,7 @@ struct StoreReportRequest {
     self_test_passed: Option<bool>,
 }
 
-/// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// Builds the OTA-report ingest sub-router ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)),
 /// stated independently of [`CloudApp`] like [`reconcile_router`].
 ///
 /// `POST /internal/ota/report` records the version a store is running and its last self-test outcome
@@ -111,7 +111,7 @@ where
 }
 
 /// The response header carrying an artifact's detached signature, as lowercase hex
-/// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)).
+/// ([ADR-0092](../../../../docs/adr/0092-artifact-trust-chain.md)).
 ///
 /// It must name the same header as `cloud-sync-http`'s `SIGNATURE_HEADER` — the spellings differ in
 /// case only, which HTTP treats as the same name. The edge refuses an
@@ -131,7 +131,7 @@ struct ArtifactState<K, C, B, L> {
 
 /// What a store asks for: a release tag, and the architecture it runs.
 ///
-/// `arch` is the additive field [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// `arch` is the additive field [ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Correction 2 added. R1's workflow cross-compiles two targets, so a request without one cannot say
 /// which binary it means — and guessing would hand an `aarch64` box an `x86_64` executable that fails
 /// its self-test after the install, which is the expensive place to find out.
@@ -142,12 +142,12 @@ struct ArtifactRequest {
 }
 
 /// Builds the OTA artifact sub-router, stated independently of [`CloudApp`]
-/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
+/// ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
 ///
 /// Like [`device_router`], it carries its own state and is merged into the main router rather than
 /// adding more `CloudApp` generics for two collaborators one route uses.
 ///
-/// **On `/sync`, not `/internal`.** [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)
+/// **On `/sync`, not `/internal`.** [ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)
 /// pinned this at `/internal/ota/artifact` when `/internal` was believed to be the store-facing
 /// surface. It is not: the proxy answers `404` to every `/internal/*` request from outside the box,
 /// and a store reaches its cloud through that proxy, so a handler there would be unreachable by its

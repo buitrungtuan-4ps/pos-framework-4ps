@@ -297,7 +297,7 @@ where
 ///
 /// A group an assignment names changes who works at each store that joins or leaves it, so each
 /// such store that is open is published its `permissions` node once the membership is saved
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7), and the answer's `stores` says how each went. The membership before the write, and
 /// whether an assignment names the group, are read first, so a failed read refuses a write that has
 /// not happened.

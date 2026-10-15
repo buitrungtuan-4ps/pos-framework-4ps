@@ -12,14 +12,14 @@
 //! This is the read that answers them, and one read rather than three: it is keyed on the order,
 //! carries the table when there is one, and carries every line with the id a fire, a void or a bump
 //! is addressed to. The floor's orders and the counter's both appear — the kitchen works from both,
-//! and a counter order sits on no table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+//! and a counter order sits on no table ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)).
 //!
 //! It is distinct from `GET /api/orders/open`, which is the cashier's list: that one is counter
 //! orders only, carries the queue number staff shouted and the money owed, and deliberately leaves
 //! the floor out so nobody charges one meal from two screens. This one is a device's memory.
 //!
 //! `GET /api/orders/kitchen` is the kitchen's version of the same read
-//! ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
+//! ([ADR-0161](../../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
 //! every open order, plus each paid order without a table whose food the kitchen has not bumped yet,
 //! fired on the current business day. A counter order is paid before it is cooked, so the live read
 //! alone left a board that reloaded after the payment without the ticket.

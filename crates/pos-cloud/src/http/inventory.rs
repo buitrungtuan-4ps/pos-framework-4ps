@@ -174,7 +174,7 @@ impl SupplierAuditSummary {
     }
 }
 
-/// Builds the inventory sub-router ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6).
+/// Builds the inventory sub-router ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md), M6).
 ///
 /// Per-record CRUD over a tenant's ingredients, recipes, and supplier references. `GET` (list and
 /// by-id) is behind [`ConsolePermission::Read`]; the writes are behind

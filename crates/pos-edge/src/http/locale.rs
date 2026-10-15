@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The till's locale read route ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+//! The till's locale read route ([ADR-0105](../../../../docs/adr/0105-a-country-pack-is-values.md)).
 //!
 //! `GET /api/locale` serves the money facts the pay screen needs from the live
 //! [`EdgeSession`](crate::app::EdgeSession): the currency, the notes a guest can hand over, and what
@@ -36,7 +36,7 @@ pub(crate) struct LocaleResponse {
     /// The currency every figure on this till is denominated in.
     currency_code: String,
     /// How many decimal places that currency has: `0` for the đồng and the yen, `2` for the paisa
-    /// and the cent ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    /// and the cent ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
     ///
     /// Sent because a till cannot work it out. Every figure it draws and every figure a cashier
     /// types is an integer in the minor unit, and without this the screen has to guess where the
@@ -51,10 +51,10 @@ pub(crate) struct LocaleResponse {
     /// line, which is what makes a rounded bill reconcile for the guest reading it.
     cash_rounding_increment: Option<i64>,
     /// Whether the prices on this store's menu already contain their tax
-    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+    /// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     prices_include_tax: bool,
     /// How this store writes a number
-    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)): the decimal
+    /// ([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)): the decimal
     /// mark, the group mark, and how many digits go in a group.
     ///
     /// Sent for the reason `currency_exponent` is — a till cannot work it out, and the one it

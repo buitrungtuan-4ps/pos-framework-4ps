@@ -69,7 +69,7 @@ pub(super) use requests::people_error_response;
 /// into the main router.
 ///
 /// The registry, the store groups and the config trees are here for
-/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3
+/// [ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3
 /// and 7: an assignment is refused for a store or group the tenant does not have or has archived,
 /// and a removal, an archive or a new assignment to a group or every store publishes the
 /// `permissions` node to every store it affects in the same request.
@@ -88,7 +88,7 @@ struct PeopleState<P, R, Cfg, A, C> {
 }
 
 /// What the people routes read of a tenant's store groups
-/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)): whether a group
+/// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)): whether a group
 /// exists, its status and the stores it holds.
 ///
 /// A trait object rather than a sixth type parameter on [`PeopleState`], for the reason
@@ -139,7 +139,7 @@ where
 
 /// What the PIN route reads of a tenant's settings: the fewest digits a PIN may have,
 /// `session.pin_min_length`
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2). A trait object rather than another type parameter on [`PeopleState`], for the reason
 /// [`GroupMembership`] gives: one handler reads it.
 trait PinMinimum: Send + Sync {
@@ -271,11 +271,11 @@ impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
     }
 }
 
-/// Builds the people & access sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// Builds the people & access sub-router ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 ///
 /// The staff records — the employee list and read-one, and the assignment list, whose rows carry the
 /// person's name and code — are behind [`ConsolePermission::ReadPeople`] (Owner/Admin,
-/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// [ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 /// The permission catalogue and the role templates name nobody, so they stay behind
 /// [`ConsolePermission::Read`] (every console role). Every write is behind
 /// [`ConsolePermission::ManagePeople`] (Owner/Admin) and emits an audit entry that records the
@@ -285,7 +285,7 @@ impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
 /// body on writes.
 ///
 /// What the console authors is what the store enforces
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decisions 3 and 7). An assignment reaches one store, a store group or every store of the tenant,
 /// and is refused for an employee, store, group or role the tenant does not have (`404`) or has
 /// archived (`409`). Removing an assignment, archiving a person, archiving a role and creating an

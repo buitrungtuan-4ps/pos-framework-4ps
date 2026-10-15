@@ -99,7 +99,7 @@ fn parse_installer_request(
 
 /// `GET /admin/ota/releases/{release}/installer?store_id=&cloud=` — a hosted release's Windows
 /// executable, named as that store's one-file installer
-/// ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).
+/// ([ADR-0141](../../../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).
 ///
 /// **The bytes are the release's own.** Nothing is appended or rewritten: the store and the cloud
 /// travel in the file *name*, which is what lets the minisign signature over these bytes keep

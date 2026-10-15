@@ -201,7 +201,7 @@ pub(super) struct ReleaseTenantQuery {
     pub(super) tenant_id: String,
 }
 
-/// Builds the releases sub-router ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+/// Builds the releases sub-router ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
 ///
 /// Reads sit behind [`ConsolePermission::Read`]; every write sits behind
 /// [`ConsolePermission::PublishConfig`], because scheduling a release *is* scheduling publishes and

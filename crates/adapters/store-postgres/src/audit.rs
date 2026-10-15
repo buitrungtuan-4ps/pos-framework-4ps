@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The console audit trail over PostgreSQL ([ADR-0069](../../../docs/adr/0069-audit-trail.md), Track G2).
+//! The console audit trail over PostgreSQL ([ADR-0069](../../../../docs/adr/0069-audit-trail.md), Track G2).
 //!
 //! One append-only row per console mutation. This adapter keeps only the SQL and returns plain rows;
 //! `pos-cloud` implements its `AuditStore` seam over this type. Append-only is enforced at the grant
@@ -69,7 +69,7 @@ pub enum AuditOrder {
 ///
 /// Both are *total*: each ends in `id`, the table's primary key, so a `LIMIT`/`OFFSET` window over
 /// either cannot return a row on two pages or on neither
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9).
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md) decision 9).
 ///
 /// `Oldest` is the exact reverse of `Newest`, every column of it — which is why this order needed no
 /// new migration. `audit_log_by_tenant_newest` (migration 0042) is `(tenant_id, at DESC, id DESC)`,

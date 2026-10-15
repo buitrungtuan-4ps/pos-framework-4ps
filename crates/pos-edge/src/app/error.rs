@@ -46,7 +46,7 @@ pub enum AppError {
     #[error("a bill is already open on that order")]
     BillAlreadyOpen,
     /// A table was released with something sold on it: a line not voided, or a bill open
-    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)). Releasing
+    /// ([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)). Releasing
     /// says nobody ate, so it can only end an order with nothing on it.
     #[error("that table has something sold on it; take payment or void the lines first")]
     OrderNotEmpty,
@@ -55,7 +55,7 @@ pub enum AppError {
     #[error("that order has nothing to bill")]
     NothingToBill,
     /// A copy was asked of a bill that has not settled, or was voided since
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
+    /// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
     /// there is no receipt to copy. A bill still open prints its check as a pre-bill.
     #[error("that bill has no receipt to copy, because it has not settled")]
     NotSettled,
@@ -72,7 +72,7 @@ pub enum AppError {
     #[error("nothing is open to print a pre-bill for")]
     NothingToPrint,
     /// A merge named bills that do not sit on the same table, or named the target as its own
-    /// absorbed bill ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    /// absorbed bill ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
     ///
     /// The model does not forbid a bill spanning two tables; the **floor** does. Settling moves a
     /// bill's table from `AwaitingPayment` to `NeedsCleaning`, and a bill over two tables makes
@@ -82,7 +82,7 @@ pub enum AppError {
     #[error("bills on different tables cannot be merged")]
     BillsOnDifferentTables,
     /// A merge named a bill of another order than the target's
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    /// ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
     ///
     /// Nothing in the model stops one bill covering two orders' lines, but nothing settles such a
     /// bill: a settle reads a bill's lines from its own order, so the other order's would be charged
@@ -98,16 +98,16 @@ pub enum AppError {
     #[error("a shift is already open")]
     ShiftAlreadyOpen,
     /// The store keeps a drawer per till, and the device acting is none of its tills, nor did the
-    /// request name one ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// request name one ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     #[error("this device is not one of the store's tills; bind it to one, or name the till")]
     NotATill,
     /// A table was seated, a counter order started or a payment taken while no shift is open, at a
     /// store whose `shift` node refuses that
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     #[error("no shift is open; open a shift before selling")]
     OpenShiftRequired,
     /// A line was fired on a guest's order a member of staff has not yet confirmed
-    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+    /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
     ///
     /// The order is real and billable; what has not happened is anyone agreeing to make it. This is
     /// the guardrail ADR-0012 and ADR-0057 promised and nothing enforced.
@@ -118,7 +118,7 @@ pub enum AppError {
     #[error("that order is not waiting for staff confirmation")]
     NotAwaitingStaffConfirmation,
     /// A rejection cited a reason the store's managed list does not hold for rejecting an order
-    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    /// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     #[error("that reason code is not valid for rejecting an order")]
     ReasonCodeNotValid,
     /// A line was fired on an order a member of staff **refused** (ADR-0116).
@@ -159,8 +159,8 @@ pub enum AppError {
     ApproverLockedOut,
     /// A command that would **open** a new order or a new shift was refused because a replacement
     /// machine has taken this store
-    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), closing
-    /// [ADR-0049](../../../docs/adr/0049-single-active-lease.md)'s edge half).
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), closing
+    /// [ADR-0049](../../../../docs/adr/0049-single-active-lease.md)'s edge half).
     ///
     /// Only the four commands that create an order or a shift raise it. Everything already open on
     /// this box still fires, bills, voids and settles — the refusal drains the floor, it does not
@@ -171,7 +171,7 @@ pub enum AppError {
     )]
     Superseded,
     /// A void cited a reason the store's managed list does not hold for voiding
-    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    /// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///
     /// Separate from [`ReasonCodeNotValid`](Self::ReasonCodeNotValid), which is a rejection's: the
     /// two actions draw from different entries of the same list, and a message naming the wrong act
@@ -179,8 +179,8 @@ pub enum AppError {
     #[error("that reason code is not valid for voiding")]
     VoidReasonNotValid,
     /// A paid in, a paid out, a no-sale opening or a close's over or short cited a reason the store's
-    /// managed list does not hold for that act ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md),
-    /// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
+    /// managed list does not hold for that act ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md),
+    /// [ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
     ///
     /// One refusal for the four: they are all the drawer's acts, and the till offers each only the
     /// reasons listed for it, so a message naming the drawer sends an operator to the right rows.
@@ -188,14 +188,14 @@ pub enum AppError {
     CashReasonNotValid,
     /// A close of a counted drawer over or short by more than the store's
     /// `shift.variance_reason_minor`, while the store's list offers a reason for that, without one
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
     ///
     /// Carries each such drawer as its close would show it. Its count is final, so these are the
     /// figures the close reveals, shown to the person closing it, where the till asks the reason.
     #[error("a drawer's over or short is beyond the store's limit; give a reason to close it")]
     VarianceReasonRequired(Vec<ShiftView>),
     /// A paid in or a paid out named a shift that is not the one trading, or one already counted
-    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+    /// ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
     ///
     /// A counted shift is refused because its blind count was made against the drawer as it stood,
     /// and a movement after the count would change what the count is checked against.
@@ -203,12 +203,12 @@ pub enum AppError {
     ShiftNotOpen,
     /// Cash into a drawer whose shift opened on an earlier business day, at a store that requires
     /// such a drawer counted and closed first
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11).
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11).
     #[error("this drawer's shift opened on an earlier business day; count and close it first")]
     DrawerDayEnded,
     /// An act on a drawer assigned, for its session, to somebody other than the person acting, who
     /// neither holds `cash.drawer.override_assignment` directly nor brought an approver who does
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). Names no
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). Names no
     /// person.
     #[error("this drawer is assigned to someone else; a manager can approve this one act")]
     DrawerAssignedToAnother,
@@ -218,7 +218,7 @@ pub enum AppError {
     AssigneeRequired,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
-    /// attaches ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    /// attaches ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
     /// The edge checks this rather than trusting the device to have asked. A required choice a till
     /// that forgot to ask can skip is required in name only, and the money is already wrong by the

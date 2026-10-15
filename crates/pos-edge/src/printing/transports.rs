@@ -40,7 +40,7 @@ impl TransportFactory for TcpTransports {
             PrinterConnection::Network => Ok(Box::new(TcpTransport::new(&device.address))),
             // A directly-attached printer's address is a device path — `/dev/usb/lp0`,
             // `/dev/ttyUSB0`, `\\.\COM3` — rather than a host
-            // ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)). Dialling port 9100
+            // ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md)). Dialling port 9100
             // at one would fail with a message about the network, which is the wrong thing to hand
             // an operator holding a USB cable, so the two are kept apart here.
             PrinterConnection::Usb | PrinterConnection::Serial => {
@@ -59,7 +59,7 @@ impl TransportFactory for TcpTransports {
 ///
 /// A device proposal carries an address, a kind and — since ADR-0100's approval change — a
 /// connection, and the console says what paper a printer takes and whether it cuts
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2). It does not carry a code page, and no discovery protocol reports one. So every
 /// unknown is set to the answer that cannot produce a wrong receipt:
 ///
@@ -77,7 +77,7 @@ impl TransportFactory for TcpTransports {
 ///   universal on ESC/POS, so the printer is not the constraint; the framework's ability to
 ///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).
 /// - `kicks_drawer` — what the console says, `drawer_attached`
-///   ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
+///   ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
 ///   because nothing a printer reports says so. The port adds the USB rule on top, so a mark on a
 ///   network printer opens nothing.
 ///

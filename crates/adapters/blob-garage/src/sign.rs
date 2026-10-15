@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Amazon `SigV4` request signing, by hand ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)).
+//! Amazon `SigV4` request signing, by hand ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)).
 //!
 //! Small and self-contained because the `BlobStore` port is thin and scheduled for deletion
-//! ([ADR-0007](../../../docs/adr/0007-in-house-vs-dependency.md)), so it does not earn an S3 SDK.
+//! ([ADR-0007](../../../../docs/adr/0007-in-house-vs-dependency.md)), so it does not earn an S3 SDK.
 //! The one thing `SigV4` has to get exactly right — the canonical request, the string to sign, the
 //! signing-key HMAC chain — is verified in this module's unit test against AWS's own published
 //! `get-vanilla` vector, so the arithmetic is checked with no server in sight.

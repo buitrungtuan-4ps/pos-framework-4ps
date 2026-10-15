@@ -112,7 +112,7 @@ pub struct LineView {
     /// Its state after the command.
     pub state: OrderLineState,
     /// Present only on a fire: what the kitchen was told to make, for the caller to print
-    /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    /// ([ADR-0100](../../../../../docs/adr/0100-receipt-and-ticket-printing.md)).
     pub fired: Option<FiredLine>,
 }
 
@@ -162,7 +162,7 @@ pub struct CounterOrderLine {
 }
 
 /// A counter order awaiting payment, as the takeaway screen lists it
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+/// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CounterOrderView {
     /// The order to bill.
@@ -242,7 +242,7 @@ pub struct LiveOrderLine {
 /// what it never loaded is **what is open right now**, so an order, a check and a kitchen board all
 /// came back empty after a reload. One read answers for all of them, which is why it is keyed on
 /// the order rather than the table: a counter order sits on no table
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)) and the kitchen works from both.
+/// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)) and the kitchen works from both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveOrderView {
     /// The order.
@@ -253,7 +253,7 @@ pub struct LiveOrderView {
     /// bill rather than asking for a second one the domain would refuse.
     pub bill_id: Option<BillId>,
     /// Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part once
-    /// its bill has been split ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    /// its bill has been split ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
     /// `bill_id` names only the newest of them, so a device that reloaded mid-split learned one part
     /// and none of the others. It paid that one, found the table still awaiting payment, and had no
@@ -262,7 +262,7 @@ pub struct LiveOrderView {
     /// The channel it was opened on, or `None` for an order this build never saw open or whose
     /// channel it does not know. The counter shows a walk-in the book of its channel, and whether
     /// the guest eats in or takes away, so a till that reloads on one learns the channel here
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2).
     pub sales_channel: Option<SalesChannel>,
     /// Its lines, in id order.

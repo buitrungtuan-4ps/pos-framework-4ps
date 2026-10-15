@@ -18,7 +18,7 @@ use crate::app::{
 
 impl<S: EventStore> Edge<S> {
     /// Bumps a kitchen ticket — a station marks lines prepared (`kitchen.ticket.bumped`,
-    /// [ADR-0026](../../../docs/adr/0026-port-shapes.md) event catalogue §18). Durable and fanned out,
+    /// [ADR-0026](../../../../../docs/adr/0026-port-shapes.md) event catalogue §18). Durable and fanned out,
     /// so a second KDS agrees the ticket is done rather than each screen holding a private, divergent
     /// "done" flag. A bump is orthogonal to a line's order state (a made line is still "fired"), so it
     /// is recorded on the projection's bumped set, not as a state-machine transition.
@@ -62,7 +62,7 @@ impl<S: EventStore> Edge<S> {
     ///
     /// One read for every screen that needs it, keyed on the order: the floor's orders and the
     /// counter's both appear, because the kitchen works from both and a counter order sits on no
-    /// table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+    /// table ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
     ///
     /// The list is the store's **live trading**, not its log: a settled order drops out of
     /// [`Projection::open_orders`], so what this returns is bounded by the tables the store has
@@ -84,7 +84,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// What the kitchen still has to make
-    /// ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
+    /// ([ADR-0161](../../../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
     /// every open order, as [`Self::live_orders`] has them, and each paid order without a table that
     /// still has a fired line no station has bumped, fired on the current business day.
     ///

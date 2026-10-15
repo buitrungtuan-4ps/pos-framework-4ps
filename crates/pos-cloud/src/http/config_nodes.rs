@@ -92,7 +92,7 @@ struct PublishTenderRequest {
 
 /// A `PUT /admin/config/origins` body: the `(tenant, store)` and the origins that store's edge
 /// answers beside the one that served the request
-/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// The serving origin is never listed here and never needs to be: the edge compares it against the
 /// request's own `Host`, so a store that publishes nothing keeps serving its own UI.
@@ -181,7 +181,7 @@ where
     }
 }
 
-/// Builds the channels/tender settings sub-router ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).
+/// Builds the channels/tender settings sub-router ([ADR-0080](../../../../docs/adr/0080-channels-and-payments.md), M7).
 ///
 /// `GET`/`PUT /admin/config/channels` and `.../tender`: read a store's current enabled channels /
 /// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`]; publishes are

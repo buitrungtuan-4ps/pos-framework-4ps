@@ -4,7 +4,7 @@
 //! The smallest runnable store.
 //!
 //! Boots `pos_edge` over the in-memory fakes with a fixed dev store id and no config file — no
-//! database, no printer, no network ([`docs/roadmap.md`](../../docs/roadmap.md) P5). It is what
+//! database, no printer, no network ([`docs/roadmap.md`](../../../docs/roadmap.md) P5). It is what
 //! `just run-edge` runs, and it exists so a contributor can see the edge come up, seat a table, and
 //! watch the change fan out to every device — from the repository alone, with the cable unplugged.
 
@@ -29,7 +29,7 @@ async fn main() -> Result<(), EdgeError> {
     let identity = StoreIdentity::for_store(store_id);
 
     // The store publishes its own configuration to itself
-    // ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md) Amendment 1). `bootstrap()` seeds an empty
+    // ([ADR-0109](../../../docs/adr/0109-counting-the-taps-an-operator-makes.md) Amendment 1). `bootstrap()` seeds an empty
     // roster and an empty price book — correct for a till that has not synced, and the reason this
     // example could not seat a table: no code signed in, so every domain route answered 403.
     //
@@ -60,7 +60,7 @@ async fn main() -> Result<(), EdgeError> {
     // Where to listen. `POS_EDGE_BIND` overrides the default so two of these can run at once —
     // a second instance on the same port dies with `AddrInUse`, which is what a contributor hits
     // when the step-budget harness starts one while their own is up
-    // ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md)).
+    // ([ADR-0109](../../../docs/adr/0109-counting-the-taps-an-operator-makes.md)).
     //
     // A concrete port, not `:0`: the pairing URL is composed before the listener binds, so port
     // zero would advertise `:0` and the QR would point nowhere. A caller that wants a free port

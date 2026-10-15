@@ -18,7 +18,7 @@
 //! hostile receiver cannot touch another's delivery.
 //!
 //! The actual network POST is a [`WebhookTransport`], so the engine is proven here against a fake
-//! that records or refuses deliveries; the concrete TLS sender is [ADR-0032](../../../docs/adr/0032-webhooks.md)'s
+//! that records or refuses deliveries; the concrete TLS sender is [ADR-0032](../../../../docs/adr/0032-webhooks.md)'s
 //! separate, later piece.
 
 use core::future::Future;

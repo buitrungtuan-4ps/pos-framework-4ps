@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The cloud org registry over PostgreSQL (P-WS-C, [ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
+//! The cloud org registry over PostgreSQL (P-WS-C, [ADR-0065](../../../../docs/adr/0065-cloud-org-registry.md)).
 //!
 //! The four named entities — Tenant, Brand, Store, Device — the cloud has always addressed by opaque
 //! ULID but never recorded. This adapter keeps only the SQL and returns plain rows; `pos-cloud`
@@ -27,7 +27,7 @@ pub struct TenantRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -44,7 +44,7 @@ pub struct BrandRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -63,7 +63,7 @@ pub struct StoreRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -84,7 +84,7 @@ pub struct DeviceRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }

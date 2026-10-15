@@ -48,7 +48,7 @@ struct ReconcileState<Rec, A, C, K> {
 ///
 /// Reconciliation is the cloud's half of ADR-0040's missing-id diff: a store sends the ids it holds
 /// over some window, and the cloud answers with the subset it lacks — the ids to re-push. Every diff
-/// also records a run into the history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// also records a run into the history ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)),
 /// so `GET /admin/reconcile` can show the console that reconciliation happened and what it caught.
 ///
 /// # Two doors, because a store is not on the cloud's network
@@ -129,10 +129,10 @@ struct ReconcileResponse {
 }
 
 /// Answers which of the edge's candidate ids the cloud is missing for a store
-/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), and records the run into the history
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)). Internal (the reconciliation partner of
+/// ([ADR-0040](../../../../docs/adr/0040-reconciliation.md)), and records the run into the history
+/// ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)). Internal (the reconciliation partner of
 /// `/internal/ingest`), so it is absent from the public OpenAPI and requires the `X-Pos-Internal-Key`
-/// shared secret ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the
+/// shared secret ([ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md)) on top of the
 /// proxy denies both deploy lanes apply.
 async fn reconcile<Rec, A, C, K>(
     State(state): State<ReconcileState<Rec, A, C, K>>,
@@ -281,7 +281,7 @@ struct ReconcileHistoryQuery {
     limit: Option<u32>,
 }
 
-/// One reconciliation run on the wire ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
+/// One reconciliation run on the wire ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)):
 /// counts and a timestamp, never event contents or a customer identifier.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ReconcileRunView {
@@ -310,7 +310,7 @@ impl ReconcileRunView {
 }
 
 /// Lists a tenant's most recent reconciliation runs, newest first
-/// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
+/// ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
 /// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind
 /// [`ConsolePermission::Read`].
 async fn admin_reconcile_runs<Rec, A, C, K>(
