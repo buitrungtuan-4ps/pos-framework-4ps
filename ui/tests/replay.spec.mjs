@@ -2843,6 +2843,69 @@ test("a store's float is filled in, the cashier changes it, and the count shows 
   }
 });
 
+// The till that opened a shift can hear its own `cash.shift.opened` after the edge's answer. The
+// event carries no figures, so it must move the shift it already holds to open and keep what the
+// answer said the drawer should hold, rather than replace it with a shift that says nothing. The
+// live link holds the event, and every frame after it, until the answer is on screen.
+test("a till that hears its own opened shift after the answer still shows what the drawer should hold", async ({
+  page,
+}) => {
+  const edge = await startEdge("shift-settings");
+  try {
+    let link = null;
+    let holding = false;
+    let heard = false;
+    const held = [];
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        link = socket;
+        socket.connectToServer().onMessage((message) => {
+          const frame = JSON.parse(String(message));
+          if (!heard && frame.event_type === "cash.shift.opened") {
+            heard = true;
+            holding = true;
+          }
+          if (holding) {
+            held.push(message);
+          } else {
+            socket.send(message);
+          }
+        });
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    // The event reaches the till only on a link that is open when the shift opens.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await navigateTo(page, "/shift");
+    await page.locator("#float").fill("450000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
+    await expect.poll(() => heard).toBe(true);
+
+    // The event lands after the answer. Hearing it reads the drawers again, so that read is the
+    // moment the event has been applied.
+    const applied = page.waitForRequest(
+      (request) => request.method() === "GET" && new URL(request.url()).pathname === "/api/shifts",
+    );
+    holding = false;
+    for (const message of held.splice(0)) {
+      link.send(message);
+    }
+    await applied;
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a store that sets no float fills in nothing, and its count stays blind", async ({ page }) => {
   const edge = await startEdge();
   try {
