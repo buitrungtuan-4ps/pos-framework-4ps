@@ -10,7 +10,6 @@
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud-catalog/src/catalog.rs" = 2018
-"crates/pos-cloud-catalog/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud-catalog/src/fees.rs" = 1623
 "crates/pos-cloud/src/http.rs" = 3004
@@ -57,8 +56,6 @@
 "crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
-"crates/pos-cloud-catalog/src/catalog_compiler.rs::compile_layout_book" = { lines = 118, params = 3 }
-"crates/pos-cloud-catalog/src/catalog_compiler.rs::compile_menu" = { lines = 125, params = 6 }
 "crates/pos-cloud/src/config.rs::CloudConfig::validate" = { lines = 118, params = 1 }
 "crates/pos-cloud/src/http.rs::router" = { lines = 186, params = 1 }
 "crates/pos-cloud/src/http/admin/invites.rs::admin_invite_admin" = { lines = 109, params = 3 }

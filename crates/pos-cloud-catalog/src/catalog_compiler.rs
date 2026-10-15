@@ -186,10 +186,34 @@ pub fn compile_menu(
         items.iter().map(|item| (item.menu_item_id, item)).collect();
     let menu_by_id: BTreeMap<MenuId, &Menu> =
         menus.iter().map(|menu| (menu.menu_id, menu)).collect();
+    let (groups_by_item, group_by_id) = active_groups(groups);
+    // Active courses only. An archived one is not published and an entry that still names it is
+    // emitted with no course — the posture an archived group already gets, rather than a third rule.
+    let course_by_id: BTreeMap<CourseId, &Course> = courses
+        .iter()
+        .filter(|course| course.status != EntityStatus::Archived)
+        .map(|course| (course.course_id, course))
+        .collect();
 
-    // The inversion, built once: item -> the groups pinned to it. A `BTreeSet` so an entry's ids come
-    // out in id order however the operator listed the attachments, which is what keeps a re-compile
-    // of unchanged authoring byte-identical.
+    let chain = menu_chain(&menu_by_id, root)?;
+    let resolved = resolve_placements(&chain, placements);
+    let by_channel = entries_by_channel(&resolved, &item_by_id, &groups_by_item, &course_by_id)?;
+    Ok(menu_book(by_channel, &group_by_id, &course_by_id))
+}
+
+/// Item -> the active groups pinned to it, and the active groups by id.
+type ActiveGroups<'a> = (
+    BTreeMap<MenuItemId, BTreeSet<ModifierGroupId>>,
+    BTreeMap<ModifierGroupId, &'a ModifierGroup>,
+);
+
+/// A channel's compiled entries, keyed by the channel's wire token for a stable book order.
+type ChannelEntries = BTreeMap<&'static str, (SalesChannel, Vec<MenuEntry>)>;
+
+/// The active groups, and the inversion built once: item -> the groups pinned to it.
+fn active_groups(groups: &[ModifierGroup]) -> ActiveGroups<'_> {
+    // A `BTreeSet` so an entry's ids come out in id order however the operator listed the
+    // attachments, which is what keeps a re-compile of unchanged authoring byte-identical.
     let mut groups_by_item: BTreeMap<MenuItemId, BTreeSet<ModifierGroupId>> = BTreeMap::new();
     let mut group_by_id: BTreeMap<ModifierGroupId, &ModifierGroup> = BTreeMap::new();
     for group in groups
@@ -204,16 +228,14 @@ pub fn compile_menu(
                 .insert(group.modifier_group_id);
         }
     }
+    (groups_by_item, group_by_id)
+}
 
-    // Active courses only. An archived one is not published and an entry that still names it is
-    // emitted with no course — the posture an archived group already gets, rather than a third rule.
-    let course_by_id: BTreeMap<CourseId, &Course> = courses
-        .iter()
-        .filter(|course| course.status != EntityStatus::Archived)
-        .map(|course| (course.course_id, course))
-        .collect();
-
-    // The chain from the requested menu up through its parents, most-specific first.
+/// The chain from the requested menu up through its parents, most-specific first.
+fn menu_chain(
+    menu_by_id: &BTreeMap<MenuId, &Menu>,
+    root: MenuId,
+) -> Result<Vec<MenuId>, CompileError> {
     let mut chain: Vec<MenuId> = Vec::new();
     let mut seen: BTreeSet<MenuId> = BTreeSet::new();
     let mut current = Some(root);
@@ -231,7 +253,14 @@ pub fn compile_menu(
         chain.push(id);
         current = menu.parent_menu_id;
     }
+    Ok(chain)
+}
 
+/// Each item's most-specific placement along `chain`: the requested menu wins over an ancestor.
+fn resolve_placements<'a>(
+    chain: &[MenuId],
+    placements: &'a [MenuPlacement],
+) -> BTreeMap<MenuItemId, &'a MenuPlacement> {
     // Group placements by menu_id first to avoid O(chain_depth * placements) scanning.
     let mut placements_by_menu: BTreeMap<MenuId, Vec<&MenuPlacement>> = BTreeMap::new();
     for placement in placements {
@@ -241,20 +270,29 @@ pub fn compile_menu(
             .push(placement);
     }
 
-    // Resolve each item to its most-specific placement: the requested menu wins over an ancestor.
     let mut resolved: BTreeMap<MenuItemId, &MenuPlacement> = BTreeMap::new();
-    for menu_id in &chain {
+    for menu_id in chain {
         if let Some(menu_placements) = placements_by_menu.get(menu_id) {
             for placement in menu_placements {
                 resolved.entry(placement.menu_item_id).or_insert(placement);
             }
         }
     }
+    resolved
+}
 
-    // Emit an entry per (item, priced channel). `resolved` iterates in item-id order, so a channel's
-    // entries come out sorted; channels are keyed by wire token for a stable book order.
-    let mut by_channel: BTreeMap<&'static str, (SalesChannel, Vec<MenuEntry>)> = BTreeMap::new();
-    for (item_id, placement) in &resolved {
+/// An entry per (item, priced channel), skipping an archived item and a price on an unrecognised or
+/// unspecified channel.
+///
+/// `resolved` iterates in item-id order, so a channel's entries come out sorted.
+fn entries_by_channel(
+    resolved: &BTreeMap<MenuItemId, &MenuPlacement>,
+    item_by_id: &BTreeMap<MenuItemId, &CatalogItem>,
+    groups_by_item: &BTreeMap<MenuItemId, BTreeSet<ModifierGroupId>>,
+    course_by_id: &BTreeMap<CourseId, &Course>,
+) -> Result<ChannelEntries, CompileError> {
+    let mut by_channel = ChannelEntries::new();
+    for (item_id, placement) in resolved {
         let item = item_by_id
             .get(item_id)
             .ok_or(CompileError::UnknownItem(*item_id))?;
@@ -274,7 +312,7 @@ pub fn compile_menu(
                 price.unit_price,
                 placement.available,
                 groups_by_item.get(item_id),
-                &course_by_id,
+                course_by_id,
             );
             by_channel
                 .entry(channel.as_wire())
@@ -283,11 +321,19 @@ pub fn compile_menu(
                 .push(entry);
         }
     }
+    Ok(by_channel)
+}
 
+/// The book: each channel's entries with the groups and courses they publish.
+fn menu_book(
+    by_channel: ChannelEntries,
+    group_by_id: &BTreeMap<ModifierGroupId, &ModifierGroup>,
+    course_by_id: &BTreeMap<CourseId, &Course>,
+) -> MenuBook {
     let mut book = MenuBook::new();
     for (_wire, (channel, mut entries)) in by_channel {
-        let published = publishable_groups(&mut entries, &group_by_id);
-        let served = publishable_courses(&entries, &course_by_id);
+        let published = publishable_groups(&mut entries, group_by_id);
+        let served = publishable_courses(&entries, course_by_id);
         let mut catalog = MenuCatalog::from_items(entries);
         for group in published {
             catalog = catalog.with_modifier_group(group);
@@ -297,7 +343,7 @@ pub fn compile_menu(
         }
         book = book.with(channel, catalog);
     }
-    Ok(book)
+    book
 }
 
 /// One channel's publishable courses, in service order, ties broken by id.
@@ -460,7 +506,22 @@ pub fn compile_layout_book(
             .map(|subcategory| (subcategory.display_subcategory_id, subcategory))
             .collect();
 
-    // Group usable buttons by channel (wire token → known channel), preserving the sort key.
+    let mut book = LayoutBook::new();
+    for (_wire, (channel, channel_buttons)) in
+        placeable_buttons(buttons, &active_categories, &active_subcategories)
+    {
+        let plan = display_plan(channel_buttons, &active_categories, &active_subcategories);
+        book = book.with(channel, plan);
+    }
+    book
+}
+
+/// The usable buttons grouped by channel (wire token → known channel), preserving the sort key.
+fn placeable_buttons<'a>(
+    buttons: &'a [LayoutButton],
+    active_categories: &BTreeMap<DisplayCategoryId, &DisplayCategory>,
+    active_subcategories: &BTreeMap<DisplaySubcategoryId, &DisplaySubcategory>,
+) -> BTreeMap<&'static str, (SalesChannel, Vec<&'a LayoutButton>)> {
     let mut by_channel: BTreeMap<&'static str, (SalesChannel, Vec<&LayoutButton>)> =
         BTreeMap::new();
     for button in buttons {
@@ -488,77 +549,92 @@ pub fn compile_layout_book(
             .1
             .push(button);
     }
+    by_channel
+}
 
-    let mut book = LayoutBook::new();
-    for (_wire, (channel, mut channel_buttons)) in by_channel {
-        // Deterministic order: by sort, then by item id to break ties.
-        channel_buttons.sort_by(|a, b| {
-            a.sort
-                .cmp(&b.sort)
-                .then(a.menu_item_id.cmp(&b.menu_item_id))
-        });
+/// One channel's plan: its buttons by sort, then item id, under their categories in ascending order
+/// of each category's minimum sort.
+fn display_plan(
+    mut channel_buttons: Vec<&LayoutButton>,
+    active_categories: &BTreeMap<DisplayCategoryId, &DisplayCategory>,
+    active_subcategories: &BTreeMap<DisplaySubcategoryId, &DisplaySubcategory>,
+) -> DisplayPlan {
+    // Deterministic order: by sort, then by item id to break ties.
+    channel_buttons.sort_by(|a, b| {
+        a.sort
+            .cmp(&b.sort)
+            .then(a.menu_item_id.cmp(&b.menu_item_id))
+    });
 
-        // Category display order = ascending minimum sort of its buttons.
-        let mut category_order: Vec<DisplayCategoryId> = Vec::new();
-        for button in &channel_buttons {
-            if !category_order.contains(&button.display_category_id) {
-                category_order.push(button.display_category_id);
-            }
+    // Category display order = ascending minimum sort of its buttons.
+    let mut category_order: Vec<DisplayCategoryId> = Vec::new();
+    for button in &channel_buttons {
+        if !category_order.contains(&button.display_category_id) {
+            category_order.push(button.display_category_id);
         }
+    }
 
-        let mut plan = DisplayPlan::new();
-        for category_id in category_order {
-            let Some(category) = active_categories.get(&category_id) else {
-                continue;
-            };
-            let group: Vec<&&LayoutButton> = channel_buttons
-                .iter()
-                .filter(|button| button.display_category_id == category_id)
-                .collect();
+    let mut plan = DisplayPlan::new();
+    for category_id in category_order {
+        let Some(category) = active_categories.get(&category_id) else {
+            continue;
+        };
+        let group: Vec<&LayoutButton> = channel_buttons
+            .iter()
+            .copied()
+            .filter(|button| button.display_category_id == category_id)
+            .collect();
+        plan = plan.with(display_category(category, &group, active_subcategories));
+    }
+    plan
+}
 
-            // Buttons placed directly under the category (no sub-category).
-            let direct: Vec<DisplayButton> = group
+/// One category of a plan: the buttons placed directly under it, then its sub-categories in the
+/// order their first button appears. `group` is the category's buttons, already in display order.
+fn display_category(
+    category: &DisplayCategory,
+    group: &[&LayoutButton],
+    active_subcategories: &BTreeMap<DisplaySubcategoryId, &DisplaySubcategory>,
+) -> ProtoDisplayCategory {
+    // Buttons placed directly under the category (no sub-category).
+    let direct: Vec<DisplayButton> = group
+        .iter()
+        .filter(|button| button.display_subcategory_id.is_none())
+        .map(|button| proto_button(button))
+        .collect();
+
+    // Sub-categories, in the order their first button appears.
+    let mut subcategory_order: Vec<DisplaySubcategoryId> = Vec::new();
+    for button in group {
+        if let Some(id) = button.display_subcategory_id
+            && !subcategory_order.contains(&id)
+        {
+            subcategory_order.push(id);
+        }
+    }
+    let subcategories: Vec<ProtoDisplaySubcategory> = subcategory_order
+        .into_iter()
+        .filter_map(|subcategory_id| {
+            let subcategory = active_subcategories.get(&subcategory_id)?;
+            let sub_buttons: Vec<DisplayButton> = group
                 .iter()
-                .filter(|button| button.display_subcategory_id.is_none())
+                .filter(|button| button.display_subcategory_id == Some(subcategory_id))
                 .map(|button| proto_button(button))
                 .collect();
+            Some(ProtoDisplaySubcategory {
+                display_subcategory_id: subcategory_id,
+                name: DisplayName::new(subcategory.name.as_str()),
+                buttons: sub_buttons,
+            })
+        })
+        .collect();
 
-            // Sub-categories, in the order their first button appears.
-            let mut subcategory_order: Vec<DisplaySubcategoryId> = Vec::new();
-            for button in &group {
-                if let Some(id) = button.display_subcategory_id
-                    && !subcategory_order.contains(&id)
-                {
-                    subcategory_order.push(id);
-                }
-            }
-            let subcategories: Vec<ProtoDisplaySubcategory> = subcategory_order
-                .into_iter()
-                .filter_map(|subcategory_id| {
-                    let subcategory = active_subcategories.get(&subcategory_id)?;
-                    let sub_buttons: Vec<DisplayButton> = group
-                        .iter()
-                        .filter(|button| button.display_subcategory_id == Some(subcategory_id))
-                        .map(|button| proto_button(button))
-                        .collect();
-                    Some(ProtoDisplaySubcategory {
-                        display_subcategory_id: subcategory_id,
-                        name: DisplayName::new(subcategory.name.as_str()),
-                        buttons: sub_buttons,
-                    })
-                })
-                .collect();
-
-            plan = plan.with(ProtoDisplayCategory {
-                display_category_id: category_id,
-                name: DisplayName::new(category.name.as_str()),
-                buttons: direct,
-                subcategories,
-            });
-        }
-        book = book.with(channel, plan);
+    ProtoDisplayCategory {
+        display_category_id: category.display_category_id,
+        name: DisplayName::new(category.name.as_str()),
+        buttons: direct,
+        subcategories,
     }
-    book
 }
 
 /// A compiled [`DisplayButton`] from an authoring [`LayoutButton`].
