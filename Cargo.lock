@@ -1767,6 +1767,7 @@ dependencies = [
  "link-nats",
  "metrics-vm",
  "pos-cloud-api",
+ "pos-cloud-catalog",
  "pos-cloud-config",
  "pos-cloud-devices",
  "pos-cloud-inventory",
@@ -1820,6 +1821,27 @@ dependencies = [
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-catalog"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "csv",
+ "image",
+ "pos-cloud-api",
+ "pos-cloud-config",
+ "pos-cloud-reports",
+ "pos-core",
+ "pos-proto",
+ "serde",
+ "serde_json",
  "store-postgres",
  "thiserror",
  "tokio",

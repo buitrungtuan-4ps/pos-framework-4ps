@@ -10,8 +10,7 @@
 // The machinery every config publish shares lives in pos-cloud-config; imported here, so the
 // other areas' routes and this module's own keep reaching it through `super`.
 pub(super) use pos_cloud_config::publish::{
-    CONDITIONAL_WRITE_ATTEMPTS, LoadedTree, layer_with_nodes, load_tree_for_write,
-    publish_config_nodes, publish_nodes,
+    LoadedTree, load_tree_for_write, publish_config_nodes, publish_nodes,
 };
 pub(crate) use pos_cloud_config::publish::{publish_config_nodes_with, strip_tree_version};
 

@@ -105,19 +105,16 @@ mod alerts;
 mod archives;
 mod authored_layer;
 mod campaigns;
-mod catalog;
 mod chain;
 mod config_nodes;
 mod config_publish;
 mod countries;
-mod fees;
 mod fleet;
 mod floor;
 mod health;
 mod integrations;
 mod lease_bump;
 mod locale_node;
-mod media;
 mod ota;
 mod ota_rollout;
 mod people;
@@ -130,8 +127,6 @@ mod settings_confirm;
 mod store_groups;
 mod subjects;
 mod sync;
-mod tax_rates;
-mod translations;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
@@ -160,7 +155,6 @@ use campaigns::scheduled_error_response;
 pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
 };
-use catalog::{catalog_error_response, clean_name_translations};
 pub use catalog::{catalog_publish_router, catalog_router};
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
@@ -174,8 +168,8 @@ pub(crate) use config_publish::{
 use config_publish::{
     LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
     admin_config_rollback, admin_config_version_effective, admin_config_versions, if_match_config,
-    layer_with_nodes, load_tree_for_write, preview_config_node, publish_config_nodes,
-    publish_nodes, release_error_response, release_report_response, release_target_stores,
+    load_tree_for_write, preview_config_node, publish_config_nodes, publish_nodes,
+    release_error_response, release_report_response, release_target_stores,
     release_target_timezones, staff_redacted_for, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
@@ -231,7 +225,7 @@ use setting_refusal::save_if_confirmed;
 pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
 use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.
-use registry::registry_error_response;
+use pos_cloud_config::route::registry_error_response;
 pub use settings::settings_router;
 pub(crate) use settings::{
     __path_admin_apply_setting_presets, __path_admin_clear_setting,
@@ -271,8 +265,8 @@ pub(crate) use pos_cloud_api::response::{
 // The refusals, paging and conditional-write helpers every area's routes share live in
 // pos-cloud-api too; imported here, so `crate::http::not_found` and the rest still name them.
 use pos_cloud_api::conditional::{
-    EntityTagRefusal, already_exists, if_match, if_match_collection, parse_entity_tag,
-    version_mismatch, versioned_created, versioned_ok, with_etag,
+    EntityTagRefusal, already_exists, if_match, parse_entity_tag, version_mismatch,
+    versioned_created, versioned_ok, with_etag,
 };
 use pos_cloud_api::console::random_hex_32;
 // What the configuration routes share, and the settings refusals, live in pos-cloud-config;
@@ -296,6 +290,9 @@ use pos_cloud_inventory::routes as inventory;
 // The device routes live in pos-cloud-devices; imported under the module's old name, so
 // `crate::http::devices::…` still names them. The admitted-device roster stays here.
 use pos_cloud_devices::routes as devices;
+// Moved to pos-cloud-catalog (ADR-0170 decision 4, ADR-0175); imported under their old names, so
+// `crate::http::catalog::…` and the routers keep their paths.
+use pos_cloud_catalog::routes::{catalog, fees, media, tax_rates, translations};
 use pos_cloud_devices::routes::CLAIM_PATH;
 use pos_cloud_reports::xz::admin_xz_report;
 
@@ -875,27 +872,6 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// Create a course — a named point in the service sequence (ADR-0130).
-#[derive(Debug, Clone, Deserialize)]
-struct CreateCourseRequest {
-    tenant_id: String,
-    name: String,
-    /// Where it falls in the sequence, ascending. Absent is `0`, which puts a first course first
-    /// and leaves the id to break the tie with any other unpositioned one.
-    #[serde(default)]
-    sort: i32,
-}
-
-/// Update a course's name, position and/or status.
-#[derive(Debug, Clone, Deserialize)]
-struct UpdateCourseRequest {
-    tenant_id: String,
-    name: String,
-    #[serde(default)]
-    sort: i32,
-    status: String,
-}
-
 /// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
 /// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
 pub use pos_proto::retention::EVENT_LOG_DAYS;
@@ -913,50 +889,6 @@ struct VoucherListQuery {
     #[serde(default)]
     limit: Option<String>,
     /// How many codes to skip. Only meaningful with `limit`.
-    #[serde(default)]
-    offset: Option<String>,
-}
-
-/// `GET /admin/catalog/items`: the tenant, plus the optional paging bounds.
-///
-/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
-#[derive(Debug, Clone, Deserialize)]
-struct ItemListQuery {
-    /// The tenant whose items to list (a 26-character ULID).
-    tenant_id: String,
-    /// How many items to return. **Absent means unpaged**: the whole item master, as an array —
-    /// which is what the menu compiler and five of the six console pickers ask for.
-    #[serde(default)]
-    limit: Option<String>,
-    /// How many items to skip. Only meaningful with `limit`.
-    #[serde(default)]
-    offset: Option<String>,
-    /// A case-insensitive substring the item's name or any per-locale name must contain.
-    ///
-    /// Only meaningful with `limit`: on the unpaged read it is ignored, and the route says so by
-    /// refusing rather than by quietly returning the whole master.
-    #[serde(default)]
-    q: Option<String>,
-    /// Which order to return the page in — one of [`ItemSort::tokens`]. Only meaningful with `limit`.
-    #[serde(default)]
-    sort: Option<String>,
-    /// `asc` or `desc`, inverting `sort`'s natural direction. Only meaningful with `limit`.
-    #[serde(default)]
-    order: Option<String>,
-}
-
-/// `GET /admin/media`: the tenant, plus the optional paging bounds.
-///
-/// The `limit`/`offset` pair is repeated per route for the reason [`VoucherListQuery`] gives.
-#[derive(Debug, Clone, Deserialize)]
-struct MediaListQuery {
-    /// The tenant whose assets to list (a 26-character ULID).
-    tenant_id: String,
-    /// How many summaries to return. **Absent means unpaged**: every asset, as an array — which is
-    /// what the item image picker asks for.
-    #[serde(default)]
-    limit: Option<String>,
-    /// How many summaries to skip. Only meaningful with `limit`.
     #[serde(default)]
     offset: Option<String>,
 }
