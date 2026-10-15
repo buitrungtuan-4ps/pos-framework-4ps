@@ -435,3 +435,81 @@ fn media_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a media id");
     api_error(ErrorStatus::Unavailable, "the media service is unavailable")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    use super::render_refusal;
+    use crate::images::{ImagePipelineError, RenderError};
+
+    fn image_error() -> image::ImageError {
+        image::ImageError::Limits(image::error::LimitError::from_kind(
+            image::error::LimitErrorKind::DimensionError,
+        ))
+    }
+
+    /// The status and the envelope's message.
+    async fn answered(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read the body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON envelope");
+        let message = body["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .to_owned();
+        (status, message)
+    }
+
+    /// Every way a render can fail, answered as the upload route answers it. Only a bad upload is
+    /// reachable over HTTP in a test; the rest are pinned here.
+    #[tokio::test]
+    async fn each_render_failure_has_its_own_status_and_message() {
+        let join = tokio::spawn(async { panic!("a rendering task that does not return") })
+            .await
+            .expect_err("the task panics");
+        for (error, status, message) in [
+            (
+                RenderError::Pipeline(ImagePipelineError::Decode(image_error())),
+                StatusCode::BAD_REQUEST,
+                "the upload is not a decodable image",
+            ),
+            (
+                RenderError::Pipeline(ImagePipelineError::Budget {
+                    budget: 30_000,
+                    smallest: 40_000,
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "the image could not be reduced within the size budget",
+            ),
+            (
+                RenderError::Pipeline(ImagePipelineError::Encode(image_error())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not encode the image",
+            ),
+            (
+                RenderError::Busy {
+                    limit: 2,
+                    wait: Duration::from_secs(5),
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "the server is busy rendering uploads; try this one again shortly",
+            ),
+            (
+                RenderError::Join(join),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not render the image",
+            ),
+        ] {
+            assert_eq!(
+                answered(render_refusal(error)).await,
+                (status, message.to_owned())
+            );
+        }
+    }
+}
