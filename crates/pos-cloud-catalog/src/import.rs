@@ -540,8 +540,9 @@ mod item_tests {
     use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
     use pos_proto::ulid::Ulid;
 
-    use super::{ItemUpsert, RowAction, parse_items_csv};
-    use crate::catalog::{CatalogItem, ItemCategoryId};
+    use super::{ImportError, ItemUpsert, NewItem, RowAction, parse_items_csv};
+    use crate::catalog::{CatalogItem, ItemCategoryId, ItemSubcategoryId};
+    use crate::media::MediaId;
     use crate::registry::EntityStatus;
     use crate::version::{Version, Versioned};
 
@@ -726,6 +727,149 @@ mod item_tests {
             report.rows[1].key, "@Tra",
             "the report names the row as it will be named"
         );
+    }
+
+    // --- pinned before `parse_items_csv` is split ------------------------------------------------
+
+    #[test]
+    fn an_update_applies_every_field_the_file_carries_and_takes_the_callers_tenant() {
+        // Stored under another tenant id, so the overwrite is visible.
+        let mut existing = stored();
+        existing[0].record.tenant_id = TenantId::new(Ulid::from_u128(77));
+        let subcategory = ItemSubcategoryId::new(Ulid::from_u128(5));
+        let image = MediaId::new(Ulid::from_u128(6));
+        let csv = format!(
+            "{HEADER}{id},Pho ga,archived,{tax},{cat},{sub},{image}\n",
+            id = item_id(),
+            tax = tax_class(),
+            cat = category(),
+            sub = subcategory,
+        );
+        let (upserts, _) = parse_items_csv(
+            csv.as_bytes(),
+            tenant(),
+            &existing,
+            &[tax_class()],
+            &[category()],
+            &[subcategory],
+        )
+        .expect("parse");
+        let [ItemUpsert::Update { item, .. }] = upserts.as_slice() else {
+            panic!("one update");
+        };
+        assert_eq!(item.menu_item_id, item_id());
+        assert_eq!(item.tenant_id, tenant());
+        assert_eq!(item.name, "Pho ga");
+        assert_eq!(item.status, EntityStatus::Archived);
+        assert_eq!(item.tax_class_id, tax_class());
+        assert_eq!(item.item_category_id, Some(category()));
+        assert_eq!(item.item_subcategory_id, Some(subcategory));
+        assert_eq!(item.image_ref, Some(image));
+    }
+
+    #[test]
+    fn a_create_carries_every_field_the_file_carries() {
+        let csv = format!(
+            "{HEADER},Tra da,archived,{tax},{cat},,\n",
+            tax = tax_class(),
+            cat = category(),
+        );
+        let (upserts, _) = parse_items_csv(
+            csv.as_bytes(),
+            tenant(),
+            &stored(),
+            &[tax_class()],
+            &[category()],
+            &[],
+        )
+        .expect("parse");
+        let [ItemUpsert::Create(new)] = upserts.as_slice() else {
+            panic!("one create");
+        };
+        assert_eq!(
+            new,
+            &NewItem {
+                name: "Tra da".to_owned(),
+                status: EntityStatus::Archived,
+                tax_class_id: tax_class(),
+                item_category_id: Some(category()),
+                item_subcategory_id: None,
+                image_ref: None,
+            }
+        );
+    }
+
+    #[test]
+    fn every_row_is_reported_in_file_order_under_its_id_or_else_its_name() {
+        let csv = format!(
+            "{HEADER}{id},Pho,active,{tax},,,\n\
+             ,,active,{tax},,,\n\
+             not-a-ulid,Bun,active,{tax},,,\n\
+             ,'=Tra,active,{tax},,,\n\
+             ,Com,retired,{tax},,,\n",
+            id = item_id(),
+            tax = tax_class(),
+        );
+        let (upserts, report) = parse_items_csv(
+            csv.as_bytes(),
+            tenant(),
+            &stored(),
+            &[tax_class()],
+            &[],
+            &[],
+        )
+        .expect("parse");
+        let rows: Vec<(&str, String)> = report
+            .rows
+            .iter()
+            .map(|row| {
+                let action = match &row.action {
+                    RowAction::Create => "create".to_owned(),
+                    RowAction::Update => "update".to_owned(),
+                    RowAction::Reject { reason } => format!("reject: {reason}"),
+                };
+                (row.key.as_str(), action)
+            })
+            .collect();
+        let id = item_id().to_string();
+        assert_eq!(
+            rows,
+            [
+                (id.as_str(), "update".to_owned()),
+                ("", "reject: missing name".to_owned()),
+                (
+                    "not-a-ulid",
+                    "reject: names an item this tenant does not have".to_owned()
+                ),
+                ("=Tra", "create".to_owned()),
+                (
+                    "Com",
+                    "reject: `retired` is not `active` or `archived`".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            (
+                report.create_count,
+                report.update_count,
+                report.reject_count
+            ),
+            (1, 1, 3)
+        );
+        assert!(matches!(
+            upserts.as_slice(),
+            [ItemUpsert::Update { .. }, ItemUpsert::Create(_)]
+        ));
+    }
+
+    #[test]
+    fn a_row_that_is_not_text_stops_the_import_as_malformed() {
+        let mut bytes = format!("{HEADER},Pho,active,{tax},,,\n", tax = tax_class()).into_bytes();
+        bytes.extend_from_slice(b",\xff\xfe,active,,,,\n");
+        assert!(matches!(
+            parse_items_csv(&bytes, tenant(), &stored(), &[tax_class()], &[], &[]),
+            Err(ImportError::Malformed(_))
+        ));
     }
 
     #[test]

@@ -1548,4 +1548,222 @@ mod tests {
             "and resolving one answers None rather than refusing the read"
         );
     }
+
+    // --- the compile steps, pinned before `compile_menu` and `compile_layout_book` are split --------
+
+    #[test]
+    fn a_price_on_an_unrecognised_or_unspecified_channel_publishes_nothing() {
+        let items = [item(500, "Margherita")];
+        let menus = [menu(10, None)];
+        let placements = [placement(
+            10,
+            500,
+            vec![
+                ChannelPrice {
+                    sales_channel: Open::parse("SALES_CHANNEL_HOVERCRAFT"),
+                    unit_price: vnd(1),
+                },
+                price(SalesChannel::Unspecified, 2),
+                price(SalesChannel::DineIn, 3),
+            ],
+            true,
+        )];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
+
+        let channels: Vec<SalesChannel> = book
+            .channels()
+            .iter()
+            .map(|channel| channel.sales_channel.known())
+            .collect();
+        assert_eq!(channels, [SalesChannel::DineIn]);
+        assert_eq!(
+            book.catalog_for(SalesChannel::DineIn)
+                .get(item_id(500))
+                .expect("priced dine-in")
+                .unit_price,
+            vnd(3)
+        );
+    }
+
+    #[test]
+    fn a_cycle_is_refused_before_any_placement_is_read() {
+        // The chain is walked first, so a broken chain is what the operator hears about even when a
+        // placement also names an item the catalog does not carry.
+        let menus = [menu(10, Some(11)), menu(11, Some(10))];
+        let placements = [placement(
+            10,
+            999,
+            vec![price(SalesChannel::DineIn, 1)],
+            true,
+        )];
+        assert_eq!(
+            compile_menu(&[], &menus, &placements, &[], &[], menu_id(10)),
+            Err(CompileError::InheritanceCycle(menu_id(10)))
+        );
+    }
+
+    #[test]
+    fn an_ancestor_three_levels_up_still_prices_what_nothing_nearer_restates() {
+        let items = [item(500, "Margherita"), item(501, "Marinara")];
+        let menus = [menu(10, Some(11)), menu(11, Some(12)), menu(12, None)];
+        let placements = [
+            placement(12, 500, vec![price(SalesChannel::DineIn, 100)], true),
+            placement(12, 501, vec![price(SalesChannel::DineIn, 200)], true),
+            placement(11, 500, vec![price(SalesChannel::DineIn, 110)], true),
+            placement(10, 500, vec![price(SalesChannel::DineIn, 120)], false),
+        ];
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
+        let dine_in = book.catalog_for(SalesChannel::DineIn);
+        let margherita = dine_in.get(item_id(500)).expect("priced");
+        assert_eq!(margherita.unit_price, vnd(120), "the requested menu wins");
+        assert!(!margherita.available, "and its availability with it");
+        assert_eq!(
+            dine_in.get(item_id(501)).expect("inherited").unit_price,
+            vnd(200)
+        );
+    }
+
+    /// A plan rendered one line per category: `Name: direct | Sub: buttons | ...`.
+    fn rendered(plan: &pos_proto::display::DisplayPlan) -> Vec<String> {
+        plan.categories()
+            .iter()
+            .map(|category| {
+                let mut parts = vec![format!(
+                    "{}: {}",
+                    category.name.as_str(),
+                    labels(&category.buttons)
+                )];
+                for subcategory in &category.subcategories {
+                    parts.push(format!(
+                        "{}: {}",
+                        subcategory.name.as_str(),
+                        labels(&subcategory.buttons)
+                    ));
+                }
+                parts.join(" | ")
+            })
+            .collect()
+    }
+
+    fn labels(buttons: &[pos_proto::display::DisplayButton]) -> String {
+        buttons
+            .iter()
+            .map(|button| button.label.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    #[test]
+    fn a_layout_orders_buttons_by_sort_then_item_and_groups_by_first_appearance() {
+        let categories = [
+            display_category(10, "Pizza", EntityStatus::Active),
+            display_category(11, "Drinks", EntityStatus::Active),
+        ];
+        let subcategories = [
+            display_subcategory(20, 10, "Red"),
+            display_subcategory(21, 10, "White"),
+        ];
+        let dine_in = |category, subcategory, item, label, sort| {
+            layout_button(
+                SalesChannel::DineIn,
+                category,
+                subcategory,
+                item,
+                label,
+                None,
+                sort,
+            )
+        };
+        let buttons = [
+            dine_in(10, Some(21), 505, "Bianca", 5),
+            dine_in(11, None, 600, "Tea", 1),
+            dine_in(10, None, 502, "Special", 3),
+            dine_in(10, Some(20), 501, "Marinara", 2),
+            dine_in(10, Some(20), 500, "Margherita", 2),
+            dine_in(10, None, 503, "Calzone", 7),
+            layout_button(SalesChannel::Delivery, 11, None, 600, "Tea", None, 0),
+        ];
+
+        let book = compile_layout_book(&categories, &subcategories, &buttons);
+
+        // Drinks first: its lowest sort (1) is below Pizza's (2). Margherita before Marinara: the
+        // same sort, so the lower item id.
+        assert_eq!(
+            rendered(book.plan_for(SalesChannel::DineIn)),
+            [
+                "Drinks: Tea",
+                "Pizza: Special,Calzone | Red: Margherita,Marinara | White: Bianca",
+            ]
+        );
+        assert_eq!(
+            rendered(book.plan_for(SalesChannel::Delivery)),
+            ["Drinks: Tea"]
+        );
+        let channels: Vec<SalesChannel> = book
+            .channels()
+            .iter()
+            .map(|channel| channel.sales_channel.known())
+            .collect();
+        assert_eq!(channels.len(), 2, "one plan per channel with a button");
+    }
+
+    #[test]
+    fn a_layout_skips_every_button_it_cannot_place() {
+        let categories = [display_category(10, "Pizza", EntityStatus::Active)];
+        let subcategories = [
+            display_subcategory(20, 10, "Red"),
+            DisplaySubcategory {
+                status: EntityStatus::Archived,
+                ..display_subcategory(21, 10, "Retired")
+            },
+            display_subcategory(22, 99, "Someone else's"),
+        ];
+        let mut unrecognised =
+            layout_button(SalesChannel::DineIn, 10, None, 506, "Future", None, 0);
+        unrecognised.sales_channel = Open::parse("SALES_CHANNEL_HOVERCRAFT");
+        let buttons = [
+            layout_button(SalesChannel::DineIn, 10, Some(20), 500, "Kept", None, 0),
+            layout_button(
+                SalesChannel::Unspecified,
+                10,
+                None,
+                501,
+                "Unspecified",
+                None,
+                0,
+            ),
+            unrecognised,
+            layout_button(SalesChannel::DineIn, 98, None, 502, "No category", None, 0),
+            layout_button(SalesChannel::DineIn, 10, Some(23), 503, "No sub", None, 0),
+            layout_button(
+                SalesChannel::DineIn,
+                10,
+                Some(21),
+                504,
+                "Archived sub",
+                None,
+                0,
+            ),
+            layout_button(
+                SalesChannel::DineIn,
+                10,
+                Some(22),
+                505,
+                "Foreign sub",
+                None,
+                0,
+            ),
+        ];
+
+        let book = compile_layout_book(&categories, &subcategories, &buttons);
+
+        assert_eq!(
+            rendered(book.plan_for(SalesChannel::DineIn)),
+            ["Pizza:  | Red: Kept"]
+        );
+        assert_eq!(book.channels().len(), 1);
+    }
 }
