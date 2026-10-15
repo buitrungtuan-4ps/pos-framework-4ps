@@ -104,4 +104,3 @@
 "crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
 "crates/pos-fakes/src/store.rs::<FakeTx as TxContext>::commit" = { lines = 102, params = 1 }
 "xtask/src/checks/deps_rule.rs::check" = { lines = 125, params = 3 }
-"xtask/src/checks/tls_modes.rs::run" = { lines = 122, params = 1 }

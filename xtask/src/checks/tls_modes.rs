@@ -93,7 +93,8 @@ fn read_caddyfiles(dir: &std::path::Path) -> Result<Vec<(String, String)>, Error
     Ok(files)
 }
 
-/// The findings for the accepted modes, the Caddyfiles and the Kubernetes manifest, if any.
+/// The findings for the accepted modes, the Caddyfiles and the Kubernetes manifest, if any: each
+/// file in the order it was read, then the accept-list against the files, then the k8s lane.
 fn check(
     accepted: &BTreeSet<String>,
     caddyfiles: &[(String, String)],
@@ -106,91 +107,97 @@ fn check(
             continue;
         };
         if name == SHARED {
-            // The shared block is imported *inside* a site block, so a site address or a `tls`
-            // directive in it would either fail to parse or silently apply to every posture —
-            // including the two that must not hold a certificate at all.
-            for forbidden in ["tls ", "tls {"] {
-                if text
-                    .lines()
-                    .any(|line| line.trim_start().starts_with(forbidden))
-                {
-                    findings.push(
-                        Finding::new(
-                            "deploy/Caddyfile.d/site.caddy",
-                            "tls-modes",
-                            "the shared site block declares a `tls` directive".to_owned(),
-                        )
-                        .with_hint(
-                            "TLS is what a posture differs in; it belongs in the per-mode file",
-                        ),
-                    );
-                    break;
-                }
-            }
-            // `/internal/*` must be denied here, in the shared block, so all four postures inherit
-            // it. Those handlers now require a shared secret (ADR-0097), and that is a second
-            // control rather than a replacement for this one: the deny is what keeps the surface
-            // off the internet at all, so dropping it would put event injection and falsifiable
-            // fleet state one leaked key away — not the kind of regression a test run shows.
-            if !text.contains(INTERNAL_DENY) {
-                findings.push(
-                    Finding::new(
-                        "deploy/Caddyfile.d/site.caddy",
-                        "tls-modes",
-                        "the shared site block does not deny `/internal/*`".to_owned(),
-                    )
-                    .with_hint(
-                        "the /internal routes require a shared secret (ADR-0097) *and* this \
-                         deny; neither replaces the other, and removing the deny leaves event \
-                         injection and falsifiable fleet state one leaked key from the internet. \
-                         The deny belongs in the shared block where every posture inherits it",
-                    ),
-                );
-            }
+            findings.extend(shared_block_findings(text));
             continue;
         }
         present.insert(stem.to_owned());
-
-        if !text.contains(IMPORT) {
-            findings.push(
-                Finding::new(
-                    format!("deploy/Caddyfile.d/{name}"),
-                    "tls-modes",
-                    format!("does not `{IMPORT}`"),
-                )
-                .with_hint(
-                    "every posture serves the same proxy configuration; importing it is what \
-                     keeps it from being copied four times and drifting in the one nobody runs",
-                ),
-            );
-        }
+        findings.extend(missing_import(name, text));
     }
-
-    for mode in accepted.difference(&present) {
-        findings.push(
-            Finding::new(
-                BOOTSTRAP,
-                "tls-modes",
-                format!(
-                    "TLS_MODE `{mode}` is accepted but deploy/Caddyfile.d/{mode}.caddy is missing"
-                ),
-            )
-            .with_hint("bootstrap.sh selects the Caddyfile by this exact name, on the box"),
-        );
-    }
-    for mode in present.difference(accepted) {
-        findings.push(
-            Finding::new(
-                format!("deploy/Caddyfile.d/{mode}.caddy"),
-                "tls-modes",
-                format!("no TLS_MODE `{mode}` is accepted, so this file can never be selected"),
-            )
-            .with_hint("add it to tls_mode_is_valid() in deploy/bootstrap.sh, or remove the file"),
-        );
-    }
-
+    findings.extend(accept_list_mismatches(accepted, &present));
     findings.extend(k8s_internal_deny(k8s));
     findings
+}
+
+/// What the shared block may not hold, a `tls` directive, and the deny it must.
+fn shared_block_findings(text: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    // The shared block is imported *inside* a site block, so a site address or a `tls`
+    // directive in it would either fail to parse or silently apply to every posture —
+    // including the two that must not hold a certificate at all.
+    let declares_tls = ["tls ", "tls {"].iter().any(|forbidden| {
+        text.lines()
+            .any(|line| line.trim_start().starts_with(forbidden))
+    });
+    if declares_tls {
+        findings.push(
+            Finding::new(
+                "deploy/Caddyfile.d/site.caddy",
+                "tls-modes",
+                "the shared site block declares a `tls` directive".to_owned(),
+            )
+            .with_hint("TLS is what a posture differs in; it belongs in the per-mode file"),
+        );
+    }
+    // `/internal/*` must be denied here, in the shared block, so all four postures inherit
+    // it. Those handlers now require a shared secret (ADR-0097), and that is a second
+    // control rather than a replacement for this one: the deny is what keeps the surface
+    // off the internet at all, so dropping it would put event injection and falsifiable
+    // fleet state one leaked key away — not the kind of regression a test run shows.
+    if !text.contains(INTERNAL_DENY) {
+        findings.push(
+            Finding::new(
+                "deploy/Caddyfile.d/site.caddy",
+                "tls-modes",
+                "the shared site block does not deny `/internal/*`".to_owned(),
+            )
+            .with_hint(
+                "the /internal routes require a shared secret (ADR-0097) *and* this \
+                 deny; neither replaces the other, and removing the deny leaves event \
+                 injection and falsifiable fleet state one leaked key from the internet. \
+                 The deny belongs in the shared block where every posture inherits it",
+            ),
+        );
+    }
+    findings
+}
+
+/// A mode file that does not import the shared block.
+fn missing_import(name: &str, text: &str) -> Option<Finding> {
+    if text.contains(IMPORT) {
+        return None;
+    }
+    Some(
+        Finding::new(
+            format!("deploy/Caddyfile.d/{name}"),
+            "tls-modes",
+            format!("does not `{IMPORT}`"),
+        )
+        .with_hint(
+            "every posture serves the same proxy configuration; importing it is what \
+             keeps it from being copied four times and drifting in the one nobody runs",
+        ),
+    )
+}
+
+/// Accepted modes without a file, then files without an accepted mode.
+fn accept_list_mismatches(accepted: &BTreeSet<String>, present: &BTreeSet<String>) -> Vec<Finding> {
+    let missing = accepted.difference(present).map(|mode| {
+        Finding::new(
+            BOOTSTRAP,
+            "tls-modes",
+            format!("TLS_MODE `{mode}` is accepted but deploy/Caddyfile.d/{mode}.caddy is missing"),
+        )
+        .with_hint("bootstrap.sh selects the Caddyfile by this exact name, on the box")
+    });
+    let unreachable = present.difference(accepted).map(|mode| {
+        Finding::new(
+            format!("deploy/Caddyfile.d/{mode}.caddy"),
+            "tls-modes",
+            format!("no TLS_MODE `{mode}` is accepted, so this file can never be selected"),
+        )
+        .with_hint("add it to tls_mode_is_valid() in deploy/bootstrap.sh, or remove the file")
+    });
+    missing.chain(unreachable).collect()
 }
 
 /// The same `/internal` deny, in the optional Kubernetes lane.
