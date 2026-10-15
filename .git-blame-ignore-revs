@@ -112,3 +112,6 @@ c3a958edf6711f73a8512c45056af2d462c300c8
 
 # #816 — the response helpers every area shares, and the record version, move into pos-cloud-api
 a0fc27dcb82be94751a0475b838f6b158911feda
+
+# #817 — the config tree, the publish every area writes through, the registry and settings move into pos-cloud-config
+48fb442a290431e2ff5ac8f633dd09f8cc0a6b81
