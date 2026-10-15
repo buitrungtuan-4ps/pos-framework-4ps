@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The two halves of [`checked_locale_node`](super::checked_locale_node): the fields the console
+//! The two halves of [`checked_locale_node`](super::config_nodes::locale::checked_locale_node): the fields the console
 //! sends, each checked with its own domain constructor, and the facts the store's country pack
 //! adds beside them.
 

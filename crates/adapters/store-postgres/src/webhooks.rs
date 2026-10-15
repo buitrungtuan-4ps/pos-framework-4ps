@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The webhook-endpoint table over PostgreSQL (P7, [ADR-0032](../../../docs/adr/0032-webhooks.md)).
+//! The webhook-endpoint table over PostgreSQL (P7, [ADR-0032](../../../../docs/adr/0032-webhooks.md)).
 //!
 //! A webhook is a cursor over the event log, so a row holds only the subscription's durable facts —
 //! destination, signing secret, cursor, disabled flag — never a backlog. The admin CRUD filters by

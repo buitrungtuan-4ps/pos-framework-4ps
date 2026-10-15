@@ -133,7 +133,7 @@ struct PublishPlacementRequest {
 /// `GET /admin/config/ota` reads the currently-published rollout. The writes compose the `fleet_update`
 /// node through the same config tree and the same `CapabilityValidator` (its `ota_violations`) the
 /// generic publish used, so a malformed rollout is a `422` with the exact violations. Writes are behind
-/// [`ConsolePermission::PublishOta`] and audited; the read is behind [`ConsolePermission::Read`].
+/// [`ConsolePermission::PublishOta`](crate::auth::console_rbac::ConsolePermission::PublishOta) and audited; the read is behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read).
 ///
 /// `PUT`/`GET /admin/config/ota/placement` are the other half of the rollout decision. A rollout says
 /// *which* devices are eligible; a placement says *where this store sits* — its ring and its stable

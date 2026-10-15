@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The alert domain model ([ADR-0073](../../../docs/adr/0073-alerting.md)): the kinds of operational
+//! The alert domain model ([ADR-0073](../../../../docs/adr/0073-alerting.md)): the kinds of operational
 //! condition the engine watches, their severity, and the [`FiringAlert`] the pure evaluator produces.
 //!
 //! These types carry no I/O. The evaluator ([`super::eval`]) turns a read-model snapshot into a set of
@@ -61,7 +61,7 @@ pub enum AlertKind {
     /// The store→cloud JetStream is near its configured capacity.
     JetstreamCapacity,
     /// A store's print agent is holding a ticket nobody has printed
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     PrintAgentStalled,
 }
 
@@ -171,7 +171,7 @@ impl FiringAlert {
     ///
     /// Used by the store-offline rule, where the condition is one kind but its urgency depends on
     /// where the store's edge runs
-    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)): the same silence
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)): the same silence
     /// means "probably still selling, and we cannot see it" from a shop-floor box, and "not selling"
     /// from a hosted one.
     #[must_use]

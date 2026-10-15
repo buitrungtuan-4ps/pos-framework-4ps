@@ -2,9 +2,9 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The four-level configuration tree the cloud owns and publishes (P7,
-//! [ADR-0033](../../../docs/adr/0033-config-tree.md)).
+//! [ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 //!
-//! Configuration is cloud-owned ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)):
+//! Configuration is cloud-owned ([ADR-0004](../../../../docs/adr/0004-cloud-owned-configuration.md)):
 //! the cloud composes a store's effective settings from four levels — Tenant → Brand → Store →
 //! Device, most-specific winning — validates the result, versions it, and hands each store either a
 //! small delta or, when it has fallen too far behind, a full snapshot. Four decisions live here:
@@ -36,7 +36,7 @@ pub use tree::{
 };
 pub use validate::{CapabilityValidator, ConfigValidator, StructuralValidator};
 
-/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7.
+/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7.
 ///
 /// One table, read by every publish path. The batch path had these rules from the day store groups
 /// landed; the single-store path did not, so the same menu that a batch would *skip* for want of a
@@ -45,7 +45,7 @@ pub use validate::{CapabilityValidator, ConfigValidator, StructuralValidator};
 /// **F7**). Two paths with two answers is the bug; one table is the fix.
 ///
 /// A release is the third reader, and the one that made the table's *order* matter as well as its
-/// contents ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6): a
+/// contents ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6): a
 /// release carrying both `tax` and `menu` satisfies its own prerequisite only if the activator
 /// applies them in dependency order. It lives here rather than beside any one of its readers so
 /// that adding a rule cannot reach two of the three.

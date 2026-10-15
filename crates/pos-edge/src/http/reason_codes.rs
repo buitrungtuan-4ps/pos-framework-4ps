@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The till's reason-code read route
-//! ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+//! ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
 //!
 //! `GET /api/reason-codes` serves the store's managed list from the live
 //! [`EdgeSession`](crate::app::EdgeSession) — the framework default until a `reason_codes` node is

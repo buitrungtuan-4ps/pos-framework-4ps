@@ -6,8 +6,8 @@
 //! [`ConfigTree`] holds one store's four layers (Tenant → Brand → Store → Device) and the history of
 //! effective documents it has published. Publishing a change composes the layers, validates the
 //! result, and — only if it validates — appends a new version; a rejected version changes nothing,
-//! so the last good version stays current ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
-//! [ADR-0033](../../../docs/adr/0033-config-tree.md)). [`ConfigTree::update_for`] then answers a
+//! so the last good version stays current ([ADR-0004](../../../../docs/adr/0004-cloud-owned-configuration.md),
+//! [ADR-0033](../../../../docs/adr/0033-config-tree.md)). [`ConfigTree::update_for`] then answers a
 //! store's sync: a delta when the store is close behind, a full snapshot when it is more than *K*
 //! versions behind or holding a version the cloud no longer has.
 
@@ -23,12 +23,12 @@ use super::merge::{diff, merge_layers};
 use super::validate::ConfigValidator;
 
 /// How many versions a store may be behind before it gets a full snapshot rather than a delta
-/// ([ADR-0033](../../../docs/adr/0033-config-tree.md)). The cloud keeps at least this much history to
+/// ([ADR-0033](../../../../docs/adr/0033-config-tree.md)). The cloud keeps at least this much history to
 /// diff against; a store older than it cannot be patched and is resynced whole.
 pub const DEFAULT_K: usize = 20;
 
 /// The four configuration levels, least specific first. A more-specific level overrides a
-/// less-specific one ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+/// less-specific one ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigLevel {
     /// The whole tenant.
@@ -409,7 +409,7 @@ impl<V: ConfigValidator> ConfigTree<V> {
     /// composes them, so they are what the shop gets.
     ///
     /// Used by the publish-time prerequisite check
-    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7), which is
+    /// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7), which is
     /// asking what the store *holds*, not what it was last told.
     #[must_use]
     pub fn effective(&self) -> Value {

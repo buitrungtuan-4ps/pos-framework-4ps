@@ -16,7 +16,7 @@ fn doc(name: &str) -> String {
 /// the version they are at, an insert at a taken id writes nothing, a tenant cannot read
 /// another's campaign by id, and a neighbour tenant's rows are never touched.
 ///
-/// The insert/update split is [ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md):
+/// The insert/update split is [ADR-0095](../../../../../docs/adr/0095-conditional-writes-for-collections.md):
 /// what this asserted before was the `ON CONFLICT DO UPDATE` that made "add a campaign" and
 /// "replace a campaign" the same statement, so a second admin creating at an id another had
 /// just used silently replaced their document.

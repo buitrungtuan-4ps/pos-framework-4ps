@@ -7,6 +7,7 @@
 mod cash;
 mod close;
 mod count;
+mod drawer_access;
 mod drawers;
 mod open;
 mod reads;

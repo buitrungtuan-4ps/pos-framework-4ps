@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The day-bounded window a chain recomputation walks, against a real planner
-//! ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+//! ([ADR-0132](../../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
 //!
 //! The read is scoped by tenant, store and a trading-day range, and the range arithmetic is
 //! PostgreSQL's — `pos-proto`'s `BusinessDate` offers none, and inventing calendar arithmetic in

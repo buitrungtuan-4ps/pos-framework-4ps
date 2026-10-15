@@ -14,6 +14,13 @@ use crate::{
     post_with_cookie, propose_printer, published_device, store_id, tenant,
 };
 
+/// The approved devices compile into the `devices` config node, and only the approved ones
+/// (**ADR-0100**, C2 slice 2b).
+///
+/// The store learns where its printers are through the config-pull it already runs, which is what
+/// makes the knowledge survive a reboot with the WAN down. Asserted end to end — propose, approve,
+/// publish, read the tree — because the value of this slice is precisely that the three sit on one
+/// path; each half passing in isolation would prove nothing about the join.
 #[tokio::test]
 async fn approved_devices_compile_into_the_published_config_node() {
     let keys = FakeKeys::default();

@@ -7,7 +7,7 @@ use super::{block_on, prepared};
 use pos_proto::{StoreId, TenantId, Ulid};
 
 /// The placement the bump wrote comes back out of the fleet read
-/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// Two tables and one join, and neither the unit tests nor the in-process suite can prove it:
 /// upstream the placement lives on a `FakeConfigTrees` and the fleet rows on a `FakeFleet`, two
@@ -17,7 +17,7 @@ use pos_proto::{StoreId, TenantId, Ulid};
 /// would return a neighbouring value or panic, with nothing at compile time to notice.
 /// The bump records the generation it displaced, and only a heartbeat that names *that*
 /// generation with an empty outbox clears it
-/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// Every assertion here is unavailable anywhere else in the tree. The fake models the maps but
 /// not the SQL, and the two facts the clear turns on — that `store_lease.generation` inside
@@ -66,7 +66,7 @@ async fn opened(
 }
 
 /// Settling by hand, against the real statement
-/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// What only a database shows: the precondition lives in the `WHERE`, so an attestation about a
 /// machine the row does not name changes nothing — and a second attestation about the same one
@@ -118,7 +118,7 @@ fn a_handover_settles_only_on_the_machine_the_caller_names() {
 }
 
 /// A store on its first-ever lease has no previous machine, and the statement says so
-/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// Generation `0` is the store's first lease: the insert in `bump_store_lease` writes
 /// `superseded_generation = NULL` for exactly that reason — it supersedes nobody. So the other

@@ -3,9 +3,9 @@
 
 //! The application layer: load → decide → apply → publish.
 //!
-//! This is the thin layer [ADR-0013](../../../docs/adr/0013-async-strategy.md) says each binary
+//! This is the thin layer [ADR-0013](../../../../docs/adr/0013-async-strategy.md) says each binary
 //! owns. For every command it: **loads** the aggregate's current state from the projection,
-//! **decides** with the synchronous `pos-core` spine ([`decide_table`] and its siblings), **applies**
+//! **decides** with the synchronous `pos-core` spine ([`decide_table`](pos_core::decision::decide_table) and its siblings), **applies**
 //! the decision by writing the wire events it maps to inside one store transaction, and — only after
 //! the commit — **publishes** the change to every device over the fan-out and folds it into the
 //! projection. A rolled-back transaction therefore prints nothing, tells no device, and changes no
@@ -13,7 +13,7 @@
 //!
 //! [`Edge`] is generic over the store `S`, so the same loop runs against `pos-fakes` in a test and
 //! `store-sqlite` on a real machine — static dispatch, no `dyn`
-//! ([ADR-0013](../../../docs/adr/0013-async-strategy.md)). It wires the **table floor cycle** (seat,
+//! ([ADR-0013](../../../../docs/adr/0013-async-strategy.md)). It wires the **table floor cycle** (seat,
 //! clean) and the **order line** (add, fire); the bill and shift families follow the identical shape.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -38,7 +38,6 @@ use crate::sync_status::SyncStatus;
 mod authority;
 mod bills;
 mod composition;
-mod drawer_access;
 mod error;
 mod floor;
 mod kitchen;
@@ -73,7 +72,7 @@ pub use views::{
 const MILLISECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
 
 /// The range a store's [`EdgeSession::event_log_days`] may take
-/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): the
+/// ([ADR-0145](../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): the
 /// one the cloud refuses a publish outside, from the `retention` node's own type
 /// ([`pos_proto::retention`]). The edge ignores a value outside it that arrives anyway, keeping what
 /// it had.
@@ -107,7 +106,7 @@ struct Projection {
     /// rollups; no edge decision consults it, and a cached copy no code reads is a field that rots.
     orders: HashMap<OrderId, OrderOrigin>,
     /// The orders a member of staff has confirmed or refused
-    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
+    /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
     ///
     /// This is the *only* mutable part of the hold, and it is append-only: an order enters the map
@@ -186,7 +185,7 @@ struct Projection {
     /// back, so an order can leave the set and come back.
     live: BTreeSet<OrderId>,
     /// Paid orders without a table whose kitchen is not done: at least one fired line no station
-    /// has bumped ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
+    /// has bumped ([ADR-0161](../../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
     /// Each maps to its newest such line's fire time, which dates it for the end of the day.
     ///
     /// Kept by [`Self::refresh_live`] from the same inputs as `live`, and from a fire, a void and
@@ -221,14 +220,14 @@ pub struct Edge<S> {
     /// derived from `S`, so the one loop runs over the real SQLite store and over the fakes alike.
     receipts: Arc<dyn ReceiptAuthority>,
     /// Whether a replacement machine has taken this store
-    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
     /// Owned here and lent as one `Arc`, so the config-pull loop that decides it, the four commands
     /// that refuse on it and the response header that reports it are all reading the same value.
     /// `Active` until a pull says otherwise, which is every box that has never been issued a lease.
     standing: Arc<CurrentStanding>,
     /// What the status bar says about the cloud link and the outbox
-    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Written by the
+    /// ([ADR-0137](../../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Written by the
     /// outbox drain and the heartbeat, read by `GET /api/sync`.
     sync: SyncStatus,
     /// What the SNTP probe last measured of this box's own clock (roadmap-v3 PF4,
@@ -236,14 +235,14 @@ pub struct Edge<S> {
     /// composition that starts no loop — a test, the on-fakes example — reports it unmeasured.
     clock_status: ClockStatus,
     /// The guest notes of the lines still open, held in memory and nowhere else
-    /// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+    /// ([ADR-0157](../../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
     ///
     /// Beside the projection rather than inside it, because the projection is rebuilt from the log
     /// and a note is precisely what the log does not hold. Locked on its own and never while the
     /// projection's lock is held.
     notes: Mutex<LineNotes>,
     /// Consecutive wrong PINs per person
-    /// ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)), shared by the sign-in route
+    /// ([ADR-0030](../../../../docs/adr/0030-pairing-and-offline-auth.md)), shared by the sign-in route
     /// and every manager approval, so a PIN the sign-in screen would have locked cannot be guessed
     /// at an approval prompt instead. Owned here and lent to the sign-in route as one `Arc`.
     pin_lockout: Arc<Lockout>,
@@ -268,7 +267,7 @@ pub struct InboundOrderOpened {
 }
 
 /// What [`Edge::open_inbound_order`] needs to write the idempotency ledger row in the order's own
-/// transaction ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)): the caller's key and the two
+/// transaction ([ADR-0064](../../../../docs/adr/0064-edge-order-in.md)): the caller's key and the two
 /// acceptance facts the order itself does not carry. `order_id`, `business_date` and
 /// `awaiting_staff_confirmation` are the order's own and are filled in by `open_inbound_order`,
 /// which answers the last of those through [`EdgeSession::holds_for_staff_confirmation`] and hands

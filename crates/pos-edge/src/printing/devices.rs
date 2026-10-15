@@ -28,9 +28,9 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
 }
 
 /// What one till prints differently from its store
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4): the receipt printer and the receipt languages its `TERMINAL` entry names, as
-/// [`Printers::till_for`] resolves them for the device a print was asked from.
+/// [`Printers::till_for`](crate::printing::Printers::till_for) resolves them for the device a print was asked from.
 ///
 /// Only a guest's paper follows it: a receipt, its copy and a pre-bill. A kitchen ticket goes to its
 /// station's printer. A shift report goes to the store's receipt printer, or where the store keeps
@@ -141,7 +141,7 @@ pub(super) fn guest_printer<'a>(
 /// printed at all, because nobody goes looking for it.
 ///
 /// The station comes back with the printer because a ticket prints in the language of the station
-/// whose cooks read it ([`ticket_language`]), and on a failover those are the backup's.
+/// whose cooks read it ([`ticket_language`](crate::printing::ticket_language)), and on a failover those are the backup's.
 #[must_use]
 pub fn station_printer<'a>(
     devices: &'a PublishedDevices,
@@ -176,8 +176,8 @@ fn is_printer(device: &PublishedDevice) -> bool {
 }
 
 /// The printer a cash drawer opens through, if this edge may open one
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
-/// [ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+/// ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4,
+/// [ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 ///
 /// The store's one drawer, `till` `None`, opens through the first printer that serves the bill
 /// rather than a station, that the console marked `drawer_attached`, whose connection may open a
@@ -241,7 +241,7 @@ pub fn published_printers(devices: &PublishedDevices) -> Vec<&PublishedDevice> {
 }
 
 /// The published terminals, in publication order: the tills a paired device can be bound to
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), and what the till's **This device** card
+/// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), and what the till's **This device** card
 /// lists.
 ///
 /// A kind this build does not know is not a terminal here, as it is not a printer either: the edge

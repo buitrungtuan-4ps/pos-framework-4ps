@@ -54,8 +54,8 @@ struct PublishDevicesRequest {
 /// Builds the device-publish sub-router
 /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md), C2 slice 2b).
 ///
-/// Separate from [`device_router`] because it needs the config tree, which the propose/approve
-/// surface does not — the same split [`floor_publish_router`] makes for the same reason.
+/// Separate from [`device_router`](crate::http::device_router) because it needs the config tree, which the propose/approve
+/// surface does not — the same split [`floor_publish_router`](crate::http::floor_publish_router) makes for the same reason.
 pub fn device_publish_router<D, Cfg, A, C>(
     devices: D,
     config_trees: Cfg,

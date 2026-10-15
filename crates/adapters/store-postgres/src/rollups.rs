@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The materialised-rollup table over PostgreSQL (P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+//! The materialised-rollup table over PostgreSQL (P7, [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 //!
 //! One row per `(tenant, store)`; the row's `state` column is the whole `StoredRollups` — the
 //! projector's cursor and the per-trading-day counts — held as `jsonb`. This adapter keeps only the

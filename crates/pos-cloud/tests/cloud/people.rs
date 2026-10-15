@@ -93,7 +93,7 @@ async fn a_second_employee_with_a_staff_code_in_use_is_refused_409_and_changes_n
 /// An assignment names the person it grants, so the console can label it without reading the roster.
 ///
 /// This is what has to be true before the People screen's employee table can be paged
-/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4): the screen used to turn an
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4): the screen used to turn an
 /// assignment's `employee_id` into a name by searching the whole loaded roster, which stops working
 /// the moment the roster arrives a page at a time. The resolution moves to the read that needs it.
 #[tokio::test]
@@ -457,7 +457,7 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
 
 /// The audit trail shows the staff code an employee write records only to a role holding
 /// `console.people.read`
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// `employee.create` and `employee.update` record the employee's id, code and status (ADR-0070),
 /// and every console role reads the trail. A Viewer or an Ops user still sees each entry and who
@@ -705,7 +705,7 @@ async fn the_paged_roster_refuses_a_bound_outside_the_range_and_an_offset_withou
 /// `?q=` narrows the roster page to whoever a name or a staff code matches, and narrows `total` too.
 ///
 /// This is what an assign picker needs before the People screen's table can be paged
-/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4): a picker that offers matches for
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4): a picker that offers matches for
 /// what the operator typed does not need the whole roster loaded, and one that does cannot survive
 /// the table paging out from under it.
 #[tokio::test]
@@ -973,7 +973,7 @@ async fn people_writes_require_manage_people_and_the_roster_needs_people_read() 
 
 /// Every read that hands back a person — the roster, one employee, and the assignment list, whose
 /// rows name who they grant — needs `console.people.read`, which only Owner and Admin hold
-/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// A name and a staff code are T1 personal data (ADR-0070), and these reads sat behind
 /// `console.data.read`, which Ops and Viewer hold too. The permission catalogue and the role

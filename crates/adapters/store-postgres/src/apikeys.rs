@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The API-key table over PostgreSQL (P7, [ADR-0037](../../../docs/adr/0037-api-keys.md)).
+//! The API-key table over PostgreSQL (P7, [ADR-0037](../../../../docs/adr/0037-api-keys.md)).
 //!
 //! A key is looked up by its public `id` — the ULID half of the `pos_<id>_<secret>` token — which is
 //! the primary key, so the lookup is a single-row fetch. This adapter keeps only the SQL and returns
@@ -11,7 +11,7 @@
 //!
 //! A box's device credential (`posdev_<id>_<secret>`, minted by activation into
 //! `device_credentials`) is fetched here too, joined to the device registry so that archiving the
-//! device ends it ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+//! device ends it ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 
 use deadpool_postgres::Pool;
 

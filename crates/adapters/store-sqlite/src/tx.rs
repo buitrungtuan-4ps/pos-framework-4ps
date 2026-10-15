@@ -31,7 +31,7 @@ pub struct SqliteTx {
     /// `IntakeLedger::record` and flushed in the same SQLite transaction as `events`.
     pub(crate) intake: Option<IntakeWrite>,
     /// The subject rows to write with the events that reference them
-    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). Buffered by
+    /// ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)). Buffered by
     /// `SubjectStore::record` and flushed in the same SQLite transaction as `events`, so a settle
     /// and the buyer it was issued to land together or not at all. A `Vec` because one transaction
     /// may record more than one person.

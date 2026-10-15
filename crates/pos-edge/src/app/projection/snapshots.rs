@@ -23,7 +23,7 @@ impl<S: EventStore> Edge<S> {
     /// separately is two chances to reach for `session.sales_channel` and reintroduce the defect,
     /// which is exactly how it was written before.
     ///
-    /// The **lines** are here for [ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)'s:
+    /// The **lines** are here for [ADR-0129](../../../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)'s:
     /// the receipt's rows have to sum to the subtotal printed under them, and they do so only if they
     /// are the very records the bases were folded from. A second read of the projection would be a
     /// second answer — a line added between the two reads, and a document that does not add up.
@@ -40,7 +40,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The same read, narrowed to the lines **one bill** covers
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
     ///
     /// This is the difference a split turns on. Before it, what a bill owed was assembled from every
     /// line of its order — so two bills on one order would each have owed all of it, and there was
@@ -123,7 +123,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The sold lines as a fee rule matches them: its item, quantity, net and class
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 2). The same lines
+    /// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 2). The same lines
     /// [`Self::class_bases`] sums, through the same filter, so each class's lines come to its base
     /// and [`billing::assemble`] never finds them another bill's.
     pub(in crate::app) fn bill_lines(lines: &[LineRecord]) -> Vec<BillLine> {

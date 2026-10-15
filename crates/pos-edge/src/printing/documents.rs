@@ -67,11 +67,11 @@ pub fn test_page_document(
 }
 
 /// The customer's receipt for a settled bill — and, where a country's law is satisfied by it, its
-/// tax invoice ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
+/// tax invoice ([ADR-0106](../../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 ///
 /// Composed from four things and nothing else: who the store is, **what was sold**, what the bill
 /// came to, and the store's own gapless receipt number — which is explicitly **not** a legal invoice
-/// number ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md)); a country whose law wants
+/// number ([ADR-0025](../../../../docs/adr/0025-receipt-number-authority.md)); a country whose law wants
 /// an allocated number gets it from `Fiscalization` and prints it beside this one.
 ///
 /// # Every block is omitted when it has nothing to say
@@ -87,13 +87,13 @@ pub fn test_page_document(
 /// an Indian tax invoice under Rule 46 must carry the buyer's name, address and GSTIN — without them
 /// the buyer cannot claim input tax, which is the reason a business asks for the document at all.
 /// The block is printed only when a buyer was captured
-/// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)); an ordinary retail sale is the
+/// ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)); an ordinary retail sale is the
 /// receipt it always was.
 ///
 /// # The lines, which every regime asks for
 ///
 /// One row per line sold: the name, then the quantity at the unit price with the extended amount
-/// beside it ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)). Vietnam's
+/// beside it ([ADR-0129](../../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)). Vietnam's
 /// Decree 123/2020 Art. 10 asks for exactly this set (minus a unit of measure the catalog has not
 /// got), and a Japanese qualified invoice, an Indian tax invoice and an EU one all want the goods
 /// named and counted. The rows sum to `subtotal` printed under them, because they are the same
@@ -137,7 +137,7 @@ pub fn receipt_document(
 }
 
 /// A copy of a settled bill's receipt
-/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
+/// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
 /// the receipt as it printed, under the same number, with **COPY** and which copy it is, and when
 /// it was printed, under that number. `reprinted` is the store's local time, as the caller formats
 /// it. In a second language as [`receipt_document`] is.
@@ -241,7 +241,7 @@ pub fn shift_report_document(
 }
 
 /// Several drawers closed at once on one slip
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10): the store's
+/// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10): the store's
 /// totals, then each drawer's report under its till's name, each set of figures printed as
 /// [`shift_report_document`] prints one drawer's.
 #[must_use]

@@ -19,7 +19,7 @@ impl<S: EventStore> Edge<S> {
     /// When the guests at a table sat down, or `None` when nobody is sitting there.
     ///
     /// Read from the id of the order the table holds — a ULID minted at the moment it was seated,
-    /// the reading [ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)
+    /// the reading [ADR-0145](../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)
     /// makes for retention — rather than from a time stored beside it. Only while somebody is
     /// sitting there, to be served or to pay: a table waiting to be cleaned has been left.
     #[must_use]
@@ -135,7 +135,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Releases a table seated by mistake, or whose guests left before anything was sold, straight
     /// back to service
-    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)):
+    /// ([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)):
     /// `sales.order.closed` for its order and `sales.table.closed`, in one transaction.
     ///
     /// Only while nothing is sold on it: every line voided or none at all, and no bill open. Before
@@ -211,7 +211,7 @@ impl<S: EventStore> Edge<S> {
     /// order a server had started there, and refusing it hands the table back to that order, which
     /// only works while both are at the table they opened on. Staff decide on it first.
     ///
-    /// [`Permission::TransferOrder`], which a server holds by default and which asks for no PIN.
+    /// [`Permission::TransferOrder`](pos_core::permission::Permission::TransferOrder), which a server holds by default and which asks for no PIN.
     /// It mints no order, so a replaced machine still moves guests between the tables it is
     /// draining (ADR-0123).
     ///

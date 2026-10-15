@@ -106,7 +106,7 @@ async fn roles_of(people: &FakePeople, tenant: TenantId) -> Vec<Versioned<RoleTe
 
 /// A tenant the console creates starts with six roles, one for each of `pos-core`'s built-in roles,
 /// named in the language it was created in and granting what the catalogue's defaults say
-/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)): a default
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)): a default
 /// role holds a permission directly, and every other role holds a PIN-flagged one with approval.
 /// The seeding is audited by ids and counts, never a name.
 #[tokio::test]

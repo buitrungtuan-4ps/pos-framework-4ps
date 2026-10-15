@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Media renditions in Postgres `bytea` (Track M5, [ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)).
+//! Media renditions in Postgres `bytea` (Track M5, [ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md)).
 //!
 //! One row per uploaded image (`media_assets`, migration 0030): a minted `MediaId`, the content type,
 //! and the two JPEG renditions the ADR-0042 pipeline produced (`thumbnail`, `detail`) as `bytea`. This

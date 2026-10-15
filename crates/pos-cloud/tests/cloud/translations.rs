@@ -25,7 +25,7 @@ use crate::{
 // --- Translation grid (`/admin/translations`, behind the session guard) -------------------------
 
 /// The translation store, one grid per tenant, each carrying the version it was last written at —
-/// the `grid` and `xmin` of one `translations` row ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// the `grid` and `xmin` of one `translations` row ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
 #[derive(Clone, Default)]
 struct FakeTranslations {
     rows: Arc<Mutex<HashMap<TenantId, Versioned<TranslationGrid>>>>,

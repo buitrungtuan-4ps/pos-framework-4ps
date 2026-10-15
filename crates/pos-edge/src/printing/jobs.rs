@@ -81,7 +81,7 @@ impl Printers {
     }
 
     /// Prints a copy of a settled bill's receipt on `till`'s receipt printer, as the receipt is
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)),
+    /// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)),
     /// marked as a copy with the store's local time it was printed at.
     ///
     /// The job is keyed on the copy's own event ([`ReceiptCopy::job_id`]), so a job retried after an
@@ -179,7 +179,7 @@ impl Printers {
     /// Prints a closed shift's report where it was closed: at the receipt printer of `till`, the
     /// till the close was made at, and at the store's for [`TillPrinting::STORE`], which is where
     /// every report printed before a till had a drawer of its own
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 10).
     ///
     /// Never returns an error, for the reason [`Self::print_receipt`] gives: the shift is closed
     /// whether the paper comes out or not, and the caller tells the cashier which.

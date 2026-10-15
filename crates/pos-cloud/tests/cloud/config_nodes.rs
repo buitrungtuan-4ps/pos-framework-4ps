@@ -119,7 +119,7 @@ fn store_profile_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::R
 
 /// The store's registered identity reaches the `store_profile` node, and a registration number that
 /// is not the shape the country issues is refused before it can reach an invoice
-/// ([ADR-0106](../../docs/adr/0106-the-store-is-a-legal-person.md)).
+/// ([ADR-0106](../../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 #[tokio::test]
 async fn a_store_profile_publish_writes_the_node_and_checks_the_registration_shape() {
     let config_trees = FakeConfigTrees::default();
@@ -201,7 +201,7 @@ async fn a_store_profile_publish_writes_the_node_and_checks_the_registration_sha
 }
 
 /// The node an edge actually receives says how many decimals the store's currency has
-/// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+/// ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
 ///
 /// Through the route rather than through `checked_locale_node`, because the value comes from the
 /// compiled country registry the *router* is handed: a builder unit test passes just as happily
@@ -486,7 +486,7 @@ async fn the_retention_node_reads_back_through_its_type() {
 }
 
 /// A store's `origins` node is authored here and refused here, by the very rule the edge applies
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// The node is the only writer for a list the edge reads on the front of every request. Two things
 /// have to hold for that to be worth anything: what the console saves is the shape the edge parses,

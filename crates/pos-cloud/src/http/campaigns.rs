@@ -100,7 +100,7 @@ impl CampaignAuditSummary {
 /// Builds the campaigns sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
 ///
 /// Per-campaign CRUD over a tenant's promotions. `GET` (list and by-id) is behind
-/// [`ConsolePermission::Read`]; `POST`/`PUT`/`DELETE` are behind [`ConsolePermission::ManageCampaigns`]
+/// [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); `POST`/`PUT`/`DELETE` are behind [`ConsolePermission::ManageCampaigns`](crate::auth::console_rbac::ConsolePermission::ManageCampaigns)
 /// and audited (`campaign.create`/`update`/`delete`) with a summary, never the discount terms. The id
 /// is server-owned. Publishing these campaigns to a store is a separate route that reuses
 /// `PublishConfig` (a later slice).

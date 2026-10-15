@@ -42,7 +42,7 @@ fn instant<'a>(id: &'a str, tenant_id: &'a str, name: &'a str) -> NewReleaseRow<
 /// neither the tenant-scoped reads nor the fleet-wide in-flight scan mixes tenants up.
 ///
 /// The two kinds matter because only one of them is safe at a store whose timezone nobody
-/// recorded ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §2): a
+/// recorded ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §2): a
 /// wall-clock release is refused there by name, an instant release is not. If the columns came
 /// back indistinguishable the refusal could not be made.
 #[test]

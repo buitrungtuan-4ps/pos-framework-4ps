@@ -21,7 +21,7 @@ use crate::printing::devices::TillPrinting;
 use crate::printing::documents::centred;
 
 /// A receipt's second language
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2): what a bilingual receipt, its copy and a pre-bill print after each of their labels,
 /// and under each name the menu or a fee's rule translates into it.
 ///
@@ -219,7 +219,7 @@ pub fn receipt_language(session: &EdgeSession, till: &TillPrinting) -> Option<St
 /// The language a kitchen ticket printed at `station` prints in: the station's `ticket_language` on
 /// the `stations` node (ADR-0160 decision 2), resolved by [`paper_language`] as a receipt's is.
 ///
-/// `station` is the one whose printer prints the ticket ([`station_printer`]), whose cooks read it.
+/// `station` is the one whose printer prints the ticket ([`station_printer`](crate::printing::station_printer)), whose cooks read it.
 /// A station that sets no language, and one the plan does not name, prints in the display language,
 /// as every kitchen ticket did before a station could say.
 #[must_use]

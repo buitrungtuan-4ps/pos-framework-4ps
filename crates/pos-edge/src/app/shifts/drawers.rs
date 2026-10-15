@@ -27,7 +27,7 @@ impl<S: EventStore> Edge<S> {
 
     /// The drawer cash taken or moved at the device `scope` says acts goes into: the store's one
     /// drawer, or where the store keeps one per till the device's own till's
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     ///
     /// # Errors
     ///
@@ -65,7 +65,7 @@ impl<S: EventStore> Edge<S> {
 
     /// Refuses a sale while no shift is open, when the store's `shift` node says
     /// `NO_SHIFT_SELLING_REFUSE`
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     ///
     /// Called where a sale starts, seating a table or starting a counter order, and where a payment
     /// is taken, so that at such a store every sale and every payment belongs to a shift. An order a
@@ -129,7 +129,7 @@ impl<S: EventStore> Edge<S> {
 
     /// [`Self::refuse_without_open_shift`] for cash, which goes into one drawer, `drawer`, whose own
     /// shift must be open: the store's one drawer's, or a till's where the store keeps one per till
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     fn refuse_without_open_drawer(&self, drawer: Option<DeviceId>) -> Result<(), AppError> {
         if self.session().shift.no_shift_selling() == NoShiftSelling::Refuse
             && self.lock_projection().open_shift_of(drawer).is_none()

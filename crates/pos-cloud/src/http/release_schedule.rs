@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The steps [`admin_schedule_release`](super::admin_schedule_release) takes, in the order it takes
+//! The steps [`admin_schedule_release`](super::config_publish::release_actions::admin_schedule_release) takes, in the order it takes
 //! them: each refuses with the response to send, and only the last writes
 //! ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
 

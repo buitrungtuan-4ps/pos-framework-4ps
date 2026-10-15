@@ -169,7 +169,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Waives one of a bill's fees, citing a reason from the store's managed list
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    /// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
     ///
     /// An act, not an edit: the rule stays published and every other bill is charged it, while
     /// this one is charged nothing and taxed nothing for it from now on, through every split and
@@ -177,7 +177,7 @@ impl<S: EventStore> Edge<S> {
     /// and only on a bill still open. [`Permission::WaiveFee`] is PIN-flagged, so where the store
     /// does not enforce each person's own set a holder's code and PIN come with every waive, and
     /// where it does, a person who holds it with approval brings somebody else who holds it
-    /// directly ([`Self::resolve_step_up`]), and one who holds it directly waives alone.
+    /// directly (`Self::resolve_step_up`), and one who holds it directly waives alone.
     ///
     /// Everything that could never be waived is refused before anybody is asked to approve it: a
     /// bill that owes nothing any more, a fee the bill does not charge, and a rule that says no.

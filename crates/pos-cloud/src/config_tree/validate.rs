@@ -4,7 +4,7 @@
 //! Validating an effective config document before it is published.
 //!
 //! The cloud is the one place that checks a configuration is coherent, so a store only ever receives
-//! a version that already validated ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
+//! a version that already validated ([ADR-0004](../../../../docs/adr/0004-cloud-owned-configuration.md),
 //! `docs/pos-spec.md` §10). Two validators: a structural one, and the real one that also runs
 //! `pos-core`'s inter-flag capability rules — the *same* rules the domain enforces, so the cloud and
 //! the edge cannot disagree about which flag combinations are legal.
@@ -77,7 +77,7 @@ impl ConfigValidator for CapabilityValidator {
 }
 
 /// Validates the OTA rollout keys — `fleet_update` and `device_ota` — when the document sets them,
-/// through `pos-core`'s shared rules ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)), so
+/// through `pos-core`'s shared rules ([ADR-0052](../../../../docs/adr/0052-ota-rollout-config.md)), so
 /// the cloud rejects exactly what the edge would refuse. An absent key means no rollout is configured
 /// at that level, which is not a violation.
 fn ota_violations(document: &Value) -> Vec<String> {
@@ -106,7 +106,7 @@ fn ota_violations(document: &Value) -> Vec<String> {
 }
 
 /// Validates the `revoked_devices` node when the document sets it
-/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), so a
+/// ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), so a
 /// node the store would refuse whole is rejected here instead — with the violations an operator can
 /// act on, rather than in a log line on a box they cannot reach.
 ///
@@ -138,7 +138,7 @@ fn device_revocation_violations(document: &Value) -> Vec<String> {
 }
 
 /// Validates the `lease` node when the document sets it
-/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), so a node the store
+/// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)), so a node the store
 /// could not parse is rejected here rather than published and silently dropped.
 ///
 /// There is nothing to check beyond the shape: every `u64` is a generation, so this arm has no

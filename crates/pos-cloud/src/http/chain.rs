@@ -35,7 +35,7 @@ struct ChainState<A, C> {
 const CHAIN_FINDINGS_DEFAULT_LIMIT: u32 = 100;
 const CHAIN_FINDINGS_MAX_LIMIT: u32 = 500;
 
-/// Builds the chain-finding sub-router, stated independently of [`CloudApp`].
+/// Builds the chain-finding sub-router, stated independently of [`CloudApp`](crate::http::CloudApp).
 ///
 /// One route: `GET /admin/chain-findings`, the contradictions the cloud refused
 /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4,
@@ -44,8 +44,8 @@ const CHAIN_FINDINGS_MAX_LIMIT: u32 = 500;
 /// read — which for a mechanism whose entire product is *being noticed* is most of the way to not
 /// having it.
 ///
-/// Stated independently and merged in `main`, like [`reconcile_router`], rather than threading an
-/// extra collaborator through every [`CloudApp`] handler. The ledger is an `Arc<dyn AnchorLedger>`
+/// Stated independently and merged in `main`, like [`reconcile_router`](crate::http::reconcile_router), rather than threading an
+/// extra collaborator through every [`CloudApp`](crate::http::CloudApp) handler. The ledger is an `Arc<dyn AnchorLedger>`
 /// because that is what [`crate::cloud::Cloud`] already holds one as.
 pub fn chain_router<A, C>(anchors: Arc<dyn AnchorLedger>, admin: A, clock: C) -> Router
 where

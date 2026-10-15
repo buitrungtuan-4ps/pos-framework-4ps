@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The super-admin session cookie, scoped to one subdomain
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 //!
 //! Setting a session cookie with `Domain=pos.example.com` sends it to *every* subdomain — the single
 //! worst multi-tenant isolation failure the roadmap names, because one tenant's admin session would

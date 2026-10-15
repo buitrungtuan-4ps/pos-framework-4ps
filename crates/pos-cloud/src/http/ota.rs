@@ -79,7 +79,7 @@ struct StoreReportRequest {
 }
 
 /// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
-/// stated independently of [`CloudApp`] like [`reconcile_router`].
+/// stated independently of [`CloudApp`](crate::http::CloudApp) like [`reconcile_router`](crate::http::reconcile_router).
 ///
 /// `POST /internal/ota/report` records the version a store is running and its last self-test outcome
 /// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
@@ -141,10 +141,10 @@ struct ArtifactRequest {
     arch: String,
 }
 
-/// Builds the OTA artifact sub-router, stated independently of [`CloudApp`]
+/// Builds the OTA artifact sub-router, stated independently of [`CloudApp`](crate::http::CloudApp)
 /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
 ///
-/// Like [`device_router`], it carries its own state and is merged into the main router rather than
+/// Like [`device_router`](crate::http::device_router), it carries its own state and is merged into the main router rather than
 /// adding more `CloudApp` generics for two collaborators one route uses.
 ///
 /// **On `/sync`, not `/internal`.** [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)

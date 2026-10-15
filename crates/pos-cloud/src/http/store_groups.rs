@@ -205,8 +205,8 @@ struct SetStoreGroupMembersRequest {
 
 /// Builds the store-group sub-router ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
 ///
-/// CRUD over the cohorts a tenant publishes to. Reads are behind [`ConsolePermission::Read`]; the
-/// writes are behind [`ConsolePermission::ManageStores`], the same permission that creates and
+/// CRUD over the cohorts a tenant publishes to. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); the
+/// writes are behind [`ConsolePermission::ManageStores`](crate::auth::console_rbac::ConsolePermission::ManageStores), the same permission that creates and
 /// renames a store — a group is a way of *organising* stores, not a way of changing what they run,
 /// and publishing to one is a separate act behind `console.config.publish`.
 ///

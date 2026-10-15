@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Device authentication and staff sign-in on the domain routes
-//! ([ADR-0084](../../../docs/adr/0084-device-authentication.md)).
+//! ([ADR-0084](../../../../docs/adr/0084-device-authentication.md)).
 //!
 //! Two gates guard the domain surface, in order:
 //!
@@ -238,7 +238,7 @@ pub(crate) struct SessionState {
     #[serde(skip_serializing_if = "Option::is_none")]
     employee_id: Option<String>,
     /// Whether a replacement machine has taken this store — `active`, `superseded` or `invalid`
-    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
     /// On this route rather than a new one because it is the call the app already makes before it
     /// draws anything, and because the state is a fact about the *box*, not about who is signed in:
@@ -251,7 +251,7 @@ pub(crate) struct SessionState {
     /// console has not staffed yet from a mistyped PIN; the refusal alone answers both the same.
     sign_in_ready: bool,
     /// Whether the store decides with each person's own set
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 6). `false`: every control works as before, and the two lists below are what the
     /// person's roles say, not what the store enforces.
     permissions_enforced: bool,
@@ -264,7 +264,7 @@ pub(crate) struct SessionState {
     permissions_with_approval: Vec<&'static str>,
     /// How many seconds an attended till may sit untouched before it signs its person out and
     /// locks, from the store's `session` node
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
     /// `0` never locks. A fact about the store rather than the person, so it is sent whoever is
     /// signed in. The till keeps the time, because what counts as a touch is what happens on its
     /// screen.

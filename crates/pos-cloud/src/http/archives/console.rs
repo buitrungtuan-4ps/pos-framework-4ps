@@ -65,7 +65,7 @@ struct StoreArchivesResponse {
 /// Builds the console-facing archive read
 /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) slice 3).
 ///
-/// Mounted **unconditionally**, unlike [`store_archive_router`], and that is the decision: the
+/// Mounted **unconditionally**, unlike [`store_archive_router`](crate::http::store_archive_router), and that is the decision: the
 /// store-facing routes need an object store and `archive_key_secret` to do anything at all, but
 /// this one needs only the registry. An operator whose `archive_key_secret` has gone missing is
 /// exactly the operator who most needs to see what archives exist — hiding the list along with the

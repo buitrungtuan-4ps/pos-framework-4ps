@@ -108,7 +108,7 @@ fn a_bill_opens_and_settles_with_a_gapless_receipt() {
 
 /// A corporate buyer is filed beside the log, and the settled event carries only the id.
 ///
-/// The property [ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md) exists for: the
+/// The property [ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md) exists for: the
 /// name and the 登録番号 are in the subject store, the event has a `SubjectId`, and the money
 /// figures are on the event where they can never be scrubbed.
 #[test]
@@ -371,7 +371,7 @@ fn opening_a_bill_on_an_unseated_table_is_refused() {
     });
 }
 
-/// The defect [ADR-0093](../../docs/adr/0093-bill-keyed-on-order.md) closes.
+/// The defect [ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md) closes.
 ///
 /// This flow could not be written at all before the bill was keyed on the order: `open_bill`
 /// took a `TableId`, gated on that table being `Occupied` and resolved the order through
@@ -650,6 +650,8 @@ fn a_second_bill_on_one_order_is_refused_from_the_counter_and_from_the_floor() {
     });
 }
 
+/// An order id the edge has never seen buys nothing. The floor path proves an order exists by
+/// finding it on a table; a counter order has no table, so its lines are the proof.
 #[test]
 fn an_order_the_edge_does_not_know_cannot_be_billed() {
     pos_fakes::executor::run_ready(async {

@@ -53,7 +53,7 @@ fn a_shift_opens_counts_and_closes_blind() {
 }
 
 /// Closing a shift publishes the chain head
-/// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+/// ([ADR-0131](../../../../../docs/adr/0131-a-chained-event-log.md) decision 4).
 ///
 /// This is the half the chain cannot do alone. A hash chain verifies happily after its tail has
 /// been cut off, and after an edit whose later links were re-derived — the algorithm is in the

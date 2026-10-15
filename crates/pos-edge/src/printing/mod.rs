@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Turning a settled bill into paper
-//! ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md), production-readiness C2).
+//! ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md), production-readiness C2).
 //!
 //! `BillView::print_receipt` has been set on every settle since P5, and the till has rendered
 //! "Printing receipt…" over it — while nothing constructed a `PrintJob` and no binary depended on
@@ -20,33 +20,33 @@
 //! # A drawer opens where the console says one is, and over USB only
 //!
 //! *When* to open one is the caller's decision: a cash payment, a paid in or out, a no-sale opening
-//! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+//! ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 //! This module only performs it, through the printer the console marked `drawer_attached`
 //! ([`drawer_printer`]). Where the store keeps a drawer per till, that is the receipt printer the
 //! till's `TERMINAL` entry names, and a till that names none has no drawer the edge opens
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 //! [`PrinterConnection::may_open_a_drawer`](pos_ports::printer::PrinterConnection::may_open_a_drawer)
 //! is false for anything but USB, because port 9100 has no authentication and the drawer-kick rides
 //! the same channel as everything else (`docs/architecture.md` §5). A published node marking a network
 //! printer's drawer is accepted here and the drawer command is still not sent. Behind a print agent
 //! the kick is a job of its own, sent only to an agent whose claim says it carries one, and `OPENED`
 //! waits on the agent's acknowledgement
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
 //!
 //! # A printer may name another device as the one that writes the bytes
 //!
-//! [ADR-0112](../../../docs/adr/0112-print-agents.md): a published printer may carry an
+//! [ADR-0112](../../../../docs/adr/0112-print-agents.md): a published printer may carry an
 //! `agent_device_id`, and **absent means the edge is the agent**, which is why a fleet that takes
 //! this release prints tomorrow the way it printed today. When it is present the last hop moves —
 //! and only the last hop. Everything above [`Printers::dispatch`] is unchanged, the rasterising in
 //! [`Printers::prepare`] still runs *here*, and what crosses to the agent is a finished
-//! [`PrintJob`]: a device that drew its own glyphs would draw them from whatever fonts that device
+//! [`PrintJob`](pos_ports::printer::PrintJob): a device that drew its own glyphs would draw them from whatever fonts that device
 //! happens to have, and a store with three terminals would print three different tickets from one
 //! order.
 //!
 //! # A till may print its guests' paper at a printer of its own
 //!
-//! [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! [ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 4: a `TERMINAL` entry may name the receipt printer and the receipt languages of the till
 //! it is, and a paired device is that till through the print-agent binding it already holds. A
 //! route resolves the till from the device a request came from ([`Printers::till_for`]) and passes
@@ -178,14 +178,14 @@ impl PrintOutcome {
 }
 
 /// What came of opening the cash drawer, as the till reports it
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+/// ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
 ///
 /// None of the three is an error. The act the drawer opened for has already been recorded, and a
 /// drawer that did not spring is opened with its key; what the till needs is which of these happened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerOutcome {
     /// The kick went down the drawer printer's cable, or, behind a print agent, the agent
-    /// acknowledged writing it within [`KICK_WAIT`]. Whether the drawer sprang is the hardware's
+    /// acknowledged writing it within [`KICK_WAIT`](crate::print_agent::KICK_WAIT). Whether the drawer sprang is the hardware's
     /// part (gate P8), which the edge cannot see.
     Opened,
     /// No printer this edge may open a drawer through: none is marked, or the marked one is not on
@@ -193,7 +193,7 @@ pub enum DrawerOutcome {
     /// before kicks. The ordinary state of a store with no drawer.
     NoDrawer,
     /// The drawer printer was chosen and did not take the kick: unplugged or switched off, or its
-    /// agent silent, its queue full, or no acknowledgement within [`KICK_WAIT`].
+    /// agent silent, its queue full, or no acknowledgement within [`KICK_WAIT`](crate::print_agent::KICK_WAIT).
     Unavailable,
 }
 
@@ -215,7 +215,7 @@ impl DrawerOutcome {
 /// which script that is. The *whole* set says more than that: a receipt block carries a buyer's name
 /// (`pos_ports::printer`), and on a box with no Vietnamese or CJK face every character of that name
 /// substitutes — so an unbounded set in a durable log is the name itself, spelled with the
-/// duplicates removed ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md)
+/// duplicates removed ([ADR-0117](../../../../docs/adr/0117-a-headless-store-keeps-a-log.md)
 /// decision 7). The count is reported alongside, so a truncation is visible as one.
 const MISSING_GLYPHS_REPORTED: usize = 6;
 
@@ -242,7 +242,7 @@ pub struct Printers {
     /// than a silent no-op.
     agents: Option<Arc<dyn AgentDispatch>>,
     /// The agents whose last claim said they carry a kick
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), at most
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), at most
     /// [`KICKING_AGENTS`]. In-process, like a claim's parking: every claim says it again, so a
     /// restart that forgets it is told again within one claim.
     kicking: Mutex<HashSet<DeviceId>>,

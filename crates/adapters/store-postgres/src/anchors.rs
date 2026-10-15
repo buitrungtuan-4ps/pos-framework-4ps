@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The anchors a store publishes, and the contradictions among them
-//! ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+//! ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md) decision 4).
 //!
 //! A store's hash chain is only as good as the record of it the store cannot reach. This adapter is
 //! that record's storage: every chain head a store published, and every offered head the cloud
@@ -163,10 +163,10 @@ impl PostgresAnchors {
 
     /// Every event the cloud holds for one store over `days_back + 1` trading days ending at
     /// `business_date`, in `event_id` order, capped at `limit` — the window a chain recomputation
-    /// walks ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+    /// walks ([ADR-0132](../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
     ///
     /// The day is the filter, against `events_tenant_store_date`
-    /// ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md)), and it is the partition
+    /// ([ADR-0022](../../../../docs/adr/0022-events-partition-strategy.md)), and it is the partition
     /// key too, so this is a partition slice rather than a scan. Chain positions are read out of the
     /// envelopes by the caller: nothing here touches a JSON operator, and no column was promoted
     /// onto the most-written table in the system to make this query tidier.

@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The counter: its order list, `GET /api/orders/open` ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)),
+//! The counter: its order list, `GET /api/orders/open` ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)),
 //! and the two routes that let it start its own orders, `POST /api/orders` and
-//! `POST /api/orders/{id}/lines` ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)),
+//! `POST /api/orders/{id}/lines` ([ADR-0146](../../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)),
 //! and today's settled bills, `GET /api/bills/settled`, which lists a counter order by its queue
-//! number ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+//! number ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 //!
 //! The counter's equivalent of `GET /api/floor`. A relayed or QR-counter order is tableless by
-//! design ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)), so it appears on no floor plan —
+//! design ([ADR-0064](../../../../docs/adr/0064-edge-order-in.md)), so it appears on no floor plan —
 //! without this route a cashier has no way to *find* the order they are being asked to charge, and
 //! the order-keyed bill routes are unreachable in practice even though they exist.
 //!
@@ -108,7 +108,7 @@ where
 }
 
 /// One of today's settled bills, as the till lists it to print a copy from
-/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+/// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 #[derive(Debug, Serialize)]
 struct SettledBillResponse {
     bill_id: BillId,

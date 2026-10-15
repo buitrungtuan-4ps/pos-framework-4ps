@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The retention period, and the decision of whether a record is past it
-//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+//! ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 //!
 //! How long personal data may be kept is a legal decision, not a code default — it is a
 //! configuration value, with a per-country default supplied by the country module
-//! ([ADR-0027](../../../docs/adr/0027-country-modules.md)). So there is no baked-in period here:
+//! ([ADR-0027](../../../../docs/adr/0027-country-modules.md)). So there is no baked-in period here:
 //! [`RetentionPolicy`] is constructed from that configured value, and the cron does nothing until it
 //! has one (masking on a guessed schedule would either erase data early or keep it too long, both
 //! violations).

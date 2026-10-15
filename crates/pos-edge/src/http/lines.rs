@@ -5,7 +5,7 @@
 //!
 //! A fire prints the station's ticket after the commit, over the
 //! [`Printers`](crate::printing::Printers) dispatcher the composition layers in
-//! ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)). The kitchen display sees the
+//! ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)). The kitchen display sees the
 //! order either way — the paper is the part that can be missing, and the response says so rather than
 //! letting the till imply a ticket came out.
 //!
@@ -13,7 +13,7 @@
 //! (`sales.order_line.added` §14.2), and this shell records them. A line's guest note reaches the
 //! event log as a boolean (`note_present`) and never as its text — the text is personal data, held in
 //! the edge's memory for the kitchen and printed on the ticket
-//! ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+//! ([ADR-0157](../../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
 
 use std::sync::Arc;
 

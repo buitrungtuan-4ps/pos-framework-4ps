@@ -21,7 +21,7 @@ use crate::printing::PrintOutcome;
 /// Where a job goes when its printer names an agent.
 ///
 /// **Dyn-compatible on purpose, unlike the three seams underneath it.** `PrintAgents`, `PrintQueue`
-/// and `PrintWake` all return `impl Future`, so none of them can be erased — and [`Printers`] is
+/// and `PrintWake` all return `impl Future`, so none of them can be erased — and [`Printers`](crate::printing::Printers) is
 /// held as one `Arc<Printers>` in an axum extension by every composition and every route test. Making
 /// it generic over three more parameters would push those three into the signature of every caller
 /// that only ever wanted to print a receipt. So the erasure happens once, here, at the point where
@@ -29,7 +29,7 @@ use crate::printing::PrintOutcome;
 ///
 /// The binding answers one more question, and this is where a route can ask it: which terminal a
 /// paired device is, which decides where that till's guests' paper prints
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4).
 pub trait AgentDispatch: Send + Sync {
     /// Offers `job` to `agent` for `printer`, answering with what the till should say.
@@ -43,9 +43,9 @@ pub trait AgentDispatch: Send + Sync {
         job: PrintJob,
     ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>>;
 
-    /// Offers a kick, a job that is [`PrintDocument::kick`] alone, to `agent` for `printer`, under
+    /// Offers a kick, a job that is [`PrintDocument::kick`](pos_ports::printer::PrintDocument::kick) alone, to `agent` for `printer`, under
     /// the same rules as [`Self::enqueue`] but deliverable only for [`KICK_WAIT`]
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
+    /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).
     ///
     /// A dispatch that cannot carry one refuses it, which is what the default does.
     fn kick<'a>(

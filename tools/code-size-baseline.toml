@@ -13,13 +13,13 @@
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 4120
+"crates/pos-cloud/src/http.rs" = 4116
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
 "crates/pos-cloud/src/persistence.rs" = 5750
 "crates/pos-cloud/src/scheduling.rs" = 1290
-"crates/pos-cloud/tests/cloud.rs" = 11661
+"crates/pos-cloud/tests/cloud.rs" = 11654
 "crates/pos-core/src/billing.rs" = 3800
 "crates/pos-core/src/decision.rs" = 1980
 "crates/pos-core/src/permission.rs" = 1023
@@ -29,8 +29,8 @@
 "crates/pos-edge/src/server.rs" = 2125
 "crates/pos-edge/tests/acceptance.rs" = 2564
 "crates/pos-edge/tests/domain_flow.rs" = 2343
-"crates/pos-edge/tests/drawers.rs" = 2234
-"crates/pos-proto/src/events.rs" = 1960
+"crates/pos-edge/tests/drawers.rs" = 1543
+"crates/pos-proto/src/events.rs" = 1123
 "crates/pos-proto/src/fees.rs" = 1317
 "crates/pos-proto/src/locale.rs" = 1376
 "crates/pos-proto/src/menu.rs" = 1224
@@ -81,7 +81,7 @@
 "crates/pos-cloud/src/import.rs::parse_items_csv" = { lines = 112, params = 6 }
 "crates/pos-cloud/src/main.rs::run" = { lines = 1168, params = 0 }
 "crates/pos-cloud/src/persistence.rs::fleet_row" = { lines = 102, params = 1 }
-"crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 126, params = 1 }
+"crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 123, params = 1 }
 "crates/pos-core/src/billing.rs::assemble" = { lines = 124, params = 1 }
 "crates/pos-core/src/decision.rs::decide_bill" = { lines = 103, params = 3 }
 "crates/pos-edge/src/app/bills/open.rs::Edge::open_bill_for_order" = { lines = 106, params = 3 }
@@ -99,7 +99,7 @@
 "crates/pos-edge/src/printing/documents.rs::receipt_copy_document" = { lines = 26, params = 10 }
 "crates/pos-edge/src/printing/jobs.rs::Printers::print_receipt" = { lines = 42, params = 9 }
 "crates/pos-edge/src/server.rs::compose" = { lines = 252, params = 8 }
-"crates/pos-edge/src/server.rs::compose_cloud_surface" = { lines = 118, params = 15 }
+"crates/pos-edge/src/server.rs::compose_cloud_surface" = { lines = 118, params = 14 }
 "crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
 "crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
 "crates/pos-fakes/src/store.rs::<FakeTx as TxContext>::commit" = { lines = 102, params = 1 }

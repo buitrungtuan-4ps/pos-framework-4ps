@@ -22,7 +22,7 @@ use crate::{
 /// router — all sharing one admin, one catalog, and one config-tree store, as production merges them.
 ///
 /// The tax and locale publish routers ride along because a menu publish now requires both nodes
-/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**):
+/// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**):
 /// without them a test would have to seed the tree behind the routes to reach the path it is
 /// testing, which is exactly the shortcut that let the rule be built and never exercised end to end.
 fn catalog_publish_app(
@@ -273,7 +273,7 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
     assert_eq!(entry["display_name"], "Margherita");
 }
 
-/// The half [ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) named as
+/// The half [ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) named as
 /// missing when the course entity landed: an operator could author a course and put an item on it,
 /// and the compiled `menu` node carried neither, so a store received a price book with no courses in
 /// it and every `course_id` on the wire still pointed at nothing a till could name.

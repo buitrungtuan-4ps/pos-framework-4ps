@@ -3,7 +3,7 @@
 
 //! Cash-shift routes: open with a float, pay cash in and out, enter the blind count, close (P5,
 //! §6/§11.1), and open the drawer outside a sale
-//! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+//! ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 //!
 //! The count is **blind** — the count request carries only the physical amount, and the response to
 //! counting reveals no expectation or variance. Only the close response does. `expected_amount` and
@@ -11,11 +11,11 @@
 //! in every response, because the cashier entered it: it tells them nothing the close keeps blind.
 //!
 //! A store that turns `shift.blind_close` off
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2) is sent `expected_amount` in every response, so the Shift screen can show it beside
 //! the count. `variance` is still the close's alone.
 //!
-//! A store that keeps a drawer per till ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
+//! A store that keeps a drawer per till ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
 //! on each. The till a device is comes from its print-agent binding, read only then; a request may
 //! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
 //! /api/shifts` lists every drawer. A paid in, a paid out and a no-sale opening are made at a till,

@@ -2,12 +2,12 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The super-admin login flow and its server-side session store
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 //!
 //! [`super`] holds the pure two-factor check ([`SuperAdminCredential::authenticate`](super::SuperAdminCredential::authenticate))
 //! and the cookie policy ([`session`](super::session)). This module is the seam that turns them into
 //! a login: it loads the stored credential, runs the check, and — on success — mints a session the
-//! [`session`](super::session) cookie carries. Three properties carry over from [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)
+//! [`session`](super::session) cookie carries. Three properties carry over from [ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)
 //! and are enforced here:
 //!
 //!  * **No oracle.** A wrong password, a wrong code, a replayed code, and a not-yet-provisioned admin
@@ -43,7 +43,7 @@ use super::session::COOKIE_NAME;
 
 /// The stored super-admin credential and the last TOTP step it has used.
 ///
-/// There is exactly one super-admin ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)); this is
+/// There is exactly one super-admin ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)); this is
 /// its persisted form. `last_used_totp_step` is `None` until the first successful login, and only ever
 /// moves forward, which is what makes a code single-use across process restarts.
 #[derive(Clone)]
@@ -67,7 +67,7 @@ impl fmt::Debug for AdminCredential {
 }
 
 /// One admin's identity *and* their own credential — what a sign-in authenticates against
-/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
 ///
 /// [`AdminCredential`] is the single `super_admin` row; this is one `admin_users` row. The columns
 /// have existed since migration 0018 and were written by the invite-acceptance route from the day it
@@ -86,7 +86,7 @@ pub struct AdminLogin {
 }
 
 /// A console admin's role — the least-privilege tier its session is granted
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the
 /// schema and seam store; the role→permission templates (the compile-forced §9-style registry) land
 /// in a later G1 slice and are built on top of these variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -181,7 +181,7 @@ pub struct AdminUser {
 }
 
 /// The input to provisioning a new console admin: identity, role, and the freshly-hashed credential
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). `password_phc` is the Argon2id PHC
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). `password_phc` is the Argon2id PHC
 /// string and `totp_secret` the raw RFC 6238 secret, both minted at the HTTP edge exactly as
 /// first-boot enrolment does; a new admin starts `active`.
 ///
@@ -218,7 +218,7 @@ impl fmt::Debug for NewAdminUser {
     }
 }
 
-/// A pending or accepted invitation, as listed ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// A pending or accepted invitation, as listed ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 /// Carries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdminInvite {
@@ -237,7 +237,7 @@ pub struct AdminInvite {
 }
 
 /// The input to minting an invitation: identity, role, the inviter, the single-use token's hash, and
-/// the expiry ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Only
+/// the expiry ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). Only
 /// `SHA-256(token)` is stored; the raw token reaches the invitee once (the copy-invite-link the
 /// inviter hands over out-of-band) and is never persisted — the same posture as the session token.
 #[derive(Debug, Clone)]
@@ -260,7 +260,7 @@ pub struct NewAdminInvite {
 
 /// A live admin session, as the role-aware guard reads it: the id of the admin it belongs to, or
 /// `None` for a legacy session minted before multi-admin
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveSession {
     /// The [`AdminUser`] id the session belongs to, or `None` for a pre-multi-admin session.
@@ -276,7 +276,7 @@ pub struct AdminContext {
 }
 
 /// The columns of a session to mint, computed at the HTTP edge and handed to
-/// [`AdminStore::create_session`] ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)
+/// [`AdminStore::create_session`] ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)
 /// slice 4). `expires_at` is the first idle boundary (`now + idle_ttl`), `absolute_expires_at` the
 /// hard cap (`now + absolute_ttl`) the sliding TTL can never pass, and `idle_ttl_ms` the window a
 /// real request slides the session forward by. `ip`/`user_agent` are captured so the admin can
@@ -302,7 +302,7 @@ pub struct NewAdminSession {
 }
 
 /// One of an admin's own live sessions, as listed for the self-service "my sessions" view
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4). Carries the session's
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4). Carries the session's
 /// opaque revocation handle (`token_hash`, the `SHA-256` of the token — never reversible to it) and
 /// the accountability details, never the token itself, so it is safe to serialise to the console.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,10 +320,10 @@ pub struct SessionSummary {
 }
 
 /// The super-admin store: the one credential, and the server-side session table
-/// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)). A table in `store-postgres`; a fake in
+/// ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)). A table in `store-postgres`; a fake in
 /// tests.
 ///
-/// [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) extends this seam with the
+/// [ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) extends this seam with the
 /// multi-admin surface — provisioning, listing and role/status management of named
 /// [`AdminUser`]s over the `admin_users` table. The single-super-admin methods stay for now: the
 /// login flow and session guard migrate onto `admin_users` in a later slice, so through the
@@ -343,7 +343,7 @@ pub trait AdminStore {
     ) -> impl Future<Output = Result<Option<AdminCredential>, AdminStoreError>> + Send;
 
     /// Provisions the single super-admin credential *if none exists yet* — the first-boot enrolment
-    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). `password_phc` is the
+    /// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)). `password_phc` is the
     /// Argon2id PHC string and `totp_secret` the raw shared secret. Returns whether it created the
     /// credential: `Ok(false)` means one was already provisioned and nothing was written, so the
     /// caller refuses the enrolment rather than replacing a live admin.
@@ -372,7 +372,7 @@ pub trait AdminStore {
     /// idle window, the owning admin, and the client IP/user-agent it was minted for.
     ///
     /// `admin_id` is the [`AdminUser`] the session belongs to, or `None` for a legacy session minted
-    /// before multi-admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)); a
+    /// before multi-admin ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)); a
     /// `None`-owned session is still valid but resolves to no specific admin.
     ///
     /// # Errors
@@ -396,7 +396,7 @@ pub trait AdminStore {
 
     /// The live session for `token_hash` as of `now`, with the id of the admin it belongs to — or
     /// `None` if there is no live session. The role-aware guard's lookup
-    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)): a `Some(LiveSession)` whose
+    /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)): a `Some(LiveSession)` whose
     /// `admin_id` is `None` is a legacy session (minted before multi-admin).
     ///
     /// # Errors
@@ -419,7 +419,7 @@ pub trait AdminStore {
     ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
 
     /// Lists `admin_id`'s own live sessions (not expired as of `now`), newest first — the self-service
-    /// "my sessions" view ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+    /// "my sessions" view ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
     /// Scoped to the one admin, so no admin sees another's sessions.
     ///
     /// # Errors
@@ -577,7 +577,7 @@ pub trait AdminStore {
 
     /// How many admins are both `owner` and `active`. Callers check this before a demotion or a
     /// suspension to keep the "always at least one active owner" invariant
-    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+    /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
     ///
     /// # Errors
     ///
@@ -588,7 +588,7 @@ pub trait AdminStore {
 
     /// The admin whose email matches `email` case-insensitively, **with their credential**, or
     /// `None` — the read [`login`] authenticates against
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// Separate from [`find_admin_user_by_email`](Self::find_admin_user_by_email) rather than a
     /// widening of it: only the sign-in path has any business holding a password hash and a TOTP
@@ -605,7 +605,7 @@ pub trait AdminStore {
 
     /// Records `step` as the newest TOTP step **`admin_id`** has spent, advancing only forward — the
     /// per-admin form of [`record_totp_step`](Self::record_totp_step)
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// Per-admin is not a tidiness point. The single-row version burns a step for *everybody*, so
     /// admin A signing in at step *N* would make admin B's perfectly valid code in the same
@@ -625,7 +625,7 @@ pub trait AdminStore {
     /// Replaces `admin_id`'s TOTP secret with `secret` and resets *their* last-used step, so the
     /// freshly-enrolled authenticator's codes verify from step zero — the per-admin form of
     /// [`rotate_totp_secret`](Self::rotate_totp_secret)
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// # Errors
     ///
@@ -710,7 +710,7 @@ impl AdminStoreError {
 /// An admin sign-in request: who is signing in, their password, and the current TOTP code.
 ///
 /// `email` is **optional**, and that is the one load-bearing choice in
-/// [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md). Migration 0018 gave the
+/// [ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md). Migration 0018 gave the
 /// only admin every existing installation has a synthetic, non-routable address
 /// ([`IMPLICIT_OWNER_EMAIL`]) that nobody has seen and no route can change, so requiring the field
 /// would lock out every installation on the day this deployed. Absent, it resolves to the single
@@ -731,7 +731,7 @@ pub struct LoginRequest {
     #[serde(default)]
     pub totp_code: String,
     /// A one-time recovery code, used in place of the TOTP second factor when the authenticator is
-    /// lost ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Absent for an
+    /// lost ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Absent for an
     /// ordinary password + TOTP sign-in.
     #[serde(default)]
     pub recovery_code: Option<String>,
@@ -797,7 +797,7 @@ impl IntoResponse for SessionDenied {
 
 /// Everything about the session a successful [`login`] mints, computed at the HTTP edge: the CSPRNG
 /// token, how long it may idle, its absolute ceiling, and the client details captured for the admin's
-/// own session list ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+/// own session list ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
 ///
 /// `idle_ttl_secs` is the sliding idle window and `absolute_ttl_secs` the hard cap it can never pass;
 /// a real guarded request slides the session forward by the idle window up to the cap
@@ -822,7 +822,7 @@ pub struct SessionMint<'a> {
 /// admin who actually signed in.
 ///
 /// Each admin authenticates against **their own** row
-/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)): the credential
+/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)): the credential
 /// migration 0018 has stored per admin since it shipped, and which the invite-acceptance route has
 /// written for every invited admin, is now the credential this reads. Before that it read the single
 /// `super_admin` row, so an invited admin could never sign in at all and every session was attributed
@@ -864,7 +864,7 @@ where
         return Err(LoginDenied::Invalid);
     }
     // The second factor: a one-time recovery code stands in for TOTP when the authenticator is lost
-    // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Either way both factors
+    // ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Either way both factors
     // are weighed before a single generic Invalid — the no-oracle rule (ADR-0034).
     let presented_recovery = request
         .recovery_code
@@ -932,7 +932,7 @@ where
 }
 
 /// The admin a sign-in request names, or `None` if it names nobody resolvable
-/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §3–4).
+/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §3–4).
 ///
 /// A present email is looked up directly. An **absent** one resolves to the single admin when the
 /// store holds exactly one, and to `None` when it holds none or more than one. That is the whole of
@@ -1005,7 +1005,7 @@ where
 }
 
 /// Resolves the acting admin behind an incoming `/admin` request — the role-aware guard the
-/// permission-gated routes stand behind ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// permission-gated routes stand behind ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 ///
 /// It reads the session cookie, confirms the session is live, and resolves the [`AdminUser`] it
 /// belongs to. A session owned by a specific admin resolves to that admin — refused if the admin is
@@ -1169,14 +1169,14 @@ pub fn hash_session_token(token: &str) -> [u8; 32] {
 
 /// The token hash of the session the request's own cookie names, or `None` if it carries none — so a
 /// handler can tell which of an admin's listed sessions is the current one, and exclude it from a
-/// "sign out everywhere else" ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+/// "sign out everywhere else" ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
 #[must_use]
 pub fn current_session_token_hash(headers: &HeaderMap) -> Option<[u8; 32]> {
     session_token_from_cookies(headers).map(hash_token)
 }
 
 /// The stored form of a recovery code — `SHA-256` of its *normalised* text
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Only the hash is ever
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Only the hash is ever
 /// stored; the code itself reaches the admin once, at generation. Normalisation
 /// ([`normalize_recovery_code`]) means the admin may type the code with or without its display
 /// dashes and in any case and still match.
@@ -1195,7 +1195,7 @@ fn normalize_recovery_code(code: &str) -> String {
 }
 
 /// A recovery code to store: its row id (a ULID minted at the edge) and `SHA-256` hash — never the
-/// code itself ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
+/// code itself ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
 #[derive(Debug, Clone)]
 pub struct NewRecoveryCode {
     /// The row's id (a ULID string).
@@ -1388,7 +1388,7 @@ mod tests {
 
     /// An in-memory admin store: the legacy single credential, the multi-admin `admin_users` table
     /// **with each admin's own credential** (the columns migration 0018 has always carried, which
-    /// [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) makes login read), an
+    /// [ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) makes login read), an
     /// invitations table, a session table, per-admin recovery codes, and a down switch.
     ///
     /// `credentials` is keyed by admin id and is what sign-in authenticates against;

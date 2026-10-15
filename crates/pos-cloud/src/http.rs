@@ -54,7 +54,7 @@
 //! console's `failure()` reads the envelope, the config publish's `{"violations":[…]}` and raw text
 //! alike, and `cloud-sync-http` maps cloud failures on HTTP status alone and never parses a body.
 //! Converted so far: every per-domain error helper (`*_error_response`, `*_entropy_unavailable`,
-//! [`activation_refused`], [`too_many_login_attempts`], [`admin_service_unavailable`]) and
+//! `activation_refused`, [`too_many_login_attempts`], `admin_service_unavailable`) and
 //! [`error_response`]. Remaining: the inline validation refusals written at each handler — also the
 //! ones that will carry field-level `details`, which is why they are their own slice.
 //!
@@ -139,14 +139,11 @@ mod sync;
 mod tax_rates;
 mod translations;
 
+// The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
+// path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
+// beside it, re-exported `pub(crate)` from the area that now holds the handler.
+
 pub use admin::audit_router;
-use admin::{
-    admin_accept_invite, admin_create_api_key, admin_invite_admin, admin_list_admins,
-    admin_list_api_keys, admin_list_invites, admin_list_sessions, admin_revoke_api_key,
-    admin_revoke_invite, admin_revoke_other_sessions, admin_revoke_session, admin_set_admin_role,
-    admin_set_admin_status,
-};
-// The console's OpenAPI document names each documented handler by its path here.
 pub(crate) use admin::{
     __path_admin_generate_recovery_codes, __path_admin_login, __path_admin_logout,
     __path_admin_recovery_codes_status, __path_admin_reenrol_totp, __path_admin_session,
@@ -154,18 +151,15 @@ pub(crate) use admin::{
     admin_logout, admin_recovery_codes_status, admin_reenrol_totp, admin_session, admin_setup,
     admin_whoami,
 };
+use admin::{
+    admin_accept_invite, admin_create_api_key, admin_invite_admin, admin_list_admins,
+    admin_list_api_keys, admin_list_invites, admin_list_sessions, admin_revoke_api_key,
+    admin_revoke_invite, admin_revoke_other_sessions, admin_revoke_session, admin_set_admin_role,
+    admin_set_admin_status,
+};
 pub use alerts::alerts_router;
 pub(crate) use archives::__path_admin_list_store_archives;
 pub use archives::{store_archive_admin_router, store_archive_router};
-pub use chain::chain_router;
-pub use ota::{
-    ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
-};
-pub use ota_rollout::ota_config_router;
-pub use reconcile::reconcile_router;
-pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
-use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
-// The console's OpenAPI document names each documented handler by its path here.
 use campaigns::scheduled_error_response;
 pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
@@ -173,6 +167,14 @@ pub use campaigns::{
 use catalog::{catalog_error_response, clean_name_translations};
 pub use catalog::{catalog_publish_router, catalog_router};
 pub(crate) use chain::__path_admin_chain_findings;
+pub use chain::chain_router;
+pub use config_nodes::{
+    config_channels_router, config_locale_router, config_store_profile_router, config_tax_router,
+};
+pub(crate) use config_publish::{
+    __path_admin_cancel_release, __path_admin_config_nodes, __path_admin_create_release,
+    __path_admin_list_releases, __path_admin_read_release, __path_admin_schedule_release,
+};
 use config_publish::{
     LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
     admin_config_rollback, admin_config_version_effective, admin_config_versions, if_match_config,
@@ -183,14 +185,6 @@ use config_publish::{
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
 pub(crate) use config_publish::{publish_config_nodes_with, strip_tree_version};
-// The console's OpenAPI document names each documented handler by its path here.
-pub use config_nodes::{
-    config_channels_router, config_locale_router, config_store_profile_router, config_tax_router,
-};
-pub(crate) use config_publish::{
-    __path_admin_cancel_release, __path_admin_config_nodes, __path_admin_create_release,
-    __path_admin_list_releases, __path_admin_read_release, __path_admin_schedule_release,
-};
 pub use countries::country_router;
 pub(crate) use devices::__path_admin_admitted_devices;
 use devices::admin_admitted_devices;
@@ -202,31 +196,30 @@ pub use devices::{
     activation_router, claim_router, device_publish_router, device_revoke_router, device_router,
 };
 pub use fees::fees_router;
-use integrations::{
-    admin_delete_webhook, admin_enable_webhook, admin_list_webhooks, admin_register_webhook,
-};
-pub use integrations::{config_integrations_router, connection_router, provider_catalogue_router};
-// The console's OpenAPI document names each documented handler by its path here.
-pub use fleet::fleet_router;
-// The console's OpenAPI document names each documented handler by its path here.
-pub(crate) use fleet::__path_admin_acknowledge_region;
-pub use floor::{floor_publish_router, floor_router, table_qr_router};
-pub(crate) use integrations::{
-    __path_admin_create_connection, __path_admin_delete_connection, __path_admin_get_connection,
-    __path_admin_list_connections, __path_admin_list_providers, __path_admin_publish_integrations,
-    __path_admin_update_connection,
-};
-// The console's OpenAPI document names each documented handler by its path here.
 pub(crate) use fees::{
     __path_admin_create_fee, __path_admin_delete_fee, __path_admin_effective_fees,
     __path_admin_list_fees, __path_admin_preview_fees, __path_admin_publish_fees,
     __path_admin_put_fee,
 };
+pub(crate) use fleet::__path_admin_acknowledge_region;
+pub use fleet::fleet_router;
+pub use floor::{floor_publish_router, floor_router, table_qr_router};
 pub use health::health_router;
+pub(crate) use integrations::{
+    __path_admin_create_connection, __path_admin_delete_connection, __path_admin_get_connection,
+    __path_admin_list_connections, __path_admin_list_providers, __path_admin_publish_integrations,
+    __path_admin_update_connection,
+};
+use integrations::{
+    admin_delete_webhook, admin_enable_webhook, admin_list_webhooks, admin_register_webhook,
+};
+pub use integrations::{config_integrations_router, connection_router, provider_catalogue_router};
 pub use inventory::{config_inventory_router, inventory_router};
 pub use media::media_router;
-pub use reason_codes::{config_reason_codes_router, reason_code_router};
-// The console's OpenAPI document names each documented handler by its path here.
+pub use ota::{
+    ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
+};
+pub use ota_rollout::ota_config_router;
 pub(crate) use people::{__path_admin_permissions_readiness, republish_people};
 pub use people::{
     capabilities_router, config_capabilities_router, people_publish_router, people_router,
@@ -237,15 +230,15 @@ pub(crate) use reason_codes::{
     __path_admin_list_reason_codes, __path_admin_publish_reason_codes,
     __path_admin_update_reason_code,
 };
+pub use reason_codes::{config_reason_codes_router, reason_code_router};
+pub use reconcile::reconcile_router;
 pub use registry::registry_router;
 use setting_refusal::save_if_confirmed;
+pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
+use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.
 use registry::registry_error_response;
 pub use settings::settings_router;
-pub use store_groups::{BatchNode, BatchNodePlan, batch_nodes, store_group_router};
-use store_groups::{BoxFuture, store_group_error_response, unknown_batch_node};
-pub use subjects::subjects_router;
-// The console's OpenAPI document names each documented handler by its path here.
 pub(crate) use settings::{
     __path_admin_apply_setting_presets, __path_admin_clear_setting,
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
@@ -258,6 +251,9 @@ pub(crate) use store_groups::{
     __path_admin_read_store_group_batch, __path_admin_set_store_group_members,
     __path_admin_update_store_group,
 };
+pub use store_groups::{BatchNode, BatchNodePlan, batch_nodes, store_group_router};
+use store_groups::{BoxFuture, store_group_error_response, unknown_batch_node};
+pub use subjects::subjects_router;
 pub use tax_rates::tax_rate_router;
 pub use translations::translation_router;
 

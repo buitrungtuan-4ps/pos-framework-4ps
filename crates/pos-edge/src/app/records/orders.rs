@@ -58,7 +58,7 @@ pub(in crate::app) struct LineRecord {
     pub(in crate::app) state: OrderLineState,
     pub(in crate::app) menu_item_id: MenuItemId,
     /// The name the guest saw at add time, and the name the receipt prints
-    /// ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+    /// ([ADR-0129](../../../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
     ///
     /// `sales.order_line.added` has always carried it — it is half of §14.2's line snapshot — and
     /// this projection always threw it away, because a fire and a tax-class fold have no use for a
@@ -79,7 +79,7 @@ pub(in crate::app) struct LineRecord {
     /// carried it and this projection used to drop it, which left the edge holding an extended total
     /// it could not take apart — re-extending meant dividing by the old quantity to recover a price,
     /// and a rounded one at that. And a **receipt** prints it, as the `đơn giá` Decree 123/2020
-    /// Art. 10 asks for ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+    /// Art. 10 asks for ([ADR-0129](../../../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
     ///
     /// Either way it is the figure the guest was quoted rather than today's menu price — a line
     /// never re-reads the live menu (§14.2), and that holds when it changes as much as when it is
@@ -93,7 +93,7 @@ pub(in crate::app) struct LineRecord {
     /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
     pub(in crate::app) modifier_menu_item_ids: Vec<MenuItemId>,
     /// The names those modifiers had at add time, which the receipt prints under the line
-    /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)). Empty for
+    /// ([ADR-0144](../../../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)). Empty for
     /// a line recorded before the event carried them, and its receipt prints no modifiers.
     pub(in crate::app) modifier_display_names: Vec<DisplayName>,
     /// When the line went to the kitchen, or `None` while it is still on the pad.

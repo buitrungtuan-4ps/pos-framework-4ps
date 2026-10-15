@@ -128,7 +128,7 @@ pub struct EmployeeUpdate {
 /// Every variant's order is *total* — each ends with the primary key. `ORDER BY name` is no more
 /// total than `ORDER BY created_at` was: two employees can share a name, which is one of the reasons
 /// a staff code exists, and a window over that tie can repeat or skip a row across pages just the
-/// same. [ADR-0098](../../docs/adr/0098-paged-admin-reads.md) decision 9 applies to every sort a
+/// same. [ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9 applies to every sort a
 /// route offers, not only its default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum EmployeeSort {
@@ -179,7 +179,7 @@ impl EmployeeSort {
 /// **This is T1 personal data on both sides.** The search runs over a person's name and code, and
 /// the page it shapes carries them back. Neither the filter nor the order reaches a log: an audit
 /// entry for a read would record that a roster was read, never what was typed to find someone
-/// ([ADR-0070](../../docs/adr/0070-people-and-access.md)).
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct EmployeeListFilter {
     /// Case-insensitive substring the person's name or staff code must contain. `None` matches all.
@@ -239,7 +239,7 @@ pub trait EmployeeStore {
     /// read and would be meaningless to match a substring against besides.
     ///
     /// `sort`/`descending` pick the order. Every one of them is total
-    /// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md) decision 9): the default order is not
+    /// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9): the default order is not
     /// the only one a window can straddle a tie in.
     ///
     /// # Errors
@@ -604,7 +604,7 @@ impl fmt::Display for AssignmentId {
 
 pos_proto::wire_enum! {
     /// Which stores an assignment reaches
-    /// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 3): one, every store of a group, or every store of the tenant. The wire's
     /// `scope_kind`. `ASSIGNMENT_SCOPE_UNSPECIFIED` is the zero value every wire enum has
     /// (`docs/naming-and-api.md` §3.3), and no assignment is held at it.
@@ -621,7 +621,7 @@ pos_proto::wire_enum! {
 ///
 /// A group assignment reaches the stores the group holds when it is read, so a store that joins
 /// the group is reached and one that leaves is not
-/// ([ADR-0122](../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). A tenant-wide one
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). A tenant-wide one
 /// reaches every store of the tenant, a store opened after it included.
 ///
 /// On the wire it is `scope_kind` with the id beside it: `store_id` for one store, where it always
@@ -693,7 +693,7 @@ impl Serialize for AssignmentScope {
 /// The row carries the assigned person's name and code alongside their id, resolved by the store as
 /// it reads. Without them a caller can only name the person by looking the id up in the tenant's
 /// roster, which is a whole-set read the console cannot keep making once the roster is paged
-/// ([ADR-0098](../../docs/adr/0098-paged-admin-reads.md), B3-4).
+/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), B3-4).
 ///
 /// Both are `Option`, and the reason is in the schema rather than the domain: nothing declares a
 /// foreign key from an assignment to an employee, so an assignment can outlive the row it names.
@@ -701,9 +701,9 @@ impl Serialize for AssignmentScope {
 /// real and still grants access, so hiding it would be worse than showing it unlabelled.
 ///
 /// The name and code are T1 personal data
-/// ([ADR-0070](../../docs/adr/0070-people-and-access.md)) and reaching them needs
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)) and reaching them needs
 /// `console.people.read`, the same gate as reading the roster
-/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 #[derive(Debug, Clone, Serialize)]
 pub struct Assignment {
     /// The assignment id.
@@ -805,7 +805,7 @@ pub trait AssignmentStore {
     /// Lists the assignments that grant a role, of every scope.
     ///
     /// The stores these reach are the ones archiving the role reaches
-    /// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 7): each must be told at once that the role no longer grants anything.
     ///
     /// # Errors

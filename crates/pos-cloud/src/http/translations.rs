@@ -47,7 +47,7 @@ struct TranslationTenantQuery {
     tenant_id: String,
 }
 
-/// Builds the translation-grid sub-router, stated independently of [`CloudApp`]
+/// Builds the translation-grid sub-router, stated independently of [`CloudApp`](crate::http::CloudApp)
 /// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
 ///
 /// A super-admin reads and replaces a tenant's whole grid behind the session guard; a `PUT` is

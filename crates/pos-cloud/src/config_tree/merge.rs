@@ -3,7 +3,7 @@
 
 //! The two JSON operations the config tree is built from: **layer merge** (composing the four levels
 //! into one effective document) and the **merge patch** (RFC 7386) that is the delta format
-//! ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+//! ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 //!
 //! They are deliberately different operations. Layer merge composes *authored* documents where a
 //! more-specific level overrides a less-specific one, so an explicit `null` at a level is a real
@@ -48,7 +48,7 @@ fn merge_into(base: &mut Value, overlay: &Value) {
 ///
 /// In a patch, an object recurses, a `null` deletes the key, and any other value replaces. This is
 /// exactly what a store does to a snapshot to reach the next version, so sender and receiver share
-/// this one definition ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
+/// this one definition ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 pub fn apply_merge_patch(target: &mut Value, patch: &Value) {
     let Value::Object(patch_map) = patch else {
         // A non-object patch replaces the target wholesale (RFC 7386 §2).

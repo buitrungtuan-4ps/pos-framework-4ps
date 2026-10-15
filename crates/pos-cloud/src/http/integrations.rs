@@ -128,9 +128,9 @@ impl ConnectionAuditSummary {
 /// Builds the connection sub-router
 /// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decisions 3–4).
 ///
-/// Per-record CRUD over a tenant's vendor connections. Reads are behind [`ConsolePermission::Read`]
+/// Per-record CRUD over a tenant's vendor connections. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read)
 /// and answer no secret value, ever — only which secret fields are set. Writes are behind
-/// [`ConsolePermission::ManageIntegrations`], check the settings against the provider's own schema,
+/// [`ConsolePermission::ManageIntegrations`](crate::auth::console_rbac::ConsolePermission::ManageIntegrations), check the settings against the provider's own schema,
 /// and seal every secret before the store sees it.
 pub fn connection_router<S, A, C>(
     connections: S,

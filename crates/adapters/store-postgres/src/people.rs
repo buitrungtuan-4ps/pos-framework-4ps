@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Employees over PostgreSQL (Track M1, [ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+//! Employees over PostgreSQL (Track M1, [ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 //!
 //! One tenant-scoped row per person. This adapter keeps only the SQL and returns plain rows;
 //! `pos-cloud` implements its `EmployeeStore` seam over this type. Tenant scoping is the explicit
@@ -39,7 +39,7 @@ pub struct EmployeeRow {
     /// Whether a sign-in PIN is set (`pin_phc IS NOT NULL`).
     pub has_pin: bool,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -54,7 +54,7 @@ const EMPLOYEE_COLUMNS: &str =
 ///
 /// The tiebreaker is what the paged read needs and what this order was missing. PostgreSQL's `now()`
 /// is **transaction** time, so every row one transaction inserts carries the identical `created_at`
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) decision 9): a CSV import of a hundred
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md) decision 9): a CSV import of a hundred
 /// staff gives a hundred rows one instant, `created_at DESC` alone does not order them, and a
 /// `LIMIT`/`OFFSET` window over a non-total order can return a row on two pages or on neither.
 ///
@@ -194,7 +194,7 @@ impl PostgresPeople {
     /// The same columns and the same order as [`fetch`](Self::fetch), so a page is a window onto the
     /// sequence that read returns — including the same deliberate absence of `pin_phc`. Paging
     /// changes how much of a tenant's roster crosses the wire at once; it changes no field
-    /// ([ADR-0070](../../../docs/adr/0070-people-and-access.md) is what decides which fields a read
+    /// ([ADR-0070](../../../../docs/adr/0070-people-and-access.md) is what decides which fields a read
     /// exposes, and this does not touch it).
     ///
     /// `count(*) OVER()` rides on the windowed `SELECT`: one round trip, one snapshot, so the count
@@ -377,7 +377,7 @@ fn employee_row(row: &tokio_postgres::Row) -> EmployeeRow {
 
 /// A role template as listed — identity, name, its two permission-id sets (each as the JSON text
 /// stored in its `jsonb` column), and status
-/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 #[derive(Clone, Debug)]
 pub struct RoleTemplateRow {
     /// The role-template id (a ULID string).
@@ -391,7 +391,7 @@ pub struct RoleTemplateRow {
     pub permissions_json: String,
     /// The permission ids the role grants only with another person's approval, as the JSON array
     /// text stored in the `jsonb` column — never one also in [`Self::permissions_json`]
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 4, migration 0074).
     pub permissions_with_approval_json: String,
     /// `active` or `archived`.
@@ -402,7 +402,7 @@ pub struct RoleTemplateRow {
     /// policy, and a console that could not tell them apart would have to invent a number.
     pub discount_ceiling_minor: Option<i64>,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -446,7 +446,7 @@ const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.scope_kind
 ///
 /// **Both tables, as one.** A one-store grant is a row of `employee_store_assignments` (0024) and a
 /// wider one a row of `employee_scope_assignments` (0077,
-/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
+/// [ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
 /// The `UNION ALL` gives every read the same columns from either, with `scope_kind` saying which, so
 /// a filter on `a.tenant_id` or `a.employee_id` reaches both tables in one statement. An id names one
 /// row in one table: both are ULIDs minted per assignment.
@@ -454,7 +454,7 @@ const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.scope_kind
 /// Resolving the name here rather than in the caller is what lets the console show who an assignment
 /// belongs to without reading the tenant's whole roster to look the id up — the read that stops
 /// working once the roster is paged
-/// ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), B3-4). A store's assignments are tens of
+/// ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4). A store's assignments are tens of
 /// rows and the join is on the employees' primary key, so this costs an index lookup per row and no
 /// second query.
 ///
@@ -467,7 +467,7 @@ const ASSIGNMENT_COLUMNS: &str = "a.id, a.tenant_id, a.employee_id, a.scope_kind
 ///
 /// **Personal data (T1).** `name` and `code` are the employee record's, so this read now returns
 /// personal data where it used to return only ids
-/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)). That is a redistribution, not an
+/// ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)). That is a redistribution, not an
 /// expansion: the caller reaches this behind `console.people.manage`, the same gate that lets them
 /// read the roster itself, and the console screen already displayed the name — by fetching the whole
 /// roster to find it. Nothing new is exposed, to nobody new, and `pin_phc` is not selected here any
@@ -662,7 +662,7 @@ impl PostgresPeople {
 
     /// Inserts an assignment that reaches a store group (`scope_kind` `STORE_GROUP`, with
     /// `store_group_id`) or every store of the tenant (`TENANT`, with none)
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 3).
     ///
     /// # Errors
@@ -814,7 +814,7 @@ impl PostgresPeople {
 
     /// Lists the assignments that grant a role, of every scope, newest first — what reaches the
     /// stores archiving the role must tell at once
-    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 7).
     ///
     /// No index serves `role_template_id`: the read is filtered within one tenant's grants — one
@@ -950,7 +950,7 @@ mod tests {
 
     /// The read exposes `has_pin`, never the PIN hash.
     ///
-    /// [ADR-0070](../../../docs/adr/0070-people-and-access.md)'s rule, asserted here rather than
+    /// [ADR-0070](../../../../docs/adr/0070-people-and-access.md)'s rule, asserted here rather than
     /// trusted to a docstring: `pin_phc` reaches the API through no read, and the paged read added
     /// beside `fetch` shares this one column list precisely so it cannot acquire a field of its own.
     #[test]

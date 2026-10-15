@@ -113,7 +113,7 @@ fn harness(code: &str) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
 }
 
 /// The same harness with a store that has published `origins`
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 fn harness_with_origins(
     code: &str,
     published: &[&str],

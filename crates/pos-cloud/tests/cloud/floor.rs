@@ -246,7 +246,7 @@ async fn floor_routes_crud_lifecycle_audited() {
 }
 
 /// A routing rule may only match a course the tenant actually carries
-/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+/// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
 ///
 /// This was the sharpest form of the course having no entity behind it: the write checked only that
 /// `menu_item_id` and `course_id` were not both set, because there was nowhere to look. An operator
@@ -503,7 +503,7 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
 }
 
 /// Each kitchen station says when its tickets are late
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2): a threshold outside a minute to an hour is refused naming the field, a write holds to
 /// the version it read and is audited with the threshold, and the publish carries a station's
 /// threshold and leaves it off a station that sets none, so the edge reads its ten minutes there.
@@ -686,7 +686,7 @@ async fn a_stations_late_threshold_is_checked_guarded_audited_and_published() {
 }
 
 /// Each kitchen station says which language its tickets print in
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2), from the receipt language's own tokens: one this release does not know, or
 /// `RECEIPT_LANGUAGE_UNSPECIFIED`, is refused `400 INVALID_ENUM_VALUE` naming the field; a write holds
 /// to the version it read and is audited with the language; and the publish carries a station's

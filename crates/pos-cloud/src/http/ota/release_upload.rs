@@ -75,7 +75,7 @@ struct HostedArtifactResponse {
 /// Builds the `/admin` release sub-router — the half that puts an artifact *into* the cloud, and
 /// hands a Windows store its one-file installer back out of it.
 ///
-/// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`]: without an
+/// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`](crate::http::ota_artifact_router): without an
 /// object store there is nowhere for the bytes to go, and a route that always answers `503` is worse
 /// than a route that is honestly absent.
 ///

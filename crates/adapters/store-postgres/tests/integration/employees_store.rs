@@ -167,7 +167,7 @@ fn insert_scoped_pin_round_trip_and_grant() {
 
 /// A page is a window onto the sequence the unpaged roster read returns: the pages partition it,
 /// every page reports the tenant's headcount rather than its own size, a page past the end is
-/// empty and still counts, and another tenant's staff are in neither ([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md)).
+/// empty and still counts, and another tenant's staff are in neither ([ADR-0098](../../../../../docs/adr/0098-paged-admin-reads.md)).
 ///
 /// The whole roster is inserted in one transaction on purpose. `created_at` defaults to `now()`,
 /// which is *transaction* time, so those rows share one timestamp exactly — the case decision 9
@@ -268,7 +268,7 @@ fn the_roster_pages_partition_the_unpaged_read_even_when_a_batch_shares_one_time
 /// predicate that dropped either column would fail rather than pass on the other's row.
 ///
 /// This is the read an assign picker sits on, and having it is what lets the People screen's
-/// table be paged at all ([ADR-0098](../../../../docs/adr/0098-paged-admin-reads.md), B3-4).
+/// table be paged at all ([ADR-0098](../../../../../docs/adr/0098-paged-admin-reads.md), B3-4).
 #[test]
 fn the_roster_search_narrows_the_page_and_its_total_on_name_or_code() {
     block_on(async {

@@ -19,9 +19,9 @@ use crate::printing::tickets::format_quantity;
 
 /// A `label            amount` line, which is how every figure on a receipt is read.
 /// How this store writes money on paper: how many decimals its currency has
-/// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)) and what marks
+/// ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)) and what marks
 /// its country groups and points a figure with
-/// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+/// ([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
 ///
 /// One value rather than two arguments, because the exponent alone was already threaded through four
 /// functions here and a second parallel parameter beside it at every call would be the third
@@ -81,7 +81,7 @@ pub fn short_reference(id: &str) -> String {
 /// This printed minor units with no decimal at all, and said so on purpose: *"the decimal place is a
 /// locale question and a receipt that invented one would be wrong in half the countries this
 /// framework targets."* That was right while nothing in the tree held the answer. Since
-/// [ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) the store
+/// [ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) the store
 /// publishes it, so nothing is invented — and what was being printed was not a safe abstention but a
 /// wrong number on a tax document: a guest in India who paid ₹261.45 was handed a receipt reading
 /// `INR 26145`.
@@ -90,7 +90,7 @@ pub fn short_reference(id: &str) -> String {
 ///
 /// The till draws `99,000₫`, and matching it exactly would be better for a guest holding the paper
 /// beside the screen. It is not worth what it costs. A thermal printer's own character set does not
-/// reach `₫` ([ADR-0102](../../../docs/adr/0102-printing-any-script.md)), so the total line would
+/// reach `₫` ([ADR-0102](../../../../docs/adr/0102-printing-any-script.md)), so the total line would
 /// have to be rasterised — and a store with no font package installed prints what the printer's
 /// firmware covers and nothing else. That store prints its total today. It would stop.
 ///
@@ -98,7 +98,7 @@ pub fn short_reference(id: &str) -> String {
 /// keeps working on a box nobody has finished installing.
 ///
 /// The marks are the store's own, published on its `locale` node
-/// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). This used to
+/// ([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). This used to
 /// group with `,` and point with `.` for every store on earth, and said so: *"making a country's
 /// typography authoritative is a separate decision from getting its arithmetic right."* It was, it
 /// has since been made, and a Vietnamese guest's receipt now reads `VND 97.900` rather than a
@@ -198,7 +198,7 @@ pub(super) fn totals_blocks(
 }
 
 /// The fees a bill was charged, each on its own line under its own name
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4), in the order of its
+/// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4), in the order of its
 /// rules. A bill with no fee line prints its service charge on one line, as every receipt did
 /// before fees were itemised; a bill with fees prints a service charge of its own only for what no
 /// fee accounts for, which is nothing on a bill the edge assembled. On a bilingual receipt a fee
@@ -241,14 +241,14 @@ fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, words: Words<'_>) -> Vec<
 /// A bill's totals as the store's paper prints them.
 ///
 /// Each fee is named in the receipt's language
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): the store's current
+/// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): the store's current
 /// rule's translation where it has one, and the name the bill froze where it does not. Unlike an
 /// item's, a fee's frozen name is the rule's own rather than one already resolved to the display
 /// language, so it is looked up in whatever language the receipt prints in.
 ///
 /// Each tax line keeps its named components only where the store prints them, its
 /// `printing.receipt_tax_components`
-/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 4).
+/// ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 4).
 /// Off, the paper prints the line alone; a settle records the components either way.
 pub(super) fn printed_totals<'a>(
     session: &EdgeSession,
@@ -286,7 +286,7 @@ pub(super) fn printed_totals<'a>(
 /// Its own function because `receipt_document` is at the line ceiling and this is the part of it
 /// with a shape of its own: a rate, then the parts of that rate, indented under the line they
 /// explain. They are allocated out of the *rounded* tax, so they sum to it exactly
-/// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)) — which is the property
+/// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)) — which is the property
 /// that makes the block printable at all, rather than three figures that nearly add up.
 fn tax_block(
     line: &pos_core::billing::TaxLine,
@@ -321,8 +321,8 @@ fn tax_block(
 ///
 /// `digits_per_group` is a single number, so this groups uniformly. India writes `12,34,567` —
 /// three digits then pairs — which no single number can express;
-/// [ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md) records that gap and
-/// [ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md) deliberately leaves
+/// [ADR-0105](../../../../docs/adr/0105-a-country-pack-is-values.md) records that gap and
+/// [ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md) deliberately leaves
 /// it open, so an Indian receipt reads `1,234,567` after this change exactly as it did before.
 ///
 /// A group size of zero would loop forever here; it cannot arrive, because the edge refuses to apply

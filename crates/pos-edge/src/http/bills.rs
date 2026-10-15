@@ -8,7 +8,7 @@
 //! allocates the gapless per-store receipt number (ADR-0025). The response carries the receipt
 //! number and a `print_receipt` flag; the printing itself runs after the commit, over the
 //! [`Printers`](crate::printing::Printers) dispatcher the composition layers in
-//! ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)) — so a printer that is down
+//! ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)) — so a printer that is down
 //! never unwinds a bill the guest has already paid, and the response says what actually came out.
 
 use std::sync::Arc;
@@ -79,7 +79,7 @@ impl PaymentRequest {
 pub(crate) struct SettleRequest {
     payments: Vec<PaymentRequest>,
     /// The corporate customer the invoice is issued to
-    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). Absent on every ordinary
+    /// ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)). Absent on every ordinary
     /// retail sale, and `#[serde(default)]` so a till built before this field existed settles
     /// exactly as it did.
     #[serde(default)]
@@ -155,7 +155,7 @@ pub(crate) struct BillResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt_print: Option<String>,
     /// What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or
-    /// `DRAWER_UNAVAILABLE` ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing
+    /// `DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing
     /// was asked of the drawer.
     #[serde(skip_serializing_if = "Option::is_none")]
     drawer_open: Option<String>,
@@ -195,7 +195,7 @@ where
 ///
 /// The counter's route, and the one that makes takeaway revenue collectable: a relayed or QR-counter
 /// order is tableless by design (ADR-0064), so `/api/tables/{id}/bill` can never reach it
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). A floor order billed through here
+/// ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)). A floor order billed through here
 /// still makes its table's `Occupied → AwaitingPayment` move, because the domain decides that from
 /// the order, not from which route was called.
 pub(crate) async fn open_for_order<S>(
@@ -325,7 +325,7 @@ struct ReprintResponse {
 
 /// `POST /api/bills/{id}/receipt/reprint` — print a settled bill's receipt again, as a copy marked
 /// COPY under the same number, and count it
-/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+/// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 ///
 /// The copy is counted when it is asked for (`billing.receipt.reprinted`), then printed, so a
 /// printer that is down still leaves the copy on the record, and the answer says what came out.
@@ -451,7 +451,7 @@ impl VoidBillRequest {
 
 /// A fee waive as a till asks for it: the reason from the store's managed list, plus the badge
 /// and PIN of somebody who holds `billing.fee.waive` where the person acting needs one
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+/// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
 #[derive(Debug, Deserialize)]
 pub(crate) struct WaiveFeeRequest {
     reason_code_id: ReasonCodeId,
@@ -614,7 +614,7 @@ pub(crate) struct SplitResponse {
 }
 
 /// `POST /api/bills/{id}/split` — partition a bill's lines into two or more bills
-/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+/// ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
 ///
 /// No manager and no PIN, unlike the void beside it: a split partitions amounts that are already
 /// captured and creates, forgives and moves nothing (decision 6). Everything that can refuse it is
@@ -653,7 +653,7 @@ pub(crate) struct MergeResponse {
 }
 
 /// `POST /api/bills/{id}/merge` — fold other bills into this one, which survives
-/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+/// ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
 ///
 /// The path names the **target**: it is the bill the cashier is standing in front of, and it keeps
 /// its identity. Every absorbed bill must be open and on the same table, which is a floor

@@ -51,7 +51,7 @@ impl Projection {
     /// another, which leaves it owing and free to bill again.
     ///
     /// This is what keeps one order to one bill now that a bill is keyed on an order rather than a
-    /// table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
+    /// table ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
     /// accident: a table can only be `Occupied` once, so `decide_table(RequestBill)` refused the
     /// second request on its way through, and nothing had to say so. An order key has no state
     /// machine behind it, and dropping the rule silently would be expensive — two open bills on one

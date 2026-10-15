@@ -219,7 +219,7 @@ async fn a_store_asking_twice_gets_the_same_archive_key() {
 }
 
 /// What the registry holds is the wrapped key, and it is not the key
-/// ([ADR-0124](../../docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The stored column
+/// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The stored column
 /// travels off-box in a `pg_dump`; the key it wraps must not travel with it.
 #[tokio::test]
 async fn the_stored_column_is_not_the_key_the_store_receives() {

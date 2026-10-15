@@ -177,7 +177,7 @@ async fn a_handover_settles_then_retires_and_each_step_refuses_out_of_order() {
 }
 
 /// A store on its first lease has nothing to retire, and says so rather than recording a decision
-/// ([ADR-0110](../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// Generation `0` is a store's first-ever lease: it supersedes nobody, so there is no previous
 /// machine and no handover. Before the `generation > 0` precondition the other two conditions both

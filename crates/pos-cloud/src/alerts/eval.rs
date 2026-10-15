@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The pure alert evaluator ([ADR-0073](../../../docs/adr/0073-alerting.md)).
+//! The pure alert evaluator ([ADR-0073](../../../../docs/adr/0073-alerting.md)).
 //!
 //! [`evaluate`] turns a read-model snapshot — per-tenant fleet rows and disabled webhook endpoints,
 //! the background-loop health rows, and an optional JetStream capacity reading — into the set of
@@ -35,7 +35,7 @@ pub struct AlertThresholds {
     /// Extra seconds past a loop's own interval before its silence counts as "stale".
     pub projector_stale_slack_secs: u64,
     /// Seconds a print agent's oldest unacknowledged job may wait before the agent is "stalled"
-    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md) wants five minutes).
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md) wants five minutes).
     ///
     /// Half the edge's `JOB_TTL`, deliberately: past the TTL the queue deletes the ticket unprinted,
     /// so an alert at the TTL arrives to tell an operator about paper that is already gone. Half of

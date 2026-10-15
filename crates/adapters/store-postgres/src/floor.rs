@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Floor master data over PostgreSQL (Track M2, [ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+//! Floor master data over PostgreSQL (Track M2, [ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 //!
 //! A store's areas and the tables in each, one tenant-and-store-scoped row apiece. This adapter keeps
 //! only the SQL and returns plain rows; `pos-cloud` implements its `AreaStore`/`TableStore` seams over
@@ -30,7 +30,7 @@ pub struct AreaRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -60,7 +60,7 @@ pub struct TableRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -395,7 +395,7 @@ pub struct StationRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }

@@ -39,7 +39,7 @@ use crate::app::session::EdgeSession;
 
 impl EdgeSession {
     /// The well-known standard tax class the bootstrap rates the menu at, until the cloud config tree
-    /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)) supplies the real classes.
+    /// ([ADR-0004](../../../../../docs/adr/0004-cloud-owned-configuration.md)) supplies the real classes.
     /// A line drafted by the example or a test carries this class so its tax resolves.
     #[must_use]
     pub fn standard_tax_class() -> TaxClassId {
@@ -57,7 +57,7 @@ impl EdgeSession {
     ///
     /// Same 10% across the board, so a bootstrap store's arithmetic is unchanged by B1.2; the
     /// point is that each cell now *exists* and the cloud can override any one of them
-    /// independently (M4's class × channel grid, [ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    /// independently (M4's class × channel grid, [ADR-0074](../../../../../docs/adr/0074-localization-and-tax.md)).
     fn bootstrap_tax_rates() -> TaxRateTable {
         let standard = Self::standard_tax_class();
         let rate = TaxRate::from_percent(10);
@@ -70,7 +70,7 @@ impl EdgeSession {
             })
     }
 
-    /// Bootstrap defaults until the cloud config tree ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md),
+    /// Bootstrap defaults until the cloud config tree ([ADR-0004](../../../../../docs/adr/0004-cloud-owned-configuration.md),
     /// P7) supplies the real values: a full-service store, every permission granted, VND, UTC with a
     /// 04:00 cut-off, offline. Enough for the edge to sell on fakes and for the dine-in flow to run.
     #[must_use]
@@ -168,7 +168,7 @@ impl EdgeSession {
     }
 
     /// Installs a price book, and the store's own channel's catalogue from it, as applying a
-    /// published `menu` node does ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)). For a test
+    /// published `menu` node does ([ADR-0066](../../../../../docs/adr/0066-cloud-catalog.md)). For a test
     /// or the example.
     #[must_use]
     pub fn with_menu_book(mut self, book: MenuBook) -> Self {
@@ -178,7 +178,7 @@ impl EdgeSession {
     }
 
     /// The catalogue an order on `channel` is priced from
-    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+    /// ([ADR-0066](../../../../../docs/adr/0066-cloud-catalog.md)).
     ///
     /// The channel's own price book when the published book prices that channel, by a row of its
     /// own or a fallback. Otherwise the store's own channel's catalogue, [`menu`](Self::menu): a
@@ -216,7 +216,7 @@ impl EdgeSession {
     }
 
     /// The name the store's current rule for `fee_id` gives the fee in `language`, if it translates
-    /// it ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+    /// it ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
     ///
     /// A bill freezes only the rule's own name, so paper or a screen in another language looks the
     /// translation up here, as a receipt does an item's in the menu, and keeps the frozen name where
@@ -238,7 +238,7 @@ impl EdgeSession {
     }
 
     /// Installs the store's campaigns, for a test or the example. The real store's promotions arrive
-    /// from the cloud config tree's `campaigns` node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md));
+    /// from the cloud config tree's `campaigns` node ([ADR-0077](../../../../../docs/adr/0077-campaigns-and-scheduling.md));
     /// this builder seeds them without a cloud.
     #[must_use]
     pub fn with_campaigns(mut self, campaigns: Vec<Campaign>) -> Self {
@@ -251,7 +251,7 @@ impl EdgeSession {
     /// a tracked one uses its `recipe_thresholds` entry (defaulting to `0`).
     ///
     /// This is the pure decision the flagged goods-in/stocktake follow-up will drive with a live
-    /// projection ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)); the edge holds no
+    /// projection ([ADR-0079](../../../../../docs/adr/0079-inventory-and-suppliers.md)); the edge holds no
     /// on-hand stock yet, so the live menu is not 86'd from it on this slice — applying the recipes so a
     /// fired line consumes its bill of materials is the change M6 lands here.
     #[must_use]
@@ -260,7 +260,7 @@ impl EdgeSession {
         stock.available(item, &self.recipes).is_sellable(threshold)
     }
 
-    /// Whether this store accepts orders on `channel` ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md),
+    /// Whether this store accepts orders on `channel` ([ADR-0080](../../../../../docs/adr/0080-channels-and-payments.md),
     /// M7). A store with no `channels` node published has no restriction (every channel enabled), so
     /// this is `true`; once a node is published only the channels it lists are accepted.
     #[must_use]
@@ -303,13 +303,13 @@ impl EdgeSession {
     }
 
     /// Whether a guest's order on `channel` naming `table_id` waits for a member of staff before
-    /// the kitchen sees it ([ADR-0057](../../../docs/adr/0057-qr-ordering.md); the store can turn
+    /// the kitchen sees it ([ADR-0057](../../../../../docs/adr/0057-qr-ordering.md); the store can turn
     /// the hold off in its `qr` guardrail node,
-    /// [ADR-0080](../../../docs/adr/0080-channels-and-payments.md) M7).
+    /// [ADR-0080](../../../../../docs/adr/0080-channels-and-payments.md) M7).
     ///
     /// **The single place this question is answered**, for the answer reported to the caller and
     /// for the answer that gates firing
-    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)). It used
+    /// ([ADR-0116](../../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)). It used
     /// to be asked twice — once to write the durable ledger row (as `table_id.is_some()` alone)
     /// and once to build the acceptance returned to the cloud (as
     /// `table_id.is_some() && qr_staff_confirmation_required`) — so on a store that had turned the
@@ -338,7 +338,7 @@ impl EdgeSession {
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
-    /// arrives from the cloud config tree's flag keys ([ADR-0071](../../../docs/adr/0071-config-without-json.md));
+    /// arrives from the cloud config tree's flag keys ([ADR-0071](../../../../../docs/adr/0071-config-without-json.md));
     /// this builder seeds one without a cloud.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: CapabilityContext) -> Self {
@@ -355,7 +355,7 @@ impl EdgeSession {
     }
 
     /// Installs a floor plan, for a test or the on-fakes example. The real store's floor arrives from
-    /// the cloud's `floor` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    /// the cloud's `floor` config node ([ADR-0072](../../../../../docs/adr/0072-floor-and-kitchen.md)).
     #[must_use]
     pub fn with_floor(mut self, floor: FloorPlan) -> Self {
         self.floor = floor;
@@ -363,7 +363,7 @@ impl EdgeSession {
     }
 
     /// Installs a station plan, for a test or the on-fakes example. The real store's kitchen arrives
-    /// from the cloud's `stations` config node ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+    /// from the cloud's `stations` config node ([ADR-0072](../../../../../docs/adr/0072-floor-and-kitchen.md)).
     #[must_use]
     pub fn with_stations(mut self, stations: StationPlan) -> Self {
         self.stations = stations;

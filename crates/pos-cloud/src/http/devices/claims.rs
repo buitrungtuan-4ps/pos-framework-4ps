@@ -49,7 +49,7 @@ struct ClaimState<Cl, A, C> {
 ///
 /// A box installed with no store opens a claim on `/claim` and polls `/claim/{claim_id}/collect`.
 /// Neither is authenticated, as `/activate` is not: the box has no credential yet. `/claim` shares
-/// `/activate`'s small budget and collection has one sized for polling ([`throttle_sync`]). A console
+/// `/activate`'s small budget and collection has one sized for polling ([`throttle_sync`](crate::http::throttle_sync)). A console
 /// user with `console.devices.manage` binds a code to a device slot on `/admin/claims/bind`, which is
 /// audited.
 pub fn claim_router<Cl, A, C>(

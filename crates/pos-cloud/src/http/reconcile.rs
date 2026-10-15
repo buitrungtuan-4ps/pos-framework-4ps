@@ -44,7 +44,7 @@ struct ReconcileState<Rec, A, C, K> {
     keys: K,
 }
 
-/// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
+/// Builds the reconciliation sub-router, stated independently of [`CloudApp`](crate::http::CloudApp).
 ///
 /// Reconciliation is the cloud's half of ADR-0040's missing-id diff: a store sends the ids it holds
 /// over some window, and the cloud answers with the subset it lacks — the ids to re-push. Every diff

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Secrets sealed on the machine's own disk under a key systemd unseals at every start
-//! ([ADR-0151](../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)).
+//! ([ADR-0151](../../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)).
 //!
 //! # Why
 //!

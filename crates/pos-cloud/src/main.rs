@@ -99,19 +99,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // and the anchor ledger ingest files each store's published chain head in.
     // Stamped, not trusted: every ingested event's tenant and brand come from this registry lookup,
     // overwriting what the publishing box claimed
-    // ([ADR-0101](../../docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**).
+    // ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**).
     // The tenant is the column row-level isolation is defined on, and until this line every store in
     // the fleet stamped the same constant.
     let cloud = Cloud::with_store_owners(store.clone(), Arc::new(store.store_directory()));
     // Every ingested `store.chain.anchored` event is offered to the anchor ledger
-    // ([ADR-0131](../../docs/adr/0131-a-chained-event-log.md) decision 4). A store's hash chain
+    // ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4). A store's hash chain
     // catches careless editing and not fraud — the algorithm is in the source, so anyone holding the
     // shop's database file can rewrite a record and re-derive every later link. What makes the chain
     // mean something is this: a head recorded where the store cannot reach it.
     let cloud = cloud
         .with_anchor_ledger(Arc::new(store.chain_anchors()))
         // And the log reader that recomputes the chain behind each accepted head
-        // ([ADR-0132](../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor
+        // ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor
         // closes recomputation; this is what closes truncation, because a store cut back and traded
         // on leaves two different events claiming one position and only the events show it.
         .with_chain_window(Arc::new(store.chain_anchors()));

@@ -18,7 +18,7 @@ use pos_proto::time::Timestamp;
 /// Every figure is one the close already computed and recorded in `cash.shift.closed`, plus the ones
 /// it was computed from, so the paper adds up: the float, plus the cash taken, plus what was paid in,
 /// minus what was paid out, is what was expected, and the count minus the expectation is the
-/// variance ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+/// variance ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
 /// decision 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShiftReport {
@@ -113,7 +113,7 @@ impl DrawerFigures {
 }
 
 /// One slip for several drawers closed at once, where the store's `shift.close_report` is
-/// `CLOSE_REPORT_COMBINED` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+/// `CLOSE_REPORT_COMBINED` ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
 /// decision 10): the store's totals, then each drawer's own report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CombinedReport {
@@ -139,7 +139,7 @@ pub struct ClosedDrawers {
 /// The close is **blind** (§11.1): counting reveals nothing, so `expected_amount` and `variance` are
 /// `None` on an open or counted shift and are populated only once the shift closes — the cashier
 /// counts before the system says what it expected. A store that turns `shift.blind_close` off
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2) is shown `expected_amount` before the close too, so the count can be made against
 /// it; `variance` stays the close's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +147,7 @@ pub struct ShiftView {
     /// The shift.
     pub shift_id: ShiftId,
     /// The till whose drawer it counts, or `None` for the store's one drawer
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 2).
     pub till: Option<DeviceId>,
     /// The person the drawer is assigned to for this session, where the store assigns drawers
     /// (decision 9): an id, never a name. `None` where drawers are shared.
@@ -162,7 +162,7 @@ pub struct ShiftView {
     /// Counted minus expected, revealed only at close. Negative means short.
     pub variance: Option<Money>,
     /// Cash paid into the drawer outside a sale so far
-    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+    /// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
     ///
     /// Not the expectation, and nothing the close keeps blind: the cashier entered every one of
     /// these, and the cash taken on bills, which is the part they do not know, is not here.
@@ -175,13 +175,13 @@ pub struct ShiftView {
     /// has them all and the last moment the shift's record exists.
     pub report: Option<ShiftReport>,
     /// Whether the shift opened on an earlier business day than today's and is still open: its
-    /// day has ended ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+    /// day has ended ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
     /// decision 11).
     pub day_ended: bool,
 }
 
 /// Which till a request comes from, and which till's drawer it names
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2 and 3).
+/// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 2 and 3).
 ///
 /// Read only where the edge keeps a drawer per till: where it keeps one, every device's drawer is
 /// the store's, and both are ignored.
@@ -229,7 +229,7 @@ pub struct DrawersView {
 }
 
 /// Which way cash moved through the drawer outside a sale
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+/// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CashMovement {
     /// Cash put in: change brought from the bank, a float topped up.

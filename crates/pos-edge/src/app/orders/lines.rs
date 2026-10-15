@@ -68,7 +68,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The names `menu` gives a line's modifiers, index-aligned with `ids`
-    /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)) — or none
+    /// ([ADR-0144](../../../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)) — or none
     /// at all if the book cannot name every one.
     ///
     /// All or nothing, because the event promises the two lists line up by position, and one gap
@@ -121,7 +121,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// [`Self::add_line`], with the guest's note for the kitchen
-    /// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+    /// ([ADR-0157](../../../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
     ///
     /// The event records only that a note exists. The text is held in memory for as long as the
     /// line is on a screen, printed on its ticket, and written nowhere.
@@ -174,7 +174,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Adds a line to an order by its id, **priced by the edge** at the order's own channel
-    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    /// ([ADR-0146](../../../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
     ///
     /// The table path records the prices the device copied from the menu, which is priced for the
     /// session's channel. A takeaway order carrying dine-in prices but taxed at the takeaway rate

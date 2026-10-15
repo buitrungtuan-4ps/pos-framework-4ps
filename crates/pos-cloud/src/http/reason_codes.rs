@@ -118,10 +118,10 @@ impl ReasonCodeAuditSummary {
 ///
 /// Per-record CRUD over a tenant's managed reason codes — the list a void, a discount, a comp, a
 /// refund, a drawer opening, a staff rejection, either cash movement and either stock correction
-/// must cite. `GET` (list and by-id) is behind [`ConsolePermission::Read`]; the writes are behind
-/// [`ConsolePermission::ManageReasonCodes`], because authoring the list is what defeats or upholds
+/// must cite. `GET` (list and by-id) is behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); the writes are behind
+/// [`ConsolePermission::ManageReasonCodes`](crate::auth::console_rbac::ConsolePermission::ManageReasonCodes), because authoring the list is what defeats or upholds
 /// the control and is not the same act as publishing it. Ids are server-minted: an event names a
-/// [`ReasonCodeId`] forever, so a client that could choose one could collide with an id already in
+/// [`ReasonCodeId`](pos_proto::ids::ReasonCodeId) forever, so a client that could choose one could collide with an id already in
 /// the log.
 ///
 /// `DELETE` is here for the entry created by mistake and never cited. The way an entry leaves

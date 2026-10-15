@@ -17,7 +17,7 @@ use crate::app::{AppError, Approval, CashMovement, Edge, ShiftView, TillScope};
 impl<S: EventStore> Edge<S> {
     /// Records cash paid into or out of the drawer outside a sale, against the shift trading now
     /// (`cash.drawer.paid_in` or `cash.drawer.paid_out`,
-    /// [ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+    /// [ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
     ///
     /// The amount moves what the close expects, which is why a counted shift refuses it: the blind
     /// count was made against the drawer as it stood. A paid out larger than the drawer should hold
@@ -50,7 +50,7 @@ impl<S: EventStore> Edge<S> {
 
     /// [`Self::record_cash_movement`] at the till `scope` says the device is. Where the store keeps
     /// a drawer per till, a paid in or out is made at the till whose drawer it springs, on that
-    /// drawer's shift ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+    /// drawer's shift ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
     /// decision 3). A drawer assigned to somebody else also takes the override, held directly or
     /// approved for this act (decision 9).
     ///
@@ -130,7 +130,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Opens the cash drawer outside a sale (`cash.drawer.opened` with `standalone: true`,
-    /// [ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 3).
+    /// [ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 3).
     ///
     /// `cash.drawer.open_no_sale` asks for a PIN, so a manager types their badge code and PIN in
     /// place, and the opening carries a reason from the store's list for it. Allowed with or without
@@ -154,7 +154,7 @@ impl<S: EventStore> Edge<S> {
     /// [`Self::open_drawer_no_sale`] at the till `scope` says the device is, answering with the till
     /// whose drawer to open: `None` for the store's one drawer, and where the store keeps one per
     /// till the device's own, which the opening names and whose shift it is stamped with
-    /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 5).
+    /// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 3 and 5).
     ///
     /// # Errors
     ///

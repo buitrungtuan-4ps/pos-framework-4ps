@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The device-proposal table over PostgreSQL (P7, [ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+//! The device-proposal table over PostgreSQL (P7, [ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
 //!
 //! The discover→propose→admin-approves onboarding queue: a store proposes a discovered printer or KDS
 //! and a super-admin resolves it. This adapter keeps only the SQL and returns plain rows; `pos-cloud`

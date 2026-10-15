@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The background projector: keeps every store's materialised rollup current
-//! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+//! ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 //!
 //! [`project`] brings one store's rollup up to date; this is the loop
 //! around it. On each tick it asks a [`StoreCatalog`] for the whole fleet's `(tenant, store)` pairs

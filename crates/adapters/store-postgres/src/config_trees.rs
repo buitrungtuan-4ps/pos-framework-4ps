@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The configuration-tree table over PostgreSQL (P7, [ADR-0033](../../../docs/adr/0033-config-tree.md)).
+//! The configuration-tree table over PostgreSQL (P7, [ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 //!
 //! One row per `(tenant, store)`; the row's `state` column is the whole `ConfigTreeState` — the four
 //! authored layers and the published version history — held as `jsonb`. This adapter keeps only the
@@ -117,7 +117,7 @@ pub enum StoredRetire {
 /// The two travel together because one statement wrote them, and a caller that took only the
 /// generation would have to read the placement back in a second query — reopening exactly the
 /// A store's recorded answer to its region difference, exactly as the row holds it
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Every field is the column's own type, un-validated: reconstructing a `CountryCode` from two
 /// letters is the caller's job, and a row this build cannot read must not stop it being returned
@@ -650,7 +650,7 @@ impl PostgresConfigTrees {
     }
 
     /// Records a person's answer to a store's region difference, replacing any answer it had
-    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// An upsert rather than an insert, because this row holds *what is currently answered* and not
     /// the history of answers — the audit trail holds that, and nothing overwrites it. The two

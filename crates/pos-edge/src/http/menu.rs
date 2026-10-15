@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The menu read route (roadmap-v3 slice E5,
-//! [ADR-0063](../../../docs/adr/0063-store-menu-catalog.md)).
+//! [ADR-0063](../../../../docs/adr/0063-store-menu-catalog.md)).
 //!
 //! `GET /api/menu` serves the store's **own** price book from the live
 //! [`EdgeSession`](crate::app::EdgeSession) the config-pull rebuilds — the same catalogue an inbound
-//! order is repriced against ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Until this route
+//! order is repriced against ([ADR-0064](../../../../docs/adr/0064-edge-order-in.md)). Until this route
 //! the in-store UI carried a hardcoded list of six pizzas, so publishing a menu from the console
 //! changed every channel *except* the till in front of the guest.
 //!
@@ -53,7 +53,7 @@
 //!
 //! `tip_percents` and `split_ways_max` are published settings rather than flags, and arrived under
 //! the same rule: the pay screen's tip row and its even split read them in the changes that added them
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 //! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
@@ -146,7 +146,7 @@ pub(crate) struct MenuResponse {
     /// The tip keys the pay screen offers, each a whole percentage of the bill, in the order the
     /// store's `tender_keys` node names them: a key set to `0`, or to a percentage an earlier key
     /// offers, is left out
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2). `[5, 10, 15]` until a store sets its own, and empty when no key is left, which
     /// the till takes as no tip row at all.
     ///
@@ -168,7 +168,7 @@ pub(crate) struct MenuResponse {
     /// channel that edge opens every walk-in on.
     walk_in_channel: &'static str,
     /// Every modifier group any item above attaches, listed once
-    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
     /// Empty on a store that has published none, which is every store until the console attaches
     /// one — and the till then asks nothing, exactly as it did before this field existed.
@@ -181,7 +181,7 @@ pub(crate) struct MenuResponse {
     /// will not honour, the same failure `tips_enabled` was added to stop.
     courses_enabled: bool,
     /// The courses any item above goes out on, **in service order**
-    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    /// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
     ///
     /// Joins this response in the change that consumes it, which is the rule this module's header
     /// sets: the course picker that fires "starters away" is in this change, and the compiled book
@@ -211,7 +211,7 @@ pub(crate) struct MenuItemResponse {
     /// a configuration error the till surfaces rather than papers over with zero.
     tax_rate: Option<Ratio>,
     /// The modifier groups the till must ask about before this item is sold
-    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
     /// Ids, not copies: the groups themselves are listed once on the response below, because one
     /// "Size" group attached to forty pizzas would otherwise be forty copies of the same rule on
@@ -239,7 +239,7 @@ pub(crate) struct CourseResponse {
     /// The course's identifier, which an item above names and a fire-by-course sends.
     course_id: CourseId,
     /// The name to show, already in the store's display language — the same resolution the item's
-    /// and the group's names get ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    /// and the group's names get ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
     display_name: DisplayName,
     /// Where it falls in the service sequence, ascending.
     ///
@@ -255,7 +255,7 @@ pub(crate) struct ModifierGroupResponse {
     /// The group's identifier, which an item above names.
     modifier_group_id: ModifierGroupId,
     /// The name to show, already in the store's display language — the same resolution the item's
-    /// own name gets ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    /// own name gets ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
     display_name: DisplayName,
     /// How many choices a guest must make. **Zero means optional**; the till has no separate
     /// `required` flag to disagree with this number, and neither does the book.

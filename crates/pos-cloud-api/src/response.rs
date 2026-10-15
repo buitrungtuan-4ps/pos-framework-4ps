@@ -31,7 +31,7 @@ pub fn csv_download_response(filename: &str, body: Vec<u8>) -> Response {
 }
 
 /// Every error this surface sends, in the one AIP-193 shape
-/// [`pos_proto::error`](../../../pos-proto/src/error.rs) defines
+/// [`pos_proto::error`](../../pos-proto/src/error.rs) defines
 /// ([ADR-0026](../../../docs/adr/0026-cloud-http-surface.md) §27, `docs/naming-and-api.md` §4).
 ///
 /// The HTTP status is **not** a parameter: it is derived from `status` through

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The lease bump against the real column, real default and real `CHECK`
-//! ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md), migration 0052).
+//! ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md), migration 0052).
 
 use pos_proto::{StoreId, TenantId, Ulid};
 
@@ -78,7 +78,7 @@ fn a_bump_sets_the_placement_and_a_later_one_without_it_keeps_it() {
 }
 
 /// The region rides the same statement as the placement it qualifies
-/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Three behaviours, and none of them is provable by the unit tests or the in-process suite:
 /// the `CASE WHEN` that lets a swap keep a region, the insert branch that writes one on a

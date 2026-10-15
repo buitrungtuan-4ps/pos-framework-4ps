@@ -46,8 +46,11 @@ use crate::store_groups::StoreGroupStore;
 // They write **no config versions of their own**. Scheduling a release expands to one
 // `scheduled_publishes` row per `(node, store)` pair carrying the release's id, and ADR-0077's
 // existing activator applies them (ADR-0125 §1). Everything here is bookkeeping over writes that
-// already had a home — which is why the handlers live in this file beside the batch publish they
-// borrow their node table and cohort rules from, rather than in a module of their own.
+// already had a home — which is why the release routes sit in `config_publish` rather than in an
+// area of their own, borrowing the store-group batch publish's node table and cohort rules
+// (`crate::http::store_groups`). This file holds their state, wire types and router; the create
+// handler is in `release_create.rs`, and schedule, cancel, list and read are in
+// `release_actions.rs`.
 
 /// The collaborators the release routes need.
 ///
@@ -203,8 +206,8 @@ pub(super) struct ReleaseTenantQuery {
 
 /// Builds the releases sub-router ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
 ///
-/// Reads sit behind [`ConsolePermission::Read`]; every write sits behind
-/// [`ConsolePermission::PublishConfig`], because scheduling a release *is* scheduling publishes and
+/// Reads sit behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); every write sits behind
+/// [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), because scheduling a release *is* scheduling publishes and
 /// there is no weaker thing it could be.
 #[expect(
     clippy::too_many_arguments,

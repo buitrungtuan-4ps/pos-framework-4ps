@@ -112,7 +112,7 @@ async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
 }
 
 /// A replacement box numbers above what the cloud has seen
-/// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)):
+/// ([ADR-0149](../../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)):
 /// the bump publishes the highest receipt number the log holds as `receipt_floor`, in the **same**
 /// version as the `lease` node, and a log with no settled bill publishes no floor at all.
 #[tokio::test]
@@ -392,7 +392,7 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
 }
 
 /// Five refusals, each naming the one field an admin can fix, and none of them issuing a
-/// generation on the way to refusing ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// generation on the way to refusing ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 #[tokio::test]
 async fn a_region_that_does_not_belong_or_does_not_parse_is_refused_by_field() {
     let config_trees = FakeConfigTrees::default();
@@ -485,7 +485,7 @@ async fn a_region_that_does_not_belong_or_does_not_parse_is_refused_by_field() {
 }
 
 /// The label's ceiling is 64 *characters*, not bytes
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// A byte limit would give a fork writing Japanese a third of the field a fork writing English
 /// gets, for a value neither of them parses. 64 Japanese characters is 192 bytes, so a byte limit

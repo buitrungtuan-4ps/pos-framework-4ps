@@ -51,7 +51,7 @@ struct RegistryState<Rg, A, C> {
 /// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
-/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]). A tenant created
+/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`](crate::http::device_router)). A tenant created
 /// here is given its six starting roles through `starting_roles`
 /// ([`crate::starting_roles`]).
 pub fn registry_router<Rg, A, C>(

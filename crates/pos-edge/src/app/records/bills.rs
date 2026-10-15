@@ -15,10 +15,10 @@ use pos_proto::time::{BusinessDate, Timestamp};
 use crate::app::session::EdgeSession;
 
 /// A bill's fees as the settle records them and the check reads show them
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
+/// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
 /// in rule order, with the rule, its code and the name the bill froze, what it charged and the tax
 /// on it, and that tax by component where the store's `tax` node names components
-/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3).
+/// ([ADR-0168](../../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3).
 /// One mapping for both, so the till and the log cannot describe a fee differently; the till's
 /// reads name each fee in the store's display language ([`fee_records_in`]).
 pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
@@ -89,8 +89,8 @@ pub(in crate::app) fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
 /// refused).
 ///
 /// `table_id` is an `Option` because a bill belongs to an order, not to a table
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). A takeaway or delivery order is
-/// tableless by design ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)); while this was a bare
+/// ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)). A takeaway or delivery order is
+/// tableless by design ([ADR-0064](../../../../../docs/adr/0064-edge-order-in.md)); while this was a bare
 /// `TableId` such an order could be accepted, priced, queued and fired — and never charged for,
 /// because there was no table to open its bill against.
 /// `Clone`, not `Copy`: the line set is a `Vec`. Cloning a record is a handful of words plus a list
@@ -102,7 +102,7 @@ pub(in crate::app) struct BillRecord {
     pub(in crate::app) table_id: Option<TableId>,
     pub(in crate::app) state: BillState,
     /// The order lines this bill covers
-    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
+    /// ([ADR-0128](../../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
     ///
     /// A bill covers *lines*, not an order, which is what makes a split a partition of something.
     /// Until this field existed the amount owed was assembled by reading **every** line of the
@@ -128,7 +128,7 @@ pub(in crate::app) struct BillRecord {
     pub(in crate::app) discount: Option<Money>,
     pub(in crate::app) comp: Option<Money>,
     /// The fee rules in force for this bill when it opened, frozen
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3): what its
+    /// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md) decision 3): what its
     /// `billing.bill.opened` recorded, and what it is computed from until it settles. A part of a
     /// split holds the source's, with a fee per bill cut to its share (decision 6). Empty for a
     /// bill opened before the field existed, or with no rule in force, which charges no fee.
@@ -173,7 +173,7 @@ pub(in crate::app) fn by_name_and_rate(components: &mut [TaxComponentLine]) {
 }
 
 /// What a settle recorded of a bill, kept so its receipt can be printed again as a copy
-/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+/// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 ///
 /// The figures are the ones `billing.bill.settled` carried, because a copy never prints a figure
 /// the settle did not record: the rate table can change after a bill is paid, and a copy computed
@@ -194,7 +194,7 @@ pub(in crate::app) struct SettledReceipt {
     pub(in crate::app) rounding_adjustment: Money,
     /// What the guest paid.
     pub(in crate::app) total_due: Money,
-    /// Each fee the bill was charged, as settled ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+    /// Each fee the bill was charged, as settled ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md)
     /// decision 4). Empty for a bill settled with no fee, or before the settle recorded them.
     pub(in crate::app) fee_lines: Vec<BillFeeLine>,
     /// The tax per class, as settled, each line with the named parts it recorded (ADR-0168). Empty
@@ -235,7 +235,7 @@ impl SettledReceipt {
     }
 
     /// The totals a copy prints
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)
+    /// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)
     /// decision 5). Either way the paper adds up to what the guest paid.
     ///
     /// A settle that recorded its fees and its tax per class (ADR-0159 decision 4) is printed from
