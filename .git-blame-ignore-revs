@@ -88,3 +88,6 @@ a697534c895232aa683aa9cacdcb424a3fc80647
 
 # #806 — the edge's kitchen commands and their tests move into their own modules
 53d159f4f5a88042fef8f3d9c8856175c623aca1
+
+# #807 — the edge's floor commands and their tests move into their own module
+34a75ee5eaf3352bd96d2ea382c3e92f63ade70e
