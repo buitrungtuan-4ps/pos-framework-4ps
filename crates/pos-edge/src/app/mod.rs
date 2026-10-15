@@ -38,7 +38,6 @@ use crate::sync_status::SyncStatus;
 mod authority;
 mod bills;
 mod composition;
-mod drawer_access;
 mod error;
 mod floor;
 mod kitchen;

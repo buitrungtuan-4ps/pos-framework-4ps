@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Which cash drawer an act is on, and what acting on it takes
-//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1, 3, 8 and
+//! ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1, 3, 8 and
 //! 9): the drawer model the edge runs, the drawers it keeps, the drawer a request names, and the
 //! step-ups another till's drawer and somebody else's drawer take, committed beside the act.
 
@@ -15,13 +15,13 @@ use pos_proto::money::Money;
 use pos_proto::shift::{DrawerAccess, DrawerModel};
 use pos_proto::text::DisplayName;
 
-use super::{
+use crate::app::{
     AppError, Approval, DrawerView, DrawersView, Edge, ShiftRecord, TillScope, another_till,
     is_till,
 };
 
 impl<S: EventStore> Edge<S> {
-    /// The drawer model this edge runs ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1 and
+    /// The drawer model this edge runs ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 1 and
     /// 8): the model its open shifts were opened under while any is open, and the store's published
     /// `shift.drawer_model` once none is, so a change of model waits for every drawer to close.
     #[must_use]
@@ -165,7 +165,7 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// What acting on `record`'s drawer takes where it is assigned to somebody other than the person
-    /// acting ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9):
+    /// acting ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9):
     /// `cash.drawer.override_assignment`, PIN-flagged, so held directly or approved for this one act
     /// (ADR-0158 decisions 4 and 5). The approver, where one approved. Nothing for a drawer with no
     /// owner, which is every drawer where drawers are shared, nor for the owner's own act.
