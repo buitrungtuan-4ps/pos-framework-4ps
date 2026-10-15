@@ -24,7 +24,7 @@ transaction, and the composition of `pos-core` with the store's adapters. See
 
 ## Most often touched
 
-`src/app/<area>/` · `src/printing.rs` · `src/http/mod.rs` and `src/http/<area>.rs` ·
+`src/app/<area>/` · `src/printing/` · `src/http/mod.rs` and `src/http/<area>.rs` ·
 `src/config_client.rs` · `tests/domain_flow.rs` · `tests/acceptance.rs`
 
 ## Gates
