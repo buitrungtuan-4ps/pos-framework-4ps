@@ -102,8 +102,9 @@ pub fn no_published_configuration() -> Response {
 /// out. They are written on the Tenant layer by the settings compile, and they are the settings
 /// store's to decide (ADR-0160 decision 3): a form that read one and saved the node back would pin
 /// it on the Store layer, where it would shadow every later settings change for the store. A node
-/// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
-/// holding only `tax_rounding` is not the locale a menu waits for.
+/// that holds nothing but settings answers `null`, as
+/// [`check_prerequisites`](crate::publish::check_prerequisites) counts it: a `locale` holding only
+/// `tax_rounding` is not the locale a menu waits for.
 ///
 /// # Errors
 ///

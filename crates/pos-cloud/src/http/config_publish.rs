@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Publishing configuration: the machinery every config publish shares, the generic preview,
-//! version history and rollback, and config releases (ADR-0069, ADR-0125).
+//! Publishing configuration: the generic preview, version history and rollback, and config
+//! releases (ADR-0069, ADR-0125).
 //!
-//! The shared machinery is here: a tree loaded for a conditional write, the nodes written onto a
-//! layer, and the prerequisite and settings checks a write runs.
+//! The shared machinery — a tree loaded for a conditional write, the nodes written onto a layer, and
+//! the prerequisite and settings checks a write runs — is `pos_cloud_config::publish`, imported here.
 
 // The machinery every config publish shares lives in pos-cloud-config; imported here, so the
 // other areas' routes and this module's own keep reaching it through `super`.

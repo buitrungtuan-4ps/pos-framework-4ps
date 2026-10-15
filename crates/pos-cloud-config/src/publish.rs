@@ -108,7 +108,7 @@ pub const CONDITIONAL_WRITE_ATTEMPTS: u8 = 3;
 /// publish runs, it is compiling committed data.
 ///
 /// The two routes where a human edits the document itself — `PUT /admin/config` and the rollback —
-/// are the exception and go through [`publish_authored_layer`] instead.
+/// are the exception and go through `pos-cloud`'s `publish_authored_layer` instead.
 ///
 /// # Errors
 ///
@@ -254,9 +254,9 @@ where
 /// question is what the store *holds*: a tree whose layers were set by a restore or a fixture has
 /// the nodes even where no history entry names them, and the sync path composes those same layers.
 ///
-/// The batch path asks the same question one notch narrower — [`publish_batch_member`] reads the
-/// store's own layer, so a cohort member inheriting `tax` from its tenant is skipped with a reason
-/// rather than published to. That is the stricter of the two and it runs first, so a batch never
+/// The batch path asks the same question one notch narrower — `pos-cloud`'s
+/// `publish_batch_member` reads the store's own layer, so a cohort member inheriting `tax` from its
+/// tenant is skipped with a reason rather than published to. That is the stricter of the two and it runs first, so a batch never
 /// reaches a refusal here; the one table both read is what finding **F7** was about.
 ///
 /// A publish that writes its own prerequisite in the same call satisfies it: the four nodes a wizard

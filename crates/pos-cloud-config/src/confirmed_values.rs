@@ -70,7 +70,8 @@ pub(crate) mod tests {
     use super::{Unconfirmed, check};
 
     /// A register with one setting whose `OWNER_ONE_PERSON` needs confirming, built here so the
-    /// tests do not wait for the register's first such entry. The activator's tests use it too.
+    /// tests do not wait for the register's first such entry. `pos-cloud`'s activator tests
+    /// repeat it.
     pub(crate) fn confirming_register() -> Vec<Setting> {
         vec![Setting {
             node: "example",
