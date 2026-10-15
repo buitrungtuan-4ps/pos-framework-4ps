@@ -55,11 +55,11 @@
 #![forbid(unsafe_code)]
 
 // Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
-pub use pos_cloud_api::{audit, auth, paging, version};
+pub use pos_cloud_api::{audit, auth, health, paging, version};
 // Moved to pos-cloud-config (ADR-0170 decision 4); re-exported so their paths still work.
 // Moved to pos-cloud-inventory (ADR-0170 decision 4); re-exported so its path still works.
 pub use pos_cloud_config::{
-    config_tree, confirmed_values, data_migrations, qr_ordering, registry, settings,
+    config_tree, confirmed_values, data_migrations, qr_ordering, registry, settings, store_groups,
 };
 pub use pos_cloud_inventory::inventory;
 // Moved to pos-cloud-devices (ADR-0170 decision 4); re-exported so their paths still work.
@@ -85,7 +85,6 @@ pub mod countries;
 pub mod cursor;
 pub mod dashboard;
 pub mod fleet;
-pub mod health;
 pub mod http;
 pub mod lease;
 pub mod metrics;
@@ -108,7 +107,6 @@ pub mod releases;
 pub mod retention;
 pub mod scheduling;
 pub mod starting_roles;
-pub mod store_groups;
 mod till_names;
 pub mod vouchers;
 pub mod wake;

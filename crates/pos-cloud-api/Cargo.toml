@@ -64,5 +64,5 @@ allow_attributes_without_reason = "deny"
 [package.metadata.pos]
 layer = "app"
 purpose = "The base every cloud route module stands on: console sessions and permissions, API keys, the audit trail, paging and the error envelope."
-adrs = [26, 34, 67, 94, 95, 98, 170]
+adrs = [26, 34, 67, 68, 94, 95, 98, 170]
 owners = ["@maintainers-cloud"]

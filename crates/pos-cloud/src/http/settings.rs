@@ -14,7 +14,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use catalogue::{admin_list_settings, admin_settings_catalogue};
 use effective::admin_effective_settings;
-use pos_cloud_api::response::service_unavailable;
 use pos_proto::WireEnum;
 use pos_proto::determinism::ClockSource;
 use pos_proto::settings::SettingScope;
@@ -25,9 +24,9 @@ use values::{admin_clear_setting, admin_put_setting};
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::config_tree::ConfigTreeStore;
-use crate::http::{Json, enum_refusal};
+use crate::http::Json;
 use crate::registry::RegistryStore;
-use crate::settings::{SettingsStore, SettingsStoreError};
+use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
@@ -44,6 +43,10 @@ pub(crate) use presets::__path_admin_apply_setting_presets;
 // What the permissions readiness read uses.
 pub(crate) use publish::__path_admin_publish_settings;
 pub(super) use publish::TenantLayout;
+// Moved to pos-cloud-config with the tenant layout; imported here, so the settings routes and
+// their callers keep reaching them through `super` and `crate::http`.
+use pos_cloud_config::route::setting_scope_refusal;
+pub(in crate::http) use pos_cloud_config::route::settings_store_error_response;
 pub(crate) use values::{__path_admin_clear_setting, __path_admin_put_setting};
 
 // --- Settings (`/admin/settings`, ADR-0160 decision 3) -----------------------------------------
@@ -146,21 +149,4 @@ fn parse_setting_scope(token: &str) -> Result<SettingScope, Response> {
         Some(SettingScope::Unspecified) | None => Err(setting_scope_refusal()),
         Some(scope) => Ok(scope),
     }
-}
-
-/// The refusal for a `scope` that is not one of the four.
-fn setting_scope_refusal() -> Response {
-    enum_refusal(
-        "scope",
-        SettingScope::ALL
-            .iter()
-            .filter(|scope| **scope != SettingScope::Unspecified)
-            .map(|scope| scope.as_wire()),
-    )
-}
-
-/// The `503` for a settings store that did not answer.
-pub(in crate::http) fn settings_store_error_response(error: &SettingsStoreError) -> Response {
-    tracing::error!(%error, "the settings store failed");
-    service_unavailable("settings")
 }

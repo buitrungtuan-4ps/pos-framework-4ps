@@ -8,25 +8,22 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use pos_cloud_api::console::{audit_action, require_permission};
-use pos_cloud_api::response::{api_error, api_error_with_details, parse_ulid_fields};
-use pos_proto::ErrorStatus;
+use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
-use pos_proto::settings::SettingScope;
 
 use super::presets::SettingsStoreRequest;
-use super::{SettingsState, publish_results_response, setting_scope_refusal};
+use super::{SettingsState, publish_results_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeState, ConfigTreeStore};
 use crate::http::setting_refusal::ConfirmCheck;
-use crate::http::{
-    load_tree_for_write, not_found, publish_nodes, registry_error_response,
-    store_group_error_response,
-};
-use crate::registry::{BrandId, EntityStatus, RegistryStore, StoreRecord};
+use crate::http::{load_tree_for_write, not_found, publish_nodes};
+use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
-use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore};
+use crate::store_groups::StoreGroupStore;
+// Moved to pos-cloud-config; imported here, so the settings routes keep reaching it.
+pub(in crate::http) use pos_cloud_config::route::TenantLayout;
 
 #[utoipa::path(
     post,
@@ -114,163 +111,6 @@ where
     )
     .await;
     publish_results_response(&results)
-}
-
-/// Where a tenant's stores sit — their brands and their active store groups — read once per
-/// request, so one write resolves every store it reaches against the same picture.
-pub(in crate::http) struct TenantLayout {
-    tenant_id: TenantId,
-    stores: Vec<StoreRecord>,
-    brand_ids: Vec<BrandId>,
-    /// Every group of the tenant with its members, archived ones included so a write to one can be
-    /// told apart from a write to a group that does not exist.
-    groups: Vec<(StoreGroup, Vec<StoreId>)>,
-}
-
-impl TenantLayout {
-    /// Reads the tenant's stores, brands and store groups.
-    pub(in crate::http) async fn load<Rg, Grp>(
-        registry: &Rg,
-        groups: &Grp,
-        tenant_id: TenantId,
-    ) -> Result<Self, Response>
-    where
-        Rg: RegistryStore,
-        Grp: StoreGroupStore,
-    {
-        let stores = registry
-            .list_stores(tenant_id)
-            .await
-            .map_err(|error| registry_error_response(&error))?
-            .into_iter()
-            .map(|store| store.record)
-            .collect();
-        let brand_ids = registry
-            .list_brands(tenant_id)
-            .await
-            .map_err(|error| registry_error_response(&error))?
-            .into_iter()
-            .map(|brand| brand.record.brand_id)
-            .collect();
-        let mut with_members = Vec::new();
-        for group in groups
-            .list_groups(tenant_id)
-            .await
-            .map_err(|error| store_group_error_response(&error))?
-        {
-            let members = groups
-                .list_members(tenant_id, group.record.group_id)
-                .await
-                .map_err(|error| store_group_error_response(&error))?;
-            with_members.push((group.record, members));
-        }
-        Ok(Self {
-            tenant_id,
-            stores,
-            brand_ids,
-            groups: with_members,
-        })
-    }
-
-    /// Where one store sits, or `None` if the tenant has no such store.
-    pub(in crate::http) fn placement(
-        &self,
-        store_id: StoreId,
-    ) -> Option<crate::settings::StorePlacement> {
-        let store = self
-            .stores
-            .iter()
-            .find(|store| store.store_id == store_id)?;
-        Some(crate::settings::StorePlacement {
-            tenant_id: self.tenant_id.to_string(),
-            brand_id: store.brand_id.map(|brand| brand.to_string()),
-            store_group_ids: self
-                .groups
-                .iter()
-                .filter(|(group, members)| {
-                    group.status == EntityStatus::Active && members.contains(&store_id)
-                })
-                .map(|(group, _)| group.group_id.to_string())
-                .collect(),
-            store_id: store_id.to_string(),
-        })
-    }
-
-    /// The canonical id a value at `scope` is written for, refusing one the tenant does not have.
-    #[expect(
-        clippy::result_large_err,
-        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
-    )]
-    pub(super) fn scope_target(
-        &self,
-        scope: SettingScope,
-        scope_id: &str,
-    ) -> Result<String, Response> {
-        let id = match parse_ulid_fields([("scope_id", scope_id)]) {
-            Ok([id]) => id,
-            Err(refusal) => return Err(refusal),
-        };
-        match scope {
-            SettingScope::Tenant if id == self.tenant_id.as_ulid() => Ok(id.to_string()),
-            SettingScope::Tenant => Err(api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a tenant-scope value is written for the tenant itself",
-                &[("scope_id", "MUST_BE_THE_TENANT")],
-            )),
-            SettingScope::Brand if self.brand_ids.contains(&BrandId::new(id)) => Ok(id.to_string()),
-            SettingScope::Brand => Err(not_found("brand")),
-            SettingScope::StoreGroup => {
-                match self
-                    .groups
-                    .iter()
-                    .find(|(group, _)| group.group_id == StoreGroupId::new(id))
-                {
-                    Some((group, _)) if group.status == EntityStatus::Active => Ok(id.to_string()),
-                    Some(_) => Err(api_error(
-                        ErrorStatus::FailedPrecondition,
-                        "the store group is archived, so its values reach no store",
-                    )),
-                    None => Err(not_found("store group")),
-                }
-            }
-            SettingScope::Store if self.placement(StoreId::new(id)).is_some() => Ok(id.to_string()),
-            SettingScope::Store => Err(not_found("store")),
-            SettingScope::Unspecified => Err(setting_scope_refusal()),
-        }
-    }
-
-    /// The stores a value at `scope` reaches.
-    pub(super) fn reached_by(&self, scope: SettingScope, scope_id: &str) -> Vec<StoreId> {
-        match scope {
-            SettingScope::Tenant => self.stores.iter().map(|store| store.store_id).collect(),
-            SettingScope::Brand => self
-                .stores
-                .iter()
-                .filter(|store| {
-                    store
-                        .brand_id
-                        .is_some_and(|brand| brand.to_string() == scope_id)
-                })
-                .map(|store| store.store_id)
-                .collect(),
-            // A membership row for a store the registry does not have reaches nothing, as a
-            // group's batch publish skips it.
-            SettingScope::StoreGroup => self
-                .groups
-                .iter()
-                .filter(|(group, _)| group.group_id.to_string() == scope_id)
-                .flat_map(|(_, members)| members.iter().copied())
-                .filter(|member| self.placement(*member).is_some())
-                .collect(),
-            SettingScope::Store => self
-                .stores
-                .iter()
-                .filter(|store| store.store_id.to_string() == scope_id)
-                .map(|store| store.store_id)
-                .collect(),
-            SettingScope::Unspecified => Vec::new(),
-        }
-    }
 }
 
 /// How one store's settings publish went.

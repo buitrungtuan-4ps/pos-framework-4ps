@@ -130,3 +130,6 @@ b7557135b309c466797e6123ca17e2f2aad5d8a8
 
 # #824 — the catalog with its fees, media, tax rates and translations move into pos-cloud-catalog
 967776d44cdda801a115f54caaec1b2bd0026ebd
+
+# #825 — the floor and kitchen, their routes and stores, and the table QR codes move into pos-cloud-floor
+b7b29b66dfc3682d3c3503751d97bd7a5387fe86

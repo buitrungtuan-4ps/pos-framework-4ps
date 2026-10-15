@@ -13,6 +13,8 @@ use store_postgres::{
     NewSessionRow, PostgresAdmin, PostgresApiKeys, PostgresAudit,
 };
 
+use store_postgres::{PostgresTaskHealth, TaskHealthRow};
+
 use pos_proto::ids::TenantId;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -30,6 +32,7 @@ use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
 };
 use crate::auth::totp::TotpSecret;
+use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::paging::{Page, PageRequest};
 
 impl AdminStore for PostgresAdmin {
@@ -667,5 +670,47 @@ impl AuditStore for PostgresAudit {
             .map(audit_entry)
             .collect::<Result<_, _>>()?;
         Ok(Page::new(entries, u32::try_from(total).unwrap_or(u32::MAX)))
+    }
+}
+
+// --- Background-task health (ADR-0068 slice 4) --------------------------------------------------
+
+/// Converts one `store-postgres` task-health row into the cloud's [`TaskHealth`]. A tick instant out
+/// of range (impossible for values this cloud wrote) or a detail that will not parse fails safe — the
+/// instant to the epoch, the detail to an empty object — rather than dropping the whole listing, since
+/// this is health telemetry and a decode fault must not itself read as "no health data".
+fn task_health(row: TaskHealthRow) -> TaskHealth {
+    let last_tick_at =
+        Timestamp::from_milliseconds_since_epoch(row.last_tick_at_ms).unwrap_or(Timestamp::EPOCH);
+    let detail = serde_json::from_str(&row.detail_json)
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    TaskHealth {
+        task: row.task,
+        last_tick_at,
+        detail,
+    }
+}
+
+impl TaskHealthStore for PostgresTaskHealth {
+    async fn record_tick(
+        &self,
+        task: &str,
+        at: Timestamp,
+        detail: &serde_json::Value,
+    ) -> Result<(), TaskHealthError> {
+        let detail_json = serde_json::to_string(detail).map_err(|error| {
+            TaskHealthError::new(format!("encoding a task-health detail failed: {error}"))
+        })?;
+        self.record(task, at.as_milliseconds_since_epoch(), &detail_json)
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))
+    }
+
+    async fn list_health(&self) -> Result<Vec<TaskHealth>, TaskHealthError> {
+        let rows = self
+            .fetch_all()
+            .await
+            .map_err(|error| TaskHealthError::new(error.to_string()))?;
+        Ok(rows.into_iter().map(task_health).collect())
     }
 }

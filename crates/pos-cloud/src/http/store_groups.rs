@@ -11,15 +11,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::response::Response;
 use axum::routing::{get, post};
 use groups::{
     admin_create_store_group, admin_list_store_groups, admin_set_store_group_members,
     admin_update_store_group,
 };
 use history::{admin_list_store_group_batches, admin_read_store_group_batch};
-use pos_cloud_api::response::api_error;
-use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 use publish::admin_publish_to_store_group;
@@ -31,7 +28,7 @@ use crate::config_tree::ConfigTreeStore;
 use crate::http::people::{PermissionsPublishResult, PermissionsPublisher};
 use crate::people::{AssignmentStore, AssignmentStoreError, EmployeeStore, RoleTemplateStore};
 use crate::registry::{EntityStatus, RegistryStore};
-use crate::store_groups::{StoreGroupId, StoreGroupStore, StoreGroupStoreError};
+use crate::store_groups::{StoreGroupId, StoreGroupStore};
 
 mod batch;
 mod batch_node;
@@ -46,6 +43,9 @@ pub use data_nodes::batch_nodes;
 // What the people, settings and release-schedule routes use.
 pub(super) use batch_node::BoxFuture;
 pub(super) use publish::{publishable_membership, unknown_batch_node};
+// Moved to pos-cloud-config with the store-group model; imported here, so the store-group
+// routes and their callers keep reaching it through `super` and `crate::http`.
+pub(in crate::http) use pos_cloud_config::route::store_group_error_response;
 // The handlers the console's OpenAPI document names.
 pub(crate) use groups::{
     __path_admin_create_store_group, __path_admin_list_store_groups,
@@ -276,13 +276,4 @@ where
             clock,
             audit,
         })
-}
-
-/// The `503` a store-group persistence failure becomes.
-pub(in crate::http) fn store_group_error_response(error: &StoreGroupStoreError) -> Response {
-    tracing::error!(%error, "a store-group operation failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the store-group service is unavailable",
-    )
 }

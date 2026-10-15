@@ -43,7 +43,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// A store group's identifier — a ULID minted when the group is created.
 ///
-/// Like [`MenuId`](crate::catalog::MenuId) it never crosses the store wire: a group is an authoring
+/// Like `pos-cloud-catalog`'s `MenuId` it never crosses the store wire: a group is an authoring
 /// and delivery concept in the cloud, and what reaches a store is the same config node it would have
 /// received from a single publish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]

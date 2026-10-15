@@ -58,5 +58,5 @@ allow_attributes_without_reason = "deny"
 [package.metadata.pos]
 layer = "app"
 purpose = "The cloud's configuration base: the config tree and its store, the publish every area's routes write through, the org registry, settings, and QR ordering's switch."
-adrs = [33, 65, 95, 160, 169, 170]
+adrs = [33, 65, 95, 122, 160, 169, 170]
 owners = ["@maintainers-cloud"]
