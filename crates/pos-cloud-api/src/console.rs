@@ -129,6 +129,7 @@ pub fn mint_ulid(now_ms: i64) -> Option<Ulid> {
 /// 32 CSPRNG bytes (256 bits) as a 64-character lowercase hex string, or `None` if the OS entropy
 /// source is unavailable. Used for both the session token and an API-key secret — both need a long,
 /// unguessable, ASCII-safe value.
+#[must_use]
 pub fn random_hex_32() -> Option<String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).ok()?;

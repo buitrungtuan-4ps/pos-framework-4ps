@@ -47,6 +47,7 @@ use crate::response::api_error_with_details;
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — the refusal a route returns as-is"
 )]
+#[must_use]
 pub fn parse_page(
     limit: Option<&str>,
     offset: Option<&str>,
@@ -78,6 +79,7 @@ pub fn parse_page(
 /// One message for all three because they are one mistake from the caller's side: the value it sent
 /// is not a page bound this API accepts, and the sentence says what one is. Splitting "not a number"
 /// from "too large" would give a client two strings to branch on where the fix is identical.
+#[must_use]
 pub fn page_bound_refusal(field: &str) -> Response {
     let accepted = if field == "limit" {
         format!("an integer from 1 to {MAX_PAGE_LIMIT}")
@@ -95,6 +97,7 @@ pub fn page_bound_refusal(field: &str) -> Response {
 ///
 /// Its own sentence because the fix is not "correct the offset" but "add a limit", and a caller told
 /// only that its offset was refused would go looking at the wrong parameter.
+#[must_use]
 pub fn offset_without_limit_refusal() -> Response {
     api_error_with_details(
         ErrorStatus::InvalidArgument,
@@ -118,6 +121,7 @@ struct PagedBody<T> {
 }
 
 /// Answers a paged read: `200` with the page, its total, and the bounds it used.
+#[must_use]
 pub fn paged_ok<T: Serialize>(page: Page<T>, request: PageRequest) -> Response {
     (
         StatusCode::OK,

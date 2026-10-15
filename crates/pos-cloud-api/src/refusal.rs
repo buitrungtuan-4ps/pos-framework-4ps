@@ -64,6 +64,14 @@ pub fn optional_choice<E: WireEnum>(
 /// map it to `null` first — one screen forgetting that would have produced a refusal an operator
 /// could not act on. So the wrappers are gone and every caller passes its own constructor
 /// (`BrandId::new`, `MenuId::new`, …) here.
+///
+/// # Errors
+///
+/// `Err(())` for a present value that is not a ULID; the caller names the field in its `400`.
+#[expect(
+    clippy::result_unit_err,
+    reason = "each caller names its own field in its own 400; the unit only says: not a ULID"
+)]
 pub fn parse_optional_ulid<T>(
     value: Option<&str>,
     wrap: impl Fn(Ulid) -> T,
@@ -89,6 +97,7 @@ pub fn parse_optional_ulid<T>(
 /// Separated from [`api_error`] so the four sites that report violations cannot each pick their own
 /// separator: before this they could not even agree on a *body*, which is how the fifth shape —
 /// the translation grid's — ended up with no reader in the console at all.
+#[must_use]
 pub fn unprocessable_violations(violations: &[String]) -> Response {
     api_error(ErrorStatus::Unprocessable, violations.join("; "))
 }
@@ -102,7 +111,7 @@ pub fn unprocessable_violations(violations: &[String]) -> Response {
 ///
 /// `field` carries the full path for a nested value (`action.rate`, not `rate`), following
 /// ADR-0096's reasoning that a path a reader can act on beats a name they have to interpret.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct FieldRefusal {
     message: &'static str,
     field: &'static str,
@@ -110,6 +119,8 @@ pub struct FieldRefusal {
 }
 
 impl FieldRefusal {
+    /// A refusal of `field` for `reason`, with `message` as its prose.
+    #[must_use]
     pub const fn new(message: &'static str, field: &'static str, reason: &'static str) -> Self {
         Self {
             message,
@@ -119,6 +130,7 @@ impl FieldRefusal {
     }
 
     /// The `400` this refusal becomes at the handler that called the builder.
+    #[must_use]
     pub fn into_response(self) -> Response {
         api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -155,6 +167,7 @@ pub fn enum_refusal<'token>(
 /// Separate from [`enum_refusal`] because this is the part with arities to get wrong, and a `String`
 /// can be asserted where a `Response` body needs an async read. Both spellings match what the
 /// hand-written sentences used, which is why generating them changed no message.
+#[must_use]
 pub fn accepted_list(tokens: &[&str]) -> String {
     match tokens {
         [only] => (*only).to_owned(),
@@ -176,6 +189,7 @@ pub fn accepted_list(tokens: &[&str]) -> String {
 /// No `details` array, deliberately. `details` names a field the caller got wrong, and a caller
 /// asking after an employee who does not exist got its fields right — the employee is absent.
 /// Naming one here would send a client to fix an input that was fine.
+#[must_use]
 pub fn not_found(entity: &str) -> Response {
     api_error(ErrorStatus::NotFound, format!("no such {entity}"))
 }

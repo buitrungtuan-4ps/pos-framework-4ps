@@ -42,6 +42,11 @@ pub enum EntityTagRefusal {
 /// **One tag, not a list.** A list is legal HTTP and means "any of these"; here the version is a
 /// single row's, so a list has no meaning a caller could intend. The inner-quote check is what
 /// rejects it: `"a", "b"` unwraps to `a", "b`, which still contains a quote.
+///
+/// # Errors
+///
+/// [`EntityTagRefusal::Wildcard`] for `*`, and [`EntityTagRefusal::Malformed`] for anything but
+/// one strong entity-tag.
 pub fn parse_entity_tag(raw: &str) -> Result<Version, EntityTagRefusal> {
     let trimmed = raw.trim();
     if trimmed == "*" {
@@ -67,6 +72,11 @@ pub fn parse_entity_tag(raw: &str) -> Result<Version, EntityTagRefusal> {
 ///
 /// `If-Match: *` is refused too. It is legal HTTP meaning "whatever is there now", which is
 /// precisely last-write-wins under a different name, and no caller in this tree wants it.
+///
+/// # Errors
+///
+/// The `400` to return: for an absent header, a wildcard, or a value that is not one strong
+/// entity-tag.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
@@ -95,6 +105,11 @@ pub fn if_match(headers: &HeaderMap) -> Result<Version, Response> {
 /// `If-Match: *` is how a caller says "nothing has", and `Ok(None)` carries that down to the store,
 /// which is the only party that can tell whether it is still true. It is an assertion, not a waiver:
 /// a store that has been saved to refuses it.
+///
+/// # Errors
+///
+/// The `400` to return: for an absent header, or a value that is neither `*` nor one strong
+/// entity-tag.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
@@ -118,6 +133,7 @@ pub fn if_match_collection(headers: &HeaderMap) -> Result<Option<Version>, Respo
 }
 
 /// The refusal for an `If-Match` this surface will not act on.
+#[must_use]
 pub fn entity_tag_refusal(refusal: EntityTagRefusal) -> Response {
     match refusal {
         EntityTagRefusal::Wildcard => api_error_with_details(
@@ -138,6 +154,7 @@ pub fn entity_tag_refusal(refusal: EntityTagRefusal) -> Response {
 /// No `details` array, for the same reason absence and outage carry none: the caller's fields were
 /// all fine. What went stale is the caller's *copy*, not any one input, so naming a field would
 /// send it to fix something that was right.
+#[must_use]
 pub fn version_mismatch() -> Response {
     api_error(
         ErrorStatus::VersionMismatch,
@@ -152,6 +169,7 @@ pub fn version_mismatch() -> Response {
 /// split the six keyed upserts, this answer did not exist — an `upsert` overwrote instead, and the
 /// only way a duplicate could surface was as the store's own `503`, which tells a caller the server
 /// is broken and invites the retry that can never succeed.
+#[must_use]
 pub fn already_exists(entity: &str) -> Response {
     api_error(
         ErrorStatus::AlreadyExists,
