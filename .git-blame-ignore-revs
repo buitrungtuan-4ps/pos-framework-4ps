@@ -106,3 +106,6 @@ e870c7057f9a40a3d24059e0a76282e1595c6a4f
 
 # #812 — the tax, marketing, media, audit and people stores' integration tests move into their own modules
 df30ada5030ce1cfbdc52a277e89d3070dbc7e4d
+
+# #813 — the remaining stores' integration tests move into their own modules
+c3a958edf6711f73a8512c45056af2d462c300c8
