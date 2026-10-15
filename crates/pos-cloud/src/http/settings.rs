@@ -69,8 +69,8 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
 /// A value is written once, at the tenant, a brand, a store group or one store, and every store it
 /// reaches is republished in the same request: each one's resolved values are composed onto its
 /// Tenant layer ([`crate::settings::tenant_layer_nodes`]), so they merge with the nodes the console
-/// publishes on the Store layer. Reads are behind [`ConsolePermission::Read`]; a write publishes, so
-/// it is behind [`ConsolePermission::PublishConfig`], like every node publish.
+/// publishes on the Store layer. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); a write publishes, so
+/// it is behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), like every node publish.
 pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
     settings: St,
     registry: Rg,

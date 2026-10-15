@@ -85,7 +85,7 @@ impl<S: EventStore> Edge<S> {
     /// comes out, and its print job is keyed on the copy's own event, so a retried job prints once.
     /// The printing itself is the caller's, after the commit, as the settle's is.
     ///
-    /// The figures are the settle's own ([`SettledReceipt::totals`]): the lines are the ones the
+    /// The figures are the settle's own (`SettledReceipt::totals`): the lines are the ones the
     /// bill covered, and the totals are recomputed only to recover what the settle did not record,
     /// which the copy prints when it still adds up to what was recorded.
     ///

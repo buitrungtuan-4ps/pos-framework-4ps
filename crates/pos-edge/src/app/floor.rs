@@ -211,7 +211,7 @@ impl<S: EventStore> Edge<S> {
     /// order a server had started there, and refusing it hands the table back to that order, which
     /// only works while both are at the table they opened on. Staff decide on it first.
     ///
-    /// [`Permission::TransferOrder`], which a server holds by default and which asks for no PIN.
+    /// [`Permission::TransferOrder`](pos_core::permission::Permission::TransferOrder), which a server holds by default and which asks for no PIN.
     /// It mints no order, so a replaced machine still moves guests between the tables it is
     /// draining (ADR-0123).
     ///

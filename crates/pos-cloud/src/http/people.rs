@@ -274,11 +274,11 @@ impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
 /// Builds the people & access sub-router ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)).
 ///
 /// The staff records — the employee list and read-one, and the assignment list, whose rows carry the
-/// person's name and code — are behind [`ConsolePermission::ReadPeople`] (Owner/Admin,
+/// person's name and code — are behind [`ConsolePermission::ReadPeople`](crate::auth::console_rbac::ConsolePermission::ReadPeople) (Owner/Admin,
 /// [ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 /// The permission catalogue and the role templates name nobody, so they stay behind
-/// [`ConsolePermission::Read`] (every console role). Every write is behind
-/// [`ConsolePermission::ManagePeople`] (Owner/Admin) and emits an audit entry that records the
+/// [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read) (every console role). Every write is behind
+/// [`ConsolePermission::ManagePeople`](crate::auth::console_rbac::ConsolePermission::ManagePeople) (Owner/Admin) and emits an audit entry that records the
 /// employee **id, code, status, and role — never the name, and never the PIN or its hash** (ADR-0070).
 /// `GET /admin/audit` shows that code only to a role holding `ReadPeople`, which is the roster's
 /// gate. The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request

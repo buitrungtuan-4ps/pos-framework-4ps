@@ -77,8 +77,8 @@ struct FeesState<F, Rg, Cat, Cfg, A, C> {
 /// are written, and writes nothing.
 ///
 /// A rule's rate and amount are prices (T2), so the reads, the preview among them, are behind
-/// [`ConsolePermission::ReadRevenue`], as a menu's placements are (production-readiness S5). A
-/// write publishes, so it is behind [`ConsolePermission::PublishConfig`], like every node publish.
+/// [`ConsolePermission::ReadRevenue`](crate::auth::console_rbac::ConsolePermission::ReadRevenue), as a menu's placements are (production-readiness S5). A
+/// write publishes, so it is behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), like every node publish.
 pub fn fees_router<F, Rg, Cat, Cfg, A, C>(
     fees: F,
     registry: Rg,

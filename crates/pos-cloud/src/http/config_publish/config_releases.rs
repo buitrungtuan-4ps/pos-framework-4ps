@@ -203,8 +203,8 @@ pub(super) struct ReleaseTenantQuery {
 
 /// Builds the releases sub-router ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
 ///
-/// Reads sit behind [`ConsolePermission::Read`]; every write sits behind
-/// [`ConsolePermission::PublishConfig`], because scheduling a release *is* scheduling publishes and
+/// Reads sit behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); every write sits behind
+/// [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), because scheduling a release *is* scheduling publishes and
 /// there is no weaker thing it could be.
 #[expect(
     clippy::too_many_arguments,

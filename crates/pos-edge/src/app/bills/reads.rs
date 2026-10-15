@@ -20,7 +20,7 @@ impl<S: EventStore> Edge<S> {
     ///
     /// A pure read — no command, no event, no state change — so a screen may call it as freely as it
     /// redraws. It runs the *same* [`billing::assemble`] the settle path runs, from the same
-    /// projection and the same [`EdgeSession`], which is the point: the figure the operator reads to
+    /// projection and the same [`EdgeSession`](crate::app::EdgeSession), which is the point: the figure the operator reads to
     /// the guest and the figure the bill settles against are one calculation, not two that agree
     /// until a store publishes a second tax class. A table with no open order owes nothing.
     ///

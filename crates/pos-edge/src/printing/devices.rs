@@ -30,7 +30,7 @@ pub fn receipt_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
 /// What one till prints differently from its store
 /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4): the receipt printer and the receipt languages its `TERMINAL` entry names, as
-/// [`Printers::till_for`] resolves them for the device a print was asked from.
+/// [`Printers::till_for`](crate::printing::Printers::till_for) resolves them for the device a print was asked from.
 ///
 /// Only a guest's paper follows it: a receipt, its copy and a pre-bill. A kitchen ticket goes to its
 /// station's printer. A shift report goes to the store's receipt printer, or where the store keeps
@@ -141,7 +141,7 @@ pub(super) fn guest_printer<'a>(
 /// printed at all, because nobody goes looking for it.
 ///
 /// The station comes back with the printer because a ticket prints in the language of the station
-/// whose cooks read it ([`ticket_language`]), and on a failover those are the backup's.
+/// whose cooks read it ([`ticket_language`](crate::printing::ticket_language)), and on a failover those are the backup's.
 #[must_use]
 pub fn station_printer<'a>(
     devices: &'a PublishedDevices,

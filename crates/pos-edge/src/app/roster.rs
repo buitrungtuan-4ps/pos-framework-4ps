@@ -74,7 +74,7 @@ pub struct StaffAuth {
     /// permission directly, to approve it with their code and PIN
     /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 4). Read only where the store enforces each person's own set
-    /// ([`EdgeSession::permissions_enforced`]); never overlaps [`Self::permissions`].
+    /// ([`EdgeSession::permissions_enforced`](crate::app::EdgeSession::permissions_enforced)); never overlaps [`Self::permissions`].
     pub permissions_with_approval: PermissionSet,
     /// How much they may discount before it needs a manager, from their role's configured ceiling
     /// (ADR-0070's `permissions` node).

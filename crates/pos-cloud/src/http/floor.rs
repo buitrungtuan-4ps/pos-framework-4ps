@@ -74,7 +74,7 @@ fn floor_entropy_unavailable() -> Response {
 
 /// Builds the floor & kitchen master-data sub-router ([ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 ///
-/// Reads are behind [`ConsolePermission::Read`]; every write is behind [`ConsolePermission::ManageFloor`]
+/// Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); every write is behind [`ConsolePermission::ManageFloor`](crate::auth::console_rbac::ConsolePermission::ManageFloor)
 /// (Owner/Admin) and is audited. The tenant is named the admin-is-global way (a `?tenant_id=` /
 /// `?store_id=` query on reads, the request body on writes). None of this data is PII.
 pub fn floor_router<F, A, C, Cat>(

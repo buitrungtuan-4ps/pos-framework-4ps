@@ -18,7 +18,7 @@ impl<S: EventStore> Edge<S> {
     ///
     /// The counted cash is entered **before** the system reveals what it expected, so this returns
     /// no expectation and no variance — that is what makes the close blind (§11.1). A store that has
-    /// turned the blind close off is shown the expectation ([`Self::expectation_shown`]), never the
+    /// turned the blind close off is shown the expectation (`Self::expectation_shown`), never the
     /// variance. `counted_minor` is the physical count in minor units.
     ///
     /// # Errors

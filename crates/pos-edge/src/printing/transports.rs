@@ -72,7 +72,7 @@ impl TransportFactory for TcpTransports {
 ///   shears on its head. Where the console says none, 80 mm's 42 characters and 576 dots, which
 ///   every printer was taken to be before it could.
 /// - `cuts_paper` — what the console says, and `true` where it says nothing. A printer with no
-///   cutter is sent no cut ([`Printers::prepare`]).
+///   cutter is sent no cut (`Printers::prepare`).
 /// - `prints_bitmaps` — whether a font is loaded, and nothing about the hardware. `GS v 0` is
 ///   universal on ESC/POS, so the printer is not the constraint; the framework's ability to
 ///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).

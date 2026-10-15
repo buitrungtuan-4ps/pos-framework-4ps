@@ -65,7 +65,7 @@ impl<S: EventStore> Edge<S> {
     /// table ([ADR-0093](../../../../../docs/adr/0093-bill-keyed-on-order.md)).
     ///
     /// The list is the store's **live trading**, not its log: a settled order drops out of
-    /// [`Projection::open_orders`], so what this returns is bounded by the tables the store has
+    /// `Projection::open_orders`, so what this returns is bounded by the tables the store has
     /// open plus the counter orders it has not yet taken money for.
     ///
     /// # Panics

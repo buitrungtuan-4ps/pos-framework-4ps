@@ -126,7 +126,7 @@ pub fn ticket_line(
 }
 
 /// The ticket `fired` prints at `printing`, the station whose printer prints it
-/// ([`station_printer`]): its labels and its names in that station's language ([`ticket_language`],
+/// ([`station_printer`](crate::printing::station_printer)): its labels and its names in that station's language ([`ticket_language`],
 /// ADR-0160 decision 2).
 ///
 /// The labels fall back to English on a box that cannot draw the language's, as all of a store's

@@ -20,7 +20,7 @@ use pos_proto::{BillState, TableState};
 ///
 /// The name and the price are the **snapshot** `sales.order_line.added` captured, not what the menu
 /// says now — a settled bill does not change because somebody renamed an item next week (§14.2).
-/// That is the one way this differs from [`CounterOrderLine`], which resolves against the live menu
+/// That is the one way this differs from [`CounterOrderLine`](crate::app::CounterOrderLine), which resolves against the live menu
 /// on purpose, because a screen showing an open order wants today's spelling.
 ///
 /// Edge-local, like [`BillTotals`] beside it: it crosses no wire and is not part of any response.
@@ -50,7 +50,7 @@ pub struct ReceiptLine {
 /// What a pre-bill prints: the rows a bill or an open order covers, and what they come to.
 ///
 /// The same two things a receipt is made of, read through the same projection and the same
-/// [`billing::assemble`] the settle runs, so a table that pays exactly the pre-bill's figure pays
+/// [`billing::assemble`](pos_core::billing::assemble) the settle runs, so a table that pays exactly the pre-bill's figure pays
 /// what the bill settles against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreBill {
@@ -64,7 +64,7 @@ pub struct PreBill {
 /// ([ADR-0107](../../../../../docs/adr/0107-the-buyer-is-a-subject.md)).
 ///
 /// Personal data, every field of it. It never enters an event — `pos_proto::pii` makes that a
-/// compile error — and [`Edge::settle_bill`] files it in the store's subject store under a freshly
+/// compile error — and [`Edge::settle_bill`](crate::app::Edge::settle_bill) files it in the store's subject store under a freshly
 /// minted [`SubjectId`], which is what the settled event carries instead.
 ///
 /// The tax code is here rather than treated as business data because for a sole trader it is not:
@@ -188,7 +188,7 @@ pub struct ReceiptCopy {
     pub reprinted_time: Timestamp,
     /// The rows the receipt printed.
     pub lines: Vec<ReceiptLine>,
-    /// The totals, as the settle recorded them ([`SettledReceipt::totals`]).
+    /// The totals, as the settle recorded them (`SettledReceipt::totals`).
     pub totals: BillTotals,
     /// The corporate buyer, whose details the copy prints again from the subject store.
     pub buyer_subject_id: Option<SubjectId>,
@@ -204,7 +204,7 @@ pub const MAX_SETTLED_LISTED: usize = 200;
 /// What a bill looks like to a caller after a command.
 ///
 /// After a settle it carries the gapless receipt number and the total the guest paid, plus the
-/// state the bill and its table moved to. `print_receipt` reflects the [`Effect::PrintReceipt`]
+/// state the bill and its table moved to. `print_receipt` reflects the [`Effect::PrintReceipt`](pos_core::decision::Effect::PrintReceipt)
 /// the domain returned: the edge does not itself hold a printer, so the caller (the binary) runs the
 /// effect after this returns — a rolled-back settle therefore never prints.
 // Not `Copy` since ADR-0106: the settled totals carry per-rate tax lines, and a country deciding how

@@ -67,13 +67,13 @@ struct DeviceState<D, A, K, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// Builds the device-onboarding sub-router, stated independently of [`CloudApp`]
+/// Builds the device-onboarding sub-router, stated independently of [`CloudApp`](crate::http::CloudApp)
 /// ([ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
 ///
 /// A store proposes a discovered printer/KDS and reads back its approved devices on the store-facing
 /// `/sync` surface (API key, `manage_devices` scope); a super-admin lists the pending queue and
 /// approves or rejects on `/admin` (session guard). It needs the proposal store plus the existing
-/// admin/api-key/clock collaborators, so — like [`reconcile_router`] — it carries its own state and is
+/// admin/api-key/clock collaborators, so — like [`reconcile_router`](crate::http::reconcile_router) — it carries its own state and is
 /// merged into the main router rather than adding an eighth `CloudApp` generic.
 pub fn device_router<D, A, K, C>(
     devices: D,

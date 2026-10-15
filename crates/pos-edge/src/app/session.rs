@@ -128,7 +128,7 @@ pub struct EdgeSession {
     /// How many days the edge keeps a **synced** event before retention may delete it
     /// ([ADR-0145](../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
     ///
-    /// Per store, from the cloud's `retention` node, within [`EVENT_LOG_DAYS`]; 90 until one
+    /// Per store, from the cloud's `retention` node, within [`EVENT_LOG_DAYS`](crate::app::EVENT_LOG_DAYS); 90 until one
     /// arrives, the figure the documents have always promised. It is a floor, never a deadline: an
     /// event the link has not acknowledged, or one an open order still needs, stays whatever this
     /// says. Not [`Self::retention_days`], which is how long *personal data* lives, set by law.

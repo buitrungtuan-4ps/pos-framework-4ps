@@ -28,7 +28,7 @@ use crate::app::{
 impl<S: EventStore> Edge<S> {
     /// The instant before which retention may delete a synced event
     /// ([ADR-0145](../../../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)):
-    /// the store's [`EdgeSession::event_log_days`] ago, or a day before the oldest business still
+    /// the store's [`EdgeSession::event_log_days`](crate::app::EdgeSession::event_log_days) ago, or a day before the oldest business still
     /// open, whichever is earlier.
     ///
     /// The day's margin is for a clock that stepped: an event stamped a little before the order it

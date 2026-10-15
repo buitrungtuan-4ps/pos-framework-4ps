@@ -121,7 +121,7 @@ pub struct LineView {
 /// The ids, not the names: resolving an item's name is the *session's* job (its published menu
 /// carries the store's spelling and its locale), and the application loop deliberately does not hold
 /// presentation. The edge still holds no printer — this is the caller's material, exactly as
-/// [`BillView::print_receipt`] is.
+/// [`BillView::print_receipt`](crate::app::BillView::print_receipt) is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FiredLine {
     /// The station the published routing sent this to (ADR-0072).
@@ -152,7 +152,7 @@ pub struct BumpView {
 ///
 /// Enough for a cashier to recognise the order a customer is collecting: what it is and how many.
 /// The name is resolved from the store's published menu at read time rather than stored on the
-/// projection, because [`LineRecord`] deliberately keeps only what the *event* carried.
+/// projection, because `LineRecord` deliberately keeps only what the *event* carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CounterOrderLine {
     /// The item's name as the store's published menu spells it.
@@ -177,7 +177,7 @@ pub struct CounterOrderView {
     pub total_due: Money,
     /// The bill already open on this order, if a cashier opened one and the screen has since
     /// reloaded. The screen settles **this** bill rather than opening a second one, which the
-    /// domain would refuse ([`AppError::BillAlreadyOpen`]).
+    /// domain would refuse ([`AppError::BillAlreadyOpen`](crate::app::AppError::BillAlreadyOpen)).
     pub bill_id: Option<BillId>,
 }
 

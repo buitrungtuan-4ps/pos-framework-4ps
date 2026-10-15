@@ -184,8 +184,8 @@ where
 /// Builds the channels/tender settings sub-router ([ADR-0080](../../../../docs/adr/0080-channels-and-payments.md), M7).
 ///
 /// `GET`/`PUT /admin/config/channels` and `.../tender`: read a store's current enabled channels /
-/// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`]; publishes are
-/// behind [`ConsolePermission::PublishConfig`] and audited — settings, not a CRUD master-data domain,
+/// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); publishes are
+/// behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig) and audited — settings, not a CRUD master-data domain,
 /// so there is no dedicated authoring permission. The edge applies each node as a policy gate.
 pub fn config_channels_router<Cfg, A, C>(
     config_trees: Cfg,

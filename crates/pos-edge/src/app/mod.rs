@@ -5,7 +5,7 @@
 //!
 //! This is the thin layer [ADR-0013](../../../../docs/adr/0013-async-strategy.md) says each binary
 //! owns. For every command it: **loads** the aggregate's current state from the projection,
-//! **decides** with the synchronous `pos-core` spine ([`decide_table`] and its siblings), **applies**
+//! **decides** with the synchronous `pos-core` spine ([`decide_table`](pos_core::decision::decide_table) and its siblings), **applies**
 //! the decision by writing the wire events it maps to inside one store transaction, and — only after
 //! the commit — **publishes** the change to every device over the fan-out and folds it into the
 //! projection. A rolled-back transaction therefore prints nothing, tells no device, and changes no

@@ -40,7 +40,7 @@
 //! this release prints tomorrow the way it printed today. When it is present the last hop moves —
 //! and only the last hop. Everything above [`Printers::dispatch`] is unchanged, the rasterising in
 //! [`Printers::prepare`] still runs *here*, and what crosses to the agent is a finished
-//! [`PrintJob`]: a device that drew its own glyphs would draw them from whatever fonts that device
+//! [`PrintJob`](pos_ports::printer::PrintJob): a device that drew its own glyphs would draw them from whatever fonts that device
 //! happens to have, and a store with three terminals would print three different tickets from one
 //! order.
 //!
@@ -185,7 +185,7 @@ impl PrintOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerOutcome {
     /// The kick went down the drawer printer's cable, or, behind a print agent, the agent
-    /// acknowledged writing it within [`KICK_WAIT`]. Whether the drawer sprang is the hardware's
+    /// acknowledged writing it within [`KICK_WAIT`](crate::print_agent::KICK_WAIT). Whether the drawer sprang is the hardware's
     /// part (gate P8), which the edge cannot see.
     Opened,
     /// No printer this edge may open a drawer through: none is marked, or the marked one is not on
@@ -193,7 +193,7 @@ pub enum DrawerOutcome {
     /// before kicks. The ordinary state of a store with no drawer.
     NoDrawer,
     /// The drawer printer was chosen and did not take the kick: unplugged or switched off, or its
-    /// agent silent, its queue full, or no acknowledgement within [`KICK_WAIT`].
+    /// agent silent, its queue full, or no acknowledgement within [`KICK_WAIT`](crate::print_agent::KICK_WAIT).
     Unavailable,
 }
 

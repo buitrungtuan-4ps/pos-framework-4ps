@@ -22,7 +22,7 @@ impl<S: EventStore> Edge<S> {
     /// Blind (§11.1): neither the expected amount nor the variance is in the view, whatever the
     /// shift's state, because a count entered after reading the expectation is not a blind count.
     /// The expected amount is there only where the store has turned the blind close off
-    /// ([`Self::expectation_shown`]), and the variance never is.
+    /// (`Self::expectation_shown`), and the variance never is.
     #[must_use]
     pub fn current_shift(&self) -> Option<ShiftView> {
         self.current_shift_at(TillScope::default())

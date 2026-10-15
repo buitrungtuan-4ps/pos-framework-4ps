@@ -85,7 +85,7 @@ struct ArchiveAcceptedResponse {
 /// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 ///
 /// Merged only when **both** an object store and `archive_key_secret` are configured, exactly like
-/// [`ota_artifact_router`]: with no object store there is nowhere for the bytes to go, and with no
+/// [`ota_artifact_router`](crate::http::ota_artifact_router): with no object store there is nowhere for the bytes to go, and with no
 /// secret there is nowhere safe to keep the key, so a route that always answers `503` would be
 /// worse than one honestly absent. `pos-cloud`'s boot says which of the two is missing.
 ///

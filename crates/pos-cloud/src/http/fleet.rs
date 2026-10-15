@@ -110,7 +110,7 @@ struct FleetPrintAgent {
 
 /// Builds the fleet-liveness sub-router ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 3).
 ///
-/// Two reads, both behind [`ConsolePermission::Read`] (every console role, so Ops and Viewer see the
+/// Two reads, both behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read) (every console role, so Ops and Viewer see the
 /// fleet) and both naming their tenant the admin-is-global way — a `?tenant_id=` query
 /// ([ADR-0060](../../../../docs/adr/0060-cloud-back-office-dashboard.md)): the whole fleet, and one
 /// store's detail. Online/offline is derived here at read time, so the answer is always current

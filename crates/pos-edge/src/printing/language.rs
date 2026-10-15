@@ -219,7 +219,7 @@ pub fn receipt_language(session: &EdgeSession, till: &TillPrinting) -> Option<St
 /// The language a kitchen ticket printed at `station` prints in: the station's `ticket_language` on
 /// the `stations` node (ADR-0160 decision 2), resolved by [`paper_language`] as a receipt's is.
 ///
-/// `station` is the one whose printer prints the ticket ([`station_printer`]), whose cooks read it.
+/// `station` is the one whose printer prints the ticket ([`station_printer`](crate::printing::station_printer)), whose cooks read it.
 /// A station that sets no language, and one the plan does not name, prints in the display language,
 /// as every kitchen ticket did before a station could say.
 #[must_use]

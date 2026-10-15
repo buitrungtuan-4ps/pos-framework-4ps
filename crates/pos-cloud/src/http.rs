@@ -54,7 +54,7 @@
 //! console's `failure()` reads the envelope, the config publish's `{"violations":[…]}` and raw text
 //! alike, and `cloud-sync-http` maps cloud failures on HTTP status alone and never parses a body.
 //! Converted so far: every per-domain error helper (`*_error_response`, `*_entropy_unavailable`,
-//! [`activation_refused`], [`too_many_login_attempts`], [`admin_service_unavailable`]) and
+//! `activation_refused`, [`too_many_login_attempts`], `admin_service_unavailable`) and
 //! [`error_response`]. Remaining: the inline validation refusals written at each handler — also the
 //! ones that will carry field-level `details`, which is why they are their own slice.
 //!
