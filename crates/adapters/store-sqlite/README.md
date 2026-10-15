@@ -15,7 +15,7 @@ The store's one SQLite database, implementing `EventStore`, `ConfigStore`, `Devi
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `pos-edge`.
+- **Used by** (workspace crates): `pos-edge`, `pos-edge-app`.
 
 ## Entry points
 

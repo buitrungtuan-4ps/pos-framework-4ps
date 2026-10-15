@@ -416,7 +416,7 @@ The receipt is worse in a different direction. In Vietnam it is a legal artefact
 ### The pipe that already reaches every device is the wrong pipe
 
 The edge already pushes committed changes to every device in the store over one
-[`tokio::sync::broadcast`](../../crates/pos-edge/src/fanout.rs) channel. It is the obvious carrier and
+[`tokio::sync::broadcast`](../../crates/pos-edge-app/src/fanout.rs) channel. It is the obvious carrier and
 it is wrong three times over, and each reason is written into the code that implements it.
 
 It is a **broadcast**. Every subscriber gets every frame. A receipt document may carry a buyer's name

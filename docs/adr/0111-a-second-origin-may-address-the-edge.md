@@ -555,7 +555,7 @@ not**, and three of them are worth naming individually:
   it and keep pairing shut for as long as it has visitors.
 - **The three session routes** carry the paired gate and not the signed-in one, so under a wildcard
   any page a paired device visits can drive `POST /api/session/sign-in` — badge code and PIN — with
-  that device's token. [`Lockout`](../../crates/pos-edge/src/auth.rs) rate-limits it, but its
+  that device's token. [`Lockout`](../../crates/pos-edge-app/src/auth.rs) rate-limits it, but its
   `HashMap<EmployeeId, Record>` is keyed per employee, not per origin, so the same wildcard that
   invites the attempts also lets a page lock a named member of staff out of their own till.
 - **`POST /api/pair/revoke`** with an absent `device_id` is the revoke-all break-glass —

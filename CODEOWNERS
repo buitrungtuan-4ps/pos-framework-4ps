@@ -9,6 +9,7 @@
 /crates/pos-cloud-devices/ @maintainers-cloud
 /crates/pos-cloud-inventory/ @maintainers-cloud
 /crates/pos-cloud-reports/ @maintainers-cloud
+/crates/pos-edge-app/    @maintainers-architecture
 /deploy/                 @maintainers-cloud
 /.github/                @maintainers-architecture
 /docs/adr/               @maintainers-architecture

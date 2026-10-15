@@ -66,7 +66,7 @@ If `just preflight` fails, fix that before anything else. Do not invent alternat
 - Code that broke the rules when the ratchet began is listed in [`tools/code-size-baseline.toml`](tools/code-size-baseline.toml) with its figure. A listed item may grow by 10 lines at most, and by no parameters. Anything larger goes in a new module or function. A file or function is never split just to meet a number; split it by meaning.
 - When a listed item is back within the rules, or is gone, `--check` fails until its entry is removed. Remove it by hand, or run `cargo xtask code-stats --write-baseline` and check the diff only removes or lowers entries.
 - **The baseline may only shrink.** With `--base`, `--check` compares the file with its copy at the merge base, and a new entry or a raised figure fails. A pull request that must grow it says why in its body, on a line of its own: `size-baseline: grow <reason>`. On `main`, the comparison is with the parent commit and only warns. `CODEOWNERS` routes the file to the architecture maintainers.
-- A function is keyed by its file and qualified name (`crates/pos-edge/src/app/bills/open.rs::Edge::open_bill`), so moving it within its file changes nothing. Moving it to another file, or renaming it, moves its entry.
+- A function is keyed by its file and qualified name (`crates/pos-edge-app/src/app/bills/open.rs::Edge::open_bill`), so moving it within its file changes nothing. Moving it to another file, or renaming it, moves its entry.
 - Warn levels are reported as annotations on the files a pull request changes. They never fail it.
 
 ## 5. Documentation is part of the change
