@@ -115,3 +115,6 @@ a0fc27dcb82be94751a0475b838f6b158911feda
 
 # #817 — the config tree, the publish every area writes through, the registry and settings move into pos-cloud-config
 48fb442a290431e2ff5ac8f633dd09f8cc0a6b81
+
+# #818 — the inventory, its routes and its store move into pos-cloud-inventory
+73bad3c40f93b3964d54bdd3037ff7aa1d2c7d76
