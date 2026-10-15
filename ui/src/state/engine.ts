@@ -215,8 +215,15 @@ export function load(key: string, fresh = false): Promise<void> {
   if (pending !== undefined) {
     queued.add(key);
     start = async (each) => {
-      await pending;
-      queued.delete(key);
+      // `read` handles its own failures and does not reject, but a read out that did must not
+      // leave this entry marked queued: every later fresh read would join instead of following.
+      try {
+        await pending;
+      } catch {
+        // Its failure is its own; this read is made regardless.
+      } finally {
+        queued.delete(key);
+      }
       await read(each);
     };
   }
