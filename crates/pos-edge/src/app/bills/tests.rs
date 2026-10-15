@@ -754,11 +754,12 @@ fn merging_into_a_bill_that_names_no_lines_does_not_hang_the_store() {
 /// as that edge wrote it, and replayed by a new one.
 #[test]
 fn a_table_stuck_on_an_empty_bill_is_recovered_by_a_void_and_a_release() {
-    use crate::app::{AppError, Approval, BillingBillOpened, StaffAuth, StaffRoster};
+    use crate::app::{AppError, Approval, StaffAuth, StaffRoster};
     use argon2::Argon2;
     use argon2::password_hash::PasswordHasher as _;
     use pos_core::error::DomainError;
     use pos_core::permission::{Permission, PermissionSet};
+    use pos_proto::events::BillingBillOpened;
     use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 
     fn session() -> EdgeSession {
