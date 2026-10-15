@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Wiring the device seams — the `ClaimStore` ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)), the
-//! `ActivationCodeStore` ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)) and the
-//! `DeviceProposalStore` ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)) — to their
-//! `store-postgres` tables.
+//! Wiring the device seams to their `store-postgres` tables: the `ClaimStore`
+//! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)),
+//! the `ActivationCodeStore` ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)) and
+//! the `DeviceProposalStore` ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
 //!
-//! Moved out of `pos-cloud`'s `persistence.rs` with the traits (ADR-0170 decision 4): a trait can be
-//! implemented for another crate's type only in the trait's own crate. The SQL stays in
+//! Moved out of `pos-cloud`'s `persistence.rs` with the traits (ADR-0170 decision 4): a trait can
+//! be implemented for another crate's type only in the trait's own crate. The SQL stays in
 //! `store-postgres`.
 
 use pos_core::activation::CodeStatus;
