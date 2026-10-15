@@ -52,6 +52,8 @@ pos-proto   = { path = "../pos-proto" }
 pos-country = { path = "../pos-country" }
 # The application layer: `Edge`, its commands, sign-in and the authorities (ADR-0170 decision 4).
 pos-edge-app = { path = "../pos-edge-app" }
+# Printing: receipts, tickets, the drawer and the print-agent lane (ADR-0170 decision 4).
+pos-edge-printing = { path = "../pos-edge-printing" }
 
 # Country modules, selected per binary as features (ADR-0027). Optional, so a fork
 # compiles only the ones it enables; `pos-country-zz` is the reference module.

@@ -1998,6 +1998,7 @@ dependencies = [
  "pos-country-vn",
  "pos-country-zz",
  "pos-edge-app",
+ "pos-edge-printing",
  "pos-fakes",
  "pos-ports",
  "pos-proto",
@@ -2040,6 +2041,22 @@ dependencies = [
  "serde_json",
  "store-sqlite",
  "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pos-edge-printing"
+version = "0.0.0"
+dependencies = [
+ "pos-core",
+ "pos-edge-app",
+ "pos-ports",
+ "pos-proto",
+ "pos-render",
+ "printer-escpos",
+ "serde_json",
+ "store-sqlite",
  "tokio",
  "tracing",
 ]

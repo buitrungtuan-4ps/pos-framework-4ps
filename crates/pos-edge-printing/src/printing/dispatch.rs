@@ -15,6 +15,10 @@ use crate::app::EdgeSession;
 use crate::printing::transports::assumed_capabilities;
 use crate::printing::{Held, HeldPrinter, MISSING_GLYPHS_REPORTED, PrintOutcome, Printers};
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::printing::dispatch";
+
 impl Printers {
     /// Turns every line the printer's own character set cannot carry into a raster, as wide as its
     /// paper, and leaves out the cut where the printer has no cutter.
@@ -76,6 +80,7 @@ impl Printers {
                         let missing = &drawn.substituted
                             [..drawn.substituted.len().min(MISSING_GLYPHS_REPORTED)];
                         tracing::warn!(
+                            target: LOG_TARGET,
                             missing = ?missing,
                             missing_count = drawn.substituted.len(),
                             "no installed font covers these characters; they printed as boxes"
@@ -84,7 +89,7 @@ impl Printers {
                     blocks.push(drawn.bitmap.into_block());
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "a line could not be rendered");
+                    tracing::warn!(target: LOG_TARGET, %error, "a line could not be rendered");
                     refused = refused.saturating_add(line.chars().count());
                 }
             }
@@ -114,6 +119,7 @@ impl Printers {
                 // Never the line's text: a document may carry a buyer's name and tax code
                 // (`pos_ports::printer`).
                 tracing::warn!(
+                    target: LOG_TARGET,
                     device = %device.device_id,
                     characters = line,
                     "the document needs characters this printer cannot render as text and no font \
@@ -128,6 +134,7 @@ impl Printers {
         if let Some(agent) = device.agent_device_id {
             let Some(lane) = self.agents.as_ref() else {
                 tracing::warn!(
+                    target: LOG_TARGET,
                     device = %device.device_id,
                     %agent,
                     "this printer names an agent but no print queue is composed"
@@ -139,7 +146,7 @@ impl Printers {
         let printer = match self.printer_for(device, capabilities) {
             Ok(printer) => printer,
             Err(error) => {
-                tracing::warn!(device = %device.device_id, %error, "no channel to that printer");
+                tracing::warn!(target: LOG_TARGET, device = %device.device_id, %error, "no channel to that printer");
                 return PrintOutcome::Unavailable;
             }
         };
@@ -151,15 +158,15 @@ impl Printers {
         match outcome {
             Ok(Ok(())) => {
                 // The job's identifier and its outcome, never its content (`pos_ports::printer`).
-                tracing::info!(%job_id, device = %device.device_id, "printed");
+                tracing::info!(target: LOG_TARGET, %job_id, device = %device.device_id, "printed");
                 PrintOutcome::Printed
             }
             Ok(Err(error)) => {
-                tracing::warn!(%job_id, device = %device.device_id, %error, "the printer refused the job");
+                tracing::warn!(target: LOG_TARGET, %job_id, device = %device.device_id, %error, "the printer refused the job");
                 PrintOutcome::Unavailable
             }
             Err(_) => {
-                tracing::warn!(%job_id, device = %device.device_id, "the print thread did not finish");
+                tracing::warn!(target: LOG_TARGET, %job_id, device = %device.device_id, "the print thread did not finish");
                 PrintOutcome::Unavailable
             }
         }

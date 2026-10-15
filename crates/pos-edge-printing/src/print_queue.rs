@@ -6,11 +6,12 @@
 //!
 //! # A trait here, implemented for the concrete store
 //!
-//! The same shape [`crate::print_agent::PrintAgents`], [`crate::queue::QueueNumberAuthority`] and
-//! [`crate::lease_state::LeaseAuthority`] take, and for the same reason: [`crate::app::Edge`] is
-//! generic over its store, so it cannot reach a concrete store's inherent table. In the field this
-//! is [`store_sqlite::SqliteStore`], whose single writer thread serialises an enqueue against every
-//! other allocation; the fakes-backed example and the route tests use [`InMemoryPrintQueue`].
+//! The same shape [`crate::print_agent::PrintAgents`],
+//! [`pos_edge_app::queue::QueueNumberAuthority`] and [`pos_edge_app::lease_state::LeaseAuthority`]
+//! take, and for the same reason: [`crate::app::Edge`] is generic over its store, so it cannot
+//! reach a concrete store's inherent table. In the field this is [`store_sqlite::SqliteStore`],
+//! whose single writer thread serialises an enqueue against every other allocation; the
+//! fakes-backed example and the route tests use [`InMemoryPrintQueue`].
 //!
 //! # The JSON is the storage format, not this seam's vocabulary
 //!
@@ -37,6 +38,10 @@ use pos_ports::printer::PrintJob;
 use pos_ports::{PortError, PortName};
 use pos_proto::ids::{DeviceId, EventId};
 use store_sqlite::SqliteStore;
+
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::print_queue";
 
 /// What an enqueue did — everything the table itself can decide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,6 +233,7 @@ impl PrintQueue for SqliteStore {
                     });
                 }
                 tracing::error!(
+                    target: LOG_TARGET,
                     job_id = %row.job_id,
                     "a queued print job could not be read back and was skipped"
                 );

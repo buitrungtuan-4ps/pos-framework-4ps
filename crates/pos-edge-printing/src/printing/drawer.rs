@@ -18,6 +18,10 @@ use crate::printing::devices::{
 use crate::printing::transports::assumed_capabilities;
 use crate::printing::{DrawerOutcome, KICKING_AGENTS, KICKS_AWAITED, PrintOutcome, Printers};
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::printing::drawer";
+
 impl Printers {
     /// The paper choices of the till `device` is
     /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
@@ -42,7 +46,7 @@ impl Printers {
                 })
                 .map_or(TillPrinting::STORE, TillPrinting::of),
             Err(error) => {
-                tracing::warn!(%device, %error, "the terminal a device is bound to could not be read");
+                tracing::warn!(target: LOG_TARGET, %device, %error, "the terminal a device is bound to could not be read");
                 TillPrinting::UNKNOWN
             }
         }
@@ -87,6 +91,7 @@ impl Printers {
         else {
             if let Some(till) = till {
                 tracing::info!(
+                    target: LOG_TARGET,
                     %till,
                     "this till names no receipt printer with a cash drawer this edge may open"
                 );
@@ -97,6 +102,7 @@ impl Printers {
                 .any(|device| device.drawer_attached)
             {
                 tracing::warn!(
+                    target: LOG_TARGET,
                     "a printer is marked as having a cash drawer, but not one this edge may open: it \
                      must serve the bill, be on USB, and print without an agent or through one that \
                      carries the kick"
@@ -113,22 +119,22 @@ impl Printers {
         let printer = match self.printer_for(device, capabilities) {
             Ok(printer) => printer,
             Err(error) => {
-                tracing::warn!(device = %device.device_id, %error, "no channel to the drawer's printer");
+                tracing::warn!(target: LOG_TARGET, device = %device.device_id, %error, "no channel to the drawer's printer");
                 return DrawerOutcome::Unavailable;
             }
         };
         // On a blocking thread for the reason a receipt is: an unplugged printer blocks on its write.
         match tokio::task::spawn_blocking(move || printer.open_drawer_blocking()).await {
             Ok(Ok(())) => {
-                tracing::info!(device = %device.device_id, "cash drawer kicked");
+                tracing::info!(target: LOG_TARGET, device = %device.device_id, "cash drawer kicked");
                 DrawerOutcome::Opened
             }
             Ok(Err(error)) => {
-                tracing::warn!(device = %device.device_id, %error, "the drawer's printer refused the kick");
+                tracing::warn!(target: LOG_TARGET, device = %device.device_id, %error, "the drawer's printer refused the kick");
                 DrawerOutcome::Unavailable
             }
             Err(_) => {
-                tracing::warn!(device = %device.device_id, "the drawer thread did not finish");
+                tracing::warn!(target: LOG_TARGET, device = %device.device_id, "the drawer thread did not finish");
                 DrawerOutcome::Unavailable
             }
         }
@@ -144,12 +150,12 @@ impl Printers {
         job_id: EventId,
     ) -> DrawerOutcome {
         let Some(lane) = self.agents.as_ref() else {
-            tracing::warn!(%printer, %agent, "the drawer's printer names an agent but no print queue is composed");
+            tracing::warn!(target: LOG_TARGET, %printer, %agent, "the drawer's printer names an agent but no print queue is composed");
             return DrawerOutcome::Unavailable;
         };
         // Waited on before it is offered, so an acknowledgement that beats the offer is heard.
         let Some(acknowledged) = self.await_kick(job_id) else {
-            tracing::warn!(%printer, %agent, "too many kicks are waiting on print agents; this one is not sent");
+            tracing::warn!(target: LOG_TARGET, %printer, %agent, "too many kicks are waiting on print agents; this one is not sent");
             return DrawerOutcome::Unavailable;
         };
         let kick = PrintJob {
@@ -162,17 +168,17 @@ impl Printers {
             return DrawerOutcome::Unavailable;
         }
         if acknowledged.within(KICK_WAIT).await {
-            tracing::info!(%job_id, %printer, %agent, "cash drawer kicked through its print agent");
+            tracing::info!(target: LOG_TARGET, %job_id, %printer, %agent, "cash drawer kicked through its print agent");
             DrawerOutcome::Opened
         } else {
-            tracing::warn!(%job_id, %printer, %agent, "the print agent did not acknowledge the kick in time");
+            tracing::warn!(target: LOG_TARGET, %job_id, %printer, %agent, "the print agent did not acknowledge the kick in time");
             DrawerOutcome::Unavailable
         }
     }
 
     /// Records what a print agent's claim said about it: whether it carries a kick. The claim
     /// route calls this once the binding has said which terminal the caller is.
-    pub(crate) fn heard_from_agent(&self, agent: DeviceId, carries_kick: bool) {
+    pub fn heard_from_agent(&self, agent: DeviceId, carries_kick: bool) {
         let mut kicking = self
             .kicking
             .lock()
@@ -200,7 +206,7 @@ impl Printers {
 
     /// An agent acknowledged `job`: a till waiting on it as a kick hears so. The acknowledgement
     /// route calls this for a job it deleted from the queue.
-    pub(crate) fn acknowledged(&self, job: EventId) {
+    pub fn acknowledged(&self, job: EventId) {
         let waiting = self
             .awaited
             .lock()

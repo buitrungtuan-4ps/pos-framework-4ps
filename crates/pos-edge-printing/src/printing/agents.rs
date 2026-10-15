@@ -18,6 +18,10 @@ use tokio::sync::oneshot;
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, KICK_WAIT, MAX_QUEUED_PER_PRINTER};
 use crate::printing::PrintOutcome;
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::printing::agents";
+
 /// Where a job goes when its printer names an agent.
 ///
 /// **Dyn-compatible on purpose, unlike the three seams underneath it.** `PrintAgents`, `PrintQueue`
@@ -128,7 +132,7 @@ where
                 Err(error) => {
                     // A store that will not say whether the agent is there is treated as *not*
                     // there: nothing is written, and the till reads a named refusal.
-                    tracing::warn!(%agent, %error, "a print agent's standing could not be read");
+                    tracing::warn!(target: LOG_TARGET, %agent, %error, "a print agent's standing could not be read");
                     return PrintOutcome::AgentUnavailable;
                 }
             };
@@ -136,6 +140,7 @@ where
             let heard_from = standing.map(|standing| standing.last_seen_ms);
             if heard_from.is_none_or(|last| now_ms.saturating_sub(last) > silence_ms) {
                 tracing::warn!(
+                    target: LOG_TARGET,
                     %agent,
                     %printer,
                     bound = heard_from.is_some(),
@@ -174,11 +179,12 @@ where
                     self.wake.queued(agent);
                     // The job's identifier and its destination, never its content
                     // (`pos_ports::printer`).
-                    tracing::info!(%job_id, %agent, %printer, "queued to a print agent");
+                    tracing::info!(target: LOG_TARGET, %job_id, %agent, %printer, "queued to a print agent");
                     PrintOutcome::QueuedToAgent
                 }
                 Ok(crate::print_queue::Enqueued::QueueFull) => {
                     tracing::warn!(
+                        target: LOG_TARGET,
                         %job_id,
                         %agent,
                         %printer,
@@ -187,7 +193,7 @@ where
                     PrintOutcome::QueueFull
                 }
                 Err(error) => {
-                    tracing::warn!(%job_id, %agent, %printer, %error, "the print queue refused the job");
+                    tracing::warn!(target: LOG_TARGET, %job_id, %agent, %printer, %error, "the print queue refused the job");
                     PrintOutcome::Unavailable
                 }
             }

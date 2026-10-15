@@ -24,6 +24,10 @@ use crate::printing::language::receipt_lines_in;
 use crate::printing::tickets::ticket_at;
 use crate::printing::{PrintOutcome, Printers};
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::printing::jobs";
+
 impl Printers {
     /// Prints the guest's receipt for a settled bill, on `till`'s receipt printer: the store's,
     /// unless the till's terminal names its own that the node lists as a printer serving no
@@ -268,6 +272,7 @@ impl Printers {
             station_printer(&session.devices, &session.stations, fired.station_id)
         else {
             tracing::info!(
+                target: LOG_TARGET,
                 "no printer is published for that station or its backup; the kitchen display still has the order"
             );
             return PrintOutcome::NoPrinter;
