@@ -8,6 +8,7 @@
 /crates/pos-cloud-catalog/ @maintainers-cloud
 /crates/pos-cloud-config/ @maintainers-cloud
 /crates/pos-cloud-devices/ @maintainers-cloud
+/crates/pos-cloud-floor/ @maintainers-cloud
 /crates/pos-cloud-inventory/ @maintainers-cloud
 /crates/pos-cloud-reports/ @maintainers-cloud
 /crates/pos-edge-app/    @maintainers-architecture

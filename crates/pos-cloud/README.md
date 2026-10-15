@@ -14,7 +14,7 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-inventory`, `pos-cloud-reports`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-reports`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
 - **Used by** (workspace crates): no workspace crate.
 
 ## Entry points
@@ -28,6 +28,7 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 - `pos-cloud-config` (re-exported as `config_tree`, `registry`, `settings`, `confirmed_values`, `qr_ordering`, `data_migrations`): the configuration tree and the publish every area writes through, the org registry and settings
 - `pos-cloud-devices` (re-exported as `activation`, `claim`, `devices`; its routes imported into `http` as `devices`): activation, claims, device onboarding and their publish; `src/http/admitted_devices.rs` keeps the admitted-device roster
 - `pos-cloud-catalog` (re-exported as `catalog`, `catalog_compiler`, `fees`, `media`, `images`, `tax`, `import`, `export`, `translations`; its routes imported into `http` as `catalog`, `fees`, `media`, `tax_rates`, `translations`): the catalog with its fees, media, tax rates, the translation grid and the item CSV, and their publish
+- `pos-cloud-floor` (re-exported as `floorplan`, `floor_compiler`, `qr`; its routes imported into `http` as `floor`): areas, tables, stations and routing, their publish, and the table QR codes; `src/qr_http.rs` keeps the guest-facing `/v1/qr/orders`
 - `pos-cloud-inventory` (re-exported as `inventory`; its routes imported into `http` as `inventory`): ingredients, recipes, suppliers and their publish
 - `pos-cloud-api` (re-exported as `auth`, `audit`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail and the error envelope
 

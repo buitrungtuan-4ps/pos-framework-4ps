@@ -20,7 +20,7 @@ The cloud's catalog, with its fees: the item master, menus, taxonomies, courses 
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-reports`, `pos-core`, `pos-proto`, `store-postgres`.
-- **Used by** (workspace crates): `pos-cloud`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-floor`.
 
 ## Entry points
 
