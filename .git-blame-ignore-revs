@@ -124,3 +124,6 @@ a0fc27dcb82be94751a0475b838f6b158911feda
 
 # #822 — Edge, its commands, sign-in and the authorities move into pos-edge-app
 cdfcce9ecc028ddef34e26f503f88ba7495bec89
+
+# #823 — printing, the print-agent lane and its queue move into pos-edge-printing
+b7557135b309c466797e6123ca17e2f2aad5d8a8
