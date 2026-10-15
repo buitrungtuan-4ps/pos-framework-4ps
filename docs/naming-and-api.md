@@ -247,7 +247,7 @@ Two existing modules predate the rule and keep their names until they move:
 **Files and directories** are `kebab-case`: `crates/pos-core`, `crates/adapters/store-sqlite`,
 `templates/adapter-template`, `docs/guides/write-an-adapter.md`. The exception is a Rust module, whose
 file or directory is `snake_case` because the module path is its name: `pos-edge/src/http/route_permissions.rs`,
-`pos-cloud/src/config_tree/`.
+`pos-cloud-config/src/config_tree/`.
 
 **Standard codes**, for new fields and values:
 

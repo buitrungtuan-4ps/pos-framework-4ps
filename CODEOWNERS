@@ -5,6 +5,7 @@
 /crates/pos-proto/       @maintainers-architecture
 /crates/adapters/windows-protect/ @maintainers-architecture
 /crates/pos-cloud-api/   @maintainers-cloud
+/crates/pos-cloud-config/ @maintainers-cloud
 /crates/pos-cloud-reports/ @maintainers-cloud
 /deploy/                 @maintainers-cloud
 /.github/                @maintainers-architecture
