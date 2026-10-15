@@ -91,3 +91,6 @@ a697534c895232aa683aa9cacdcb424a3fc80647
 
 # #807 — the edge's floor commands and their tests move into their own module
 34a75ee5eaf3352bd96d2ea382c3e92f63ade70e
+
+# #808 — the edge's projection and event plumbing move into their own modules
+b99e200e7b609ee9b2f9c1c6a2a29441834ea9dd
