@@ -82,3 +82,6 @@ e14828d075c16e9b5e2603e3ec80321898124973
 
 # #803 — the edge's bill, settle and receipt commands and their tests move into their own modules
 c8754d354a581dc7d13eacf786f032eaf14b9b49
+
+# #805 — the edge's shift and drawer commands and their tests move into their own modules
+a697534c895232aa683aa9cacdcb424a3fc80647
