@@ -27,7 +27,7 @@
 "crates/pos-edge/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
-"crates/pos-edge/src/printing/mod.rs" = 6410
+"crates/pos-edge/src/printing/mod.rs" = 3957
 "crates/pos-edge/src/server.rs" = 2125
 "crates/pos-edge/tests/acceptance.rs" = 2564
 "crates/pos-edge/tests/domain_flow.rs" = 2343
@@ -97,9 +97,9 @@
 "crates/pos-edge/src/main.rs::run" = { lines = 110, params = 2 }
 "crates/pos-edge/src/order_in.rs::<EdgeOrderIn as OrderIn>::submit" = { lines = 168, params = 2 }
 "crates/pos-edge/src/ota_client.rs::OtaClient::new" = { lines = 21, params = 9 }
-"crates/pos-edge/src/printing/mod.rs::Printers::print_receipt" = { lines = 42, params = 9 }
-"crates/pos-edge/src/printing/mod.rs::bill_document" = { lines = 101, params = 7 }
-"crates/pos-edge/src/printing/mod.rs::receipt_copy_document" = { lines = 26, params = 10 }
+"crates/pos-edge/src/printing/documents.rs::bill_document" = { lines = 101, params = 7 }
+"crates/pos-edge/src/printing/documents.rs::receipt_copy_document" = { lines = 26, params = 10 }
+"crates/pos-edge/src/printing/jobs.rs::Printers::print_receipt" = { lines = 42, params = 9 }
 "crates/pos-edge/src/server.rs::compose" = { lines = 252, params = 8 }
 "crates/pos-edge/src/server.rs::compose_cloud_surface" = { lines = 118, params = 15 }
 "crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
