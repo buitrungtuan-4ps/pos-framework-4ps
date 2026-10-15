@@ -73,3 +73,6 @@ dc8c5eb97db492c7daa013c0d6f7f3a8c442a1e7
 
 # #800 — the edge's session, roster, errors, views and records move into their own modules (app.rs becomes app/mod.rs)
 e14828d075c16e9b5e2603e3ec80321898124973
+
+# #801 — the edge's composition and who may act move into their own modules
+7ac8f843f3f7ae2ed490634c84ab359288be6077
