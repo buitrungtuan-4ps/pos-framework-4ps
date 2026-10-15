@@ -5,7 +5,6 @@
 [files]
 "crates/adapters/store-postgres/src/catalog.rs" = 1859
 "crates/adapters/store-postgres/src/store.rs" = 1573
-"crates/adapters/store-postgres/tests/integration.rs" = 4967
 "crates/adapters/store-sqlite/src/store.rs" = 1184
 "crates/adapters/store-sqlite/src/writer.rs" = 2521
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
