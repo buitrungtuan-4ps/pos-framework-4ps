@@ -25,12 +25,12 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 - `src/http/<area>.rs` and `src/http/<area>/`: an area's routes, state and handlers, one module per business area
 - `pos-cloud-reports` (re-exported as `dashboard::{rollup, projection}`, the report types in `cloud`, the CSV writers in `export`): the reports and their routes; `src/dashboard/projector.rs` keeps them current
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
-- `pos-cloud-config` (re-exported as `config_tree`, `registry`, `settings`, `confirmed_values`, `qr_ordering`, `data_migrations`): the configuration tree and the publish every area writes through, the org registry and settings
+- `pos-cloud-config` (re-exported as `config_tree`, `registry`, `settings`, `store_groups`, `confirmed_values`, `qr_ordering`, `data_migrations`): the configuration tree and the publish every area writes through, the org registry, settings and the store-group model
 - `pos-cloud-devices` (re-exported as `activation`, `claim`, `devices`; its routes imported into `http` as `devices`): activation, claims, device onboarding and their publish; `src/http/admitted_devices.rs` keeps the admitted-device roster
 - `pos-cloud-catalog` (re-exported as `catalog`, `catalog_compiler`, `fees`, `media`, `images`, `tax`, `import`, `export`, `translations`; its routes imported into `http` as `catalog`, `fees`, `media`, `tax_rates`, `translations`): the catalog with its fees, media, tax rates, the translation grid and the item CSV, and their publish
 - `pos-cloud-floor` (re-exported as `floorplan`, `floor_compiler`, `qr`; its routes imported into `http` as `floor`): areas, tables, stations and routing, their publish, and the table QR codes; `src/qr_http.rs` keeps the guest-facing `/v1/qr/orders`
 - `pos-cloud-inventory` (re-exported as `inventory`; its routes imported into `http` as `inventory`): ingredients, recipes, suppliers and their publish
-- `pos-cloud-api` (re-exported as `auth`, `audit`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail and the error envelope
+- `pos-cloud-api` (re-exported as `auth`, `audit`, `health`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail, the background loops' heartbeats and the error envelope
 
 ## Rules
 
