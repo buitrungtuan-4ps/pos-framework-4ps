@@ -21,7 +21,7 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 | 3. CI runs what changed | A `changes` job with path classes, `xtask affected`, nextest, build once and shard, `xtask impact` on each PR; `main` and nightly run everything | Done. A docs-only pull request takes 0:34 instead of 9:28; one that runs everything takes about 5:20, with no job over 3:47 ([figures](../metrics/ci-2026-10-phase3.md)) | #720, #721, #722, #723, #724, #725 |
 | 4. Pilot | Reporting split into modules, then `pos-cloud-reports` on a `pos-cloud-api` base; the five longest functions split; build, token and review time measured | Done. **Decision gate 1** taken 2026-10-14: option B, below. A report is now changed in one crate that builds in 2.4 s; `pos-cloud` still takes about 81 s ([figures](../metrics/pilot-2026-10.md)) | #727, #728, #730, #732 |
 | 5. Module split | `http.rs`, `app.rs`, `persistence.rs`, `printing.rs` and the large test files into modules of ≤ 500 lines by business area and role; a route declared in one place | Not started; in full under gate 1. The pull-request backlog is cleared through #738–#743 | |
-| 6. Crate split | 14 crates (9 cloud, 5 edge) under `crates/core`, `crates/edge`, `crates/cloud` | In progress. `pos-cloud-config`, `pos-cloud-inventory` and `pos-cloud-devices` are crates, on the shared helpers moved into `pos-cloud-api`. **Decision gate 2** passed on 2026-10-15 (continue, area by area): an area change now builds its crate in 1–2 s and its tests in 1.5–3 s; `pos-cloud` still takes about 70 s ([figures](../metrics/crates-2026-10.md)) | #816, #817, #818, #819 |
+| 6. Crate split | The crates [ADR-0175](../adr/0175-the-crate-list-follows-what-a-move-can-reach.md) lists: `pos-cloud-catalog` (with fees), `-config`, `-people`, `-devices`, `-floor` and `-inventory`, then `-integrations` and `-admin` after a sub-state design; `pos-edge-app` (with billing, shift and floor) and `pos-edge-printing` | In progress. `pos-cloud-config`, `pos-cloud-inventory` and `pos-cloud-devices` are crates, on the shared helpers moved into `pos-cloud-api`. **Decision gate 2** passed on 2026-10-15 (continue, area by area): an area change now builds its crate in 1–2 s and its tests in 1.5–3 s; `pos-cloud` still takes about 70 s ([figures](../metrics/crates-2026-10.md)) | #816, #817, #818, #819 |
 | 7. Long functions | The functions over 100 lines (64 in the size baseline after the pilot; the roadmap survey counted 55) down to ≤ 60, 3–5 per PR with tests and a mutation check | Not started; needs 5; may run beside 6. `pos-cloud`'s `main.rs::run` and `store-postgres`'s `PostgresStore::migrate` get tests before they are split | |
 | 8. Generate and self-register | TypeScript types from 100% OpenAPI; one screen registry; map, graph and CODEOWNERS from the contract cards; `cargo xtask new crate\|route\|setting\|screen\|adapter\|country` | Not started; needs 6 | |
 | 9. Framework guides | Add a country, write an adapter, add a setting, add a business area, each with a runnable example; optionally a merge queue and larger runners | Not started; needs 8. No merge queue or larger runners for now (owner, 2026-10-14) | |
@@ -50,6 +50,10 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 - 2026-10-13 — The `impact` comment is informational and never a required check (#725).
 - 2026-10-13 — Changes to `AGENTS.md`, and new nested `AGENTS.md` files, are applied by the owner,
   not by an agent (ADR-0126's reasoning). The phase 2.4 drafts wait for the owner.
+
+- 2026-10-15 — The crate list follows what a move can reach (ADR-0175, superseding ADR-0170
+  decision 4's list on three points): edge billing, shift and floor stay in `pos-edge-app`; catalog
+  and fees are one crate; integrations and admin wait for a written sub-state design.
 
 ### The owner's decisions of 2026-10-14
 
