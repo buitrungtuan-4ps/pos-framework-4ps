@@ -14,6 +14,7 @@ use axum::routing::get;
 use brands::{admin_create_brand, admin_list_brands, admin_update_brand};
 use devices::{admin_create_device, admin_list_devices, admin_update_device};
 use pos_cloud_api::response::api_error;
+use pos_cloud_config::route::registry_error_response;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use serde::Deserialize;
@@ -22,7 +23,7 @@ use tenants::{admin_create_tenant, admin_list_tenants, admin_update_tenant};
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
-use crate::registry::{RegistryStore, RegistryStoreError};
+use crate::registry::RegistryStore;
 use crate::starting_roles::StartingRoles;
 
 mod brands;
@@ -165,15 +166,6 @@ struct UpdateDeviceRequest {
     name: String,
     kind: String,
     status: String,
-}
-
-/// Maps a registry store failure to a retryable `503`, logging the detail rather than leaking it.
-pub(in crate::http) fn registry_error_response(error: &RegistryStoreError) -> Response {
-    tracing::error!(%error, "a registry store operation failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the registry service is unavailable",
-    )
 }
 
 /// The `503` returned when OS entropy is unavailable to mint an id.

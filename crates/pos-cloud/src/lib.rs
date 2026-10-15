@@ -64,14 +64,16 @@ pub use pos_cloud_config::{
 pub use pos_cloud_inventory::inventory;
 // Moved to pos-cloud-devices (ADR-0170 decision 4); re-exported so their paths still work.
 pub use pos_cloud_devices::{activation, claim, devices};
+// Moved to pos-cloud-catalog (ADR-0170 decision 4, ADR-0175); re-exported so their paths still work.
+pub use pos_cloud_catalog::{
+    catalog, catalog_compiler, export, fees, images, import, media, tax, translations,
+};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
 pub mod archive_retention;
 pub mod assets;
 pub mod campaigns;
-pub mod catalog;
-pub mod catalog_compiler;
 pub mod chain_audit;
 pub mod clock;
 pub mod cloud;
@@ -80,17 +82,12 @@ pub mod connections;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
-pub mod export;
-pub mod fees;
 pub mod fleet;
 pub mod floor_compiler;
 pub mod floorplan;
 pub mod health;
 pub mod http;
-pub mod images;
-pub mod import;
 pub mod lease;
-pub mod media;
 pub mod metrics;
 mod openapi;
 mod openapi_admin;
@@ -113,9 +110,7 @@ pub mod retention;
 pub mod scheduling;
 pub mod starting_roles;
 pub mod store_groups;
-pub mod tax;
 mod till_names;
-pub mod translations;
 pub mod vouchers;
 pub mod wake;
 pub mod webhook;

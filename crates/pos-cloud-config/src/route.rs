@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::config_tree::{CapabilityValidator, ConfigLevel, ConfigTree, ConfigTreeStore};
 use crate::publish::{only_settings, strip_tree_version};
-use crate::registry::EntityStatus;
+use crate::registry::{EntityStatus, RegistryStoreError};
 
 /// A `?tenant_id=` query for the tenant-scoped listings.
 #[derive(Debug, Clone, Deserialize)]
@@ -155,6 +155,15 @@ fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::
         }
         Some(other) => other.clone(),
     }
+}
+
+/// Maps a registry store failure to a retryable `503`, logging the detail rather than leaking it.
+pub fn registry_error_response(error: &RegistryStoreError) -> Response {
+    tracing::error!(%error, "a registry store operation failed");
+    api_error(
+        ErrorStatus::Unavailable,
+        "the registry service is unavailable",
+    )
 }
 
 #[cfg(test)]
