@@ -19,6 +19,10 @@ use pos_proto::{BillState, OrderLineState, TableState};
 
 use crate::app::{EdgeSession, LineRecord, MAX_COOKING, Projection, StaffDecision};
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::app::projection::lines";
+
 impl Projection {
     /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
     pub(in crate::app) fn refresh_live(&mut self, order_id: OrderId) {
@@ -131,7 +135,11 @@ impl Projection {
     pub(in crate::app) fn consume(&mut self, movements: &[StockMovement]) {
         for movement in movements {
             if let Err(error) = self.stock.apply(movement) {
-                tracing::warn!(%error, "a stock movement overflowed the projection; not folded");
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    %error,
+                    "a stock movement overflowed the projection; not folded"
+                );
             }
         }
     }

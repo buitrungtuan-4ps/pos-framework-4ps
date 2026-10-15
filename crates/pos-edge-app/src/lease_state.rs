@@ -20,13 +20,13 @@
 //!
 //! The take is therefore an `INSERT … ON CONFLICT DO NOTHING` on the store's own SQLite (migration
 //! `0008_lease.sql`), so the rule sits in the schema and not only in the Rust that happens to call
-//! it. Durable for the same reason [`crate::ota_state`] is: an install **deliberately restarts the
+//! it. Durable for the same reason `pos_edge::ota_state` is: an install **deliberately restarts the
 //! edge** ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md)), and a held generation in process
 //! memory would be re-taken from config on every boot.
 //!
 //! # Why this is not a port
 //!
-//! Same category as [`OtaStateAuthority`](crate::ota_state::OtaStateAuthority),
+//! Same category as `pos_edge::ota_state::OtaStateAuthority`,
 //! [`QueueNumberAuthority`](crate::queue::QueueNumberAuthority) and
 //! [`ReceiptAuthority`](crate::receipt::ReceiptAuthority): durable *edge-local* bookkeeping, a trait
 //! `pos-edge` defines and implements **for** [`SqliteStore`] over that store's public API, with an
@@ -42,6 +42,10 @@ use pos_core::lease::{LeaseGeneration, LeaseStanding, lease_standing};
 use pos_ports::PortError;
 use pos_proto::ids::StoreId;
 use store_sqlite::SqliteStore;
+
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::lease_state";
 
 /// A hand-boxed future, so [`HeldLease`] can be a trait object. The workspace takes no
 /// `async-trait`, and adding one for a single method would be a dependency decision of its own.
@@ -210,7 +214,7 @@ impl LeaseAuthority for InMemoryLease {
 /// The lease standing this box is acting on, shared by the loop that decides it and everything that
 /// acts on it ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
 ///
-/// Shaped exactly like [`Origins`](crate::origins::Origins) and [`Pairing`](crate::pairing::Pairing),
+/// Shaped exactly like `pos_edge::origins::Origins` and `pos_edge::pairing::Pairing`,
 /// and for the same reasons: interior mutability behind one `Arc`, written by the config-pull loop
 /// and read by the request path — here also by the application layer, which is the reader that
 /// decides whether a table may be seated.
@@ -286,8 +290,8 @@ impl CurrentStanding {
 /// The box's own lease in the one shape the config-pull loop needs it: hand it the generation the
 /// cloud last published, get back what this box is.
 ///
-/// A trait object rather than a type parameter on [`ConfigClient`](crate::config_client::ConfigClient),
-/// which is the same call [`DeviceRevocations`](crate::device_revocations::DeviceRevocations) made
+/// A trait object rather than a type parameter on `pos_edge::config_client::ConfigClient`,
+/// which is the same call `pos_edge::device_revocations::DeviceRevocations` made
 /// with its `Arc<dyn DurableAuth>`: a parameter would reach every test and example that builds a
 /// config loop, and none of them has a lease. It is a *narrower* trait than [`LeaseAuthority`] and
 /// not a replacement for it — the loop has no business taking or reading a generation, only weighing
@@ -386,11 +390,13 @@ impl LeaseWatch {
             Ok(()) => {
                 self.current.set(LeaseStanding::Active);
                 tracing::info!(
+                    target: LOG_TARGET,
                     "activation cleared any lease generation this box inherited; the next config \
                      pull takes the store's current one"
                 );
             }
             Err(error) => tracing::error!(
+                target: LOG_TARGET,
                 %error,
                 "activation could not clear an inherited lease generation; if this box was built \
                  from a copy of another box's store.sqlite it may refuse to open new orders until \
@@ -415,6 +421,7 @@ impl LeaseWatch {
                 self.current.set(weighed);
                 if previous != weighed {
                     tracing::info!(
+                        target: LOG_TARGET,
                         ?previous,
                         standing = ?weighed,
                         "this box's lease standing changed"
@@ -422,6 +429,7 @@ impl LeaseWatch {
                 }
             }
             Err(error) => tracing::warn!(
+                target: LOG_TARGET,
                 %error,
                 "could not weigh this box's lease standing; keeping the standing it was already \
                  acting on, because reading it as active would let a replaced machine open orders"

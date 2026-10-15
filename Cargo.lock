@@ -1997,6 +1997,7 @@ dependencies = [
  "pos-country-jp",
  "pos-country-vn",
  "pos-country-zz",
+ "pos-edge-app",
  "pos-fakes",
  "pos-ports",
  "pos-proto",
@@ -2023,6 +2024,24 @@ dependencies = [
  "windows-protect",
  "windows-service",
  "zeroize",
+]
+
+[[package]]
+name = "pos-edge-app"
+version = "0.0.0"
+dependencies = [
+ "argon2",
+ "getrandom 0.4.3",
+ "pos-core",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-sqlite",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

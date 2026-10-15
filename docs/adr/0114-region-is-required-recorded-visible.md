@@ -242,7 +242,7 @@ parts of it are personal.
 the box authenticates against. [`config_client.rs`](../../crates/pos-edge/src/config_client.rs)
 deserialises each staff member as an id, the code a person types, their granted permissions and
 `pin_phc` — the Argon2id PHC string
-[`auth.rs`](../../crates/pos-edge/src/auth.rs) verifies against. Those hashes sit on that machine's
+[`auth.rs`](../../crates/pos-edge-app/src/auth.rs) verifies against. Those hashes sit on that machine's
 disk and in its memory, and they are credentials belonging to named people.
 
 **A B2B buyer's name, tax code and address.** [ADR-0107](0107-the-buyer-is-a-subject.md) put the

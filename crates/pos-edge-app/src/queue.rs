@@ -11,7 +11,7 @@
 //! simply starts at 1.
 //!
 //! [`crate::app::Edge`] is generic over its store `S`, so it cannot reach a concrete store's
-//! inherent counter; the authority is injected into [`EdgeOrderIn`](crate::EdgeOrderIn) instead. In
+//! inherent counter; the authority is injected into `pos_edge::EdgeOrderIn` instead. In
 //! the field that is [`store_sqlite::SqliteStore`], whose single writer thread serialises every
 //! allocation into one durable counter — so a restart mid-day does **not** reissue `#1`. The
 //! fakes-backed example and the intake tests use [`InMemoryQueueNumbers`], the same contract
@@ -29,7 +29,7 @@ use store_sqlite::SqliteStore;
 
 /// Allocates the daily queue number a tableless order is called back by (ADR-0064).
 ///
-/// Injected into [`EdgeOrderIn`](crate::EdgeOrderIn) rather than derived from the store type, so the
+/// Injected into `pos_edge::EdgeOrderIn` rather than derived from the store type, so the
 /// one intake path runs unchanged over the real SQLite store and over the fakes.
 pub trait QueueNumberAuthority: Send + Sync {
     /// Allocates the next queue number for `order_id` at `store_id` on `business_date`.

@@ -17,7 +17,7 @@
 //!
 //! The 80 random bits come from a `SplitMix64` stream seeded once from the OS CSPRNG (`getrandom`).
 //! A ULID's randomness is not a secret — unlike a pairing code or a device token, which take OS
-//! entropy directly ([`crate::pairing`]) — and within-millisecond uniqueness is guaranteed by the
+//! entropy directly (`pos_edge::pairing`) — and within-millisecond uniqueness is guaranteed by the
 //! increment regardless, so a fast non-cryptographic stream is the right tool here.
 
 use pos_proto::ulid::Ulid;

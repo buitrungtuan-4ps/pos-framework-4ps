@@ -16,7 +16,7 @@
 //!
 //! A PIN and its hash are secrets: they never enter a log, a span, an event, or the fan-out. Only the
 //! employee id (an identifier, not PII) and the outcome are observable. See
-//! [`crate::telemetry`].
+//! `pos_edge::telemetry`.
 //!
 //! # Why the lockout is separable from the hashing
 //!
@@ -43,11 +43,11 @@ use pos_proto::time::Timestamp;
 
 /// The `tracing` target every event in this module carries.
 ///
-/// Named rather than spelled out at the reader's end, so that
-/// [`crate::telemetry::EXCLUDED_TARGETS`] — which keeps this module's per-employee sign-in,
-/// wrong-PIN and lockout stream out of the durable log file (ADR-0117 decision 6) — cannot go stale
-/// if the module moves.
-pub(crate) const LOG_TARGET: &str = module_path!();
+/// Named rather than spelled out at the reader's end, so that `pos_edge::telemetry::EXCLUDED_TARGETS`
+/// — which keeps this module's per-employee sign-in, wrong-PIN and lockout stream out of the durable
+/// log file (ADR-0117 decision 6) — cannot go stale. Spelled as the path this module had in
+/// `pos_edge`, so the target stays the same now that the module lives in this crate.
+pub const LOG_TARGET: &str = "pos_edge::auth";
 
 /// How many consecutive wrong PINs lock a person out, and for how long: the store's own numbers from
 /// its `session` node ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
@@ -120,7 +120,7 @@ pub fn verify_pin(phc_hash: &str, pin: &str) -> bool {
 /// has no cloud to publish a roster from, and without one no sign-in can succeed.
 ///
 /// `None` if the OS entropy source needed for the salt is unavailable — a salt is never faked, for
-/// the same reason a pairing code is not ([`crate::pairing::Pairing::mint`]).
+/// the same reason a pairing code is not (`pos_edge::pairing::Pairing::mint`).
 #[cfg(feature = "demo-fixtures")]
 #[must_use]
 pub fn hash_pin(pin: &str) -> Option<String> {
@@ -240,7 +240,7 @@ impl Lockout {
 /// that person the next day. A store sets its own window with the `session.sign_in_idle_timeout_minutes`
 /// setting ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
 /// one that does not runs the local file's deprecated value, if it sets one
-/// ([`EdgeConfig::sign_in_idle_timeout`](crate::EdgeConfig::sign_in_idle_timeout)), and this
+/// (`pos_edge::EdgeConfig::sign_in_idle_timeout`), and this
 /// otherwise. The same thirty as
 /// [`DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES`](pos_proto::session::DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES),
 /// which a test holds it to.
@@ -300,7 +300,7 @@ pub struct Admission {
 /// Who is signed in on each paired device (S0b, [ADR-0084](../../../docs/adr/0084-device-authentication.md)),
 /// durable across a restart (S0d, [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)).
 ///
-/// Device authentication ([`crate::pairing`]) proves *which tablet* is talking to the edge; this
+/// Device authentication (`pos_edge::pairing`) proves *which tablet* is talking to the edge; this
 /// records *which employee* is acting on it, so a command runs under a real
 /// [`Actor`](pos_core::decision::Actor) rather than a placeholder. A device signs one employee in at
 /// a time; signing another in replaces the first, and signing out clears the binding.
@@ -308,7 +308,7 @@ pub struct Admission {
 /// # Durable, guarded by an idle timeout
 ///
 /// Reads answer from memory and every change writes through to the [`DurableAuth`] registry, exactly
-/// as [`Pairing`](crate::pairing::Pairing) does — so a power blip or an OTA install no longer makes
+/// as `pos_edge::pairing::Pairing` does — so a power blip or an OTA install no longer makes
 /// every member of staff re-enter a PIN mid-service. The cost of that is a till carried off while
 /// signed in as a manager, and [`has_gone_idle`] is what bounds it: past the window, the binding is
 /// reported as absent and the device gets the same `403` an unsigned one gets.

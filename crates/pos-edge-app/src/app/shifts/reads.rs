@@ -15,6 +15,10 @@ use pos_proto::{ClockSource, ShiftState};
 use crate::app::records::is_till;
 use crate::app::{AppError, Edge, ShiftRecord, ShiftView, TillScope};
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::app::shifts::reads";
+
 impl<S: EventStore> Edge<S> {
     /// The shift trading now, as a device may see it: its id, its state and — once counted — the
     /// count the cashier entered. `None` when no shift is open.
@@ -73,6 +77,7 @@ impl<S: EventStore> Edge<S> {
         }
         if self.lock_projection().warn_day_ended(shift_id, today) {
             tracing::warn!(
+                target: LOG_TARGET,
                 %shift_id,
                 till = ?record.till,
                 opened_on = %record.business_date,

@@ -44,6 +44,10 @@ use tokio::net::UdpSocket;
 use crate::app::Edge;
 use crate::clock::SystemClock;
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::sntp";
+
 /// The offset past which the clock is considered adrift and an alarm is raised. Two seconds is well
 /// inside the tolerance business-date derivation needs and well outside ordinary NTP jitter.
 pub const DRIFT_ALARM: Duration = Duration::from_secs(2);
@@ -430,12 +434,13 @@ impl ClockStatus {
             Ok(reading) => {
                 *self.reading.lock().unwrap_or_else(PoisonError::into_inner) = Some(reading);
                 if self.failing.swap(false, Ordering::Relaxed) {
-                    tracing::info!("clock: the time server answers again");
+                    tracing::info!(target: LOG_TARGET, "clock: the time server answers again");
                 }
                 let alarm = matches!(reading.drift(), Drift::Alarm { .. });
                 let before = self.alarmed.swap(alarm, Ordering::Relaxed);
                 if alarm && !before {
                     tracing::warn!(
+                        target: LOG_TARGET,
                         offset_ms = reading.offset_ms,
                         alarm_ms = drift_alarm_ms(),
                         "clock: this box's clock is off by more than the drift alarm. The trading \
@@ -444,18 +449,24 @@ impl ClockStatus {
                     );
                 } else if before && !alarm {
                     tracing::info!(
+                        target: LOG_TARGET,
                         offset_ms = reading.offset_ms,
                         "clock: this box's clock is back within tolerance"
                     );
                 } else {
-                    tracing::debug!(offset_ms = reading.offset_ms, "clock: measured");
+                    tracing::debug!(
+                        target: LOG_TARGET,
+                        offset_ms = reading.offset_ms,
+                        "clock: measured"
+                    );
                 }
             }
             Err(error) => {
                 if self.failing.swap(true, Ordering::Relaxed) {
-                    tracing::debug!(%error, "clock: still cannot measure");
+                    tracing::debug!(target: LOG_TARGET, %error, "clock: still cannot measure");
                 } else {
                     tracing::warn!(
+                        target: LOG_TARGET,
                         %error,
                         "clock: cannot measure this box's clock against the time server, so a \
                          drift goes unreported until it can; the store trades either way"
@@ -481,6 +492,7 @@ where
     let server = server.trim().to_owned();
     if server.is_empty() {
         tracing::warn!(
+            target: LOG_TARGET,
             "sntp_server is empty: this box's clock is not measured, so a drifting clock goes \
              unreported"
         );

@@ -219,7 +219,7 @@ Any time-based handover would fire somewhere in the middle of that, unattended.
 **The edge takes its generation once.** The held generation is a row on the store's own SQLite,
 inserted with `ON CONFLICT DO NOTHING` (migration
 [`0008_lease.sql`](../../crates/adapters/store-sqlite/migrations/0008_lease.sql)), and
-[`lease_state.rs`](../../crates/pos-edge/src/lease_state.rs) states the rule in the trait itself:
+[`lease_state.rs`](../../crates/pos-edge-app/src/lease_state.rs) states the rule in the trait itself:
 
 ```rust
 /// Two operations and no setter, deliberately. There is no way to move a held generation *forward*
