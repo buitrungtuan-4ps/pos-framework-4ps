@@ -5,5 +5,5 @@ kind: added
   records what `pos-cloud-config`, `pos-cloud-inventory` and `pos-cloud-devices` cost and changed:
   build and test times before and after with a target directory per side, what changing one thing
   in each area means reading, what CI runs, the crate sizes, what was found, and an order for the
-  remaining crates. Decision gate 2 is taken on it, and the plan marks phase 6 in progress with the
-  gate open.
+  remaining crates. Decision gate 2 is taken on it: continue, one area at a time, where the boundary
+  is clean.
