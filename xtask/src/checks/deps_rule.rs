@@ -188,122 +188,154 @@ pub fn check(meta: &Metadata, allow: &Allowlist, closures: &Closures) -> Vec<Fin
         let Some(pkg) = meta.packages.iter().find(|p| p.name == name) else {
             continue; // Crate not created yet; earlier phases are allowed to lack it.
         };
-        let manifest = if pkg.manifest_path.is_empty() {
-            format!("crates/{name}/Cargo.toml")
-        } else {
-            relative(&pkg.manifest_path)
-        };
-
-        // -- Layer 1: declared normal dependencies. -------------------------
+        let manifest = manifest_of(pkg);
         for dep in pkg.dependencies.iter().filter(|d| d.kind.is_none()) {
-            // Same reasoning as the closure walk: a proc macro expands in the
-            // compiler and is never linked, so it is not an infrastructure
-            // dependency whether it is declared directly or reached transitively.
-            let declared_is_proc_macro = meta
-                .packages
-                .iter()
-                .find(|p| p.name == dep.name)
-                .is_some_and(Package::is_proc_macro);
-            if !declared_is_proc_macro && !allow.permits(&dep.name) {
-                findings.push(
-                    Finding::new(
-                        &manifest,
-                        "dependency-rule",
-                        format!(
-                            "`{name}` declares `{}`, which is not allow-listed",
-                            dep.name
-                        ),
-                    )
-                    .with_hint(
-                        "either drop the dependency, or add it to \
-                         tools/backbone-allowlist.toml with an ADR — that file needs an \
-                         architecture reviewer",
-                    ),
-                );
-            }
-
-            // A crate can be allow-listed and still be wrong: jiff's default
-            // features read $TZ and /usr/share/zoneinfo (ADR-0014).
-            if let Some(forbidden) = allow.forbidden_features.get(&dep.name) {
-                if dep.uses_default_features == Some(true)
-                    && forbidden.iter().any(|f| f == "default")
-                {
-                    findings.push(
-                        Finding::new(
-                            &manifest,
-                            "dependency-rule",
-                            format!(
-                                "`{name}` takes `{}` with default features, which are \
-                                 forbidden for this crate",
-                                dep.name
-                            ),
-                        )
-                        .with_hint("set `default-features = false` and list features explicitly"),
-                    );
-                }
-                for enabled in &dep.features {
-                    if forbidden.contains(enabled) {
-                        findings.push(Finding::new(
-                            &manifest,
-                            "dependency-rule",
-                            format!(
-                                "`{name}` enables `{}/{enabled}`, which is forbidden \
-                                 for this crate",
-                                dep.name
-                            ),
-                        ));
-                    }
-                }
-            }
+            findings.extend(declared_findings(meta, allow, name, &manifest, dep));
         }
+        findings.extend(linked_findings(meta, allow, closures, pkg, &manifest));
+    }
+    findings.extend(forbidden_edge_findings(meta, closures));
 
-        // -- Layer 2: what is actually linked. ------------------------------
-        let empty = BTreeSet::new();
-        let activated = closures.get(name).unwrap_or(&empty);
-        for reached in linked_closure(meta, &pkg.id, activated) {
-            if reached == name {
-                continue;
-            }
-            if !allow.permits(&reached) {
-                findings.push(
-                    Finding::new(
-                        &manifest,
-                        "dependency-rule",
-                        format!("`{name}` links `{reached}`, which is not allow-listed"),
-                    )
-                    .with_hint(format!(
-                        "find the path with `cargo tree -p {name} -e normal --target all \
-                         --invert {reached}`"
-                    )),
-                );
-            }
-        }
+    findings.sort_by(|a, b| (&a.file, &a.message).cmp(&(&b.file, &b.message)));
+    findings.dedup();
+    findings
+}
+
+/// The manifest a finding about `pkg` names, relative to the repository root.
+fn manifest_of(pkg: &Package) -> String {
+    if pkg.manifest_path.is_empty() {
+        format!("crates/{}/Cargo.toml", pkg.name)
+    } else {
+        relative(&pkg.manifest_path)
+    }
+}
+
+/// Layer 1: one declared normal dependency of the backbone crate `name`.
+fn declared_findings(
+    meta: &Metadata,
+    allow: &Allowlist,
+    name: &str,
+    manifest: &str,
+    dep: &Dependency,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    // Same reasoning as the closure walk: a proc macro expands in the
+    // compiler and is never linked, so it is not an infrastructure
+    // dependency whether it is declared directly or reached transitively.
+    let declared_is_proc_macro = meta
+        .packages
+        .iter()
+        .find(|p| p.name == dep.name)
+        .is_some_and(Package::is_proc_macro);
+    if !declared_is_proc_macro && !allow.permits(&dep.name) {
+        findings.push(
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` declares `{}`, which is not allow-listed",
+                    dep.name
+                ),
+            )
+            .with_hint(
+                "either drop the dependency, or add it to \
+                 tools/backbone-allowlist.toml with an ADR — that file needs an \
+                 architecture reviewer",
+            ),
+        );
     }
 
-    // -- Edges that are banned outright. ------------------------------------
+    // A crate can be allow-listed and still be wrong: jiff's default
+    // features read $TZ and /usr/share/zoneinfo (ADR-0014).
+    if let Some(forbidden) = allow.forbidden_features.get(&dep.name) {
+        findings.extend(forbidden_feature_findings(name, manifest, dep, forbidden));
+    }
+    findings
+}
+
+/// The features of `dep` its allow-list entry forbids, its defaults among them.
+fn forbidden_feature_findings(
+    name: &str,
+    manifest: &str,
+    dep: &Dependency,
+    forbidden: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if dep.uses_default_features == Some(true) && forbidden.iter().any(|f| f == "default") {
+        findings.push(
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` takes `{}` with default features, which are \
+                     forbidden for this crate",
+                    dep.name
+                ),
+            )
+            .with_hint("set `default-features = false` and list features explicitly"),
+        );
+    }
+    for enabled in &dep.features {
+        if forbidden.contains(enabled) {
+            findings.push(Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` enables `{}/{enabled}`, which is forbidden \
+                     for this crate",
+                    dep.name
+                ),
+            ));
+        }
+    }
+    findings
+}
+
+/// Layer 2: what the backbone crate `pkg` actually links.
+fn linked_findings(
+    meta: &Metadata,
+    allow: &Allowlist,
+    closures: &Closures,
+    pkg: &Package,
+    manifest: &str,
+) -> Vec<Finding> {
+    let name = pkg.name.as_str();
+    let empty = BTreeSet::new();
+    let activated = closures.get(name).unwrap_or(&empty);
+    linked_closure(meta, &pkg.id, activated)
+        .into_iter()
+        .filter(|reached| reached != name && !allow.permits(reached))
+        .map(|reached| {
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!("`{name}` links `{reached}`, which is not allow-listed"),
+            )
+            .with_hint(format!(
+                "find the path with `cargo tree -p {name} -e normal --target all \
+                 --invert {reached}`"
+            ))
+        })
+        .collect()
+}
+
+/// Edges that are banned outright, whatever the allow-list says.
+fn forbidden_edge_findings(meta: &Metadata, closures: &Closures) -> Vec<Finding> {
+    let mut findings = Vec::new();
     for (from, to, why) in FORBIDDEN_EDGES {
         let Some(pkg) = meta.packages.iter().find(|p| p.name == from) else {
             continue;
         };
-        let manifest = if pkg.manifest_path.is_empty() {
-            format!("crates/{from}/Cargo.toml")
-        } else {
-            relative(&pkg.manifest_path)
-        };
         let empty = BTreeSet::new();
         let activated = closures.get(from).unwrap_or(&empty);
-        let reaches = linked_closure(meta, &pkg.id, activated).contains(to);
-        if reaches {
+        if linked_closure(meta, &pkg.id, activated).contains(to) {
             findings.push(Finding::new(
-                &manifest,
+                manifest_of(pkg),
                 "dependency-rule",
                 format!("`{from}` must not depend on `{to}` — {why}"),
             ));
         }
     }
-
-    findings.sort_by(|a, b| (&a.file, &a.message).cmp(&(&b.file, &b.message)));
-    findings.dedup();
     findings
 }
 
