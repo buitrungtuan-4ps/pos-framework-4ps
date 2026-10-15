@@ -1767,6 +1767,7 @@ dependencies = [
  "link-nats",
  "metrics-vm",
  "pos-cloud-api",
+ "pos-cloud-config",
  "pos-cloud-reports",
  "pos-contract-tests",
  "pos-core",
@@ -1822,6 +1823,24 @@ dependencies = [
  "tokio",
  "tracing",
  "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-config"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "pos-cloud-api",
+ "pos-core",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

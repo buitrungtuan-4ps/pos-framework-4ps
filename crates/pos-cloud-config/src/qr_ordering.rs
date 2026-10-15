@@ -491,7 +491,7 @@ where
         return Ok(StoreOutcome::Unchanged);
     }
     // Read again inside the publish's retry, from the version the store runs at that moment.
-    crate::http::publish_config_nodes_with(
+    crate::publish::publish_config_nodes_with(
         config_trees,
         clock,
         tenant_id,

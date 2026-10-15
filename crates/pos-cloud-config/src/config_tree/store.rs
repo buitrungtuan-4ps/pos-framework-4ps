@@ -16,8 +16,31 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::time::Timestamp;
 
 use super::ConfigTreeState;
-use crate::fleet::PrintAgentStanding;
 use crate::version::{UpdateOutcome, Version, Versioned};
+
+/// One bound print agent, as the store last reported it
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Ids are kept as raw strings for the reason the config versions below are: the cloud did not mint
+/// the paired device id — the store did — and one report the cloud cannot parse must not fail a
+/// whole fleet read. The console shows what the store said.
+///
+/// Carries no personal data by construction: two opaque identifiers and a duration. Nothing a ticket
+/// *says* helps diagnose a stalled agent, so nothing a ticket says is here.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PrintAgentStanding {
+    /// The terminal a console admin created and a manager bound at the till.
+    pub agent_device_id: String,
+    /// The paired device answering for it.
+    pub paired_device_id: String,
+    /// How long the oldest still-unacknowledged job has waited, or `None` when nothing is waiting.
+    ///
+    /// `None` is the healthy answer and is deliberately not zero: an agent with an empty queue and
+    /// one whose ticket arrived this instant are different states, and only one is about to become
+    /// an alert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest_unacknowledged_secs: Option<u64>,
+}
 
 /// Persists and loads a store's config-tree state, keyed by `(tenant, store)`.
 pub trait ConfigTreeStore {
