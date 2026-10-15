@@ -241,3 +241,20 @@ These are cited from each pull request's hand-back, not re-run for this file.
 
 ## Orchestrator
 
+Reported by the orchestrator, which reviewed and merged each pull request.
+
+- **Pull requests:** #816 to #827, eleven move pull requests plus the gate-2 figures (#820) and
+  ADR-0175 (#821). Each merged on its first green CI run (24 of 24 checks, docs-only ones 9), five
+  to ten minutes after it opened. One needed a second push: #823's generated ADR index was out of
+  date because the check had run before the new README was committed.
+- **Review:** each move was checked by listing every added code line that is not, after removing
+  indentation and visibility, already a line of the crate it came from. What remained in every pull
+  request was imports, `mod` lines, rustfmt rewraps, the `ErrorResponse` path, the `ROUTE_CRATES`
+  list, log-target constants on the edge, and two hand-written `Debug` impls.
+- **Sub-agents:** two, one after the other: the first did the survey, #816 to #821 and the gate-2
+  figures; the second did #822 to #827 and these figures, resumed between steps.
+
+**Phase 6 is closed** on these figures. Integrations and admin stay in `pos-cloud` until their
+sub-state design is written (ADR-0175 decision 3). The edge test-binary merge goes to the backlog as
+a measured trial.
+
