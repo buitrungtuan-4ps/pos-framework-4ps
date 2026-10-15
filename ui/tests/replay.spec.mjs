@@ -1353,6 +1353,77 @@ test("a till whose link opens after it reached the floor still hears what happen
   }
 });
 
+// What a till hears while it reads again after a `resync` is applied after the read, never under it.
+//
+// The read can be answered before a change the link then carries; applied in arrival order, the
+// older answer would put the table back to free. Here the till's link opens late, as above, and the
+// floor read its `resync` starts is answered at once but held back from the till while a second
+// screen seats the first table. The till has heard the seating before the read lands, and still
+// shows the table taken after it.
+test("a till reading again after a resync does not undo what it heard meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const carried = [];
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          await opened;
+        }
+        socket.connectToServer().onMessage((message) => {
+          carried.push(JSON.parse(String(message)).event_type);
+          socket.send(message);
+        });
+      },
+    );
+    await pair(till, edge);
+    await signIn(till, edge);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+
+    // From here on, the floor read is answered by the edge at once and handed to the till later.
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const answered = new Promise((resolve) => {
+      reached = resolve;
+    });
+    await till.route("**/api/floor", async (route) => {
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    });
+    open();
+    await answered;
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await expect.poll(() => carried.includes("sales.table.opened")).toBe(true);
+
+    const landed = till.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/floor",
+    );
+    release();
+    await landed;
+    // One turn of the page's own loop, so the answer it was handed is applied before this looks.
+    await till.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A till that reloads still knows which tables have people at them.
 //
 // The floor is the home screen, and it drew every table free after a refresh. `GET /api/floor`

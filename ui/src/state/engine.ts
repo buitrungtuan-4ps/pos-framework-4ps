@@ -82,6 +82,8 @@ let entries: readonly Entry[] = [];
 const etags = new Map<string, string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlight = new Map<string, Promise<void>>();
+// The entries whose fresh read waits behind the one out.
+const queued = new Set<string>();
 // What the snapshot held at this start, until the edge confirms or replaces each entry.
 const restored = new Map<string, Restored>();
 let restoring: Promise<void> | null = null;
@@ -196,27 +198,44 @@ async function read(found: Entry): Promise<void> {
 }
 
 // Reads one entry now, unless a read of it is already on its way, or it is not wanted.
-export function load(key: string): Promise<void> {
+//
+// `fresh` asks for a read that starts now: one already on its way may have been answered before
+// what the caller needs it to include, so a fresh read follows it rather than joining it. At most
+// one read waits behind the one out, so the reads of an entry stay bounded.
+export function load(key: string, fresh = false): Promise<void> {
   const found = entry(key);
   if (found === undefined || (found.when !== undefined && !found.when())) {
     return Promise.resolve();
   }
   const pending = inFlight.get(key);
-  if (pending !== undefined) {
+  if (pending !== undefined && (!fresh || queued.has(key))) {
     return pending;
   }
-  const next = read(found).finally(() => inFlight.delete(key));
+  let start = read;
+  if (pending !== undefined) {
+    queued.add(key);
+    start = async (each) => {
+      await pending;
+      queued.delete(key);
+      await read(each);
+    };
+  }
+  const next = start(found).finally(() => {
+    if (inFlight.get(key) === next) {
+      inFlight.delete(key);
+    }
+  });
   inFlight.set(key, next);
   return next;
 }
 
 // Reads every entry but those in `except`: the store's load at the boot gate and at sign-in, and a
 // `resync`, where each read that names a tag costs a `304` when nothing changed.
-export async function loadAll(except: readonly string[] = []): Promise<void> {
+export async function loadAll(except: readonly string[] = [], fresh = false): Promise<void> {
   setStarted(true);
   await restore();
   await Promise.all(
-    entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key)),
+    entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key, fresh)),
   );
 }
 
@@ -236,7 +255,8 @@ export function prime(key: string, body: unknown): void {
 // again, once the store's load has started, and an unchanged copy costs a `304`.
 export async function readAgain(): Promise<void> {
   if (started()) {
-    await loadAll();
+    // Fresh, because a read already out may have been answered before what this one must include.
+    await loadAll([], true);
   }
 }
 

@@ -34,7 +34,9 @@ export type LinkStatus = "connecting" | "open" | "closed";
 
 export interface LiveLinkHandlers {
   onEvent: (event: ServerEvent) => void;
-  onResync: () => void;
+  // Reads again what is open. The frames that arrive meanwhile are held and applied once it
+  // settles (`LiveLink`'s catching up), so the read cannot undo them.
+  onResync: () => Promise<void>;
   // The edge applied a new store configuration (ADR-0160 item 7): reload what the till draws from
   // it without a new sign-in. `changedNodes` is what the edge says changed (ADR-0173), and absent
   // from an edge that cannot say, or one too old to.
@@ -108,12 +110,23 @@ function socketUrl(position: Position | null): string {
   return url.toString();
 }
 
+// How many frames are held while a resync's read is out. Past it the held frames are dropped and the
+// read is made again once it settles, since a read that starts later covers them.
+const HELD_LIMIT = 1024;
+
 export class LiveLink {
   #socket: WebSocket | null = null;
   #closed = false;
   #retry = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #position: Position | null = null;
+  // While a resync's read is out, the frames that arrive are held here and applied once it settles:
+  // the read may have been served before them, and applied after them it would undo them. `null`
+  // when nothing is being caught up.
+  #held: (() => void)[] | null = null;
+  // Whether the read must be made again before the held frames are applied: another resync came,
+  // or more frames came than are held.
+  #again = false;
   readonly #handlers: LiveLinkHandlers;
 
   constructor(handlers: LiveLinkHandlers) {
@@ -133,6 +146,46 @@ export class LiveLink {
     }
     this.#socket?.close();
     this.#socket = null;
+    this.#held = null;
+    this.#again = false;
+  }
+
+  // Reads again what is open, holding the frames that arrive until the read settles.
+  #resync(): void {
+    if (this.#held !== null) {
+      this.#again = true;
+      return;
+    }
+    this.#held = [];
+    void this.#catchUp();
+  }
+
+  async #catchUp(): Promise<void> {
+    do {
+      this.#again = false;
+      try {
+        await this.#handlers.onResync();
+      } catch {
+        // The read reports its own failure; the held frames are still applied.
+      }
+    } while (this.#again && this.#held !== null);
+    const held = this.#held ?? [];
+    this.#held = null;
+    for (const apply of held) {
+      apply();
+    }
+  }
+
+  // Applies a frame now, or after the read a resync started.
+  #deliver(apply: () => void): void {
+    if (this.#held === null) {
+      apply();
+    } else if (this.#held.length < HELD_LIMIT) {
+      this.#held.push(apply);
+    } else {
+      this.#held = [];
+      this.#again = true;
+    }
   }
 
   #connect(): void {
@@ -171,16 +224,18 @@ export class LiveLink {
         // is spent: the next frame starts a fresh one. A resync published to every device carries
         // its own position, and one sent to this device alone carries none.
         this.#position = next;
-        this.#handlers.onResync();
+        this.#resync();
         return;
       }
       if (skipped(this.#position, next)) {
-        this.#handlers.onResync();
+        this.#resync();
       }
       if (message.type === "event" && typeof message.event_type === "string") {
-        this.#handlers.onEvent({ eventType: message.event_type, payload: message.payload });
+        const event = { eventType: message.event_type, payload: message.payload };
+        this.#deliver(() => this.#handlers.onEvent(event));
       } else if (message.type === "config_applied") {
-        this.#handlers.onConfigApplied(nodesOf(message.changed_nodes));
+        const changed = nodesOf(message.changed_nodes);
+        this.#deliver(() => this.#handlers.onConfigApplied(changed));
       }
       // Recorded once the frame is applied, because the position is the last frame this device
       // has, not the last one it was sent.

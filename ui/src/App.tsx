@@ -136,13 +136,12 @@ export function App() {
 
   const link = new LiveLink({
     onEvent: fold,
-    onResync: () => {
+    onResync: () =>
       // A resync says this client fell behind, so what it holds may be stale — and the events it
       // missed are exactly the ones it will never be sent. Re-reading is the answer: the same reads
       // the boot gate makes, merged over whatever the fold has since established. What it missed
       // may include a new configuration, so every entry is read again (ADR-0173).
-      void readAgain();
-    },
+      readAgain(),
     // A new configuration is live on the edge: read again what it changed, without a new sign-in
     // (ADR-0160, ADR-0173).
     onConfigApplied: (changed) => void loadConfiguration(changed),

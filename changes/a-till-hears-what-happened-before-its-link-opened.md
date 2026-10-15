@@ -7,4 +7,6 @@ kind: fixed
   its floor could show a taken table as free until the page was reloaded. A till's first link now
   asks the store server for what it cannot name, and reads again what is open when the server says
   it cannot replay it, which is every first connect. No route, setting or protocol changes: it is
-  the same answer a link that dropped before its first event already got.
+  the same answer a link that dropped before its first event already got. While it reads again, what
+  the link carries meanwhile is applied after the read rather than under it, so an older answer no
+  longer puts a just-seated table back to free.
