@@ -1,32 +1,33 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The `/admin/inventory/recipes` handlers: list, read, create, update and delete.
+//! The `/admin/inventory/ingredients` handlers: list, read, create, update and delete.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use pos_cloud_api::console::{audit_action, require_permission};
+use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
-use pos_proto::ids::{MenuItemId, TenantId};
+use pos_proto::ids::{IngredientId, TenantId};
 
 use super::{
-    CreateRecipeRequest, InventoryState, RecipeAuditSummary, RecipeRequest, build_recipe,
-    inventory_error_response,
+    IngredientAuditSummary, IngredientRequest, InventoryState, build_ingredient,
+    inventory_entropy_unavailable, inventory_error_response,
 };
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::http::{
-    RegistryTenantQuery, already_exists, if_match, not_found, version_mismatch, versioned_created,
-    versioned_ok,
-};
 use crate::inventory::InventoryStore;
 use crate::version::{CreateOutcome, UpdateOutcome};
+use pos_cloud_api::conditional::{
+    already_exists, if_match, version_mismatch, versioned_created, versioned_ok,
+};
+use pos_cloud_api::refusal::not_found;
+use pos_cloud_config::route::RegistryTenantQuery;
 
-/// A super-admin lists a tenant's authored recipes.
-pub(super) async fn admin_list_recipes<Inv, A, C>(
+/// A super-admin lists a tenant's authored ingredients.
+pub(super) async fn admin_list_ingredients<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
@@ -50,17 +51,17 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state.inventory.list_recipes(tenant_id).await {
-        Ok(recipes) => (StatusCode::OK, Json(recipes)).into_response(),
+    match state.inventory.list_ingredients(tenant_id).await {
+        Ok(ingredients) => (StatusCode::OK, Json(ingredients)).into_response(),
         Err(error) => inventory_error_response(&error),
     }
 }
 
-/// A super-admin reads one recipe by the item it makes.
-pub(super) async fn admin_get_recipe<Inv, A, C>(
+/// A super-admin reads one ingredient by id.
+pub(super) async fn admin_get_ingredient<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
-    Path(item_id): Path<String>,
+    Path(ingredient_id): Path<String>,
     Query(query): Query<RegistryTenantQuery>,
 ) -> Response
 where
@@ -78,30 +79,31 @@ where
     {
         return denied;
     }
-    let (tenant_id, item) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("item_id", &item_id)]) {
-            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
-            Err(refusal) => return refusal,
-        };
-    match state.inventory.get_recipe(tenant_id, item).await {
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
+    };
+    match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
         Ok(Some(row)) => versioned_ok(row.record, &row.etag),
-        Ok(None) => not_found("recipe"),
+        Ok(None) => not_found("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
 
-/// A super-admin creates the recipe for an item, refusing if that item already has one.
-///
-/// The route this replaced was a single `PUT` upsert that re-derived create-versus-update at
-/// runtime: it listed the tenant's recipes to pick between `201`/`200` and between the
-/// `create`/`update` audit action, then wrote unconditionally. That read raced its own write — a
-/// concurrent create or delete in between made *both* the status code and the audit entry wrong —
-/// and a caller asking to add a recipe silently replaced the bill of materials of one already
-/// there. [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md) §(ii).
-pub(super) async fn admin_create_recipe<Inv, A, C>(
+/// A super-admin creates an ingredient; the server mints its id.
+pub(super) async fn admin_create_ingredient<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
-    Json(request): Json<CreateRecipeRequest>,
+    Json(request): Json<IngredientRequest>,
 ) -> Response
 where
     Inv: InventoryStore + Clone + Send + Sync + 'static,
@@ -119,44 +121,52 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, item) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("item_id", &request.item_id),
-    ]) {
-        Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let recipe = match build_recipe(&request.into_write(), item) {
-        Ok(recipe) => recipe,
+    let Some(ingredient_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(IngredientId::new)
+    else {
+        return inventory_entropy_unavailable();
+    };
+    let ingredient = match build_ingredient(&request, ingredient_id) {
+        Ok(ingredient) => ingredient,
         Err(refusal) => return refusal.into_response(),
     };
-    match state.inventory.create_recipe(tenant_id, &recipe).await {
+    match state
+        .inventory
+        .create_ingredient(tenant_id, &ingredient)
+        .await
+    {
         Ok(CreateOutcome::Created(version)) => {
             audit_action(
                 &state.audit,
                 &state.clock,
                 &context,
                 Some(tenant_id),
-                "inventory.recipe.create",
-                "recipe",
-                &item.to_string(),
+                "inventory.ingredient.create",
+                "ingredient",
+                &ingredient_id.to_string(),
                 None,
-                serde_json::to_value(RecipeAuditSummary::of(&recipe)).ok(),
+                serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
             )
             .await;
-            versioned_created(recipe, &version)
+            versioned_created(ingredient, &version)
         }
-        Ok(CreateOutcome::AlreadyExists) => already_exists("recipe"),
+        // Unreachable while the id is minted here rather than sent by the caller, and answered
+        // anyway — the seam cannot know that, and silently overwriting is what this slice removed.
+        Ok(CreateOutcome::AlreadyExists) => already_exists("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
 
-/// A super-admin replaces the recipe for the path item, only at the version they read.
-pub(super) async fn admin_update_recipe<Inv, A, C>(
+/// A super-admin updates an ingredient in place, by the path id.
+pub(super) async fn admin_update_ingredient<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
-    Path(item_id): Path<String>,
-    Json(request): Json<RecipeRequest>,
+    Path(ingredient_id): Path<String>,
+    Json(request): Json<IngredientRequest>,
 ) -> Response
 where
     Inv: InventoryStore + Clone + Send + Sync + 'static,
@@ -174,19 +184,28 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, item) =
-        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("item_id", &item_id)]) {
-            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
-            Err(refusal) => return refusal,
-        };
-    // Read for the audit's "before" only. It no longer decides the status code or the action name:
-    // the version comparison in the write does that, so a race here can no longer mislabel either.
-    let before = match state.inventory.get_recipe(tenant_id, item).await {
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
+    };
+    let before = match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
         Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
-    let recipe = match build_recipe(&request, item) {
-        Ok(recipe) => recipe,
+    let Some(before) = before else {
+        return not_found("ingredient");
+    };
+    let ingredient = match build_ingredient(&request, ingredient_id) {
+        Ok(ingredient) => ingredient,
         Err(refusal) => return refusal.into_response(),
     };
     let expected = match if_match(&headers) {
@@ -195,7 +214,7 @@ where
     };
     match state
         .inventory
-        .update_recipe(tenant_id, &recipe, &expected)
+        .update_ingredient(tenant_id, &ingredient, &expected)
         .await
     {
         Ok(UpdateOutcome::Updated(version)) => {
@@ -204,28 +223,26 @@ where
                 &state.clock,
                 &context,
                 Some(tenant_id),
-                "inventory.recipe.update",
-                "recipe",
-                &item.to_string(),
-                before
-                    .as_ref()
-                    .and_then(|r| serde_json::to_value(RecipeAuditSummary::of(r)).ok()),
-                serde_json::to_value(RecipeAuditSummary::of(&recipe)).ok(),
+                "inventory.ingredient.update",
+                "ingredient",
+                &ingredient_id.to_string(),
+                serde_json::to_value(IngredientAuditSummary::of(&before)).ok(),
+                serde_json::to_value(IngredientAuditSummary::of(&ingredient)).ok(),
             )
             .await;
-            versioned_ok(recipe, &version)
+            versioned_ok(ingredient, &version)
         }
         Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
-        Ok(UpdateOutcome::NotFound) => not_found("recipe"),
+        Ok(UpdateOutcome::NotFound) => not_found("ingredient"),
         Err(error) => inventory_error_response(&error),
     }
 }
 
-/// A super-admin deletes a recipe by the item it makes.
-pub(super) async fn admin_delete_recipe<Inv, A, C>(
+/// A super-admin deletes an ingredient by id.
+pub(super) async fn admin_delete_ingredient<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,
-    Path(item_id): Path<String>,
+    Path(ingredient_id): Path<String>,
     Query(query): Query<RegistryTenantQuery>,
 ) -> Response
 where
@@ -244,29 +261,41 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, item) =
-        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("item_id", &item_id)]) {
-            Ok([tenant_id, item]) => (TenantId::new(tenant_id), MenuItemId::new(item)),
-            Err(refusal) => return refusal,
-        };
-    let before = match state.inventory.get_recipe(tenant_id, item).await {
+    let (tenant_id, ingredient_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("ingredient_id", &ingredient_id),
+    ]) {
+        Ok([tenant_id, ingredient_id]) => {
+            (TenantId::new(tenant_id), IngredientId::new(ingredient_id))
+        }
+        Err(refusal) => return refusal,
+    };
+    let before = match state
+        .inventory
+        .get_ingredient(tenant_id, ingredient_id)
+        .await
+    {
         Ok(row) => row.map(|row| row.record),
         Err(error) => return inventory_error_response(&error),
     };
     let Some(before) = before else {
-        return not_found("recipe");
+        return not_found("ingredient");
     };
-    match state.inventory.delete_recipe(tenant_id, item).await {
+    match state
+        .inventory
+        .delete_ingredient(tenant_id, ingredient_id)
+        .await
+    {
         Ok(()) => {
             audit_action(
                 &state.audit,
                 &state.clock,
                 &context,
                 Some(tenant_id),
-                "inventory.recipe.delete",
-                "recipe",
-                &item.to_string(),
-                serde_json::to_value(RecipeAuditSummary::of(&before)).ok(),
+                "inventory.ingredient.delete",
+                "ingredient",
+                &ingredient_id.to_string(),
+                serde_json::to_value(IngredientAuditSummary::of(&before)).ok(),
                 None,
             )
             .await;

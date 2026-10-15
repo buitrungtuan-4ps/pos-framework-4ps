@@ -1768,6 +1768,7 @@ dependencies = [
  "metrics-vm",
  "pos-cloud-api",
  "pos-cloud-config",
+ "pos-cloud-inventory",
  "pos-cloud-reports",
  "pos-contract-tests",
  "pos-core",
@@ -1834,6 +1835,22 @@ dependencies = [
  "pos-core",
  "pos-fakes",
  "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pos-cloud-inventory"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "pos-cloud-api",
+ "pos-cloud-config",
  "pos-proto",
  "serde",
  "serde_json",

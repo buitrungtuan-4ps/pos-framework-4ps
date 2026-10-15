@@ -1,0 +1,57 @@
+[package]
+name        = "pos-cloud-inventory"
+version     = "0.0.0"
+description = "The cloud's inventory: the ingredients, recipes and suppliers a tenant authors, their routes, and their publish to each store's inventory node."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Moved out of pos-cloud (ADR-0170 decision 4, P7), with the same dependencies at the same versions:
+# this crate adds edges to crates already in the lockfile, and nothing new.
+[dependencies]
+pos-cloud-api    = { path = "../pos-cloud-api" }
+pos-cloud-config = { path = "../pos-cloud-config" }
+pos-proto        = { path = "../pos-proto" }
+# The inventory table (ADR-0016). This crate implements its InventoryStore for it, since a trait can
+# be implemented for another crate's type only where the trait is defined.
+store-postgres = { path = "../adapters/store-postgres" }
+
+axum       = "0.8"
+tracing    = "0.1"
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# The same lint table as pos-cloud, which this code came from.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The cloud's inventory: ingredients, recipes and supplier references, their /admin routes, and their publish to each store's inventory node."
+adrs = [79, 95, 170]
+owners = ["@maintainers-cloud"]

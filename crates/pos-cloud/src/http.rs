@@ -115,7 +115,6 @@ mod fleet;
 mod floor;
 mod health;
 mod integrations;
-mod inventory;
 mod lease_bump;
 mod locale_node;
 mod media;
@@ -291,6 +290,9 @@ use pos_cloud_config::route::{
     read_store_node_as_run,
 };
 use pos_cloud_config::setting_refusal;
+// The inventory routes live in pos-cloud-inventory; imported under the module's old name, so
+// `crate::http::inventory::…` still names them.
+use pos_cloud_inventory::routes as inventory;
 use pos_cloud_reports::xz::admin_xz_report;
 
 use crate::registry::RegistryStore;

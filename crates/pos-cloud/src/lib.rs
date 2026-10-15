@@ -58,9 +58,11 @@ pub mod activation;
 // Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
 pub use pos_cloud_api::{audit, auth, paging, version};
 // Moved to pos-cloud-config (ADR-0170 decision 4); re-exported so their paths still work.
+// Moved to pos-cloud-inventory (ADR-0170 decision 4); re-exported so its path still works.
 pub use pos_cloud_config::{
     config_tree, confirmed_values, data_migrations, qr_ordering, registry, settings,
 };
+pub use pos_cloud_inventory::inventory;
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
@@ -88,7 +90,6 @@ pub mod health;
 pub mod http;
 pub mod images;
 pub mod import;
-pub mod inventory;
 pub mod lease;
 pub mod media;
 pub mod metrics;
