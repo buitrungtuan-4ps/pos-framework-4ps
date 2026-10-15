@@ -9,6 +9,7 @@ import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
+import { keptShift, shiftInfo } from "./shift-info";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -900,11 +901,16 @@ export function fold(event: ServerEvent): void {
     //
     // Where the store keeps a drawer per till, the shift a device shows is its own till's, so an
     // event about another till's drawer changes only the list of drawers (ADR-0167).
+    //
+    // An event about the shift already held moves only its state: the device that opened or counted
+    // it may already hold the edge's answer, whose figures the event does not carry, and the event
+    // can reach the live link after that answer. A shift not yet held is replaced and read back for
+    // its figures.
     case "cash.shift.opened": {
       const shiftId = str(payload, "opened_shift_id");
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
-        replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+        heardShift(shiftId, "SHIFT_STATE_OPEN");
       } else if (own === null) {
         void loadShift();
       }
@@ -919,7 +925,7 @@ export function fold(event: ServerEvent): void {
       if (shiftId !== null) {
         const oneDrawer = state.drawers?.drawer_model === "DRAWER_MODEL_PER_STORE";
         if (oneDrawer || state.shift?.shiftId === shiftId) {
-          replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+          heardShift(shiftId, "SHIFT_STATE_COUNTED", counted ?? undefined);
         } else if (state.drawers === null) {
           void loadShift();
         }
@@ -1728,20 +1734,13 @@ export function applyShift(response: ShiftResponse | null): void {
   replaceShift(response === null ? null : shiftInfo(response));
 }
 
-// A shift as the edge answered it, every field named.
-function shiftInfo(response: ShiftResponse): ShiftInfo {
-  return {
-    shiftId: response.shift_id,
-    state: response.state,
-    expected: response.expected_amount,
-    counted: response.counted_amount,
-    variance: response.variance,
-    reportPrint: response.shift_report_print,
-    paidIn: response.paid_in_amount,
-    paidOut: response.paid_out_amount,
-    dayEnded: response.day_ended === true,
-    assignee: response.assigned_employee_id,
-  };
+// Applies a shift event about this device's drawer. The shift already held keeps every figure the
+// edge answered (the expectation, what was paid in and out) and takes the event's state, and its
+// count where the event carries one; any other shift replaces it, and is read back for its figures.
+function heardShift(shiftId: string, shiftState: string, counted?: Money): void {
+  const kept = keptShift(state.shift, shiftId, shiftState, counted);
+  replaceShift(kept ?? { shiftId, state: shiftState, counted });
+  if (kept === null) void loadShift();
 }
 
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
