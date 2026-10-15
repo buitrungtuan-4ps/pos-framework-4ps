@@ -14,7 +14,7 @@ Encodes a print document into ESC/POS bytes and writes them through a `Transport
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `pos-edge`, `pos-print-agent`.
+- **Used by** (workspace crates): `pos-edge`, `pos-edge-printing`, `pos-print-agent`.
 
 ## Entry points
 

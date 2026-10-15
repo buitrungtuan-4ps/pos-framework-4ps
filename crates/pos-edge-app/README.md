@@ -18,7 +18,7 @@ The store's application layer: `Edge` and every command it loads, decides, appli
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-core`, `pos-ports`, `pos-proto`, `store-sqlite`; in tests, `pos-fakes`.
-- **Used by** (workspace crates): `pos-edge`.
+- **Used by** (workspace crates): `pos-edge`, `pos-edge-printing`.
 
 ## Entry points
 

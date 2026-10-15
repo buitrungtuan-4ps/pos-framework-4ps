@@ -14,7 +14,7 @@ Text rendering for thermal printers. It shapes a line of text in any script (Vie
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`.
-- **Used by** (workspace crates): `pos-edge`.
+- **Used by** (workspace crates): `pos-edge`, `pos-edge-printing`.
 
 ## Entry points
 

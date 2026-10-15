@@ -78,7 +78,7 @@ A change to how money, tax or receipt numbering works needs an ADR first (AGENTS
 | The register entry | `register` in `crates/pos-proto/src/settings.rs` ([ADR-0160](adr/0160-everything-a-store-runs-differently-is-published-configuration.md)) | `every_value_reads_back_through_its_node`, `the_default_is_what_an_empty_node_reads_as` |
 | A value that records something about a person | `confirm: Some(Confirm { value, notice })` on its register entry, never the default or the preset ([ADR-0169](adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)); `notice` is `settings.item.<node>.<field>.confirm`, with its sentence in `dashboard/src/i18n/en.json` and `vi.json`; the Settings screen asks for it with no code of its own | `every_setting_has_a_default_and_a_preset_it_takes_a_scope_and_a_release`; `every_notice_is_in_every_console_language`; `xtask snapshot` (a `confirm=` line is never removed) |
 | Generated files | [`configuration.md`](configuration.md) and [`snapshots/settings.txt`](snapshots/settings.txt), via `just snapshot` | `the_committed_settings_snapshot_matches_the_register`; `xtask snapshot` |
-| The edge reads it | where the behaviour lives, for example `crates/pos-edge/src/printing/` | edge tests |
+| The edge reads it | where the behaviour lives, for example `crates/pos-edge-printing/src/printing/` | edge tests |
 | The console shows it | `settings.item.<node>.<field>.title` and `.help` in `dashboard/src/i18n/en.json` and `vi.json`. `Settings.tsx` renders the register | `dashboard build` (i18n parity), `crates/pos-cloud/tests/cloud.rs` |
 
 A store-profile switch (a capability flag) is `crates/pos-core/src/capability.rs` instead. It is

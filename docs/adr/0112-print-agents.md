@@ -112,7 +112,7 @@ either slice's content changed; the order did.
 gate **and** an employee signed in holding `Permission::ManageDevices`, checked in the handler
 against the roster the cloud published. The binding is migration
 [`0010_print_agents.sql`](../../crates/adapters/store-sqlite/migrations/0010_print_agents.sql) and
-the [`PrintAgents`](../../crates/pos-edge/src/print_agent.rs) seam over it — the shape
+the [`PrintAgents`](../../crates/pos-edge-printing/src/print_agent.rs) seam over it — the shape
 `QueueNumberAuthority` and `LeaseAuthority` already take, implemented for `SqliteStore` and again in
 memory for the example and the tests.
 
@@ -142,7 +142,7 @@ A store that binds an agent today changes nothing about where its tickets print.
 The queue is live. `GET /api/print/jobs` and `POST /api/print/jobs/{job_id}/ack`
 ([`http/print_jobs.rs`](../../crates/pos-edge/src/http/print_jobs.rs)) sit behind the paired-device
 gate and no second one; the branch in
-[`Printers::dispatch`](../../crates/pos-edge/src/printing/dispatch.rs) sends a job whose printer names an
+[`Printers::dispatch`](../../crates/pos-edge-printing/src/printing/dispatch.rs) sends a job whose printer names an
 agent to that agent's queue and leaves every other printer on the path
 [ADR-0103](0103-directly-attached-printers.md) shipped. `PrintOutcome` gained the three answers this
 record specified — `QUEUED_TO_AGENT`, `PRINT_AGENT_UNAVAILABLE`, `PRINT_QUEUE_FULL` — and the till
@@ -377,7 +377,7 @@ means no drawer opens anywhere.
 [ADR-0103](0103-directly-attached-printers.md) decided that a USB or serial printer is reached by
 opening its OS device path — `/dev/usb/lp0`, `/dev/ttyUSB0`, `\\.\COM3` — and writing bytes to it.
 [`printer_escpos::device::DeviceTransport`](../../crates/adapters/printer-escpos/src/device.rs) does
-exactly that, and [`printing.rs`](../../crates/pos-edge/src/printing/transports.rs) picks it in `TcpTransports`:
+exactly that, and [`printing.rs`](../../crates/pos-edge-printing/src/printing/transports.rs) picks it in `TcpTransports`:
 
 ```rust
 PrinterConnection::Usb | PrinterConnection::Serial => {

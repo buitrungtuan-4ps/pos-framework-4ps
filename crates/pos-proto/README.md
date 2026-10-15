@@ -16,7 +16,7 @@ Everything that crosses a boundary between `pos_edge`, `pos_cloud` and the outsi
 ## Depends on / used by
 
 - **Depends on** (workspace crates): no workspace crate.
-- **Used by** (workspace crates): `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-inventory`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`.
+- **Used by** (workspace crates): `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-inventory`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`.
 
 ## Entry points
 
