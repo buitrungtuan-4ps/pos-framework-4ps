@@ -20,7 +20,8 @@ use super::{DeviceState, device_write_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::devices::{DeviceProposalId, DeviceProposalStore};
-use crate::http::{accepted_tokens, enum_refusal, if_match};
+use pos_cloud_api::conditional::if_match;
+use pos_cloud_api::refusal::{accepted_tokens, enum_refusal};
 
 /// An operator points an approved device at the terminal that holds its transport, or clears it.
 #[derive(Debug, Clone, Deserialize)]
@@ -202,13 +203,13 @@ pub(super) struct SetPaperRequest {
         (status = 204, description = "Saved. It reaches the store on the next devices publish, \
                                       `POST /admin/devices/publish`"),
         (status = 400, description = "`paper_width` is not one of the three, an id is not a \
-                                      ULID, or If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
-        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+                                      ULID, or If-Match is absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 412, description = "The device changed since you read it: re-read it and try \
-                                      again", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "printers",
 )]

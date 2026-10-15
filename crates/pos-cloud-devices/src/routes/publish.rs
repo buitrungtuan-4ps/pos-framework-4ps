@@ -30,7 +30,7 @@ use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::devices::{
     DeviceKind, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
 };
-use crate::http::publish_config_nodes;
+use pos_cloud_config::publish::publish_config_nodes;
 
 /// The device-publish sub-router's state: the approval queue to read, the config tree to write.
 #[derive(Clone)]
@@ -208,7 +208,7 @@ where
 /// has neither a drawer nor an address to guess. Nothing dials it — the agent connects outbound to
 /// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
 /// is not a guess here, it is the accurate answer.
-pub(in crate::http) fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
+pub(super) fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
     PublishedDevices::new(with_listed_receipt_printers(
         approved
             .iter()

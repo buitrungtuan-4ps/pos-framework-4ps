@@ -22,7 +22,7 @@ use serde::Deserialize;
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::http::random_hex_32;
+use pos_cloud_api::console::random_hex_32;
 
 // --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
 

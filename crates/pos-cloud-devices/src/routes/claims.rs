@@ -28,9 +28,13 @@ use crate::claim::{
     BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
     hash_claim_secret, hash_user_code,
 };
-use crate::http::{CLAIM_PATH, random_hex_32};
+use pos_cloud_api::console::random_hex_32;
 
 // --- Device claims (`/claim`, `/claim/{claim_id}/collect`, `/admin/claims/bind`) ------------------
+
+/// Opening a claim ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md))
+/// shares `pos-cloud`'s `ACTIVATE_PATH` budget: both are how an unauthenticated box first asks for anything.
+pub const CLAIM_PATH: &str = "/claim";
 
 /// How often a box waiting to be claimed should ask whether it has been, in seconds.
 const CLAIM_POLL_INTERVAL_SECS: u64 = 5;

@@ -54,7 +54,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod activation;
 // Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
 pub use pos_cloud_api::{audit, auth, paging, version};
 // Moved to pos-cloud-config (ADR-0170 decision 4); re-exported so their paths still work.
@@ -63,6 +62,8 @@ pub use pos_cloud_config::{
     config_tree, confirmed_values, data_migrations, qr_ordering, registry, settings,
 };
 pub use pos_cloud_inventory::inventory;
+// Moved to pos-cloud-devices (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_devices::{activation, claim, devices};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
@@ -72,7 +73,6 @@ pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
 pub mod chain_audit;
-pub mod claim;
 pub mod clock;
 pub mod cloud;
 pub mod config;
@@ -80,7 +80,6 @@ pub mod connections;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
-pub mod devices;
 pub mod export;
 pub mod fees;
 pub mod fleet;
