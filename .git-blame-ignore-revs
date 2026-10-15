@@ -136,3 +136,6 @@ b7b29b66dfc3682d3c3503751d97bd7a5387fe86
 
 # #826 — store groups and the tenant layout move to pos-cloud-config, and task health to pos-cloud-api
 c9823825147a4dd78a89d0f92ea08be23e958463
+
+# #827 — employees, roles, assignments, their publish and republish queue move into pos-cloud-people
+47ea4e44fd842b52dbfb5df16e00091e6565dbab
