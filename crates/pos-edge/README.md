@@ -22,7 +22,9 @@ The store binary, `pos_edge`, and its library. It owns the async runtime, the HT
 
 - `src/main.rs`: the binary; deliberately tiny
 - `src/server.rs`: `serve` and `compose`: wires the adapters and binds the listener
-- `src/app.rs`: `Edge`, every command
+- `src/app/mod.rs`: `Edge`, every command, and the projection; beside it under `src/app/`, the session
+  (`session.rs`), the roster, the errors, the views each command answers with and the records the
+  projection keeps
 - `src/http/mod.rs`: `router`, every route; one file per area beside it
 - `src/http/route_permissions.rs`: what each state-changing route needs
 - `src/auth.rs`: `Sessions`, sign-in and idle
