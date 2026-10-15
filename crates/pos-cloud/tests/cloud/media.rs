@@ -7,15 +7,16 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use pos_cloud::audit::NoopAuditRecorder;
+use pos_cloud::audit::{AuditSink, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeConfigTrees, FakeKeys, FakeMedia, FakeRollups, FakeWebhooks, admin_cookie,
-    app_all, clock, delete_with_cookie, get_with_cookie, json_body, post_bytes_with_cookie,
-    provisioned_admin, ulid_text,
+    FakeAdmin, FakeAudit, FakeConfigTrees, FakeKeys, FakeMedia, FakeRollups, FakeWebhooks,
+    admin_cookie, app_all, clock, delete_with_cookie, get_with_cookie, json_body,
+    post_bytes_with_cookie, provisioned_admin, role_session_cookie, ulid_text,
 };
 
 fn media_app(admin: FakeAdmin, media: FakeMedia) -> axum::Router {
@@ -259,4 +260,126 @@ async fn media_routes_require_a_session() {
         .await
         .expect("route without a cookie");
     assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- pinned before `admin_upload_media` is split (ADR-0170 decision 7) ---------------------------
+
+/// An upload stores the asset, answers its id and size, and records one audit entry naming them.
+#[tokio::test]
+async fn an_upload_is_stored_answered_and_audited_by_its_id_and_size() {
+    let audit = FakeAudit::default();
+    let media = FakeMedia::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::media_router(
+        media,
+        admin,
+        clock(),
+        Arc::new(AuditSink::new(audit.clone())),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={tenant}"),
+            tiny_png(),
+            "image/png",
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created = json_body(created).await;
+    let media_id = created["media_id"].as_str().expect("a media id").to_owned();
+    let detail_bytes = created["detail_bytes"].as_u64().expect("a size");
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "media.upload");
+    assert_eq!(entry.entity_type, "media_asset");
+    assert_eq!(entry.entity_id, media_id);
+    assert_eq!(
+        entry
+            .tenant_id
+            .map(|tenant_id| tenant_id.as_ulid().to_string()),
+        Some(tenant.clone())
+    );
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({ "content_type": "image/jpeg", "detail_bytes": detail_bytes }))
+    );
+
+    // What was stored serves at the id the answer named.
+    let detail = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/media/{media_id}/detail?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the detail");
+    assert_eq!(detail.status(), StatusCode::OK);
+}
+
+/// An upload refuses a role that may not manage media and an owner that is not a ULID, and a
+/// refused upload records nothing.
+#[tokio::test]
+async fn an_upload_refuses_a_role_without_media_and_a_bad_tenant() {
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::media_router(
+        FakeMedia::default(),
+        admin.clone(),
+        clock(),
+        Arc::new(AuditSink::new(audit.clone())),
+    ));
+
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/media?tenant_id={}", ulid_text(1)),
+            tiny_png(),
+            "image/png",
+            &ops,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    let bad = router
+        .oneshot(post_bytes_with_cookie(
+            "/admin/media?tenant_id=not-a-ulid",
+            tiny_png(),
+            "image/png",
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(bad).await["error"]["details"][0]["field"],
+        "tenant_id"
+    );
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }
