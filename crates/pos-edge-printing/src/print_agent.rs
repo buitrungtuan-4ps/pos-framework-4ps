@@ -8,7 +8,7 @@
 //!
 //! The `agent_device_id` is **cloud-approved**: the `TERMINAL` entry a console admin created, which
 //! reaches the store in the published `devices` node. The paired device id is **locally minted** by a
-//! pairing, and [`crate::pairing`] says so in as many words — *"unique per pairing; the cloud's
+//! pairing, and `pos_edge::pairing` says so in as many words — *"unique per pairing; the cloud's
 //! approved-device registry is a separate identity this local id does not claim to be."* Nothing else
 //! in the tree joins them, and a printer's `agent_device_id` is inert until something does. This is
 //! that something.
@@ -16,11 +16,11 @@
 //! # A trait here, implemented for the concrete store
 //!
 //! [`crate::app::Edge`] is generic over its store, so it cannot reach a concrete store's inherent
-//! table — the same shape [`crate::queue::QueueNumberAuthority`] and
-//! [`crate::lease_state::LeaseAuthority`] already take, and for the same reason. In the field this is
-//! [`store_sqlite::SqliteStore`], whose single writer thread serialises the binding with every other
-//! allocation; the fakes-backed example and the route tests use [`InMemoryPrintAgents`], which holds
-//! the same rules without a database.
+//! table — the same shape [`pos_edge_app::queue::QueueNumberAuthority`] and
+//! [`pos_edge_app::lease_state::LeaseAuthority`] already take, and for the same reason. In the
+//! field this is [`store_sqlite::SqliteStore`], whose single writer thread serialises the binding
+//! with every other allocation; the fakes-backed example and the route tests use
+//! [`InMemoryPrintAgents`], which holds the same rules without a database.
 //!
 //! # What the binding buys, and what it does not
 //!
@@ -143,7 +143,7 @@ pub struct AgentBacklog {
 pub trait PrintAgents: Send + Sync {
     /// Binds `agent` to `device`, exclusively.
     ///
-    /// Recorded **before** the route answers, the ordering [`crate::pairing`] already uses: a crash
+    /// Recorded **before** the route answers, the ordering `pos_edge::pairing` already uses: a crash
     /// between the write and the reply leaves an operator claiming again rather than holding a
     /// standing the box forgot.
     ///
@@ -228,7 +228,7 @@ pub trait PrintAgents: Send + Sync {
 /// The routes that bind an agent and the dispatch that reads the binding must agree — two records
 /// over one store would be two answers to "who holds this terminal" — and the trait returns
 /// `impl Future`, so it cannot be erased behind `dyn`. `Arc<T>` is what lets the same value be
-/// cloned into both, exactly as [`crate::queue::QueueNumberAuthority`] is shared.
+/// cloned into both, exactly as [`pos_edge_app::queue::QueueNumberAuthority`] is shared.
 impl<T: PrintAgents + ?Sized> PrintAgents for std::sync::Arc<T> {
     fn claim(
         &self,

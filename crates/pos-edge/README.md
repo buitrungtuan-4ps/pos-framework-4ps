@@ -12,11 +12,12 @@ The store binary, `pos_edge`, and its library. It owns the async runtime, the HT
 - The composition of the application layer, `Edge`, which lives in `pos-edge-app` and is
   re-exported here under its old paths (`pos_edge::app`, `pos_edge::auth`, …)
 - Device pairing
-- Printing, the print queue, OTA, backups, and the cloud clients
+- OTA, backups, and the cloud clients; printing lives in `pos-edge-printing` and is re-exported
+  here under its old paths (`pos_edge::printing`, `pos_edge::print_agent`, …)
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge-app`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge-app`, `pos-edge-printing`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-fakes`.
 - **Used by** (workspace crates): `minimal-edge`.
 
 ## Entry points

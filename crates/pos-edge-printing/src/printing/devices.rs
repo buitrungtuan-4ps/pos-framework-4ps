@@ -13,6 +13,10 @@ use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use crate::app::EdgeSession;
 use crate::printing::PrintOutcome;
 
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::printing::devices";
+
 /// The store's receipt printer: the printer bound to no station.
 ///
 /// A station printer serves a kitchen; the receipt printer serves the *bill*, which is why its
@@ -113,6 +117,7 @@ pub(super) fn guest_printer<'a>(
 ) -> Result<&'a PublishedDevice, PrintOutcome> {
     if till.unknown {
         tracing::warn!(
+            target: LOG_TARGET,
             "the till a guest's paper is for could not be told; nothing was printed rather than \
              printing it at a counter that may be the wrong one"
         );
@@ -126,7 +131,7 @@ pub(super) fn guest_printer<'a>(
         })
         .or_else(|| receipt_printer(devices))
         .ok_or_else(|| {
-            tracing::info!("no receipt printer is published for this store; nothing to print");
+            tracing::info!(target: LOG_TARGET, "no receipt printer is published for this store; nothing to print");
             PrintOutcome::NoPrinter
         })
 }
