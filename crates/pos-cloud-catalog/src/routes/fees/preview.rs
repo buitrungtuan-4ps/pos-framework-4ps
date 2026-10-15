@@ -31,7 +31,7 @@ use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
 use crate::config_tree::ConfigTreeStore;
-use crate::fees::{FeeRule, FeeRuleStore};
+use crate::fees::{FeePlacement, FeeRule, FeeRuleStore};
 use crate::registry::RegistryStore;
 use crate::routes::{FieldRefusal, enum_refusal, not_found};
 
@@ -260,84 +260,68 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, store_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("store_id", &request.store_id),
-    ]) {
-        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+    let read = match read_preview_request(&request) {
+        Ok(read) => read,
         Err(refusal) => return refusal,
     };
-    let channel = match &request.sales_channel {
-        None => SalesChannel::DineIn,
-        Some(channel) if channel.is_unspecified() => {
-            return enum_refusal(
-                "sales_channel",
-                SalesChannel::ALL
-                    .iter()
-                    .filter(|channel| **channel != SalesChannel::Unspecified)
-                    .map(|channel| channel.as_wire()),
-            );
-        }
-        Some(channel) => channel.known(),
-    };
-    if request.rules.len() > MOST_PREVIEW_RULES {
-        return FieldRefusal::new("a preview takes at most 20 rules", "rules", "OUT_OF_RANGE")
-            .into_response();
-    }
-    let lines = match parse_sample_lines(&request.lines) {
-        Ok(lines) => lines,
+    let (tenant_id, store_id, channel) = (read.tenant_id, read.store_id, read.channel);
+    let (layout, placement, catalog) = match store_fee_inputs(&state, tenant_id, store_id).await {
+        Ok(inputs) => inputs,
         Err(refusal) => return refusal,
     };
-    let layout = match FeeLayout::load(&state.registry, tenant_id).await {
-        Ok(layout) => layout,
-        Err(refusal) => return refusal,
-    };
-    let Some(placement) = layout.placement(store_id) else {
-        return not_found("store");
-    };
-    let catalog = match FeeCatalog::load(&state.catalog, tenant_id).await {
-        Ok(catalog) => catalog,
-        Err(refusal) => return refusal,
-    };
-    let mut rules = match state.fees.list(tenant_id).await {
+    let rules = match rules_with_previews(
+        &state,
+        &context,
+        &layout,
+        &catalog,
+        tenant_id,
+        &request.rules,
+    )
+    .await
+    {
         Ok(rules) => rules,
-        Err(error) => return fee_store_error_response(&error),
+        Err(refusal) => return refusal,
     };
-    for preview in &request.rules {
-        let rule = match previewed_rule(&state, &context, &layout, &catalog, preview) {
-            Ok(rule) => rule,
-            Err(refusal) => return refusal,
-        };
-        rules.retain(|held| held.slot() != rule.slot());
-        rules.push(rule);
-    }
     let facts = match fee_store_facts(&state.config_trees, tenant_id, store_id).await {
         Ok(facts) => facts,
         Err(refusal) => return refusal,
     };
     let sent = crate::fees::for_store(&rules, &placement, &catalog.categories, &facts);
     if !sent.faults.is_empty() {
-        let message: Vec<String> = sent
-            .faults
-            .iter()
-            .map(|(fee_id, fault)| {
-                format!(
-                    "fee {fee_id} cannot apply at the store: {}",
-                    fault.as_wire()
-                )
-            })
-            .collect();
-        let details: BTreeSet<(&str, &str)> = sent
-            .faults
-            .iter()
-            .map(|(_, fault)| ("rules", fault.as_wire()))
-            .collect();
-        let details: Vec<(&str, &str)> = details.into_iter().collect();
-        return api_error_with_details(ErrorStatus::Unprocessable, message.join("; "), &details);
+        return store_faults_refusal(&sent.faults);
     }
-    match crate::fees::sample_bill(&facts, channel, &lines, &sent.node) {
+    let bill = crate::fees::sample_bill(&facts, channel, &read.lines, &sent.node);
+    sample_bill_answer(store_id, channel, &request.lines, bill)
+}
+
+/// The tenant's fee layout, the store's place in it, and the catalog the rules compile against.
+async fn store_fee_inputs<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<(FeeLayout, FeePlacement, FeeCatalog), Response>
+where
+    Rg: RegistryStore,
+    Cat: CatalogStore,
+{
+    let layout = FeeLayout::load(&state.registry, tenant_id).await?;
+    let Some(placement) = layout.placement(store_id) else {
+        return Err(not_found("store"));
+    };
+    let catalog = FeeCatalog::load(&state.catalog, tenant_id).await?;
+    Ok((layout, placement, catalog))
+}
+
+/// The sample bill as the console draws it, or the `422` naming what the store could not price.
+fn sample_bill_answer(
+    store_id: StoreId,
+    channel: SalesChannel,
+    lines: &[SampleLineRequest],
+    bill: Result<crate::fees::SampleBill, crate::fees::SampleBillError>,
+) -> Response {
+    match bill {
         Ok(bill) => {
-            let units: Vec<i64> = request.lines.iter().map(|line| line.quantity).collect();
+            let units: Vec<i64> = lines.iter().map(|line| line.quantity).collect();
             (
                 StatusCode::OK,
                 Json(SampleBillView::of(store_id, channel, &units, bill)),
@@ -346,6 +330,100 @@ where
         }
         Err(error) => sample_bill_refusal(&error),
     }
+}
+
+/// What a preview reads from its request before it reads any store.
+struct PreviewRequest {
+    tenant_id: TenantId,
+    store_id: StoreId,
+    channel: SalesChannel,
+    lines: Vec<crate::fees::SampleLine>,
+}
+
+/// The ids, the channel (dine-in when absent), the rule count and the sample lines, refused in
+/// that order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn read_preview_request(request: &PreviewFeesRequest) -> Result<PreviewRequest, Response> {
+    let [tenant_id, store_id] = parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ])?;
+    let channel = match &request.sales_channel {
+        None => SalesChannel::DineIn,
+        Some(channel) if channel.is_unspecified() => {
+            return Err(enum_refusal(
+                "sales_channel",
+                SalesChannel::ALL
+                    .iter()
+                    .filter(|channel| **channel != SalesChannel::Unspecified)
+                    .map(|channel| channel.as_wire()),
+            ));
+        }
+        Some(channel) => channel.known(),
+    };
+    if request.rules.len() > MOST_PREVIEW_RULES {
+        return Err(
+            FieldRefusal::new("a preview takes at most 20 rules", "rules", "OUT_OF_RANGE")
+                .into_response(),
+        );
+    }
+    let lines = parse_sample_lines(&request.lines)?;
+    Ok(PreviewRequest {
+        tenant_id: TenantId::new(tenant_id),
+        store_id: StoreId::new(store_id),
+        channel,
+        lines,
+    })
+}
+
+/// The tenant's written rules with each previewed rule in the place of the one at its slot, checked
+/// against the tenant's `layout` and `catalog` as a write checks it.
+async fn rules_with_previews<F, Rg, Cat, Cfg, A, C>(
+    state: &FeesState<F, Rg, Cat, Cfg, A, C>,
+    context: &AdminContext,
+    layout: &FeeLayout,
+    catalog: &FeeCatalog,
+    tenant_id: TenantId,
+    previews: &[PreviewFeeRule],
+) -> Result<Vec<FeeRule>, Response>
+where
+    F: FeeRuleStore,
+    C: ClockSource,
+{
+    let mut rules = state
+        .fees
+        .list(tenant_id)
+        .await
+        .map_err(|error| fee_store_error_response(&error))?;
+    for preview in previews {
+        let rule = previewed_rule(state, context, layout, catalog, preview)?;
+        rules.retain(|held| held.slot() != rule.slot());
+        rules.push(rule);
+    }
+    Ok(rules)
+}
+
+/// The `422` for rules the store cannot apply: each fee and its fault in the message, each
+/// distinct fault once in the details.
+fn store_faults_refusal(faults: &[(FeeId, crate::fees::StoreFault)]) -> Response {
+    let message: Vec<String> = faults
+        .iter()
+        .map(|(fee_id, fault)| {
+            format!(
+                "fee {fee_id} cannot apply at the store: {}",
+                fault.as_wire()
+            )
+        })
+        .collect();
+    let details: BTreeSet<(&str, &str)> = faults
+        .iter()
+        .map(|(_, fault)| ("rules", fault.as_wire()))
+        .collect();
+    let details: Vec<(&str, &str)> = details.into_iter().collect();
+    api_error_with_details(ErrorStatus::Unprocessable, message.join("; "), &details)
 }
 
 /// One rule a preview writes in place, checked as a write checks it. A rule with no `fee_id` is
