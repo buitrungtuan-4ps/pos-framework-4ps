@@ -125,6 +125,11 @@ impl ConfigTreeStore for PostgresConfigTrees {
 
 // --- The org registry (ADR-0065) ---------------------------------------------------------------
 
+/// Parses a tenant id the registry stored.
+///
+/// # Errors
+///
+/// [`RegistryStoreError`] if a stored tenant id is not a ULID.
 pub fn parse_registry_tenant(text: &str) -> Result<TenantId, RegistryStoreError> {
     text.parse::<Ulid>().map(TenantId::new).map_err(|_ignored| {
         RegistryStoreError::new(format!("a registry tenant id is not a ULID: {text}"))
@@ -137,6 +142,11 @@ fn parse_registry_brand(text: &str) -> Result<BrandId, RegistryStoreError> {
     })
 }
 
+/// Parses a store id the registry stored.
+///
+/// # Errors
+///
+/// [`RegistryStoreError`] if a stored store id is not a ULID.
 pub fn parse_registry_store(text: &str) -> Result<StoreId, RegistryStoreError> {
     text.parse::<Ulid>().map(StoreId::new).map_err(|_ignored| {
         RegistryStoreError::new(format!("a registry store id is not a ULID: {text}"))
@@ -215,6 +225,7 @@ fn device_record(row: DeviceRow) -> Result<Versioned<DeviceRecord>, RegistryStor
 /// knows both. Collapsing them would put a `store-postgres` type in the seam every fork has to
 /// implement. One function serves every seam — the translation does not vary by entity, and a copy
 /// per store would be a copy that can drift.
+#[must_use]
 pub fn update_outcome(update: RowUpdate) -> UpdateOutcome {
     match update {
         RowUpdate::Updated(version) => UpdateOutcome::Updated(Version::new(version)),
@@ -229,6 +240,7 @@ pub fn update_outcome(update: RowUpdate) -> UpdateOutcome {
 /// `store-postgres`'s way of saying the key was taken. Kept beside [`update_outcome`] and for the
 /// same reason: this crate is the only place that knows both vocabularies, and one function per
 /// seam would be a copy that can drift.
+#[must_use]
 pub fn create_outcome(inserted: Option<String>) -> CreateOutcome {
     inserted.map_or(CreateOutcome::AlreadyExists, |version| {
         CreateOutcome::Created(Version::new(version))

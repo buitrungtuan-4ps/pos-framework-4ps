@@ -29,6 +29,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 /// A read of the tree wants the four layers and the history; the version the row was read at is a
 /// *writer's* precondition ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 /// Read paths say so by calling this, rather than silently discarding a field.
+#[must_use]
 pub fn strip_tree_version(loaded: Option<Versioned<ConfigTreeState>>) -> Option<ConfigTreeState> {
     loaded.map(|versioned| versioned.record)
 }
@@ -37,8 +38,11 @@ pub fn strip_tree_version(loaded: Option<Versioned<ConfigTreeState>>) -> Option<
 ///
 /// The two travel together because a conditional write needs both: the state to compose the next
 /// publish from, and the version to write against.
+#[derive(Debug)]
 pub struct LoadedTree {
+    /// The tree's state, or `None` for a store never published to.
     pub state: Option<ConfigTreeState>,
+    /// The version it was read at, which the write is conditional on.
     pub version: Option<Version>,
 }
 
@@ -46,6 +50,10 @@ pub struct LoadedTree {
 ///
 /// Split from [`publish_store_layer`] so each route can compose its own layer in between, which is
 /// the only part of the twelve node-publish routes that actually differs.
+///
+/// # Errors
+///
+/// The `503` to return when the config-tree store could not be read.
 pub async fn load_tree_for_write<Cfg>(
     config_trees: &Cfg,
     tenant_id: TenantId,
@@ -101,6 +109,10 @@ pub const CONDITIONAL_WRITE_ATTEMPTS: u8 = 3;
 ///
 /// The two routes where a human edits the document itself — `PUT /admin/config` and the rollback —
 /// are the exception and go through [`publish_authored_layer`] instead.
+///
+/// # Errors
+///
+/// The response to return: the store's refusal as [`publish_config_nodes_with`] gives it.
 #[expect(
     clippy::result_large_err,
     reason = "the composing closure's Err is an axum Response by design — the same shape every \
@@ -142,6 +154,12 @@ where
 /// A write to the Store layer that sets QR ordering's switch, the `qr` node or the `channels` list
 /// also carries what the other two need to follow the switch ([`crate::qr_ordering::align`],
 /// ADR-0160 decision 5), composed here on the tree as just read, so a retry composes again.
+///
+/// # Errors
+///
+/// The response to return: `compose`'s own refusal, a `422` for a node whose prerequisite the store
+/// lacks or a tree that does not validate, a `400` for a value that needs a recorded confirmation,
+/// a `412` after every attempt lost a race, or a `503` when the store or the entropy source failed.
 pub async fn publish_config_nodes_with<Cfg, C, F>(
     config_trees: &Cfg,
     clock: &C,
@@ -161,6 +179,10 @@ where
 
 /// [`publish_config_nodes_with`], saying whether the write takes ADR-0169 decision 3's check. Only
 /// the settings republish skips it: every value it publishes passed decision 2 when written.
+///
+/// # Errors
+///
+/// As [`publish_config_nodes_with`].
 pub async fn publish_nodes<Cfg, C, F>(
     config_trees: &Cfg,
     clock: &C,
@@ -246,6 +268,10 @@ where
 ///
 /// A node that carries nothing but settings is not held ([`only_settings`]): the settings compile
 /// writes `locale.tax_rounding` on the Tenant layer of a store whose locale was never published.
+///
+/// # Errors
+///
+/// The `422` naming the node and the one it waits for.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
@@ -282,6 +308,7 @@ pub fn check_prerequisites(
 ///
 /// Such a node is the settings and nothing else: a `locale` holding `tax_rounding` alone has no
 /// currency, timezone or cutoff, so it is not the locale a menu waits for.
+#[must_use]
 pub fn only_settings(node: &str, value: &serde_json::Value) -> bool {
     let register = pos_proto::settings::register();
     value.as_object().is_some_and(|fields| {
@@ -298,6 +325,7 @@ pub fn only_settings(node: &str, value: &serde_json::Value) -> bool {
 ///
 /// A missing or non-object prior layer starts from an empty object, so a store's first publish and a
 /// corrupt layer both compose cleanly.
+#[must_use]
 pub fn layer_with_nodes(
     state_before: Option<&ConfigTreeState>,
     level: ConfigLevel,

@@ -22,6 +22,7 @@ use crate::settings::SettingRefusal;
 use crate::version::{UpdateOutcome, Version};
 
 /// The `400` a value the register refuses becomes, naming the field at fault.
+#[must_use]
 pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
     let (field, reason) = match refusal {
         SettingRefusal::UnknownSetting(_) => ("setting_key", "UNKNOWN_SETTING"),
@@ -49,6 +50,7 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
 /// a value that needs a recorded confirmation, which it did not run before: the setting's key, with
 /// `CONFIRMATION_REQUIRED`, and a message that points to Settings. A release names the store, since
 /// it reaches many.
+#[must_use]
 pub fn unconfirmed_response(unconfirmed: &Unconfirmed, store_id: Option<StoreId>) -> Response {
     let message = match store_id {
         Some(store_id) => format!("store {store_id}: {unconfirmed}"),
@@ -74,6 +76,10 @@ pub enum ConfirmCheck {
 
 /// [`crate::confirmed_values::check`] against the register, for a write that turns what the store
 /// runs from `before` into `after`, as the `400` to answer.
+///
+/// # Errors
+///
+/// The `400` naming the first setting that needs a recorded confirmation.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
@@ -107,6 +113,11 @@ fn confirmed_against(
 /// `saved` is the tenant, the store, and the version the tree was read at. That precondition is the
 /// one the store evaluates at write time, and it is what prevents two writes interleaving: an
 /// `If-Match` compared against the handler's own read can already have been overtaken.
+///
+/// # Errors
+///
+/// The `400` for a value that needs a recorded confirmation, the `412` when the tree changed since
+/// it was read, or the `503` when the store failed.
 pub async fn save_if_confirmed<Cfg, V>(
     config_trees: &Cfg,
     (tenant_id, store_id, read_at): (TenantId, StoreId, Option<&Version>),

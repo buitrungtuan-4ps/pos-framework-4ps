@@ -44,6 +44,7 @@ pub fn config_store_error_response(error: &crate::config_tree::ConfigStoreError)
 }
 
 /// Parses a config-tree level from its path segment, or `None` for an unknown one.
+#[must_use]
 pub fn parse_config_level(level: &str) -> Option<ConfigLevel> {
     ConfigLevel::ORDER
         .into_iter()
@@ -56,6 +57,7 @@ pub fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
 }
 
 /// Parses a status word from a request body; `None` (a `400`) for anything but the two known values.
+#[must_use]
 pub fn parse_entity_status(value: &str) -> Option<EntityStatus> {
     EntityStatus::ALL
         .iter()
@@ -67,6 +69,7 @@ pub fn parse_entity_status(value: &str) -> Option<EntityStatus> {
 ///
 /// Eighteen routes read this one field, which is why it gets a name of its own: the eighteen call
 /// sites now say *which* refusal they mean rather than each restating the accepted set.
+#[must_use]
 pub fn entity_status_refusal() -> Response {
     enum_refusal(
         "status",
@@ -78,6 +81,7 @@ pub fn entity_status_refusal() -> Response {
 ///
 /// Its own name because six routes answer it and it is not the `"no such X"` shape: the store
 /// exists, and so does its config tree; what is missing is a *published version* of it.
+#[must_use]
 pub fn no_published_configuration() -> Response {
     api_error(
         ErrorStatus::NotFound,
@@ -100,6 +104,10 @@ pub fn no_published_configuration() -> Response {
 /// it on the Store layer, where it would shadow every later settings change for the store. A node
 /// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
 /// holding only `tax_rounding` is not the locale a menu waits for.
+///
+/// # Errors
+///
+/// The `503` to return when the config-tree store could not be read.
 pub async fn read_store_node_as_run<Cfg>(
     config_trees: &Cfg,
     tenant_id: TenantId,
