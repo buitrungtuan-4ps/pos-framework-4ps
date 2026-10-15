@@ -16,7 +16,7 @@ The domain: every rule that decides what a sale means. Each command is `decide(s
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-proto`.
-- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-people`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator`.
 
 ## Entry points
 
