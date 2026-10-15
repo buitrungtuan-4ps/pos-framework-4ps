@@ -76,3 +76,6 @@ e14828d075c16e9b5e2603e3ec80321898124973
 
 # #801 — the edge's composition and who may act move into their own modules
 7ac8f843f3f7ae2ed490634c84ab359288be6077
+
+# #802 — the edge's order commands and their tests move into their own modules
+348e222fb3f7fc01ff6c941196216a88c76d43cc
