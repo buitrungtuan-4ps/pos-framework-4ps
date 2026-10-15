@@ -375,6 +375,7 @@ export function ComboboxField(props: {
   const [active, setActive] = createSignal(0);
   let root: HTMLDivElement | undefined;
   let search: HTMLInputElement | undefined;
+  let trigger: HTMLButtonElement | undefined;
   const optionRefs: HTMLLIElement[] = [];
 
   const shown = createMemo(() => {
@@ -429,10 +430,12 @@ export function ComboboxField(props: {
       const option = items[active()];
       if (option) {
         choose(option);
+        trigger?.focus();
       }
     } else if (event.key === "Escape") {
       event.preventDefault();
       close();
+      trigger?.focus();
     }
   };
 
@@ -442,6 +445,7 @@ export function ComboboxField(props: {
         {props.label}
       </span>
       <button
+        ref={trigger}
         type="button"
         // The trigger is where a declared click lands: the budget counts choosing in a picker as
         // one step, so the harness presses this and takes an option rather than counting two.
