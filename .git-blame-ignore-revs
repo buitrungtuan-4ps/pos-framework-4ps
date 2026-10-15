@@ -118,3 +118,6 @@ a0fc27dcb82be94751a0475b838f6b158911feda
 
 # #818 — the inventory, its routes and its store move into pos-cloud-inventory
 73bad3c40f93b3964d54bdd3037ff7aa1d2c7d76
+
+# #819 — activation, claims, onboarding and their routes and stores move into pos-cloud-devices
+51d39df9d934a1e4b42fef90c9b2d6185e03c79d
