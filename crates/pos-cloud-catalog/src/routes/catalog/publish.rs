@@ -15,12 +15,12 @@ use pos_cloud_api::response::{api_error, parse_ulid_fields, service_unavailable}
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::fees::PublishedFees;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use serde::Deserialize;
 
 use super::catalog_error_response;
 use crate::audit::AuditRecorder;
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::{
     CatalogItem, CatalogStore, Course, DisplayCategory, DisplaySubcategory, Menu, MenuId,
@@ -220,11 +220,6 @@ struct PublishedMenu {
 /// being written: what the store is sent is checked against what it will hold. A store that cannot
 /// apply one of its rules still gets its menu; the answer says which rule and why, and the store
 /// keeps the fees it has, as a fee publish leaves it.
-#[expect(
-    clippy::result_large_err,
-    reason = "the composing closure's Err is an axum Response by design — the shape every node \
-              publish's closure carries — and this closure never takes the Err branch"
-)]
 async fn admin_publish_menu<Cat, F, Rg, Cfg, A, C>(
     State(state): State<CatalogPublishState<Cat, F, Rg, Cfg, A, C>>,
     headers: HeaderMap,
@@ -261,14 +256,79 @@ where
         ),
         Err(refusal) => return refusal,
     };
-
-    // Load the store's tree (or start one), set the `menu` and `layout` keys on its Store layer, and
-    // re-publish that layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order
-    // (`ConfigLevel::ORDER`); writing the whole layer back preserves any other Store-level keys there.
     let nodes = match menu_nodes(&state.catalog, tenant_id, menu_id).await {
         Ok(nodes) => nodes,
         Err(refusal) => return refusal,
     };
+    let (id, fees) = match write_menu_with_fees(&state, tenant_id, store_id, nodes).await {
+        Ok(written) => written,
+        Err(refusal) => return refusal,
+    };
+    record_menu_publish(&state, &context, tenant_id, store_id, menu_id, id).await;
+    (
+        StatusCode::OK,
+        Json(PublishedMenu {
+            config_version_id: id.to_string(),
+            fees,
+        }),
+    )
+        .into_response()
+}
+
+/// Records that a menu was compiled and published to a store — the menu compiled and the config
+/// version it produced, keyed to the store. The compiled book itself rides the config tree; the
+/// config version history (a later G2 slice) is where it is diffed.
+async fn record_menu_publish<Cat, F, Rg, Cfg, A, C>(
+    state: &CatalogPublishState<Cat, F, Rg, Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    menu_id: MenuId,
+    id: ConfigVersionId,
+) where
+    C: ClockSource,
+{
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        "catalog.publish",
+        "store",
+        &store_id.to_string(),
+        None,
+        Some(serde_json::json!({
+            "menu_id": menu_id.to_string(),
+            "config_version_id": id.to_string(),
+        })),
+    )
+    .await;
+}
+
+/// Writes the compiled `nodes` onto the store's Store layer with the store's `fees` node beside
+/// them where it changes, and answers the version and how the fees went.
+///
+/// Loads the store's tree (or starts one), sets the `menu` and `layout` keys on its Store layer, and
+/// re-publishes that layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order
+/// (`ConfigLevel::ORDER`); writing the whole layer back preserves any other Store-level keys there.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every node \
+              publish's closure carries — and this closure never takes the Err branch"
+)]
+async fn write_menu_with_fees<Cat, F, Rg, Cfg, A, C>(
+    state: &CatalogPublishState<Cat, F, Rg, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    nodes: Vec<(String, serde_json::Value)>,
+) -> Result<(ConfigVersionId, FeePublishResult), Response>
+where
+    Cat: CatalogStore,
+    F: FeeRuleStore,
+    Rg: RegistryStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
     let tenant_fees =
         TenantFeeRules::load(&state.fees, &state.registry, &state.catalog, tenant_id).await;
     let store_fees = tenant_fees
@@ -276,7 +336,7 @@ where
         .and_then(|fees| fees.for_store(store_id));
 
     let mut composed = None;
-    let id = match publish_config_nodes_with(
+    let id = publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
@@ -294,41 +354,10 @@ where
             Ok(writing)
         },
     )
-    .await
-    {
-        Ok(id) => id,
-        Err(refusal) => return refusal,
-    };
+    .await?;
     let fees = composed.map_or_else(
         || FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
         |on_tree| on_tree.result(store_id, Some(id)),
     );
-    {
-        // Records that a menu was compiled and published to a store — the menu compiled and the
-        // config version it produced, keyed to the store. The compiled book itself rides the
-        // config tree; the config version history (a later G2 slice) is where it is diffed.
-        audit_action(
-            &state.audit,
-            &state.clock,
-            &context,
-            Some(tenant_id),
-            "catalog.publish",
-            "store",
-            &store_id.to_string(),
-            None,
-            Some(serde_json::json!({
-                "menu_id": menu_id.to_string(),
-                "config_version_id": id.to_string(),
-            })),
-        )
-        .await;
-        (
-            StatusCode::OK,
-            Json(PublishedMenu {
-                config_version_id: id.to_string(),
-                fees,
-            }),
-        )
-            .into_response()
-    }
+    Ok((id, fees))
 }

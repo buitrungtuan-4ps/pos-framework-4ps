@@ -19,9 +19,9 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
 use crate::audit::AuditRecorder;
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
-use crate::images::{self, ImagePipelineError, RenderError};
+use crate::images::{self, ImagePipelineError, RenderError, Renditions};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::paging::Page;
 use crate::routes::{MediaListQuery, RegistryTenantQuery, not_found, paged_ok, parse_page};
@@ -190,40 +190,60 @@ where
     // not a copy of the upload.
     let renditions = match images::render_blocking(body).await {
         Ok(renditions) => renditions,
-        Err(RenderError::Pipeline(ImagePipelineError::Decode(_))) => {
-            return api_error(
-                ErrorStatus::InvalidArgument,
-                "the upload is not a decodable image",
-            );
-        }
-        Err(RenderError::Pipeline(ImagePipelineError::Budget { .. })) => {
+        Err(error) => return render_refusal(error),
+    };
+    store_upload(&state, &context, tenant_id, renditions).await
+}
+
+/// The answer to an upload that did not render: a bad upload, one the budget cannot hold, the
+/// server at its rendering cap, or an internal fault.
+fn render_refusal(error: RenderError) -> Response {
+    match error {
+        RenderError::Pipeline(ImagePipelineError::Decode(_)) => api_error(
+            ErrorStatus::InvalidArgument,
+            "the upload is not a decodable image",
+        ),
+        RenderError::Pipeline(ImagePipelineError::Budget { .. }) => {
             // The pipeline understood the image and could not fit it in the budget: well-formed
             // request, unprocessable content (ADR-0096). There is no field to name — the upload is
             // the whole body — so this carries no `details`.
-            return api_error(
+            api_error(
                 ErrorStatus::Unprocessable,
                 "the image could not be reduced within the size budget",
-            );
+            )
         }
-        Err(RenderError::Pipeline(ImagePipelineError::Encode(_))) => {
+        RenderError::Pipeline(ImagePipelineError::Encode(_)) => {
             tracing::error!("encoding a media rendition failed");
-            return api_error(ErrorStatus::Internal, "could not encode the image");
+            api_error(ErrorStatus::Internal, "could not encode the image")
         }
-        Err(RenderError::Busy { limit, wait }) => {
+        RenderError::Busy { limit, wait } => {
             // Nothing is wrong with the upload or the request; the server is at its rendering cap.
             // `RESOURCE_EXHAUSTED` is the retryable status (ADR-0096), which is the honest answer —
             // the console can send this one again in a moment and it will work.
             tracing::warn!(limit, ?wait, "refused a media upload at the rendering cap");
-            return api_error(
+            api_error(
                 ErrorStatus::ResourceExhausted,
                 "the server is busy rendering uploads; try this one again shortly",
-            );
+            )
         }
-        Err(RenderError::Join(error)) => {
+        RenderError::Join(error) => {
             tracing::error!(%error, "the media rendering task did not return");
-            return api_error(ErrorStatus::Internal, "could not render the image");
+            api_error(ErrorStatus::Internal, "could not render the image")
         }
-    };
+    }
+}
+
+/// Stores an upload's renditions under a new id, records it, and answers the id and the size.
+async fn store_upload<M, A, C>(
+    state: &MediaState<M, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    renditions: Renditions,
+) -> Response
+where
+    M: MediaStore,
+    C: ClockSource,
+{
     let Some(media_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MediaId::new)
     else {
@@ -242,7 +262,7 @@ where
             audit_action(
                 &state.audit,
                 &state.clock,
-                &context,
+                context,
                 Some(tenant_id),
                 "media.upload",
                 "media_asset",
@@ -414,4 +434,82 @@ fn media_error_response(error: &MediaStoreError) -> Response {
 fn media_entropy_unavailable() -> Response {
     tracing::error!("could not read OS entropy to mint a media id");
     api_error(ErrorStatus::Unavailable, "the media service is unavailable")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    use super::render_refusal;
+    use crate::images::{ImagePipelineError, RenderError};
+
+    fn image_error() -> image::ImageError {
+        image::ImageError::Limits(image::error::LimitError::from_kind(
+            image::error::LimitErrorKind::DimensionError,
+        ))
+    }
+
+    /// The status and the envelope's message.
+    async fn answered(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read the body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON envelope");
+        let message = body["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .to_owned();
+        (status, message)
+    }
+
+    /// Every way a render can fail, answered as the upload route answers it. Only a bad upload is
+    /// reachable over HTTP in a test; the rest are pinned here.
+    #[tokio::test]
+    async fn each_render_failure_has_its_own_status_and_message() {
+        let join = tokio::spawn(async { panic!("a rendering task that does not return") })
+            .await
+            .expect_err("the task panics");
+        for (error, status, message) in [
+            (
+                RenderError::Pipeline(ImagePipelineError::Decode(image_error())),
+                StatusCode::BAD_REQUEST,
+                "the upload is not a decodable image",
+            ),
+            (
+                RenderError::Pipeline(ImagePipelineError::Budget {
+                    budget: 30_000,
+                    smallest: 40_000,
+                }),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "the image could not be reduced within the size budget",
+            ),
+            (
+                RenderError::Pipeline(ImagePipelineError::Encode(image_error())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not encode the image",
+            ),
+            (
+                RenderError::Busy {
+                    limit: 2,
+                    wait: Duration::from_secs(5),
+                },
+                StatusCode::TOO_MANY_REQUESTS,
+                "the server is busy rendering uploads; try this one again shortly",
+            ),
+            (
+                RenderError::Join(join),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not render the image",
+            ),
+        ] {
+            assert_eq!(
+                answered(render_refusal(error)).await,
+                (status, message.to_owned())
+            );
+        }
+    }
 }
