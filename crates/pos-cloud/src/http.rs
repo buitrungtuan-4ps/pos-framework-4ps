@@ -64,22 +64,21 @@
 //! it over `store-postgres` with the identical handler code (ADR-0026).
 
 use core::fmt;
-use core::fmt::Write as _;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
 use axum::http::HeaderName;
 use axum::http::header::{
-    CONTENT_SECURITY_POLICY, ETAG, IF_MATCH, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE,
-    STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    CONTENT_SECURITY_POLICY, REFERRER_POLICY, RETRY_AFTER, SET_COOKIE, STRICT_TRANSPORT_SECURITY,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use pos_ports::PortError;
 use pos_ports::event_store::EventStore;
@@ -87,8 +86,6 @@ use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
-use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::WireEnum;
 
 use crate::audit::{AuditRecorder, NoopAuditRecorder};
 use crate::auth::admin::{AdminContext, AdminStore};
@@ -274,16 +271,28 @@ pub(crate) use pos_cloud_api::console::{audit_action, mint_ulid};
 pub(crate) use pos_cloud_api::response::{
     api_error, api_error_with_details, parse_ulid_fields, service_unavailable,
 };
+// The refusals, paging and conditional-write helpers every area's routes share live in
+// pos-cloud-api too; imported here, so `crate::http::not_found` and the rest still name them.
+use pos_cloud_api::conditional::{
+    EntityTagRefusal, already_exists, if_match, if_match_collection, parse_entity_tag,
+    version_mismatch, versioned_created, versioned_ok, with_etag,
+};
+use pos_cloud_api::console::random_hex_32;
+use pos_cloud_api::paged::{
+    offset_without_limit_refusal, page_bound_refusal, paged_ok, parse_page,
+};
+use pos_cloud_api::refusal::{
+    FieldRefusal, accepted_tokens, enum_refusal, not_found, optional_choice, parse_optional_ulid,
+    present_param, unprocessable_violations,
+};
 use pos_cloud_reports::xz::admin_xz_report;
 
-use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::registry::{EntityStatus, RegistryStore};
 // These are ADR-0125 config releases — a named set of config publishes going out to a set of shops.
 // They import under their own plain spelling, which they could not do while `crate::ota` also
 // exported a `ReleaseStore`; that one is `ArtifactStore` now, so the alias this import used to carry
 // is gone and the reader no longer has to hold two meanings of one word at once.
 use crate::store_groups::StoreGroupStore;
-use crate::version::{Version, Versioned};
 use crate::webhook::WebhookEndpointStore;
 use utoipa::OpenApi as _;
 
@@ -875,18 +884,6 @@ struct UpdateCourseRequest {
     status: String,
 }
 
-/// The tokens a caller may actually send for `E`: every wire token except `UNSPECIFIED`.
-///
-/// `WireEnum::ALL` leads with `UNSPECIFIED`, which exists so an older client can read a newer
-/// server's value and is never a choice a caller makes. Listing it as accepted would invite one.
-fn accepted_tokens<E: WireEnum>() -> impl Iterator<Item = &'static str> {
-    E::ALL
-        .iter()
-        .copied()
-        .filter(|value| *value != E::UNSPECIFIED)
-        .map(WireEnum::as_wire)
-}
-
 /// A store's `node_key` node as the store runs it, without the node's settings fields, or `null`
 /// when it runs none.
 ///
@@ -953,49 +950,6 @@ fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::
 /// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
 /// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
 pub use pos_proto::retention::EVENT_LOG_DAYS;
-
-/// A choice a request names by its wire token: `None` where it names none, which leaves the choice
-/// to whatever stands for it, or a token of `E` this release knows.
-///
-/// # Errors
-///
-/// A `400 INVALID_ENUM_VALUE` naming `field` for a token this release does not know, and for `E`'s
-/// `UNSPECIFIED`, which is what an older reader takes a newer token to be and never a choice.
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
-)]
-fn optional_choice<E: WireEnum>(field: &str, token: Option<&str>) -> Result<Option<E>, Response> {
-    let Some(token) = token else {
-        return Ok(None);
-    };
-    match E::from_wire(token) {
-        Some(known) if known != E::UNSPECIFIED => Ok(Some(known)),
-        _ => Err(enum_refusal(field, accepted_tokens::<E>())),
-    }
-}
-
-/// Parses an optional id field: an absent field, an empty string, or whitespace is `Ok(None)`; a
-/// present value must be a ULID or the caller gets a `400` naming the field.
-///
-/// **The only place that rule is written.** There were seven typed wrappers around this, and two of
-/// them — `brand_id` on a store and `parent_menu_id` on a menu — matched on `Some(text)` without
-/// trimming or filtering, so an empty string meant "malformed" for those two fields and "unset" for
-/// the other five. Whether `""` clears an optional reference is not a per-field question, and a
-/// caller cannot be expected to know which of two identical-looking fields it is asking. Clearing a
-/// select box sends `""`, and the console only avoided the `400` because every call site happened to
-/// map it to `null` first — one screen forgetting that would have produced a refusal an operator
-/// could not act on. So the wrappers are gone and every caller passes its own constructor
-/// (`BrandId::new`, `MenuId::new`, …) here.
-fn parse_optional_ulid<T>(value: Option<&str>, wrap: impl Fn(Ulid) -> T) -> Result<Option<T>, ()> {
-    match value.map(str::trim).filter(|text| !text.is_empty()) {
-        None => Ok(None),
-        Some(text) => text
-            .parse::<Ulid>()
-            .map(|ulid| Some(wrap(ulid)))
-            .map_err(|_ignored| ()),
-    }
-}
 
 /// A `?tenant_id=` query for the tenant-scoped listings.
 #[derive(Debug, Clone, Deserialize)]
@@ -1491,20 +1445,6 @@ fn mint_session_token() -> Option<String> {
     random_hex_32()
 }
 
-/// 32 CSPRNG bytes (256 bits) as a 64-character lowercase hex string, or `None` if the OS entropy
-/// source is unavailable. Used for both the session token and an API-key secret — both need a long,
-/// unguessable, ASCII-safe value.
-fn random_hex_32() -> Option<String> {
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).ok()?;
-    let mut hex = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        // Writing to a String is infallible; the result is ignored deliberately.
-        let _ = write!(hex, "{byte:02x}");
-    }
-    Some(hex)
-}
-
 /// Mints a fresh super-admin credential from OS entropy: a [`TOTP_SECRET_BYTES`]-byte TOTP secret and
 /// the Argon2id PHC hash of `password` under a fresh 16-byte CSPRNG salt. `None` if the OS entropy
 /// source is unavailable or hashing fails — the caller then fails closed rather than provision a
@@ -1518,92 +1458,6 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
     Some((secret, phc))
 }
 
-/// The `422` a composed document earns when every field in it is valid and the document they make
-/// together is not ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
-///
-/// The violations arrive from `pos-core` as prose a person can read — "the routing rule for station
-/// `S01` names a backup station that does not exist" — not as field paths, so they join into
-/// `message` rather than becoming `details`. Inventing a `field` for them would be fabricating
-/// structure the domain never produced, and a client that branched on the fabricated `reason` would
-/// be branching on a guess.
-///
-/// Separated from [`api_error`] so the four sites that report violations cannot each pick their own
-/// separator: before this they could not even agree on a *body*, which is how the fifth shape —
-/// the translation grid's — ended up with no reader in the console at all.
-fn unprocessable_violations(violations: &[String]) -> Response {
-    api_error(ErrorStatus::Unprocessable, violations.join("; "))
-}
-
-/// Why a request-to-record builder refused, and which field to send the caller to.
-///
-/// The four builders returned a bare `&'static str`, and their own doc comments said why: a
-/// `Result<_, Response>` trips `clippy::result_large_err`. That is a real constraint and this
-/// respects it — three `&'static str`s is 48 bytes, well under the threshold — while fixing what
-/// the bare string cost, which is that a refusal naming no field is one no console can mark.
-///
-/// `field` carries the full path for a nested value (`action.rate`, not `rate`), following
-/// ADR-0096's reasoning that a path a reader can act on beats a name they have to interpret.
-#[derive(Clone, Copy)]
-struct FieldRefusal {
-    message: &'static str,
-    field: &'static str,
-    reason: &'static str,
-}
-
-impl FieldRefusal {
-    const fn new(message: &'static str, field: &'static str, reason: &'static str) -> Self {
-        Self {
-            message,
-            field,
-            reason,
-        }
-    }
-
-    /// The `400` this refusal becomes at the handler that called the builder.
-    fn into_response(self) -> Response {
-        api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            self.message,
-            &[(self.field, self.reason)],
-        )
-    }
-}
-
-/// The refusal for a field whose value is outside a **closed set**: `INVALID_ARGUMENT`, an
-/// `INVALID_ENUM_VALUE` detail naming the field, and prose listing what is accepted.
-///
-/// The set is passed in rather than spelled into the message, so every caller derives it from the
-/// enum that owns it — `EntityStatus::ALL`, `AdminRole::ALL`, `AdminStatus::ALL`,
-/// `ConfigLevel::ORDER`. Adding a variant then updates the refusal, where before it would have left
-/// a sentence listing the old set: `"status must be active or archived"` was written out at eighteen
-/// routes, so a third status would have needed eighteen edits and got none.
-///
-/// The prose it builds matches what those sites already said, so only the `details` array is new.
-fn enum_refusal<'token>(field: &str, accepted: impl IntoIterator<Item = &'token str>) -> Response {
-    let tokens: Vec<&str> = accepted.into_iter().collect();
-    api_error_with_details(
-        ErrorStatus::InvalidArgument,
-        format!("{field} must be {}", accepted_list(&tokens)),
-        &[(field, "INVALID_ENUM_VALUE")],
-    )
-}
-
-/// Reads a closed set as English: `"active or archived"`, `"owner, admin, ops, or viewer"`.
-///
-/// Separate from [`enum_refusal`] because this is the part with arities to get wrong, and a `String`
-/// can be asserted where a `Response` body needs an async read. Both spellings match what the
-/// hand-written sentences used, which is why generating them changed no message.
-fn accepted_list(tokens: &[&str]) -> String {
-    match tokens {
-        [only] => (*only).to_owned(),
-        [first, last] => format!("{first} or {last}"),
-        [head @ .., last] => format!("{}, or {last}", head.join(", ")),
-        // Unreachable: a closed set with nothing in it accepts nothing, so no value could be
-        // refused *against* it.
-        [] => "one of the accepted values".to_owned(),
-    }
-}
-
 /// The refusal for a `status` field that is not an [`EntityStatus`] token.
 ///
 /// Eighteen routes read this one field, which is why it gets a name of its own: the eighteen call
@@ -1615,20 +1469,6 @@ fn entity_status_refusal() -> Response {
     )
 }
 
-/// The refusal for a named thing that is not there: `NOT_FOUND`, `"no such {entity}"`, no details.
-///
-/// Sixty-one sites wrote this sentence out, thirty-five spellings of it, and the value of one home
-/// here is smaller than for the ULID and closed-set refusals: nothing was *wrong*, only repeated.
-/// What it does buy is that the next absent entity cannot arrive with a different phrasing or a
-/// different status.
-///
-/// No `details` array, deliberately. `details` names a field the caller got wrong, and a caller
-/// asking after an employee who does not exist got its fields right — the employee is absent.
-/// Naming one here would send a client to fix an input that was fine.
-fn not_found(entity: &str) -> Response {
-    api_error(ErrorStatus::NotFound, format!("no such {entity}"))
-}
-
 /// The refusal for a store's configuration that has not been published yet.
 ///
 /// Its own name because six routes answer it and it is not the `"no such X"` shape: the store
@@ -1638,328 +1478,6 @@ fn no_published_configuration() -> Response {
         ErrorStatus::NotFound,
         "the store has no published configuration",
     )
-}
-
-/// A query param that was actually sent: absent, empty, and whitespace all read as absent.
-///
-/// The same rule `parse_optional_ulid` applies to optional id fields (#280), for the same reason —
-/// clearing a form control sends `""`, and a caller that sent nothing meaningful should be treated as
-/// having sent nothing.
-fn present_param(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|text| !text.is_empty())
-}
-
-/// Reads a list route's paging params: `None` for an unpaged read, `Some(Ok(_))` for a page,
-/// `Some(Err(_))` for a refusal.
-///
-/// The three-way answer is the shape of ADR-0098's central decision. An absent `limit` is not a
-/// missing value to default — it is the caller asking for the whole set, which is what a picker and
-/// a compiler want and what these routes have always returned. Only a caller that names a limit gets
-/// a page.
-///
-/// **`offset` without `limit` is refused**, not ignored. On its own it selects nothing coherent — the
-/// unpaged read returns everything regardless — so honouring it silently would answer a question
-/// nobody asked, and dropping it silently would lose one somebody did. Both are the kind of silence
-/// ADR-0098 exists to remove.
-///
-/// **Two `&str` parameters rather than one flattened struct.** A `PageParams` carrying the pair and
-/// `#[serde(flatten)]`-ed into each query struct would read better and does not compile here: the
-/// flatten attribute makes serde's derive generate its buffering `Content` enum, whose `f32`/`f64`
-/// variants `clippy.toml` bans outright (ADR-0013 — money is never a float), and it does so
-/// regardless of the field types being flattened. So each list query declares its own
-/// `Option<String>` pair and passes them here, and this function stays the only place the rule is
-/// written. Measured, not assumed: flattening two `Option<String>` fields fails the `lints` gate with
-/// `use of a disallowed type f32`.
-///
-/// The params arrive as text, not `u32`, for the same reason [`parse_ulid_fields`] takes strings:
-/// typed as a number, axum's `Query` extractor would reject `?limit=abc` itself with its own
-/// plain-text body, and every refusal on this surface is an AIP-193 envelope naming the field
-/// (Q3a/Q3b).
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is an axum Response by design — the refusal a route returns as-is"
-)]
-fn parse_page(limit: Option<&str>, offset: Option<&str>) -> Option<Result<PageRequest, Response>> {
-    let Some(limit_text) = present_param(limit) else {
-        // No limit, so no page. An offset with nothing to offset into is a caller mistake worth
-        // naming rather than dropping.
-        return present_param(offset).map(|_offset| Err(offset_without_limit_refusal()));
-    };
-    let Ok(limit) = limit_text.parse::<u32>() else {
-        return Some(Err(page_bound_refusal("limit")));
-    };
-    let offset = match present_param(offset) {
-        None => 0,
-        Some(text) => match text.parse::<u32>() {
-            Ok(value) => value,
-            Err(_ignored) => return Some(Err(page_bound_refusal("offset"))),
-        },
-    };
-    Some(match PageRequest::new(limit, offset) {
-        Ok(request) => Ok(request),
-        Err(PageRequestError::LimitOutOfRange) => Err(page_bound_refusal("limit")),
-        Err(PageRequestError::OffsetOutOfRange) => Err(page_bound_refusal("offset")),
-    })
-}
-
-/// The refusal for a `limit` or `offset` that is absent-shaped, unparseable, or out of range.
-///
-/// One message for all three because they are one mistake from the caller's side: the value it sent
-/// is not a page bound this API accepts, and the sentence says what one is. Splitting "not a number"
-/// from "too large" would give a client two strings to branch on where the fix is identical.
-fn page_bound_refusal(field: &str) -> Response {
-    let accepted = if field == "limit" {
-        format!("an integer from 1 to {MAX_PAGE_LIMIT}")
-    } else {
-        format!("an integer from 0 to {MAX_PAGE_OFFSET}")
-    };
-    api_error_with_details(
-        ErrorStatus::InvalidArgument,
-        format!("{field} must be {accepted}"),
-        &[(field, "OUT_OF_RANGE")],
-    )
-}
-
-/// The refusal for an `offset` sent without a `limit`.
-///
-/// Its own sentence because the fix is not "correct the offset" but "add a limit", and a caller told
-/// only that its offset was refused would go looking at the wrong parameter.
-fn offset_without_limit_refusal() -> Response {
-    api_error_with_details(
-        ErrorStatus::InvalidArgument,
-        "offset needs a limit: paging is a limit and an offset together, and without a limit this \
-         read answers with its unpaged form instead",
-        &[("offset", "MISSING_DEPENDENT_FIELD")],
-    )
-}
-
-/// A page on the wire: the rows, the size of the whole set, and the bounds that produced them.
-///
-/// The bounds are echoed because a pager needs them to render "1–25 of 812" and to build the next
-/// request, and because the alternative — the client tracking what it sent — breaks the moment a
-/// link is shared or a page is reloaded.
-#[derive(Debug, Clone, Serialize)]
-struct PagedBody<T> {
-    items: Vec<T>,
-    total: u32,
-    limit: u32,
-    offset: u32,
-}
-
-/// Answers a paged read: `200` with the page, its total, and the bounds it used.
-fn paged_ok<T: Serialize>(page: Page<T>, request: PageRequest) -> Response {
-    (
-        StatusCode::OK,
-        Json(PagedBody {
-            items: page.items,
-            total: page.total,
-            limit: request.limit(),
-            offset: request.offset(),
-        }),
-    )
-        .into_response()
-}
-
-/// What was wrong with an `If-Match` value that is present but unusable.
-///
-/// Separate from the refusal it becomes so the parse can be tested as a pure function: the exact
-/// strings a client branches on are worth asserting, and a test that only reads status codes would
-/// pass on any of them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum EntityTagRefusal {
-    /// `If-Match: *` — legal HTTP, and refused here. See [`if_match`].
-    Wildcard,
-    /// Not one strong entity-tag: a weak `W/"…"`, a comma-separated list, or unquoted.
-    Malformed,
-}
-
-/// Reads one strong entity-tag out of a raw header value.
-///
-/// **Strong only.** RFC 9110 §13.1.1 evaluates `If-Match` with the strong comparison function,
-/// under which a weak validator never matches — so accepting `W/"…"` would accept a token that can
-/// only ever fail, which is worse than refusing it, because the caller would read the resulting
-/// `412` as a real conflict and go looking for an edit nobody made.
-///
-/// **One tag, not a list.** A list is legal HTTP and means "any of these"; here the version is a
-/// single row's, so a list has no meaning a caller could intend. The inner-quote check is what
-/// rejects it: `"a", "b"` unwraps to `a", "b`, which still contains a quote.
-fn parse_entity_tag(raw: &str) -> Result<Version, EntityTagRefusal> {
-    let trimmed = raw.trim();
-    if trimmed == "*" {
-        return Err(EntityTagRefusal::Wildcard);
-    }
-    let inner = trimmed
-        .strip_prefix('"')
-        .and_then(|rest| rest.strip_suffix('"'))
-        .ok_or(EntityTagRefusal::Malformed)?;
-    if inner.contains('"') {
-        return Err(EntityTagRefusal::Malformed);
-    }
-    Ok(Version::new(inner))
-}
-
-/// The version a mutating route is being asked to replace
-/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
-///
-/// **Required, not optional.** Treating an absent header as "no opinion" would leave the silent
-/// clobber this exists to close, and leave it as the *default* — every caller that had not been
-/// updated would keep overwriting. Absent is therefore an ordinary missing-field refusal, in the
-/// shape Q3b gave every other one, rather than a status of its own.
-///
-/// `If-Match: *` is refused too. It is legal HTTP meaning "whatever is there now", which is
-/// precisely last-write-wins under a different name, and no caller in this tree wants it.
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
-)]
-fn if_match(headers: &HeaderMap) -> Result<Version, Response> {
-    let Some(raw) = headers.get(IF_MATCH) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "if-match is required: send the etag the record was read at",
-            &[("if-match", "REQUIRED")],
-        ));
-    };
-    let Ok(text) = raw.to_str() else {
-        return Err(entity_tag_refusal(EntityTagRefusal::Malformed));
-    };
-    parse_entity_tag(text).map_err(entity_tag_refusal)
-}
-
-/// The `If-Match` a **collection** write must carry
-/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
-///
-/// Same requirement as [`if_match`] and one difference: a wildcard is accepted, and means something
-/// the record routes have no use for. A record is created by a `POST` that names no version; a
-/// collection is not created at all — the tenant's tax table and translation grid are always
-/// *there*, conceptually, and the only question is whether anything has been saved into them yet.
-/// `If-Match: *` is how a caller says "nothing has", and `Ok(None)` carries that down to the store,
-/// which is the only party that can tell whether it is still true. It is an assertion, not a waiver:
-/// a store that has been saved to refuses it.
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
-)]
-fn if_match_collection(headers: &HeaderMap) -> Result<Option<Version>, Response> {
-    let Some(raw) = headers.get(IF_MATCH) else {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "if-match is required: send the etag the collection was read at, or * if it has never been saved",
-            &[("if-match", "REQUIRED")],
-        ));
-    };
-    let Ok(text) = raw.to_str() else {
-        return Err(entity_tag_refusal(EntityTagRefusal::Malformed));
-    };
-    match parse_entity_tag(text) {
-        Ok(version) => Ok(Some(version)),
-        Err(EntityTagRefusal::Wildcard) => Ok(None),
-        Err(refusal @ EntityTagRefusal::Malformed) => Err(entity_tag_refusal(refusal)),
-    }
-}
-
-/// The refusal for an `If-Match` this surface will not act on.
-fn entity_tag_refusal(refusal: EntityTagRefusal) -> Response {
-    match refusal {
-        EntityTagRefusal::Wildcard => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "if-match must name a version, not *",
-            &[("if-match", "WILDCARD_NOT_ACCEPTED")],
-        ),
-        EntityTagRefusal::Malformed => api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "if-match must be one strong entity-tag, in double quotes",
-            &[("if-match", "INVALID_FORMAT")],
-        ),
-    }
-}
-
-/// The refusal for a write against a version the record no longer holds: `412`, and no details.
-///
-/// No `details` array, for the same reason absence and outage carry none: the caller's fields were
-/// all fine. What went stale is the caller's *copy*, not any one input, so naming a field would
-/// send it to fix something that was right.
-fn version_mismatch() -> Response {
-    api_error(
-        ErrorStatus::VersionMismatch,
-        "the record changed since you read it: re-read it and try again",
-    )
-}
-
-/// The `409` a create earns when the key it asked for is taken.
-///
-/// Names the entity, because the caller's next move depends on it: edit the one that is there, or
-/// pick a different key. Before [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)
-/// split the six keyed upserts, this answer did not exist — an `upsert` overwrote instead, and the
-/// only way a duplicate could surface was as the store's own `503`, which tells a caller the server
-/// is broken and invites the retry that can never succeed.
-fn already_exists(entity: &str) -> Response {
-    api_error(
-        ErrorStatus::AlreadyExists,
-        format!("that {entity} already exists: edit it instead of creating another"),
-    )
-}
-
-/// A freshly created record and the version it starts at, as `201`.
-///
-/// A create answers with a version for the same reason a read does: without one the caller has to
-/// list the collection again before it can edit what it just made, which is a round trip to learn
-/// something the server already knew. RFC 9110 provides for exactly this on `201`.
-fn versioned_created<T>(record: T, version: &Version) -> Response
-where
-    T: Serialize,
-{
-    let body = Json(Versioned::new(record, version.clone()));
-    match HeaderValue::from_str(&format!("\"{version}\"")) {
-        Ok(tag) => (StatusCode::CREATED, [(ETAG, tag)], body).into_response(),
-        Err(_ignored) => (StatusCode::CREATED, body).into_response(),
-    }
-}
-
-/// Stamps the version a write left the record at onto a response, without changing its shape.
-///
-/// Five entities — areas, tables, stations, employees, role templates — answer a write with `204`
-/// or a bare `{"id": …}`, not the record. That is not an oversight to correct here: their update
-/// payloads do not carry every field (an `AreaUpdate` has no `store_id`), so a returned
-/// "representation" would be one this handler had to invent. The header is the whole contract for
-/// them — RFC 9110 §8.8.3 puts `ETag` on exactly this response — so a caller that wants the record
-/// re-reads it, and a caller that wants to keep writing already holds the token it needs.
-///
-/// A token that cannot be a header value is the adapter's fault, not the caller's, and the write
-/// itself still succeeded; the response goes out unstamped rather than turning a completed write
-/// into a `500`.
-fn with_etag(mut response: Response, version: &Version) -> Response {
-    if let Ok(tag) = HeaderValue::from_str(&format!("\"{version}\"")) {
-        response.headers_mut().insert(ETAG, tag);
-    }
-    response
-}
-
-/// A record and the version it is now at, as `200`.
-///
-/// Carries the version **twice**, deliberately: as the `ETag` header RFC 9110 defines for a single
-/// resource, and as the `etag` field a list row has to use because one header cannot describe many
-/// rows. Byte-identical either way, so a client has one code path for "remember this version" and
-/// no opportunity to reformat a token it must not parse.
-fn versioned_ok<T>(record: T, version: &Version) -> Response
-where
-    T: Serialize,
-{
-    let Ok(tag) = HeaderValue::from_str(&format!("\"{version}\"")) else {
-        // Unreachable through the adapters in this tree, which mint digits. A token that cannot be
-        // a header value is the adapter's fault, not the caller's, and the record is still correct.
-        return (
-            StatusCode::OK,
-            Json(Versioned::new(record, version.clone())),
-        )
-            .into_response();
-    };
-    (
-        StatusCode::OK,
-        [(ETAG, tag)],
-        Json(Versioned::new(record, version.clone())),
-    )
-        .into_response()
 }
 
 /// Maps a [`PortError`] to an HTTP response, so a caller retries the retryable statuses (`503`,
@@ -2838,81 +2356,6 @@ mod preview_diff_tests {
 }
 
 #[cfg(test)]
-mod conditional_write_tests {
-    //! What `If-Match` accepts, and — more usefully — what it refuses.
-    //!
-    //! Every case here is a header a real client could plausibly send. Two of them look correct and
-    //! are not, which is why they are pinned rather than reasoned about: a weak validator, which
-    //! `If-Match` can never satisfy, and a wildcard, which is legal HTTP for exactly the
-    //! last-write-wins behaviour ADR-0094 removes. The parse is a pure function so the refusal each
-    //! produces can be asserted by name rather than by status code alone.
-
-    use super::{EntityTagRefusal, parse_entity_tag};
-
-    #[test]
-    fn a_strong_entity_tag_unwraps_to_the_token_the_adapter_minted() {
-        // Byte-identical to what the read handed out, quotes stripped and nothing else touched —
-        // the token is opaque, so any normalisation here would corrupt a fork's scheme.
-        for (header, token) in [
-            (r#""1847302""#, "1847302"),
-            (r#""sha256:9f86d0818""#, "sha256:9f86d0818"),
-            (r#"  "42"  "#, "42"),
-            (r#""""#, ""),
-        ] {
-            assert_eq!(
-                parse_entity_tag(header).map(|version| version.as_str().to_owned()),
-                Ok(token.to_owned()),
-                "parsing {header}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_weak_validator_is_refused_because_if_match_could_never_match_it() {
-        // RFC 9110 §13.1.1: `If-Match` uses the *strong* comparison function, under which a weak
-        // validator never matches. Accepting `W/"…"` would accept a tag that can only ever fail,
-        // and the caller would read the resulting 412 as a real conflict and go hunting for an edit
-        // that nobody made.
-        assert_eq!(
-            parse_entity_tag(r#"W/"1847302""#),
-            Err(EntityTagRefusal::Malformed)
-        );
-    }
-
-    #[test]
-    fn a_wildcard_is_refused_because_it_is_last_write_wins_by_another_name() {
-        // `If-Match: *` is legal HTTP meaning "whatever is there now" — precisely the behaviour
-        // ADR-0094 exists to remove. It gets its own refusal rather than the malformed one, because
-        // the caller's header is well-formed and the answer it needs is different.
-        assert_eq!(parse_entity_tag("*"), Err(EntityTagRefusal::Wildcard));
-        assert_eq!(parse_entity_tag("  *  "), Err(EntityTagRefusal::Wildcard));
-    }
-
-    #[test]
-    fn a_list_of_tags_is_refused_because_one_row_has_one_version() {
-        // A list is legal HTTP and means "any of these". A row has one version, so a list names no
-        // intent this surface could honour. The inner-quote check is what catches it.
-        assert_eq!(
-            parse_entity_tag(r#""a", "b""#),
-            Err(EntityTagRefusal::Malformed)
-        );
-    }
-
-    #[test]
-    fn an_unquoted_token_is_refused_rather_than_guessed_at() {
-        // Sending the token bare is the likeliest client mistake. Guessing that the caller meant
-        // `"1847302"` would work until the day a scheme mints a token that is itself quoted.
-        for header in ["1847302", r#""unterminated"#, r#"unopened""#] {
-            assert_eq!(
-                parse_entity_tag(header),
-                Err(EntityTagRefusal::Malformed),
-                "parsing {header}"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
 mod absence_tests {
     //! The two refusals that are *not* the caller's fault, and the one property that separates them.
     //!
@@ -2966,11 +2409,12 @@ mod closed_set_tests {
     //! its parser actually accepts — which is the half a reviewer cannot check by eye.
 
     use super::{
-        ConfigLevel, EntityStatus, accepted_list, accepted_tokens, entity_status_refusal,
-        parse_config_level, parse_entity_status,
+        ConfigLevel, EntityStatus, accepted_tokens, entity_status_refusal, parse_config_level,
+        parse_entity_status,
     };
     use crate::auth::admin::{AdminRole, AdminStatus};
     use axum::http::StatusCode;
+    use pos_cloud_api::refusal::accepted_list;
     use pos_proto::enums::{PaymentMethod, SalesChannel};
     use pos_proto::wire_enum::WireEnum as _;
 
@@ -3106,111 +2550,6 @@ mod closed_set_tests {
                 "{token} is listed, so it must parse"
             );
         }
-    }
-}
-
-#[cfg(test)]
-mod page_params_tests {
-    //! The rule for `?limit=`/`?offset=`, pinned where a future list route cannot fork it.
-    //!
-    //! The load-bearing case is the first one: an absent `limit` must stay "the whole set". Give it
-    //! a default and five item pickers and the menu compiler start reading a page and saying nothing
-    //! about it (ADR-0098).
-
-    use super::{parse_page, present_param};
-    use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET};
-
-    #[test]
-    fn no_limit_means_the_whole_set_and_not_a_default_page() {
-        assert!(
-            parse_page(None, None).is_none(),
-            "an absent limit is the unpaged read, not a value to default"
-        );
-        // Blank and whitespace are absent too: a console clearing its page-size box sends `""`.
-        assert!(parse_page(Some(""), None).is_none());
-        assert!(parse_page(Some("   "), None).is_none());
-    }
-
-    #[test]
-    fn a_limit_alone_starts_at_the_head_of_the_set() {
-        let page = parse_page(Some("25"), None)
-            .expect("a limit means a page")
-            .expect("25 is in range");
-        assert_eq!(page.limit(), 25);
-        assert_eq!(page.offset(), 0, "no offset starts at the beginning");
-    }
-
-    #[test]
-    fn an_offset_without_a_limit_is_refused_rather_than_ignored() {
-        // Silently dropping it loses a question the caller asked; silently honouring it answers one
-        // nobody did, since the unpaged read returns everything regardless.
-        let refusal = parse_page(None, Some("50"))
-            .expect("an offset is not nothing")
-            .expect_err("but it is not a page either");
-        assert_eq!(refusal.status(), axum::http::StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn a_bound_that_is_not_a_number_is_refused_by_this_layer() {
-        // Not axum's `Query` extractor: these arrive as text precisely so the refusal is an AIP-193
-        // envelope naming the field rather than a plain-text rejection body.
-        for (limit, offset) in [
-            (Some("abc"), None),
-            (Some("25"), Some("-1")),
-            (Some("2.5"), None),
-        ] {
-            let refusal = parse_page(limit, offset)
-                .expect("a limit was named")
-                .expect_err("but it does not parse");
-            assert_eq!(refusal.status(), axum::http::StatusCode::BAD_REQUEST);
-        }
-    }
-
-    #[test]
-    fn a_bound_past_its_cap_is_refused_rather_than_clamped() {
-        // Clamping would answer a different question than the one asked, and leave the caller to
-        // notice by diffing what it sent against what came back. Nothing does that.
-        for (limit, offset) in [
-            (format!("{}", MAX_PAGE_LIMIT + 1), "0".to_owned()),
-            ("0".to_owned(), "0".to_owned()),
-            ("25".to_owned(), format!("{}", MAX_PAGE_OFFSET + 1)),
-        ] {
-            let refusal = parse_page(Some(&limit), Some(&offset))
-                .expect("a limit was named")
-                .expect_err("but a bound is out of range");
-            assert_eq!(
-                refusal.status(),
-                axum::http::StatusCode::BAD_REQUEST,
-                "limit={limit} offset={offset}"
-            );
-        }
-        // The caps themselves are accepted: the range is inclusive on both ends.
-        assert!(
-            parse_page(
-                Some(&MAX_PAGE_LIMIT.to_string()),
-                Some(&MAX_PAGE_OFFSET.to_string())
-            )
-            .expect("a limit was named")
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn a_present_bound_is_trimmed_before_it_is_parsed() {
-        let page = parse_page(Some(" 25 "), Some(" 50 "))
-            .expect("a limit was named")
-            .expect("both are in range once trimmed");
-        assert_eq!((page.limit(), page.offset()), (25, 50));
-    }
-
-    #[test]
-    fn absent_blank_and_whitespace_are_the_same_absence() {
-        // The shared rule, asserted on the helper itself so both bounds inherit it and a third
-        // param added later cannot spell it differently.
-        assert_eq!(present_param(None), None);
-        assert_eq!(present_param(Some("")), None);
-        assert_eq!(present_param(Some(" \t ")), None);
-        assert_eq!(present_param(Some(" 7 ")), Some("7"));
     }
 }
 

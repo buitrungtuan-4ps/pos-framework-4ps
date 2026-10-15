@@ -56,7 +56,7 @@
 
 pub mod activation;
 // Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
-pub use pos_cloud_api::{audit, auth, paging};
+pub use pos_cloud_api::{audit, auth, paging, version};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
@@ -118,7 +118,6 @@ pub mod store_groups;
 pub mod tax;
 mod till_names;
 pub mod translations;
-pub mod version;
 pub mod vouchers;
 pub mod wake;
 pub mod webhook;
