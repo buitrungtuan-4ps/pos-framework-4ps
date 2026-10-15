@@ -97,3 +97,6 @@ b99e200e7b609ee9b2f9c1c6a2a29441834ea9dd
 
 # #809 — printing's devices, documents, agents and jobs move into their own modules (printing.rs becomes printing/mod.rs)
 5e3d6cf8e0f9ef17b5bbde2ce3450677ab4721a9
+
+# #810 — printing's unit tests move into their own modules, by area
+f1b338af2527b99f888bcd8cd59a2615071f3dc5
