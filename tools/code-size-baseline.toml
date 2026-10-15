@@ -24,7 +24,7 @@
 "crates/pos-core/src/billing.rs" = 3800
 "crates/pos-core/src/decision.rs" = 1980
 "crates/pos-core/src/permission.rs" = 1023
-"crates/pos-edge/src/app/mod.rs" = 9137
+"crates/pos-edge/src/app/mod.rs" = 7888
 "crates/pos-edge/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
@@ -91,8 +91,8 @@
 "crates/pos-edge/src/app/mod.rs::Edge::discount_bill" = { lines = 122, params = 6 }
 "crates/pos-edge/src/app/mod.rs::Edge::fold" = { lines = 102, params = 2 }
 "crates/pos-edge/src/app/mod.rs::Edge::open_bill_for_order" = { lines = 106, params = 3 }
-"crates/pos-edge/src/app/mod.rs::Edge::open_inbound_order" = { lines = 145, params = 6 }
 "crates/pos-edge/src/app/mod.rs::Edge::settle_bill_at" = { lines = 154, params = 7 }
+"crates/pos-edge/src/app/orders/inbound.rs::Edge::open_inbound_order" = { lines = 145, params = 6 }
 "crates/pos-edge/src/demo.rs::config_document" = { lines = 105, params = 0 }
 "crates/pos-edge/src/http/mod.rs::domain_router" = { lines = 224, params = 8 }
 "crates/pos-edge/src/main.rs::run" = { lines = 110, params = 2 }
