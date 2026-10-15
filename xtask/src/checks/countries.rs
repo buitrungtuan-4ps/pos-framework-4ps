@@ -46,26 +46,69 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         return Ok(Vec::new());
     }
 
+    let tree = read_tree(&root, &countries_dir)?;
+    let findings = check(&tree);
+
+    if tree.binaries.is_empty() {
+        let codes = tree
+            .countries
+            .iter()
+            .filter(|(name, _)| is_country_code(name))
+            .count();
+        eprintln!(
+            "xtask countries: {codes} module(s) checked for naming and workspace membership. \
+             No binary crates found, so feature selectability is not yet checked — that starts when \
+             pos_edge and pos_cloud arrive (docs/roadmap.md P5, P7)."
+        );
+    }
+
+    Ok(findings)
+}
+
+/// What the check reads from the tree, so the rules themselves run on text.
+struct Tree {
+    /// The workspace `members`.
+    members: BTreeSet<String>,
+    /// Every binary crate's manifest path and text, from [`binary_manifests`].
+    binaries: Vec<(String, String)>,
+    /// Each directory under `countries/`, sorted by name, with its `Cargo.toml` if one reads.
+    countries: Vec<(String, Option<String>)>,
+}
+
+/// Reads the workspace manifest, the binary manifests and every country directory.
+fn read_tree(root: &std::path::Path, countries_dir: &std::path::Path) -> Result<Tree, Error> {
     let workspace = std::fs::read_to_string(root.join("Cargo.toml"))?;
     let members = workspace_members(&workspace);
-    let binaries = binary_manifests(&root)?;
+    let binaries = binary_manifests(root)?;
 
-    let mut findings = Vec::new();
-    let mut codes = Vec::new();
-
-    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&countries_dir)?
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(countries_dir)?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
         .collect();
     entries.sort();
 
-    for path in entries {
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let rel = format!("{COUNTRIES_DIR}/{name}");
+    let countries = entries
+        .iter()
+        .filter_map(|path| {
+            let name = path.file_name().and_then(|name| name.to_str())?;
+            let manifest = std::fs::read_to_string(path.join("Cargo.toml")).ok();
+            Some((name.to_owned(), manifest))
+        })
+        .collect();
+    Ok(Tree {
+        members,
+        binaries,
+        countries,
+    })
+}
 
+/// The findings for every country directory in `tree`.
+fn check(tree: &Tree) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    for (name, manifest) in &tree.countries {
+        let rel = format!("{COUNTRIES_DIR}/{name}");
         if !is_country_code(name) {
             findings.push(
                 Finding::new(
@@ -81,12 +124,10 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
             );
             continue;
         }
-        codes.push(name.to_owned());
 
-        let manifest_path = path.join("Cargo.toml");
-        let manifest = match std::fs::read_to_string(&manifest_path) {
-            Ok(text) => text,
-            Err(_) => {
+        let manifest = match manifest {
+            Some(text) => text,
+            None => {
                 findings.push(
                     Finding::new(
                         format!("{rel}/Cargo.toml"),
@@ -100,7 +141,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         };
 
         let expected_package = format!("pos-country-{name}");
-        match package_name(&manifest) {
+        match package_name(manifest) {
             Some(actual) if actual == expected_package => {}
             Some(actual) => findings.push(
                 Finding::new(
@@ -121,7 +162,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
             )),
         }
 
-        if !members.contains(rel.as_str()) {
+        if !tree.members.contains(rel.as_str()) {
             findings.push(
                 Finding::new(
                     "Cargo.toml",
@@ -138,11 +179,12 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         }
 
         // Rule 4. Skipped, loudly, until there is a binary to check against.
-        if binaries.is_empty() {
+        if tree.binaries.is_empty() {
             continue;
         }
         let feature = format!("country-{name}");
-        let selectable = binaries
+        let selectable = tree
+            .binaries
             .iter()
             .any(|(_, manifest)| declares_feature(manifest, &feature, &expected_package));
         if !selectable {
@@ -163,16 +205,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         }
     }
 
-    if binaries.is_empty() {
-        eprintln!(
-            "xtask countries: {} module(s) checked for naming and workspace membership. \
-             No binary crates found, so feature selectability is not yet checked — that starts when \
-             pos_edge and pos_cloud arrive (docs/roadmap.md P5, P7).",
-            codes.len()
-        );
-    }
-
-    Ok(findings)
+    findings
 }
 
 /// Whether `name` is two lower-case ASCII letters.

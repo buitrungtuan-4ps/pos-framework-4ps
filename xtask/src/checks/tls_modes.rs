@@ -30,6 +30,8 @@ use crate::Finding;
 /// The line in `bootstrap.sh` that enumerates the accepted postures, e.g.
 /// `    acme-http01 | acme-dns01 | byo-cert | external) return 0 ;;`
 const ACCEPT_MARKER: &str = ") return 0 ;;";
+/// The script that holds the accept-list, relative to the repository root.
+const BOOTSTRAP: &str = "deploy/bootstrap.sh";
 const SHARED: &str = "site.caddy";
 const IMPORT: &str = "import /etc/caddy/Caddyfile.d/site.caddy";
 /// The `handle` block that keeps the cloud's trusted-network surface off the public one. Checked by
@@ -46,14 +48,12 @@ const K8S_DENY_RETURN: &str = "return 404;";
 /// Checks the mode accept-list against the committed per-mode Caddyfiles.
 pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
     let root = repo_root();
-    let bootstrap = "deploy/bootstrap.sh";
-    let script = std::fs::read_to_string(root.join(bootstrap))?;
+    let script = std::fs::read_to_string(root.join(BOOTSTRAP))?;
 
-    let mut findings = Vec::new();
     let Some(accepted) = accepted_modes(&script) else {
-        findings.push(
+        return Ok(vec![
             Finding::new(
-                bootstrap,
+                BOOTSTRAP,
                 "tls-modes",
                 format!(
                     "could not find the TLS_MODE accept-list (a line ending `{ACCEPT_MARKER}`)"
@@ -63,22 +63,49 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
                 "this check reads the accepted postures out of tls_mode_is_valid(); keep that \
                  case arm on one line, or teach this check the new shape",
             ),
-        );
-        return Ok(findings);
+        ]);
     };
 
-    let dir = root.join("deploy/Caddyfile.d");
-    let mut present = BTreeSet::new();
-    for entry in std::fs::read_dir(&dir)? {
+    let caddyfiles = read_caddyfiles(&root.join("deploy/Caddyfile.d"))?;
+    let k8s_path = root.join(K8S_MANIFEST);
+    let k8s = if k8s_path.exists() {
+        Some(std::fs::read_to_string(&k8s_path)?)
+    } else {
+        None
+    };
+    Ok(check(&accepted, &caddyfiles, k8s.as_deref()))
+}
+
+/// Every `*.caddy` file in `dir`, by file name, in directory order.
+fn read_caddyfiles(dir: &std::path::Path) -> Result<Vec<(String, String)>, Error> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
+        if !name.ends_with(".caddy") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)?;
+        files.push((name.to_owned(), text));
+    }
+    Ok(files)
+}
+
+/// The findings for the accepted modes, the Caddyfiles and the Kubernetes manifest, if any.
+fn check(
+    accepted: &BTreeSet<String>,
+    caddyfiles: &[(String, String)],
+    k8s: Option<&str>,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    let mut present = BTreeSet::new();
+    for (name, text) in caddyfiles {
         let Some(stem) = name.strip_suffix(".caddy") else {
             continue;
         };
         if name == SHARED {
-            let text = std::fs::read_to_string(&path)?;
             // The shared block is imported *inside* a site block, so a site address or a `tls`
             // directive in it would either fail to parse or silently apply to every posture —
             // including the two that must not hold a certificate at all.
@@ -124,7 +151,6 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         }
         present.insert(stem.to_owned());
 
-        let text = std::fs::read_to_string(&path)?;
         if !text.contains(IMPORT) {
             findings.push(
                 Finding::new(
@@ -143,7 +169,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
     for mode in accepted.difference(&present) {
         findings.push(
             Finding::new(
-                bootstrap,
+                BOOTSTRAP,
                 "tls-modes",
                 format!(
                     "TLS_MODE `{mode}` is accepted but deploy/Caddyfile.d/{mode}.caddy is missing"
@@ -152,7 +178,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
             .with_hint("bootstrap.sh selects the Caddyfile by this exact name, on the box"),
         );
     }
-    for mode in present.difference(&accepted) {
+    for mode in present.difference(accepted) {
         findings.push(
             Finding::new(
                 format!("deploy/Caddyfile.d/{mode}.caddy"),
@@ -163,8 +189,8 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         );
     }
 
-    findings.extend(k8s_internal_deny(&root)?);
-    Ok(findings)
+    findings.extend(k8s_internal_deny(k8s));
+    findings
 }
 
 /// The same `/internal` deny, in the optional Kubernetes lane.
@@ -172,16 +198,12 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
 /// A missing manifest is not a finding: `k8s/` is explicitly optional (`k8s/README.md`), and a fork
 /// that deletes it has removed the exposure rather than created one. A manifest that exists and does
 /// not deny the prefix is the finding, because that is a lane which serves the routes.
-fn k8s_internal_deny(root: &std::path::Path) -> Result<Vec<Finding>, Error> {
-    let path = root.join(K8S_MANIFEST);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(&path)?;
+fn k8s_internal_deny(manifest: Option<&str>) -> Option<Finding> {
+    let text = manifest?;
     if text.contains(K8S_DENY_LOCATION) && text.contains(K8S_DENY_RETURN) {
-        return Ok(Vec::new());
+        return None;
     }
-    Ok(vec![
+    Some(
         Finding::new(
             K8S_MANIFEST,
             "tls-modes",
@@ -194,7 +216,7 @@ fn k8s_internal_deny(root: &std::path::Path) -> Result<Vec<Finding>, Error> {
              state to the internet behind one shared key - see k8s/README.md, which also gives \
              the curl that verifies the deny actually took effect",
         ),
-    ])
+    )
 }
 
 /// The posture names from `bootstrap.sh`'s `tls_mode_is_valid` accept arm.
