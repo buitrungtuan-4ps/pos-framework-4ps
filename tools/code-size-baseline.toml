@@ -24,7 +24,7 @@
 "crates/pos-core/src/billing.rs" = 3800
 "crates/pos-core/src/decision.rs" = 1980
 "crates/pos-core/src/permission.rs" = 1023
-"crates/pos-edge/src/app/mod.rs" = 2833
+"crates/pos-edge/src/app/mod.rs" = 2518
 "crates/pos-edge/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
