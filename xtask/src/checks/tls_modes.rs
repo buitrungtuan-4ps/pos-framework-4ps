@@ -365,6 +365,21 @@ mod tests {
     }
 
     #[test]
+    fn the_k8s_lane_passes_only_with_both_halves_of_the_deny() {
+        assert!(super::k8s_internal_deny(Some(K8S_OK)).is_none());
+        assert!(super::k8s_internal_deny(None).is_none());
+        for half in [
+            "location ^~ /internal/ {\n  proxy_pass http://pos-cloud;\n}\n",
+            "location /health {\n  return 404;\n}\n",
+        ] {
+            assert!(
+                super::k8s_internal_deny(Some(half)).is_some(),
+                "half a deny passed: {half}"
+            );
+        }
+    }
+
+    #[test]
     fn a_script_without_the_arm_is_none_rather_than_an_empty_set() {
         // The distinction matters: an empty set would make every committed mode file look
         // unreachable and bury the real problem under four bogus findings.
