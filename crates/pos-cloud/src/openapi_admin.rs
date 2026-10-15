@@ -514,9 +514,15 @@ fn registered_admin_paths() -> std::collections::BTreeSet<String> {
     paths
 }
 
+/// The business-area crates whose routes `pos-cloud`'s router mounts, each declaring them in its own
+/// `src/routes.rs` and `src/routes/` (ADR-0170 decision 4).
+#[cfg(test)]
+const ROUTE_CRATES: [&str; 1] = ["pos-cloud-inventory"];
+
 /// The router sources: `http.rs` and every module under `http/`, where each business area's routes
-/// are declared. Every `/admin` route is registered in one of them; the other route-carrying modules
-/// (`orders`, `qr_http`, `relay`) serve `/v1` and the relay surface only.
+/// are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin` route is
+/// registered in one of them; the other route-carrying modules (`orders`, `qr_http`, `relay`) serve
+/// `/v1` and the relay surface only.
 ///
 /// Read from the tree when the test runs, so a route that moves into a new module is still found.
 #[cfg(test)]
@@ -524,6 +530,11 @@ pub(crate) fn router_sources() -> Vec<String> {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![source.join("http.rs")];
     let mut directories = vec![source.join("http")];
+    for route_crate in ROUTE_CRATES {
+        let crate_source = source.join("../..").join(route_crate).join("src");
+        files.push(crate_source.join("routes.rs"));
+        directories.push(crate_source.join("routes"));
+    }
     while let Some(directory) = directories.pop() {
         for entry in std::fs::read_dir(&directory)
             .into_iter()
