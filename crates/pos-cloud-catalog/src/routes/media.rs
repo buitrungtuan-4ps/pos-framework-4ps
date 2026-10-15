@@ -19,9 +19,9 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
 use crate::audit::AuditRecorder;
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
-use crate::images::{self, ImagePipelineError, RenderError};
+use crate::images::{self, ImagePipelineError, RenderError, Renditions};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::paging::Page;
 use crate::routes::{MediaListQuery, RegistryTenantQuery, not_found, paged_ok, parse_page};
@@ -190,40 +190,60 @@ where
     // not a copy of the upload.
     let renditions = match images::render_blocking(body).await {
         Ok(renditions) => renditions,
-        Err(RenderError::Pipeline(ImagePipelineError::Decode(_))) => {
-            return api_error(
-                ErrorStatus::InvalidArgument,
-                "the upload is not a decodable image",
-            );
-        }
-        Err(RenderError::Pipeline(ImagePipelineError::Budget { .. })) => {
+        Err(error) => return render_refusal(error),
+    };
+    store_upload(&state, &context, tenant_id, renditions).await
+}
+
+/// The answer to an upload that did not render: a bad upload, one the budget cannot hold, the
+/// server at its rendering cap, or an internal fault.
+fn render_refusal(error: RenderError) -> Response {
+    match error {
+        RenderError::Pipeline(ImagePipelineError::Decode(_)) => api_error(
+            ErrorStatus::InvalidArgument,
+            "the upload is not a decodable image",
+        ),
+        RenderError::Pipeline(ImagePipelineError::Budget { .. }) => {
             // The pipeline understood the image and could not fit it in the budget: well-formed
             // request, unprocessable content (ADR-0096). There is no field to name — the upload is
             // the whole body — so this carries no `details`.
-            return api_error(
+            api_error(
                 ErrorStatus::Unprocessable,
                 "the image could not be reduced within the size budget",
-            );
+            )
         }
-        Err(RenderError::Pipeline(ImagePipelineError::Encode(_))) => {
+        RenderError::Pipeline(ImagePipelineError::Encode(_)) => {
             tracing::error!("encoding a media rendition failed");
-            return api_error(ErrorStatus::Internal, "could not encode the image");
+            api_error(ErrorStatus::Internal, "could not encode the image")
         }
-        Err(RenderError::Busy { limit, wait }) => {
+        RenderError::Busy { limit, wait } => {
             // Nothing is wrong with the upload or the request; the server is at its rendering cap.
             // `RESOURCE_EXHAUSTED` is the retryable status (ADR-0096), which is the honest answer —
             // the console can send this one again in a moment and it will work.
             tracing::warn!(limit, ?wait, "refused a media upload at the rendering cap");
-            return api_error(
+            api_error(
                 ErrorStatus::ResourceExhausted,
                 "the server is busy rendering uploads; try this one again shortly",
-            );
+            )
         }
-        Err(RenderError::Join(error)) => {
+        RenderError::Join(error) => {
             tracing::error!(%error, "the media rendering task did not return");
-            return api_error(ErrorStatus::Internal, "could not render the image");
+            api_error(ErrorStatus::Internal, "could not render the image")
         }
-    };
+    }
+}
+
+/// Stores an upload's renditions under a new id, records it, and answers the id and the size.
+async fn store_upload<M, A, C>(
+    state: &MediaState<M, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    renditions: Renditions,
+) -> Response
+where
+    M: MediaStore,
+    C: ClockSource,
+{
     let Some(media_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MediaId::new)
     else {
@@ -242,7 +262,7 @@ where
             audit_action(
                 &state.audit,
                 &state.clock,
-                &context,
+                context,
                 Some(tenant_id),
                 "media.upload",
                 "media_asset",
