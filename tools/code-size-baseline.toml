@@ -13,11 +13,11 @@
 "crates/pos-cloud/src/catalog_compiler.rs" = 1551
 "crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 3293
+"crates/pos-cloud/src/http.rs" = 3072
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud/src/people.rs" = 1069
-"crates/pos-cloud/src/persistence.rs" = 5029
+"crates/pos-cloud/src/persistence.rs" = 4642
 "crates/pos-cloud/src/scheduling.rs" = 1290
 "crates/pos-cloud/tests/cloud.rs" = 11654
 "crates/pos-core/src/billing.rs" = 3800

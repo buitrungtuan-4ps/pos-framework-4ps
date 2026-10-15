@@ -22,7 +22,8 @@ use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
     PersistedDeviceProposal,
 };
-use crate::http::{if_match, not_found, optional_choice};
+use pos_cloud_api::conditional::if_match;
+use pos_cloud_api::refusal::{not_found, optional_choice};
 
 /// An operator names a POS terminal that exists because somebody carried it into the shop.
 #[derive(Debug, Clone, Deserialize)]
@@ -186,13 +187,13 @@ pub(super) struct SetReceiptRequest {
                                       (`UNKNOWN_REFERENCE`) or not a printer serving no station \
                                       (`WRONG_KIND`), a language is not one of its choices, an id \
                                       is not a ULID, or If-Match is absent, malformed, or a \
-                                      wildcard", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
-        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+                                      wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 412, description = "The terminal changed since you read it: re-read it and try \
-                                      again", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "printers",
 )]
@@ -380,13 +381,13 @@ pub(super) struct SetFloatRequest {
         (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), the \
                                       float is outside its bounds (`opening_float_minor`, \
                                       `OUT_OF_RANGE`), an id is not a ULID, or If-Match is \
-                                      absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
-        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+                                      absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 412, description = "The terminal changed since you read it: re-read it and try \
-                                      again", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "printers",
 )]

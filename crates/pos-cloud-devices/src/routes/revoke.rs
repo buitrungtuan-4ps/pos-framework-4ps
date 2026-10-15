@@ -21,7 +21,8 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeState, ConfigTreeStore};
-use crate::http::{PublishedConfig, publish_config_nodes_with};
+use pos_cloud_config::publish::publish_config_nodes_with;
+use pos_cloud_config::route::PublishedConfig;
 
 // --- Device revocation (`/admin/stores/{id}/devices/revoke`, ADR-0118 §6) -----------------------
 
@@ -90,12 +91,12 @@ where
                                       then shows the device retired. Re-revoking a device already \
                                       on the list succeeds and adds nothing"),
         (status = 400, description = "tenant_id, store_id or local_device_id is absent or not a \
-                                      ULID, or this store's deny-list is already at its cap", body = crate::openapi_admin::ErrorResponse),
-        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
-        (status = 409, description = "Concurrent config publishes kept winning the race", body = crate::openapi_admin::ErrorResponse),
-        (status = 422, description = "The composed node did not validate", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+                                      ULID, or this store's deny-list is already at its cap", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "Concurrent config publishes kept winning the race", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The composed node did not validate", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The config tree is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "devices",
 )]
@@ -224,7 +225,7 @@ where
     reason = "the Err is an axum Response by design — it *is* the refusal the route returns, the \
               same shape every other route helper carries"
 )]
-pub(in crate::http) fn append_revoked_device(
+pub(super) fn append_revoked_device(
     before: Option<&ConfigTreeState>,
     listed: &str,
 ) -> Result<Vec<(String, serde_json::Value)>, Response> {

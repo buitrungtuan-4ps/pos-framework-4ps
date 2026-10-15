@@ -19,7 +19,7 @@ The cloud's configuration base: what every business area's routes publish throug
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-cloud-api`, `pos-core`, `pos-ports`, `pos-proto`, `store-postgres`; in tests, `pos-fakes`.
-- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-inventory`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-devices`, `pos-cloud-inventory`.
 
 ## Entry points
 

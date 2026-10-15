@@ -7,7 +7,7 @@
 //! before it is anything more than a pending suggestion — the human gate that stops an
 //! unauthenticated port-9100 device becoming live just because it answered an mDNS query. This seam
 //! is the cloud's store of those proposals: `store-postgres` persists a `device_proposals` table, a
-//! fake answers from a list, and the routes ([`crate::http`]) drive both.
+//! fake answers from a list, and the routes (`pos-cloud`'s `http`) drive both.
 
 use core::fmt;
 use core::future::Future;

@@ -22,7 +22,7 @@ use serde::Deserialize;
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::http::random_hex_32;
+use pos_cloud_api::console::random_hex_32;
 
 // --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
 
@@ -40,7 +40,7 @@ struct ActivationState<X, A, C> {
 /// A super-admin issues a code bound to a device slot and can cancel a slot's pending code, both
 /// behind the `/admin` session guard. A device presents its code on `/activate` and receives its
 /// credential — that route is **not** authenticated, because the code itself is the bearer credential
-/// (single-use, 55-bit); the exchange is where a box first earns a credential. Like [`device_router`](crate::http::device_router),
+/// (single-use, 55-bit); the exchange is where a box first earns a credential. Like [`device_router`](crate::routes::device_router),
 /// it carries its own state and is merged into the main router rather than adding a `CloudApp` generic.
 pub fn activation_router<X, A, C>(activations: X, admin: A, clock: C) -> Router
 where

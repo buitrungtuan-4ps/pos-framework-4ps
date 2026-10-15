@@ -28,9 +28,13 @@ use crate::claim::{
     BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
     hash_claim_secret, hash_user_code,
 };
-use crate::http::{CLAIM_PATH, random_hex_32};
+use pos_cloud_api::console::random_hex_32;
 
 // --- Device claims (`/claim`, `/claim/{claim_id}/collect`, `/admin/claims/bind`) ------------------
+
+/// Opening a claim ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md))
+/// shares `pos-cloud`'s `ACTIVATE_PATH` budget: both are how an unauthenticated box first asks for anything.
+pub const CLAIM_PATH: &str = "/claim";
 
 /// How often a box waiting to be claimed should ask whether it has been, in seconds.
 const CLAIM_POLL_INTERVAL_SECS: u64 = 5;
@@ -49,7 +53,7 @@ struct ClaimState<Cl, A, C> {
 ///
 /// A box installed with no store opens a claim on `/claim` and polls `/claim/{claim_id}/collect`.
 /// Neither is authenticated, as `/activate` is not: the box has no credential yet. `/claim` shares
-/// `/activate`'s small budget and collection has one sized for polling ([`throttle_sync`](crate::http::throttle_sync)). A console
+/// `/activate`'s small budget and collection has one sized for polling (`pos-cloud`'s `throttle_sync`). A console
 /// user with `console.devices.manage` binds a code to a device slot on `/admin/claims/bind`, which is
 /// audited.
 pub fn claim_router<Cl, A, C>(

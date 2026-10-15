@@ -100,6 +100,7 @@ use crate::dashboard::RollupStore;
 use crate::openapi::ApiDoc;
 
 mod admin;
+mod admitted_devices;
 mod alerts;
 mod archives;
 mod authored_layer;
@@ -109,7 +110,6 @@ mod chain;
 mod config_nodes;
 mod config_publish;
 mod countries;
-mod devices;
 mod fees;
 mod fleet;
 mod floor;
@@ -151,6 +151,8 @@ use admin::{
     admin_revoke_invite, admin_revoke_other_sessions, admin_revoke_session, admin_set_admin_role,
     admin_set_admin_status,
 };
+pub(crate) use admitted_devices::__path_admin_admitted_devices;
+use admitted_devices::admin_admitted_devices;
 pub use alerts::alerts_router;
 pub(crate) use archives::__path_admin_list_store_archives;
 pub use archives::{store_archive_admin_router, store_archive_router};
@@ -180,8 +182,6 @@ use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
 pub(crate) use config_publish::{publish_config_nodes_with, strip_tree_version};
 pub use countries::country_router;
-pub(crate) use devices::__path_admin_admitted_devices;
-use devices::admin_admitted_devices;
 pub(crate) use devices::{
     __path_admin_revoke_device, __path_admin_set_printer_paper, __path_admin_set_terminal_float,
     __path_admin_set_terminal_receipt,
@@ -293,6 +293,10 @@ use pos_cloud_config::setting_refusal;
 // The inventory routes live in pos-cloud-inventory; imported under the module's old name, so
 // `crate::http::inventory::…` still names them.
 use pos_cloud_inventory::routes as inventory;
+// The device routes live in pos-cloud-devices; imported under the module's old name, so
+// `crate::http::devices::…` still names them. The admitted-device roster stays here.
+use pos_cloud_devices::routes as devices;
+use pos_cloud_devices::routes::CLAIM_PATH;
 use pos_cloud_reports::xz::admin_xz_report;
 
 use crate::registry::RegistryStore;
@@ -1148,10 +1152,6 @@ const ACTIVATE_MAX_ATTEMPTS: usize = 10;
 /// The sliding window [`ACTIVATE_MAX_ATTEMPTS`] counts over, in seconds.
 const ACTIVATE_WINDOW_SECS: u64 = 600;
 
-/// Opening a claim ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md))
-/// shares [`ACTIVATE_PATH`]'s budget: both are how an unauthenticated box first asks for anything.
-const CLAIM_PATH: &str = "/claim";
-
 /// Collection polls sit under this prefix, and get [`CLAIM_COLLECT_MAX_POLLS`] of their own.
 const CLAIM_COLLECT_PREFIX: &str = "/claim/";
 
@@ -1502,156 +1502,6 @@ mod client_ip_tests {
 }
 
 #[cfg(test)]
-mod devices_compile_tests {
-    //! What a till's receipts compile to ([`super::compile_devices`], ADR-0160 decision 4), and the
-    //! rule for a till whose receipt printer leaves the store's approved devices: it is published
-    //! without the field, and prints at the store's receipt printer. And what a till's float compiles
-    //! to (ADR-0167 decision 4): the float where one is set, and not a byte where none is.
-    use super::devices::publish::compile_devices;
-    use crate::devices::DeviceProposalSummary;
-    use pos_proto::devices::PublishedDevice;
-    use pos_proto::ids::DeviceId;
-    use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
-    use pos_proto::ulid::Ulid;
-
-    /// An approved row of the one store, as the device store lists it.
-    fn row(
-        id: u128,
-        kind: &str,
-        connection: Option<&str>,
-        station: Option<u128>,
-    ) -> DeviceProposalSummary {
-        DeviceProposalSummary {
-            id: Ulid::from_u128(id).to_string(),
-            store_id: Ulid::from_u128(0x5).to_string(),
-            kind: kind.to_owned(),
-            name: format!("Device {id}"),
-            address: String::new(),
-            connection: connection.map(str::to_owned),
-            station_id: station.map(|station| Ulid::from_u128(station).to_string()),
-            agent_device_id: None,
-            drawer_attached: false,
-            paper_width: None,
-            cuts_paper: None,
-            receipt_printer_id: None,
-            receipt_language: None,
-            receipt_second_language: None,
-            opening_float_minor: None,
-            status: "approved".to_owned(),
-            version: "1".to_owned(),
-        }
-    }
-
-    /// The bar till, naming `printer` and printing in English then Vietnamese.
-    fn bar_till(printer: u128) -> DeviceProposalSummary {
-        DeviceProposalSummary {
-            receipt_printer_id: Some(Ulid::from_u128(printer).to_string()),
-            receipt_language: Some("RECEIPT_LANGUAGE_EN".to_owned()),
-            receipt_second_language: Some("RECEIPT_SECOND_LANGUAGE_VI".to_owned()),
-            ..row(7, "terminal", None, None)
-        }
-    }
-
-    /// The compiled entry for `id`.
-    fn compiled(rows: &[DeviceProposalSummary], id: u128) -> PublishedDevice {
-        compile_devices(rows)
-            .devices()
-            .iter()
-            .find(|device| device.device_id == DeviceId::new(Ulid::from_u128(id)))
-            .cloned()
-            .expect("the device is published")
-    }
-
-    #[test]
-    fn a_till_carries_its_receipt_printer_and_languages_and_one_nobody_set_carries_none() {
-        let rows = [
-            row(1, "printer", Some("network"), None),
-            row(2, "printer", Some("network"), None),
-            bar_till(2),
-            row(8, "terminal", None, None),
-        ];
-        let bar = compiled(&rows, 7);
-        assert_eq!(
-            bar.receipt_printer_id,
-            Some(DeviceId::new(Ulid::from_u128(2)))
-        );
-        assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
-        assert_eq!(
-            bar.receipt_second_language(),
-            Some(ReceiptSecondLanguage::Vietnamese)
-        );
-        let door = serde_json::to_value(compiled(&rows, 8)).expect("json");
-        for field in [
-            "receipt_printer_id",
-            "receipt_language",
-            "receipt_second_language",
-        ] {
-            assert!(door.get(field).is_none(), "{field} is not written: {door}");
-        }
-    }
-
-    #[test]
-    fn a_till_whose_receipt_printer_goes_is_published_without_it_and_keeps_its_languages() {
-        // Archived: the printer is no longer among the approved rows. A station's printer, and a
-        // printer approved before a connection was recorded, which the publish holds back, are not
-        // a counter's receipt printer either. Each till prints at the store's instead.
-        for rows in [
-            vec![row(1, "printer", Some("network"), None), bar_till(2)],
-            vec![row(2, "printer", Some("network"), Some(0x5A)), bar_till(2)],
-            vec![row(2, "printer", None, None), bar_till(2)],
-            vec![row(2, "kds", Some("network"), None), bar_till(2)],
-        ] {
-            let bar = compiled(&rows, 7);
-            assert_eq!(bar.receipt_printer_id, None, "{rows:?}");
-            assert_eq!(bar.receipt_language(), Some(ReceiptLanguage::English));
-            assert_eq!(
-                bar.receipt_second_language(),
-                Some(ReceiptSecondLanguage::Vietnamese)
-            );
-        }
-    }
-
-    #[test]
-    fn a_till_carries_its_own_float_and_one_nobody_set_carries_no_key() {
-        // `0` is a float, a drawer started empty, and not the store's.
-        let float = |id, minor| DeviceProposalSummary {
-            opening_float_minor: Some(minor),
-            ..row(id, "terminal", None, None)
-        };
-        let rows = [
-            float(7, 250_000),
-            float(8, 0),
-            row(9, "terminal", None, None),
-        ];
-        assert_eq!(compiled(&rows, 7).opening_float_minor(), Some(250_000));
-        assert_eq!(compiled(&rows, 8).opening_float_minor(), Some(0));
-        let door = serde_json::to_value(compiled(&rows, 9)).expect("json");
-        assert!(door.get("opening_float_minor").is_none(), "{door}");
-    }
-
-    #[test]
-    fn a_node_whose_tills_set_no_float_is_the_bytes_it_was_before_the_column() {
-        // Migration 0085 leaves every row's float null, so a store nobody has set a float for
-        // publishes the devices node it published before, byte for byte.
-        let rows = [
-            row(1, "printer", Some("network"), None),
-            row(7, "terminal", None, None),
-        ];
-        let json = serde_json::to_string(&compile_devices(&rows)).expect("json");
-        assert_eq!(
-            json,
-            concat!(
-                r#"{"devices":[{"device_id":"00000000000000000000000001","#,
-                r#""kind":"DEVICE_KIND_PRINTER","connection":"DEVICE_CONNECTION_NETWORK","#,
-                r#""address":"","name":"Device 1"},"#,
-                r#"{"device_id":"00000000000000000000000007","kind":"DEVICE_KIND_TERMINAL","#,
-                r#""connection":"DEVICE_CONNECTION_UNSPECIFIED","address":"","name":"Device 7"}]}"#,
-            )
-        );
-    }
-}
-
-#[cfg(test)]
 mod locale_node_tests {
     //! What a store's `locale` node actually carries
     //! ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
@@ -1846,79 +1696,6 @@ mod locale_node_tests {
             node.get("currency_exponent").and_then(Value::as_u64),
             Some(0),
             "the node must state the đồng's zero, not omit it: {node}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod revoked_devices_tests {
-    //! The deny-list a revocation writes ([`super::append_revoked_device`]): the list the store runs,
-    //! read from the tree's layers composed, with the new id appended.
-    use super::devices::revoke::append_revoked_device;
-    use crate::config_tree::ConfigTreeState;
-    use pos_core::device_revocation::MAX_REVOKED_DEVICES;
-    use pos_proto::ulid::Ulid;
-    use serde_json::{Value, json};
-
-    /// A tree whose Tenant layer holds `tenant` and whose Store layer holds `store`.
-    fn tree(tenant: Value, store: Value) -> ConfigTreeState {
-        ConfigTreeState {
-            layers: [tenant, json!({}), store, json!({})],
-            history: Vec::new(),
-            k: 8,
-        }
-    }
-
-    fn id(n: u128) -> String {
-        Ulid::from_u128(n).to_string()
-    }
-
-    fn deny_list(ids: &[String]) -> Value {
-        json!({ "revoked_devices": { "device_ids": ids } })
-    }
-
-    /// The ids the append writes onto the Store layer.
-    fn written(before: &ConfigTreeState, listed: &str) -> Vec<String> {
-        let (key, node) = append_revoked_device(Some(before), listed)
-            .expect("appended")
-            .into_iter()
-            .next()
-            .expect("one node");
-        assert_eq!(key, "revoked_devices");
-        serde_json::from_value(node["device_ids"].clone()).expect("a list of ids")
-    }
-
-    #[test]
-    fn a_restored_list_is_kept_and_the_new_id_appended_to_it() {
-        // A rollback leaves the restored list on the Tenant layer and the Store layer empty.
-        let restored = tree(deny_list(&[id(1), id(2)]), json!({}));
-        assert_eq!(written(&restored, &id(3)), vec![id(1), id(2), id(3)]);
-        assert_eq!(
-            written(&restored, &id(1)),
-            vec![id(1), id(2)],
-            "an id already listed adds nothing"
-        );
-    }
-
-    #[test]
-    fn the_list_appended_to_is_the_one_the_store_runs() {
-        // A list on the Store layer replaces one below it when the layers merge, so it is the list
-        // the store runs, and the one a revocation adds to.
-        let both = tree(deny_list(&[id(1)]), deny_list(&[id(2)]));
-        assert_eq!(written(&both, &id(3)), vec![id(2), id(3)]);
-    }
-
-    #[test]
-    fn the_cap_counts_the_list_the_store_runs() {
-        let full: Vec<String> = (1_u128..).take(MAX_REVOKED_DEVICES).map(id).collect();
-        let restored = tree(deny_list(&full), json!({}));
-        let refused =
-            append_revoked_device(Some(&restored), &id(0xFFFF)).expect_err("past the cap");
-        assert_eq!(refused.status(), axum::http::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            written(&restored, &id(1)).len(),
-            MAX_REVOKED_DEVICES,
-            "an id already listed re-publishes the full list"
         );
     }
 }

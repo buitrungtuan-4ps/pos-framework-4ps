@@ -30,6 +30,7 @@ members = [
     "crates/pos-print-agent",
     "crates/pos-cloud-api",
     "crates/pos-cloud-config",
+    "crates/pos-cloud-devices",
     "crates/pos-cloud-inventory",
     "crates/pos-cloud-reports",
     "crates/pos-cloud",
