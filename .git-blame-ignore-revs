@@ -109,3 +109,6 @@ df30ada5030ce1cfbdc52a277e89d3070dbc7e4d
 
 # #813 — the remaining stores' integration tests move into their own modules
 c3a958edf6711f73a8512c45056af2d462c300c8
+
+# #816 — the response helpers every area shares, and the record version, move into pos-cloud-api
+a0fc27dcb82be94751a0475b838f6b158911feda

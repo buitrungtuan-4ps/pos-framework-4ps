@@ -85,7 +85,6 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 
 use crate::audit::{AuditRecorder, NoopAuditRecorder};
 use crate::auth::admin::{AdminContext, AdminStore};
@@ -95,8 +94,8 @@ use crate::auth::password::hash_password;
 use crate::auth::rate_limit::SlidingRateLimiter;
 use crate::cloud::Cloud;
 use crate::config::InternalSecret;
+use crate::config_tree::ConfigTreeStore;
 use crate::config_tree::prerequisites_for;
-use crate::config_tree::{CapabilityValidator, ConfigLevel, ConfigTree, ConfigTreeStore};
 use crate::dashboard::RollupStore;
 use crate::openapi::ApiDoc;
 
@@ -127,7 +126,6 @@ mod reason_codes;
 mod reconcile;
 mod registry;
 mod release_schedule;
-mod setting_refusal;
 mod settings;
 mod settings_confirm;
 mod store_groups;
@@ -175,9 +173,9 @@ pub(crate) use config_publish::{
 use config_publish::{
     LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
     admin_config_rollback, admin_config_version_effective, admin_config_versions, if_match_config,
-    layer_with_nodes, load_tree_for_write, only_settings, preview_config_node,
-    publish_config_nodes, publish_nodes, release_error_response, release_report_response,
-    release_target_stores, release_target_timezones, staff_redacted_for, unresolvable_moment,
+    layer_with_nodes, load_tree_for_write, preview_config_node, publish_config_nodes,
+    publish_nodes, release_error_response, release_report_response, release_target_stores,
+    release_target_timezones, staff_redacted_for, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
@@ -278,6 +276,8 @@ use pos_cloud_api::conditional::{
     version_mismatch, versioned_created, versioned_ok, with_etag,
 };
 use pos_cloud_api::console::random_hex_32;
+// What the configuration routes share, and the settings refusals, live in pos-cloud-config;
+// imported here, so `crate::http::read_store_node_as_run` and the rest still name them.
 use pos_cloud_api::paged::{
     offset_without_limit_refusal, page_bound_refusal, paged_ok, parse_page,
 };
@@ -285,9 +285,15 @@ use pos_cloud_api::refusal::{
     FieldRefusal, accepted_tokens, enum_refusal, not_found, optional_choice, parse_optional_ulid,
     present_param, unprocessable_violations,
 };
+use pos_cloud_config::route::{
+    PublishedConfig, RegistryTenantQuery, config_store_error_response, entity_status_refusal,
+    mint_version_id, no_published_configuration, parse_config_level, parse_entity_status,
+    read_store_node_as_run,
+};
+use pos_cloud_config::setting_refusal;
 use pos_cloud_reports::xz::admin_xz_report;
 
-use crate::registry::{EntityStatus, RegistryStore};
+use crate::registry::RegistryStore;
 // These are ADR-0125 config releases — a named set of config publishes going out to a set of shops.
 // They import under their own plain spelling, which they could not do while `crate::ota` also
 // exported a `ReleaseStore`; that one is `ArtifactStore` now, so the alias this import used to carry
@@ -884,79 +890,9 @@ struct UpdateCourseRequest {
     status: String,
 }
 
-/// A store's `node_key` node as the store runs it, without the node's settings fields, or `null`
-/// when it runs none.
-///
-/// Read from the tree's four layers composed ([`ConfigTree::effective`]), not from the Store layer
-/// alone. A rollback writes the restored version onto the Tenant layer and empties the others
-/// ([`ConfigTree::restore_with`]), so a Store-layer read answered `null` for every node the store
-/// still ran: the console's forms went blank, and its checks refused a store that held the node. A
-/// node a tenant or brand layer sets is read with the store's own, because the store runs it.
-///
-/// The fields the settings register puts on the node (`pos_proto::settings::register`) are left
-/// out. They are written on the Tenant layer by the settings compile, and they are the settings
-/// store's to decide (ADR-0160 decision 3): a form that read one and saved the node back would pin
-/// it on the Store layer, where it would shadow every later settings change for the store. A node
-/// that holds nothing but settings answers `null`, as [`check_prerequisites`] counts it: a `locale`
-/// holding only `tax_rounding` is not the locale a menu waits for.
-async fn read_store_node_as_run<Cfg>(
-    config_trees: &Cfg,
-    tenant_id: TenantId,
-    store_id: StoreId,
-    node_key: &str,
-) -> Result<serde_json::Value, Response>
-where
-    Cfg: ConfigTreeStore,
-{
-    match config_trees
-        .load(tenant_id, store_id)
-        .await
-        .map(strip_tree_version)
-    {
-        Ok(Some(state)) => {
-            let composed = ConfigTree::from_state(store_id, CapabilityValidator, state).effective();
-            Ok(node_as_run(node_key, composed.get(node_key)))
-        }
-        Ok(None) => Ok(serde_json::Value::Null),
-        Err(error) => Err(config_store_error_response(&error)),
-    }
-}
-
-/// The answer [`read_store_node_as_run`] gives for `node`, the store's `node_key` as its layers
-/// compose it: the node without its settings fields, and `null` for a node the store does not run
-/// or one that holds nothing but settings. A node that is not an object is answered as it is.
-fn node_as_run(node_key: &str, node: Option<&serde_json::Value>) -> serde_json::Value {
-    match node {
-        None => serde_json::Value::Null,
-        Some(value) if only_settings(node_key, value) => serde_json::Value::Null,
-        Some(serde_json::Value::Object(fields)) => {
-            let register = pos_proto::settings::register();
-            serde_json::Value::Object(
-                fields
-                    .iter()
-                    .filter(|(field, _)| {
-                        !register.iter().any(|setting| {
-                            setting.node == node_key && setting.field == field.as_str()
-                        })
-                    })
-                    .map(|(field, value)| (field.clone(), value.clone()))
-                    .collect(),
-            )
-        }
-        Some(other) => other.clone(),
-    }
-}
-
 /// The range a store's `event_log_days` may take (ADR-0145): the `retention` node's own, which the
 /// edge reads the node through and ignores a value outside of ([`pos_proto::retention`]).
 pub use pos_proto::retention::EVENT_LOG_DAYS;
-
-/// A `?tenant_id=` query for the tenant-scoped listings.
-#[derive(Debug, Clone, Deserialize)]
-struct RegistryTenantQuery {
-    /// The tenant whose entities to list (a 26-character ULID).
-    tenant_id: String,
-}
 
 /// `GET /admin/campaigns/{id}/vouchers`: the tenant, plus the optional paging bounds.
 ///
@@ -1017,14 +953,6 @@ struct MediaListQuery {
     /// How many summaries to skip. Only meaningful with `limit`.
     #[serde(default)]
     offset: Option<String>,
-}
-
-/// Parses a status word from a request body; `None` (a `400`) for anything but the two known values.
-fn parse_entity_status(value: &str) -> Option<EntityStatus> {
-    EntityStatus::ALL
-        .iter()
-        .copied()
-        .find(|status| status.as_str() == value)
 }
 
 /// The generated OpenAPI document for the public `/v1` surface.
@@ -1384,29 +1312,6 @@ fn hex_value(digit: u8) -> Option<u8> {
     }
 }
 
-/// The version id a successful publish produced.
-#[derive(Debug, Clone, serde::Serialize)]
-struct PublishedConfig {
-    /// The new config version id (a ULID).
-    config_version_id: String,
-}
-
-/// Maps a config-tree store failure to a retryable `503`, logging the detail rather than leaking it.
-fn config_store_error_response(error: &crate::config_tree::ConfigStoreError) -> Response {
-    tracing::error!(%error, "a config-tree store operation failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the configuration service is unavailable",
-    )
-}
-
-/// Parses a config-tree level from its path segment, or `None` for an unknown one.
-fn parse_config_level(level: &str) -> Option<ConfigLevel> {
-    ConfigLevel::ORDER
-        .into_iter()
-        .find(|candidate| candidate.as_str() == level)
-}
-
 /// Parses wire scope names strictly, returning the first unknown name rather than dropping it — the
 /// deny-by-default read tolerance is wrong for a write, where a typo would silently grant nothing.
 fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
@@ -1421,11 +1326,6 @@ fn parse_scopes(names: &[String]) -> Result<BTreeSet<Scope>, String> {
 /// Mints an API-key id from `now_ms`, or `None` if the OS entropy source is unavailable.
 fn mint_api_key_id(now_ms: i64) -> Option<ApiKeyId> {
     mint_ulid(now_ms).map(ApiKeyId::new)
-}
-
-/// Mints a config version id from `now_ms`, or `None` if the OS entropy source is unavailable.
-fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
-    mint_ulid(now_ms).map(ConfigVersionId::new)
 }
 
 /// A response with `status` and one `Set-Cookie` header. A cookie this code built is always a valid
@@ -1456,28 +1356,6 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
     getrandom::fill(&mut salt_bytes).ok()?;
     let phc = hash_password(password, &salt_bytes).ok()?;
     Some((secret, phc))
-}
-
-/// The refusal for a `status` field that is not an [`EntityStatus`] token.
-///
-/// Eighteen routes read this one field, which is why it gets a name of its own: the eighteen call
-/// sites now say *which* refusal they mean rather than each restating the accepted set.
-fn entity_status_refusal() -> Response {
-    enum_refusal(
-        "status",
-        EntityStatus::ALL.iter().map(|status| status.as_str()),
-    )
-}
-
-/// The refusal for a store's configuration that has not been published yet.
-///
-/// Its own name because six routes answer it and it is not the `"no such X"` shape: the store
-/// exists, and so does its config tree; what is missing is a *published version* of it.
-fn no_published_configuration() -> Response {
-    api_error(
-        ErrorStatus::NotFound,
-        "the store has no published configuration",
-    )
 }
 
 /// Maps a [`PortError`] to an HTTP response, so a caller retries the retryable statuses (`503`,
@@ -2044,45 +1922,6 @@ mod revoked_devices_tests {
 }
 
 #[cfg(test)]
-mod node_as_run_tests {
-    //! What a store's node reads as once its layers are composed ([`super::node_as_run`]).
-    use super::node_as_run;
-    use serde_json::{Value, json};
-
-    #[test]
-    fn a_node_reads_without_its_settings_and_one_of_settings_alone_reads_as_none() {
-        let locale = json!({
-            "currency_code": "VND",
-            "timezone": "Asia/Ho_Chi_Minh",
-            "tax_rounding": "TAX_ROUNDING_DOWN",
-        });
-        assert_eq!(
-            node_as_run("locale", Some(&locale)),
-            json!({ "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh" })
-        );
-        for (node, settings) in [
-            ("locale", json!({ "tax_rounding": "TAX_ROUNDING_DOWN" })),
-            ("qr", json!({ "table_order": "TABLE_ORDER_JOIN" })),
-        ] {
-            assert_eq!(node_as_run(node, Some(&settings)), Value::Null, "{node}");
-        }
-        assert_eq!(node_as_run("locale", None), Value::Null);
-    }
-
-    #[test]
-    fn a_node_with_no_settings_fields_reads_as_it_is_composed() {
-        // `table_order` is a setting of the `qr` node, not of `channels`.
-        let channels = json!({ "enabled": ["SALES_CHANNEL_DINE_IN"], "table_order": 1 });
-        assert_eq!(node_as_run("channels", Some(&channels)), channels);
-        // An empty node is a node, as the publish check counts it, and a node that is not an
-        // object, `null` included, is answered as it is.
-        for node in [json!({}), Value::Null, json!([1, 2]), json!("text")] {
-            assert_eq!(node_as_run("qr", Some(&node)), node, "{node}");
-        }
-    }
-}
-
-#[cfg(test)]
 mod qr_node_tests {
     //! The `qr` node the console's QR form publishes reads back through the type the edge and the
     //! guest intake read it with (`pos_proto::qr::PublishedQr`), every field as it was written.
@@ -2141,7 +1980,7 @@ mod qr_node_tests {
 // The preview tests below reach the prerequisite check through `super`, as they did when it lived in
 // this file; the import sits below the file's first `#[cfg(test)]`, with the other test code.
 #[cfg(test)]
-use config_publish::check_prerequisites;
+use pos_cloud_config::publish::{check_prerequisites, only_settings};
 
 #[cfg(test)]
 mod preview_diff_tests {
@@ -2408,11 +2247,10 @@ mod closed_set_tests {
     //! eighteen hand-written sentences did, and every token any of the four refusals lists is a token
     //! its parser actually accepts — which is the half a reviewer cannot check by eye.
 
-    use super::{
-        ConfigLevel, EntityStatus, accepted_tokens, entity_status_refusal, parse_config_level,
-        parse_entity_status,
-    };
+    use super::{accepted_tokens, entity_status_refusal, parse_config_level, parse_entity_status};
     use crate::auth::admin::{AdminRole, AdminStatus};
+    use crate::config_tree::ConfigLevel;
+    use crate::registry::EntityStatus;
     use axum::http::StatusCode;
     use pos_cloud_api::refusal::accepted_list;
     use pos_proto::enums::{PaymentMethod, SalesChannel};

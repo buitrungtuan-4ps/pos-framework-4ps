@@ -264,7 +264,7 @@ notices.
 
 ### Nothing in the framework records where a machine is, and the one thing called "region" is not one
 
-`StoreRecord` in [`registry.rs`](../../crates/pos-cloud/src/registry.rs) is five fields — `store_id`,
+`StoreRecord` in [`registry.rs`](../../crates/pos-cloud-config/src/registry.rs) is five fields — `store_id`,
 `tenant_id`, `brand_id`, `name`, `status`. No address, no country, no location. ADR-0110 adds
 `edge_placement`, which says *what kind* of machine holds the store and deliberately not where it is.
 

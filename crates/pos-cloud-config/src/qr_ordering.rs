@@ -12,7 +12,7 @@
 //!    on when it was absent;
 //! 3. the QR channel in a published `channels` list, without which the edge refused the order.
 //!
-//! The flag is the switch now ([`SWITCH`]). The cloud's guest intake ([`crate::qr_http`]) reads it,
+//! The flag is the switch now ([`SWITCH`]). The cloud's guest intake (`pos_cloud::qr_http`) reads it,
 //! and the edge refuses a QR order where it is published off, with `qr.enabled` off beside it,
 //! which tells it from the flag as it stood before the switch; where a store's configuration does
 //! not carry the switch, the edge decides by the channel list, as before. The other two follow the
@@ -491,7 +491,7 @@ where
         return Ok(StoreOutcome::Unchanged);
     }
     // Read again inside the publish's retry, from the version the store runs at that moment.
-    crate::http::publish_config_nodes_with(
+    crate::publish::publish_config_nodes_with(
         config_trees,
         clock,
         tenant_id,

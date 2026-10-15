@@ -12,14 +12,18 @@ use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::settings::{Setting, ValueRefusal, register};
 use serde_json::Value;
 
-use super::{api_error_with_details, config_store_error_response, version_mismatch};
+use pos_cloud_api::conditional::version_mismatch;
+use pos_cloud_api::response::api_error_with_details;
+
 use crate::config_tree::{ConfigTree, ConfigTreeStore, ConfigValidator};
 use crate::confirmed_values::Unconfirmed;
+use crate::route::config_store_error_response;
 use crate::settings::SettingRefusal;
 use crate::version::{UpdateOutcome, Version};
 
 /// The `400` a value the register refuses becomes, naming the field at fault.
-pub(super) fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
+#[must_use]
+pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
     let (field, reason) = match refusal {
         SettingRefusal::UnknownSetting(_) => ("setting_key", "UNKNOWN_SETTING"),
         SettingRefusal::ScopeNotAllowed { .. } => ("scope", "SCOPE_NOT_ALLOWED"),
@@ -46,10 +50,8 @@ pub(super) fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
 /// a value that needs a recorded confirmation, which it did not run before: the setting's key, with
 /// `CONFIRMATION_REQUIRED`, and a message that points to Settings. A release names the store, since
 /// it reaches many.
-pub(super) fn unconfirmed_response(
-    unconfirmed: &Unconfirmed,
-    store_id: Option<StoreId>,
-) -> Response {
+#[must_use]
+pub fn unconfirmed_response(unconfirmed: &Unconfirmed, store_id: Option<StoreId>) -> Response {
     let message = match store_id {
         Some(store_id) => format!("store {store_id}: {unconfirmed}"),
         None => unconfirmed.to_string(),
@@ -65,7 +67,7 @@ pub(super) fn unconfirmed_response(
 /// republish, whose every value passed the settings write's own check when it was written
 /// (ADR-0169 decisions 2 and 3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConfirmCheck {
+pub enum ConfirmCheck {
     /// A layer write, a rollback, a node publish, single or in a batch.
     Required,
     /// The settings republish.
@@ -74,15 +76,15 @@ pub(super) enum ConfirmCheck {
 
 /// [`crate::confirmed_values::check`] against the register, for a write that turns what the store
 /// runs from `before` into `after`, as the `400` to answer.
+///
+/// # Errors
+///
+/// The `400` naming the first setting that needs a recorded confirmation.
 #[expect(
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
 )]
-pub(super) fn confirmed(
-    check: ConfirmCheck,
-    before: &Value,
-    after: &Value,
-) -> Result<(), Response> {
+pub fn confirmed(check: ConfirmCheck, before: &Value, after: &Value) -> Result<(), Response> {
     confirmed_against(&register(), check, before, after)
 }
 
@@ -111,7 +113,12 @@ fn confirmed_against(
 /// `saved` is the tenant, the store, and the version the tree was read at. That precondition is the
 /// one the store evaluates at write time, and it is what prevents two writes interleaving: an
 /// `If-Match` compared against the handler's own read can already have been overtaken.
-pub(super) async fn save_if_confirmed<Cfg, V>(
+///
+/// # Errors
+///
+/// The `400` for a value that needs a recorded confirmation, the `412` when the tree changed since
+/// it was read, or the `503` when the store failed.
+pub async fn save_if_confirmed<Cfg, V>(
     config_trees: &Cfg,
     (tenant_id, store_id, read_at): (TenantId, StoreId, Option<&Version>),
     before: &Value,

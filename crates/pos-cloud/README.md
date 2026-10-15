@@ -9,12 +9,12 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 ## Owns
 
 - Event ingest (a store's HTTPS `/sync/stores/{store_id}/events`, the NATS cursor, and `/internal/ingest`) and the rollup read model
-- The configuration tree: compose, validate, version, publish
+- The routes that compose and publish each store's configuration (store groups, releases, the config history); the tree itself is `pos-cloud-config`'s
 - Webhooks, retention and PII masking, OTA release hosting, exports
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-cloud-reports`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
+- **Depends on** (workspace crates): `blob-garage`, `erp-sap`, `link-nats`, `metrics-vm`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-reports`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-providers`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
 - **Used by** (workspace crates): no workspace crate.
 
 ## Entry points
@@ -25,7 +25,7 @@ The cloud binary, `pos_cloud`, and its library. It ingests every store's events 
 - `src/http/<area>.rs` and `src/http/<area>/`: an area's routes, state and handlers, one module per business area
 - `pos-cloud-reports` (re-exported as `dashboard::{rollup, projection}`, the report types in `cloud`, the CSV writers in `export`): the reports and their routes; `src/dashboard/projector.rs` keeps them current
 - `src/openapi.rs`, `src/openapi_admin.rs`: the generated API documents and their drift tests
-- `src/config_tree/`: the configuration tree
+- `pos-cloud-config` (re-exported as `config_tree`, `registry`, `settings`, `confirmed_values`, `qr_ordering`, `data_migrations`): the configuration tree and the publish every area writes through, the org registry and settings
 - `pos-cloud-api` (re-exported as `auth`, `audit`, `paging`): console login, sessions, `ConsolePermission`, API keys, the audit trail and the error envelope
 
 ## Rules
