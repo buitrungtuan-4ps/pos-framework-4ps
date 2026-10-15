@@ -39,7 +39,7 @@ use crate::response::api_error_with_details;
 /// written. Measured, not assumed: flattening two `Option<String>` fields fails the `lints` gate with
 /// `use of a disallowed type f32`.
 ///
-/// The params arrive as text, not `u32`, for the same reason [`parse_ulid_fields`] takes strings:
+/// The params arrive as text, not `u32`, for the same reason [`parse_ulid_fields`](crate::response::parse_ulid_fields) takes strings:
 /// typed as a number, axum's `Query` extractor would reject `?limit=abc` itself with its own
 /// plain-text body, and every refusal on this surface is an AIP-193 envelope naming the field
 /// (Q3a/Q3b).
