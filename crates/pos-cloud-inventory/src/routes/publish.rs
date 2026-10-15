@@ -22,9 +22,10 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
-use crate::http::{PublishedConfig, publish_config_nodes};
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::version::records;
+use pos_cloud_config::publish::publish_config_nodes;
+use pos_cloud_config::route::PublishedConfig;
 
 // --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
 
@@ -52,7 +53,7 @@ struct PublishInventoryRequest {
 /// A compact audit summary of an inventory publish — how many of each kind went into the node, never
 /// the recipe amounts (T2 proprietary process live in the inventory store).
 #[derive(Debug, Clone, serde::Serialize)]
-pub(in crate::http) struct InventoryPublishSummary {
+pub struct InventoryPublishSummary {
     ingredients: usize,
     recipes: usize,
     suppliers: usize,
@@ -124,7 +125,11 @@ where
 ///
 /// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
 /// the node is the same at every member, so a batch compiles it once and writes it *N* times.
-pub(in crate::http) async fn inventory_nodes<Inv>(
+///
+/// # Errors
+///
+/// The `503` to return when the inventory store could not be read.
+pub async fn inventory_nodes<Inv>(
     inventory: &Inv,
     tenant_id: TenantId,
 ) -> Result<(Vec<(String, serde_json::Value)>, InventoryPublishSummary), Response>

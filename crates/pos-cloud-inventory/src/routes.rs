@@ -3,7 +3,7 @@
 
 //! Inventory authoring: the ingredients, recipes and suppliers a tenant authors under
 //! `/admin/inventory/*`, and their publish to a store as its `inventory` node
-//! ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md)).
+//! ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)).
 //!
 //! The state, the request bodies and their checks, and the router are here; each list's
 //! handlers are in a module of their own, and the publish in [`publish`].
@@ -27,8 +27,8 @@ use serde::Deserialize;
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
-use crate::http::FieldRefusal;
 use crate::inventory::{InventoryStore, InventoryStoreError};
+use pos_cloud_api::refusal::FieldRefusal;
 
 mod ingredients;
 mod publish;
@@ -40,7 +40,7 @@ use ingredients::{
     admin_update_ingredient,
 };
 pub use publish::config_inventory_router;
-pub(super) use publish::inventory_nodes;
+pub use publish::inventory_nodes;
 use recipes::{
     admin_create_recipe, admin_delete_recipe, admin_get_recipe, admin_list_recipes,
     admin_update_recipe,
@@ -66,7 +66,7 @@ struct InventoryState<Inv, A, C> {
 /// on update — so a client never supplies or forges it. `name` and `unit` are the wire ingredient's own
 /// fields, reused rather than re-declared.
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct IngredientRequest {
+pub struct IngredientRequest {
     tenant_id: String,
     name: String,
     unit: Open<UnitOfMeasure>,
@@ -104,7 +104,7 @@ impl CreateRecipeRequest {
 /// server-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's
 /// own fields.
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecipeRequest {
+pub struct RecipeRequest {
     tenant_id: String,
     #[serde(default)]
     lines: Vec<PublishedRecipeLine>,
@@ -114,7 +114,7 @@ pub(super) struct RecipeRequest {
 
 /// A create/update body for a supplier. The id is **server-owned**, exactly like an ingredient's.
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct SupplierRequest {
+pub struct SupplierRequest {
     tenant_id: String,
     name: String,
 }
@@ -235,7 +235,11 @@ where
 
 /// Validates an ingredient request and builds the ingredient with the given (server-owned) id. Returns
 /// the fault message for a `400` rather than the whole response, so the error type stays small.
-pub(super) fn build_ingredient(
+///
+/// # Errors
+///
+/// The field a blank name or an unknown unit is refused on.
+pub fn build_ingredient(
     request: &IngredientRequest,
     id: IngredientId,
 ) -> Result<PublishedIngredient, FieldRefusal> {
@@ -261,7 +265,11 @@ pub(super) fn build_ingredient(
 }
 
 /// Validates a recipe request and builds the recipe for the given (client-owned, path) item.
-pub(super) fn build_recipe(
+///
+/// # Errors
+///
+/// The field a negative threshold or a line that consumes nothing is refused on.
+pub fn build_recipe(
     request: &RecipeRequest,
     item: MenuItemId,
 ) -> Result<PublishedRecipe, FieldRefusal> {
@@ -291,7 +299,11 @@ pub(super) fn build_recipe(
 }
 
 /// Validates a supplier request and builds the supplier with the given (server-owned) id.
-pub(super) fn build_supplier(
+///
+/// # Errors
+///
+/// The field a blank name is refused on.
+pub fn build_supplier(
     request: &SupplierRequest,
     id: SupplierId,
 ) -> Result<PublishedSupplier, FieldRefusal> {
