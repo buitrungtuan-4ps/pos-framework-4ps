@@ -262,6 +262,44 @@ pub fn parse_items_csv(
     categories: &[ItemCategoryId],
     subcategories: &[ItemSubcategoryId],
 ) -> Result<(Vec<ItemUpsert>, ImportReport), ImportError> {
+    let mut reader = item_reader(bytes)?;
+    let by_id: BTreeMap<String, &Versioned<CatalogItem>> = existing
+        .iter()
+        .map(|row| (row.record.menu_item_id.to_string(), row))
+        .collect();
+
+    let mut upserts = Vec::new();
+    let mut rows = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(|error| ImportError::Malformed(error.to_string()))?;
+        let id = record.get(0).unwrap_or("").trim().to_owned();
+        // What names the row in the report: the id it claims, or its name when it claims none. A row
+        // with neither is reported under an empty key, exactly as the translation rail does.
+        let key = if id.is_empty() {
+            unescape_formula(record.get(1).unwrap_or("").trim()).to_owned()
+        } else {
+            id.clone()
+        };
+        let upsert = read_item_fields(&record, tax_classes, categories, subcategories)
+            .and_then(|fields| item_upsert(&id, fields, &by_id, tenant_id));
+        let action = match upsert {
+            Ok(upsert) => {
+                let action = match &upsert {
+                    ItemUpsert::Create(_) => RowAction::Create,
+                    ItemUpsert::Update { .. } => RowAction::Update,
+                };
+                upserts.push(upsert);
+                action
+            }
+            Err(reason) => RowAction::Reject { reason },
+        };
+        rows.push(ImportRow { key, action });
+    }
+    Ok((upserts, item_report(rows)))
+}
+
+/// A reader over an item CSV whose header is exactly the export's.
+fn item_reader(bytes: &[u8]) -> Result<csv::Reader<&[u8]>, ImportError> {
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
@@ -277,94 +315,59 @@ pub fn parse_items_csv(
     if named != ITEM_HEADER {
         return Err(ImportError::BadHeader);
     }
+    Ok(reader)
+}
 
-    let by_id: BTreeMap<String, &Versioned<CatalogItem>> = existing
-        .iter()
-        .map(|row| (row.record.menu_item_id.to_string(), row))
-        .collect();
-
-    let mut upserts = Vec::new();
-    let mut rows = Vec::new();
-    let (mut creates, mut updates, mut rejects) = (0usize, 0usize, 0usize);
-
-    for record in reader.records() {
-        let record = record.map_err(|error| ImportError::Malformed(error.to_string()))?;
-        let id = record.get(0).unwrap_or("").trim().to_owned();
-        // What names the row in the report: the id it claims, or its name when it claims none. A row
-        // with neither is reported under an empty key, exactly as the translation rail does.
-        let key = if id.is_empty() {
-            unescape_formula(record.get(1).unwrap_or("").trim()).to_owned()
-        } else {
-            id.clone()
-        };
-
-        let fields = match read_item_fields(&record, tax_classes, categories, subcategories) {
-            Ok(fields) => fields,
-            Err(reason) => {
-                rows.push(ImportRow {
-                    key,
-                    action: RowAction::Reject { reason },
-                });
-                rejects += 1;
-                continue;
-            }
-        };
-
-        if id.is_empty() {
-            upserts.push(ItemUpsert::Create(NewItem {
-                name: fields.name,
-                status: fields.status,
-                tax_class_id: fields.tax_class_id,
-                item_category_id: fields.item_category_id,
-                item_subcategory_id: fields.item_subcategory_id,
-                image_ref: fields.image_ref,
-            }));
-            creates += 1;
-            rows.push(ImportRow {
-                key,
-                action: RowAction::Create,
-            });
-            continue;
-        }
-
-        let Some(stored) = by_id.get(&id) else {
-            rows.push(ImportRow {
-                key,
-                action: RowAction::Reject {
-                    reason: "names an item this tenant does not have".to_owned(),
-                },
-            });
-            rejects += 1;
-            continue;
-        };
-        // The stored item with the file's fields over it: the columns the CSV does not carry — the
-        // per-locale names above all — are preserved rather than defaulted away.
-        let mut item = stored.record.clone();
-        item.tenant_id = tenant_id;
-        item.name = fields.name;
-        item.status = fields.status;
-        item.tax_class_id = fields.tax_class_id;
-        item.item_category_id = fields.item_category_id;
-        item.item_subcategory_id = fields.item_subcategory_id;
-        item.image_ref = fields.image_ref;
-        upserts.push(ItemUpsert::Update {
-            item: Box::new(item),
-            expected: stored.etag.clone(),
-        });
-        updates += 1;
-        rows.push(ImportRow {
-            key,
-            action: RowAction::Update,
-        });
+/// What one valid row would write: a create when it names no id, an update of the stored item
+/// when it names one this tenant has, and otherwise the reason it is rejected.
+fn item_upsert(
+    id: &str,
+    fields: ItemFields,
+    by_id: &BTreeMap<String, &Versioned<CatalogItem>>,
+    tenant_id: TenantId,
+) -> Result<ItemUpsert, String> {
+    if id.is_empty() {
+        return Ok(ItemUpsert::Create(NewItem {
+            name: fields.name,
+            status: fields.status,
+            tax_class_id: fields.tax_class_id,
+            item_category_id: fields.item_category_id,
+            item_subcategory_id: fields.item_subcategory_id,
+            image_ref: fields.image_ref,
+        }));
     }
-
-    let report = ImportReport {
-        rows,
-        create_count: creates,
-        update_count: updates,
-        reject_count: rejects,
+    let Some(stored) = by_id.get(id) else {
+        return Err("names an item this tenant does not have".to_owned());
     };
-    Ok((upserts, report))
+    // The stored item with the file's fields over it: the columns the CSV does not carry — the
+    // per-locale names above all — are preserved rather than defaulted away.
+    let mut item = stored.record.clone();
+    item.tenant_id = tenant_id;
+    item.name = fields.name;
+    item.status = fields.status;
+    item.tax_class_id = fields.tax_class_id;
+    item.item_category_id = fields.item_category_id;
+    item.item_subcategory_id = fields.item_subcategory_id;
+    item.image_ref = fields.image_ref;
+    Ok(ItemUpsert::Update {
+        item: Box::new(item),
+        expected: stored.etag.clone(),
+    })
+}
+
+/// The report over `rows`, counting each verdict.
+fn item_report(rows: Vec<ImportRow>) -> ImportReport {
+    let count =
+        |wanted: fn(&RowAction) -> bool| rows.iter().filter(|row| wanted(&row.action)).count();
+    let create_count = count(|action| matches!(action, RowAction::Create));
+    let update_count = count(|action| matches!(action, RowAction::Update));
+    let reject_count = count(|action| matches!(action, RowAction::Reject { .. }));
+    ImportReport {
+        rows,
+        create_count,
+        update_count,
+        reject_count,
+    }
 }
 
 /// One row's fields, once every cell has parsed and every foreign key has been found.
@@ -534,219 +537,8 @@ mod tests {
 }
 
 #[cfg(test)]
-mod item_tests {
-    use std::collections::BTreeMap;
-
-    use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
-    use pos_proto::ulid::Ulid;
-
-    use super::{ItemUpsert, RowAction, parse_items_csv};
-    use crate::catalog::{CatalogItem, ItemCategoryId};
-    use crate::registry::EntityStatus;
-    use crate::version::{Version, Versioned};
-
-    fn tenant() -> TenantId {
-        TenantId::new(Ulid::from_u128(1))
-    }
-
-    fn tax_class() -> TaxClassId {
-        TaxClassId::new(Ulid::from_u128(2))
-    }
-
-    fn category() -> ItemCategoryId {
-        ItemCategoryId::new(Ulid::from_u128(3))
-    }
-
-    fn item_id() -> MenuItemId {
-        MenuItemId::new(Ulid::from_u128(4))
-    }
-
-    /// One stored item, carrying a Vietnamese name the CSV format cannot express.
-    fn stored() -> Vec<Versioned<CatalogItem>> {
-        vec![Versioned::new(
-            CatalogItem {
-                menu_item_id: item_id(),
-                tenant_id: tenant(),
-                name: "Pho".to_owned(),
-                name_translations: BTreeMap::from([("vi".to_owned(), "Phở".to_owned())]),
-                tax_class_id: tax_class(),
-                item_category_id: None,
-                item_subcategory_id: None,
-                course_id: None,
-                image_ref: None,
-                status: EntityStatus::Active,
-            },
-            Version::new("v1"),
-        )]
-    }
-
-    const HEADER: &str = "menu_item_id,name,status,tax_class_id,item_category_id,\
-                          item_subcategory_id,image_ref\n";
-
-    #[test]
-    fn a_row_naming_a_stored_item_updates_it_and_a_row_naming_none_creates_one() {
-        let csv = format!(
-            "{HEADER}{id},Pho bo,active,{tax},{cat},,\n\
-             ,Tra da,active,{tax},,,\n",
-            id = item_id(),
-            tax = tax_class(),
-            cat = category(),
-        );
-        let (upserts, report) = parse_items_csv(
-            csv.as_bytes(),
-            tenant(),
-            &stored(),
-            &[tax_class()],
-            &[category()],
-            &[],
-        )
-        .expect("parse");
-
-        assert_eq!(report.update_count, 1);
-        assert_eq!(report.create_count, 1);
-        assert_eq!(report.reject_count, 0);
-        assert_eq!(report.rows[0].action, RowAction::Update);
-        assert_eq!(report.rows[1].action, RowAction::Create);
-
-        // The update carries the file's fields *and* the per-locale name the file could not carry.
-        // An import that silently dropped translations would be a data loss nobody sees until a
-        // Vietnamese till shows an English word.
-        let ItemUpsert::Update { item, expected } = &upserts[0] else {
-            panic!("the first row updates");
-        };
-        assert_eq!(item.name, "Pho bo");
-        assert_eq!(item.item_category_id, Some(category()));
-        assert_eq!(
-            item.name_translations.get("vi").map(String::as_str),
-            Some("Phở")
-        );
-        assert_eq!(expected, &Version::new("v1"), "the write stays conditional");
-    }
-
-    #[test]
-    fn an_id_this_tenant_does_not_have_is_rejected_rather_than_created() {
-        // The id is the identity an inbound order names. A file that could mint one would let a
-        // spreadsheet create a wire id — and, worse, could quietly adopt another tenant's.
-        let csv = format!(
-            "{HEADER}{stranger},Pho,active,{tax},,,\n",
-            stranger = MenuItemId::new(Ulid::from_u128(99)),
-            tax = tax_class(),
-        );
-        let (upserts, report) = parse_items_csv(
-            csv.as_bytes(),
-            tenant(),
-            &stored(),
-            &[tax_class()],
-            &[],
-            &[],
-        )
-        .expect("parse");
-        assert!(upserts.is_empty());
-        assert_eq!(report.reject_count, 1);
-        let RowAction::Reject { reason } = &report.rows[0].action else {
-            panic!("the row is rejected");
-        };
-        assert!(reason.contains("does not have"), "{reason}");
-    }
-
-    #[test]
-    fn a_foreign_key_the_tenant_does_not_have_is_rejected_by_name_and_the_file_is_read_on() {
-        let csv = format!(
-            "{HEADER},No tax,active,{stranger},,,\n\
-             ,Fine,active,{tax},,,\n",
-            stranger = TaxClassId::new(Ulid::from_u128(98)),
-            tax = tax_class(),
-        );
-        let (upserts, report) = parse_items_csv(
-            csv.as_bytes(),
-            tenant(),
-            &stored(),
-            &[tax_class()],
-            &[],
-            &[],
-        )
-        .expect("parse");
-        assert_eq!(report.reject_count, 1);
-        assert_eq!(
-            report.create_count, 1,
-            "a bad row does not stop the file: the operator wants every verdict, not the first"
-        );
-        assert_eq!(upserts.len(), 1);
-    }
-
-    #[test]
-    fn a_missing_name_and_an_unknown_status_are_rejections_not_errors() {
-        let csv = format!(
-            "{HEADER},,active,{tax},,,\n\
-             ,Pho,retired,{tax},,,\n",
-            tax = tax_class(),
-        );
-        let (upserts, report) = parse_items_csv(
-            csv.as_bytes(),
-            tenant(),
-            &stored(),
-            &[tax_class()],
-            &[],
-            &[],
-        )
-        .expect("parse");
-        assert!(upserts.is_empty());
-        assert_eq!(report.reject_count, 2);
-    }
-
-    #[test]
-    fn an_escaped_name_is_read_without_the_quote_the_export_added() {
-        let csv = format!(
-            "{HEADER}{id},'-5 Pho,active,{tax},,,\n\
-             ,'@Tra,active,{tax},,,\n\
-             ,'Pho,active,{tax},,,\n",
-            id = item_id(),
-            tax = tax_class(),
-        );
-        let (upserts, report) = parse_items_csv(
-            csv.as_bytes(),
-            tenant(),
-            &stored(),
-            &[tax_class()],
-            &[],
-            &[],
-        )
-        .expect("parse");
-        assert_eq!((report.update_count, report.create_count), (1, 2));
-        let names: Vec<&str> = upserts
-            .iter()
-            .map(|upsert| match upsert {
-                ItemUpsert::Update { item, .. } => item.name.as_str(),
-                ItemUpsert::Create(new) => new.name.as_str(),
-            })
-            .collect();
-        // A `'` before a trigger is the export's; one before anything else is the name's own.
-        assert_eq!(names, ["-5 Pho", "@Tra", "'Pho"]);
-        assert_eq!(
-            report.rows[1].key, "@Tra",
-            "the report names the row as it will be named"
-        );
-    }
-
-    #[test]
-    fn a_header_that_is_not_the_export_s_is_an_error() {
-        // The import accepts exactly what the export writes, so the pair round-trips. A file with
-        // its own columns is a different format, and guessing at it is how a price column would
-        // one day arrive by accident.
-        let csv = "name,price\nPho,45000\n";
-        assert!(
-            parse_items_csv(
-                csv.as_bytes(),
-                tenant(),
-                &stored(),
-                &[tax_class()],
-                &[],
-                &[]
-            )
-            .is_err()
-        );
-    }
-}
+#[path = "import/tests/items.rs"]
+mod item_tests;
 
 #[cfg(test)]
 mod round_trip_tests {
