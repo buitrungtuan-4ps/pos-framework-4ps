@@ -235,6 +235,10 @@ where
 
 /// Validates an ingredient request and builds the ingredient with the given (server-owned) id. Returns
 /// the fault message for a `400` rather than the whole response, so the error type stays small.
+///
+/// # Errors
+///
+/// The field a blank name or an unknown unit is refused on.
 pub fn build_ingredient(
     request: &IngredientRequest,
     id: IngredientId,
@@ -261,6 +265,10 @@ pub fn build_ingredient(
 }
 
 /// Validates a recipe request and builds the recipe for the given (client-owned, path) item.
+///
+/// # Errors
+///
+/// The field a negative threshold or a line that consumes nothing is refused on.
 pub fn build_recipe(
     request: &RecipeRequest,
     item: MenuItemId,
@@ -291,6 +299,10 @@ pub fn build_recipe(
 }
 
 /// Validates a supplier request and builds the supplier with the given (server-owned) id.
+///
+/// # Errors
+///
+/// The field a blank name is refused on.
 pub fn build_supplier(
     request: &SupplierRequest,
     id: SupplierId,

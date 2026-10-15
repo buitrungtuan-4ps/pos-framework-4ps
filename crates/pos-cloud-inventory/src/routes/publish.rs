@@ -125,6 +125,10 @@ where
 ///
 /// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
 /// the node is the same at every member, so a batch compiles it once and writes it *N* times.
+///
+/// # Errors
+///
+/// The `503` to return when the inventory store could not be read.
 pub async fn inventory_nodes<Inv>(
     inventory: &Inv,
     tenant_id: TenantId,
