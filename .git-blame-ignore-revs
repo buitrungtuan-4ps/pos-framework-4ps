@@ -85,3 +85,6 @@ c8754d354a581dc7d13eacf786f032eaf14b9b49
 
 # #805 — the edge's shift and drawer commands and their tests move into their own modules
 a697534c895232aa683aa9cacdcb424a3fc80647
+
+# #806 — the edge's kitchen commands and their tests move into their own modules
+53d159f4f5a88042fef8f3d9c8856175c623aca1
