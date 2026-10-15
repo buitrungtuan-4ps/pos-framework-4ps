@@ -249,3 +249,38 @@ impl StaffRoster {
         Some((auth.employee_id?, auth.pin_phc.as_deref()?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use pos_proto::ids::EmployeeId;
+    use pos_proto::ulid::Ulid;
+
+    #[test]
+    fn a_roster_is_ready_for_sign_in_once_someone_has_an_id_and_a_pin() {
+        use super::{StaffAuth, StaffRoster};
+        use pos_core::permission::PermissionSet;
+
+        let member = |employee_id: Option<u128>, pin_phc: Option<&str>| StaffAuth {
+            employee_id: employee_id.map(|id| EmployeeId::new(Ulid::from_u128(id))),
+            permissions: PermissionSet::default(),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: pin_phc.map(str::to_owned),
+        };
+        let mut roster = StaffRoster::new();
+        assert!(
+            !roster.sign_in_ready(),
+            "a roster nobody published signs nobody in"
+        );
+
+        roster.insert("1001", member(Some(1), None));
+        roster.insert("1002", member(None, Some("$argon2id$v=19$stand-in")));
+        assert!(
+            !roster.sign_in_ready(),
+            "a member with no PIN, or with no id, cannot sign in either"
+        );
+
+        roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
+        assert!(roster.sign_in_ready());
+    }
+}

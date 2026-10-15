@@ -34,33 +34,31 @@ use pos_core::error::DomainError;
 use pos_core::inventory::{StockMovement, StockProjection};
 use pos_core::machines::{Bill, BillTrigger};
 use pos_core::menu::{PricedLine, RequestedLine, reprice_line};
-use pos_core::permission::{Permission, PermissionSet};
+use pos_core::permission::Permission;
 use pos_core::state_machine::StateMachine;
+use pos_ports::TxContext;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
-use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted,
     CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
-    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableMerged, SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden,
+    CashShiftOpened, EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
+    SalesTableClosed, SalesTableMerged, SalesTableOpened, SalesTableTransferred,
     StoreChainAnchored,
 };
 use pos_proto::fees::FrozenFee;
 use pos_proto::ids::{
     BillId, CourseId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
-    ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId,
+    ReasonCodeId, ShiftId, StationId, SubjectId, TableId,
 };
 use pos_proto::qr::TableOrder;
 use pos_proto::reason_codes::ReasonAction;
 use pos_proto::shift::{CloseReport, DrawerDayEnd, DrawerModel, NoShiftSelling};
-use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
@@ -75,7 +73,7 @@ use pos_proto::{
     ReductionKind, SalesChannel, ShiftState, TableState,
 };
 
-use crate::auth::{Lockout, LockoutPolicy, SignIn};
+use crate::auth::Lockout;
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
@@ -84,8 +82,10 @@ use crate::line_notes::{LineNotes, NoteText};
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
 use crate::sntp::ClockStatus;
-use crate::sync_status::{OUTBOX_PLANNED_DEPTH, OutboxLevel, SyncReport, SyncStatus};
+use crate::sync_status::SyncStatus;
 
+mod authority;
+mod composition;
 mod drawer_access;
 mod error;
 mod records;
@@ -1377,342 +1377,7 @@ pub struct IntakeIntent<'a> {
     pub repriced: bool,
 }
 
-impl<S> Edge<S> {
-    /// A snapshot of the synced session — the menu catalog and tax table an inbound `OrderIn`
-    /// reprices from. A cheap `Arc` clone, so a caller reads a coherent session for the whole of its
-    /// command even if the config-pull loop swaps in a new one mid-flight.
-    #[must_use]
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "the only panic is a poisoned session lock, unreachable here: the critical section \
-                  just clones an Arc and cannot itself panic"
-    )]
-    pub fn session(&self) -> Arc<EdgeSession> {
-        self.session_cell
-            .read()
-            .expect("session lock is not poisoned")
-            .clone()
-    }
-
-    /// Swaps in a rebuilt session — the config-pull loop's apply step
-    /// ([ADR-0039](../../../docs/adr/0039-config-delivery.md)). Commands already in flight keep the
-    /// [`Arc`] snapshot they took; the next command sees the new session. Cloud-owned configuration
-    /// (ADR-0004): the store never edits this, it only receives it.
-    #[expect(
-        clippy::missing_panics_doc,
-        reason = "the only panic is a poisoned session lock, unreachable here: the critical section \
-                  just replaces an Arc and cannot itself panic"
-    )]
-    pub fn apply_session(&self, session: EdgeSession) {
-        *self
-            .session_cell
-            .write()
-            .expect("session lock is not poisoned") = Arc::new(session);
-    }
-
-    /// The lease standing this box is acting on
-    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
-    ///
-    /// Lent as the shared cell rather than copied out, because the config-pull loop writes it and
-    /// the request path reads it, and a second copy is a second answer.
-    #[must_use]
-    pub const fn lease(&self) -> &Arc<CurrentStanding> {
-        &self.standing
-    }
-
-    /// What this box last measured of its own clock against a time server (roadmap-v3 PF4).
-    ///
-    /// Lent rather than copied out for the reason [`Self::lease`] is: the probe loop writes it and
-    /// the status route reads it.
-    #[must_use]
-    pub const fn clock_status(&self) -> &ClockStatus {
-        &self.clock_status
-    }
-
-    /// Refuses a command that would **open** something new when a replacement machine has taken this
-    /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
-    ///
-    /// Called by the four commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
-    /// no others — `open_shift`, `seat_table`, `open_inbound_order` and `open_counter_order`, which
-    /// are exactly the sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
-    /// its second round, gets its bill and is paid — because the order lives in *this* box's log and
-    /// there is nowhere else for those guests to be served. What the box cannot do is start
-    /// anything: the floor drains and does not refill.
-    ///
-    /// # Errors
-    ///
-    /// [`AppError::Superseded`] when, and only when, the standing is
-    /// [`Superseded`](pos_core::lease::LeaseStanding::Superseded).
-    fn refuse_if_superseded(&self) -> Result<(), AppError> {
-        if self.standing.opens_new_work() {
-            Ok(())
-        } else {
-            Err(AppError::Superseded)
-        }
-    }
-
-    /// The lines currently marked prepared (`kitchen.ticket.bumped`), for a KDS reading the current
-    /// state on (re)connect.
-    ///
-    /// # Panics
-    ///
-    /// If the projection lock is poisoned — unreachable, as its critical section only reads the set.
-    #[must_use]
-    pub fn bumped_line_ids(&self) -> Vec<OrderLineId> {
-        self.projection
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .bumped_line_ids()
-    }
-}
-
 impl<S: EventStore> Edge<S> {
-    /// Composes an edge over `store` for a given identity and session, allocating receipt numbers
-    /// from `receipts`.
-    ///
-    /// The real binary passes the SQLite store itself (its writer thread is the gapless authority,
-    /// ADR-0025); the example and tests pass an [`InMemoryReceipts`](crate::receipt::InMemoryReceipts).
-    ///
-    /// # Errors
-    ///
-    /// [`getrandom::Error`] if the OS entropy source needed to seed the id generator is unavailable.
-    pub fn new(
-        store: S,
-        identity: StoreIdentity,
-        session: EdgeSession,
-        receipts: Arc<dyn ReceiptAuthority>,
-    ) -> Result<Self, getrandom::Error> {
-        Ok(Self {
-            store,
-            identity,
-            session_cell: RwLock::new(Arc::new(session)),
-            clock: SystemClock,
-            ids: Mutex::new(EdgeIdGenerator::new(SystemClock)?),
-            fanout: Fanout::new(),
-            projection: Mutex::new(Projection::default()),
-            receipts,
-            standing: Arc::new(CurrentStanding::new()),
-            sync: SyncStatus::new(),
-            clock_status: ClockStatus::new(),
-            notes: Mutex::new(LineNotes::default()),
-            pin_lockout: Arc::new(Lockout::new()),
-        })
-    }
-
-    /// The PIN lockout sign-ins and approvals share ([`Lockout`], ADR-0030).
-    #[must_use]
-    pub fn pin_lockout(&self) -> Arc<Lockout> {
-        Arc::clone(&self.pin_lockout)
-    }
-
-    /// The cloud-link and outbox-depth cell the status bar reads
-    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
-    #[must_use]
-    pub const fn sync(&self) -> &SyncStatus {
-        &self.sync
-    }
-
-    /// What the status bar shows: how many events wait for the cloud, how worried to be about it,
-    /// and whether the cloud was reachable on the drain's last pass.
-    ///
-    /// The depth is reused for [`DEPTH_TTL`](crate::sync_status::DEPTH_TTL) so every device polling
-    /// at once costs the store one count.
-    ///
-    /// # Errors
-    ///
-    /// [`AppError::Port`] if the depth had to be measured and the store could not be read.
-    pub async fn sync_report(&self) -> Result<SyncReport, AppError> {
-        let now = tokio::time::Instant::now();
-        let depth = if let Some(depth) = self.sync.cached_depth(now) {
-            depth
-        } else {
-            let depth = self.store.outbox_depth(self.identity.store_id).await?;
-            self.sync.record_depth(depth, now);
-            depth
-        };
-        Ok(SyncReport {
-            outbox_depth: depth,
-            outbox_level: OutboxLevel::of(depth, OUTBOX_PLANNED_DEPTH),
-            cloud_link: self.sync.cloud_link(),
-            last_sync_time: self.sync.last_sync_time(),
-        })
-    }
-
-    /// The fan-out devices subscribe to.
-    #[must_use]
-    pub fn fanout(&self) -> &Fanout {
-        &self.fanout
-    }
-
-    /// Tells every connected device that a new store configuration is live
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-    /// item 7), so an open till reloads its floor, menu, layout, locale and reason codes without a
-    /// new sign-in. Numbered on the fan-out like any frame, so a till that reconnects is replayed it.
-    ///
-    /// `changed_nodes` names the top-level nodes that changed, where the caller knows them, so a
-    /// till re-reads only what derives from them; `None` has every till re-read everything.
-    pub fn announce_config(&self, config_version_id: &str, changed_nodes: Option<Vec<String>>) {
-        self.fanout.publish(&ServerMessage::ConfigApplied {
-            config_version_id: config_version_id.to_owned(),
-            changed_nodes,
-        });
-    }
-
-    /// The store this edge is, so a driving-port caller (the inbound `OrderIn`) can bind an order to
-    /// it and refuse one addressed to another store.
-    #[must_use]
-    pub fn store_id(&self) -> StoreId {
-        self.identity.store_id
-    }
-
-    /// Makes sure this box never issues a receipt number at or below `floor`, the highest the cloud
-    /// has seen from this store
-    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
-    /// A counter already above it is left alone.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError`] if the receipt authority cannot be written.
-    pub async fn raise_receipt_floor(&self, floor: u64) -> Result<(), PortError> {
-        self.receipts.raise_floor(self.store_id(), floor).await
-    }
-
-    /// The event log this edge owns, lent read-only.
-    ///
-    /// The one caller is the outbox drain
-    /// ([`event_publish`](crate::event_publish), [ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)),
-    /// which needs an [`EventStore`] handle to read `outbox_batch` and acknowledge what the cloud
-    /// accepted. Lending the store beats threading a second handle through `serve()` — the `Edge`
-    /// already owns it, and a borrow cannot append behind the application layer's back: every write
-    /// still goes through `Edge`'s own load → decide → apply path.
-    #[must_use]
-    pub const fn store(&self) -> &S {
-        &self.store
-    }
-
-    /// Records that this box completed device activation and may now trade
-    /// (`device.activation.completed`, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
-    ///
-    /// A system event, not a domain decision: there is no signed-in employee at first boot, so the
-    /// envelope carries none, and the box's own new identity is both the reporting and the activated
-    /// device. The caller stores the credential in the [`KeyVault`](pos_ports::KeyVault) *before*
-    /// calling this — the vault is what the boot gate reads, so it, not this event, is the source of
-    /// truth for "activated"; this event is the notification that flows to the cloud.
-    ///
-    /// # Errors
-    ///
-    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
-    /// cannot be written.
-    pub async fn record_activation(&self, activated_device_id: DeviceId) -> Result<(), AppError> {
-        self.record_device_fact(
-            activated_device_id,
-            &DeviceActivationCompleted {
-                activated_device_id,
-            },
-        )
-        .await
-    }
-
-    /// Records that the store admitted a device by pairing it (`device.admission.granted`,
-    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
-    ///
-    /// `admitted_by_device_id` is the paired device whose signed-in manager minted the code, and
-    /// `None` for the code a boot announces — nothing authorised that one, because nothing could.
-    ///
-    /// # No employee reaches this event, deliberately
-    ///
-    /// The signature cannot carry one, which is the point: an employee identity here would be a
-    /// durable, central, cross-border, attributable record of managerial activity, and the purpose
-    /// this event serves is served in full by device ids (ADR-0118 §5 and its *Compliance posture*).
-    /// Who admitted a device is recorded on the store's own disk, as
-    /// [`PairedDevice::admitted_by`](pos_ports::device_registry::PairedDevice::admitted_by).
-    ///
-    /// # Errors
-    ///
-    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
-    /// cannot be written. Callers on the admission path **log and continue**: a device the store has
-    /// already admitted must not be un-admitted because an event could not be written.
-    pub async fn record_device_admitted(
-        &self,
-        admitted_device_id: DeviceId,
-        admitted_by_device_id: Option<DeviceId>,
-    ) -> Result<(), AppError> {
-        self.record_device_fact(
-            admitted_device_id,
-            &DeviceAdmissionGranted {
-                admitted_device_id,
-                admitted_by_device_id,
-            },
-        )
-        .await
-    }
-
-    /// Records that the store retired a device's admission (`device.admission.revoked`,
-    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
-    ///
-    /// One call per device, including for the break-glass that retires every device at once, so a
-    /// reader never has to interpret an absent field as *all of them*.
-    ///
-    /// # Errors
-    ///
-    /// [`AppError`] as [`Self::record_device_admitted`], and treated the same way by its caller: the
-    /// device is already revoked locally when this runs, and a revocation must not be undone because
-    /// the cloud could not be told about it.
-    pub async fn record_device_revoked(&self, revoked_device_id: DeviceId) -> Result<(), AppError> {
-        self.record_device_fact(
-            revoked_device_id,
-            &DeviceAdmissionRevoked { revoked_device_id },
-        )
-        .await
-    }
-
-    /// Appends one **system** fact about a device and publishes it to the connected screens.
-    ///
-    /// Shared by activation, admission and revocation because they share everything about them that
-    /// is easy to get wrong, and because a fourth copy of this envelope was the alternative:
-    ///
-    /// * **no employee.** There is none at first boot, and an admission records none by decision
-    ///   (ADR-0118 §5). An `employee_id` that crept onto one of these would be a compliance change
-    ///   disguised as a refactor, so no caller here is able to supply one.
-    /// * **no shift.** None of the three is a trading act and none of them opens or belongs to one.
-    /// * **the subject device reports.** A system event has no separate reporter, so the device the
-    ///   fact is *about* is the device on the envelope — which is what `record_activation` has always
-    ///   done, since at first boot the box's new identity is all there is.
-    async fn record_device_fact<P: EventPayload>(
-        &self,
-        device_id: DeviceId,
-        payload: &P,
-    ) -> Result<(), AppError> {
-        let now = self.clock.now();
-        let session = self.session();
-        let business_date = derive_business_date(now, &session.timezone, session.cutoff)
-            .map_err(|_ignored| AppError::Clock)?;
-        let data = RawPayload::encode(payload).map_err(AppError::Encode)?;
-        let envelope = EventEnvelope {
-            event_id: pos_proto::ids::EventId::new(self.next_ulid()),
-            event_type: EventTypeRef::from_known(P::EVENT_TYPE),
-            event_time: now,
-            business_date,
-            schema_version: P::SCHEMA_VERSION,
-            tenant_id: self.identity.tenant_id,
-            brand_id: self.identity.brand_id,
-            store_id: self.identity.store_id,
-            device_id,
-            employee_id: None,
-            shift_id: None,
-            // Unstamped here. The chain is assigned at append, inside the transaction,
-            // because that is the only place the previous head is known (ADR-0131).
-            chain: None,
-            data,
-        };
-        let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
-        let message = ServerMessage::Event {
-            event_type: EventTypeRef::from_known(P::EVENT_TYPE).as_str().to_owned(),
-            payload: published,
-        };
-        self.append_and_publish(vec![envelope], vec![message]).await
-    }
-
     /// Opens an order that arrived from **outside** the store — a marketplace order, the public API,
     /// or a QR guest ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Emits `sales.order.opened`
     /// (tableless-capable) and one `sales.order_line.added` per already-priced line, in **one**
@@ -2193,94 +1858,6 @@ impl<S: EventStore> Edge<S> {
         }
         self.forget_notes_off_screen();
         Ok(())
-    }
-
-    /// Resolves a step-up for one `permission`, returning the approver and whether a PIN was
-    /// verified.
-    ///
-    /// The permission's own `pin_required` decides whether an approval is needed at all, so the
-    /// registry stays the single source of truth: flipping `pin: true` on a permission changes what
-    /// the till demands, with no second list to update.
-    ///
-    /// What the approval grants is deliberately narrow: **exactly the permission being exercised**,
-    /// not the approver's whole set. A manager approving a void must not incidentally hand the
-    /// server their discount ceiling for the same act.
-    fn resolve_step_up(
-        &self,
-        ctx: &mut DecisionCtx,
-        permission: Permission,
-        approval: Option<&Approval>,
-    ) -> Result<Option<EmployeeId>, AppError> {
-        let session = self.session();
-        // Where the store enforces each person's own set (ADR-0158 decision 4), the actor's role
-        // says whether this act needs an approver: none for a permission held directly, one for a
-        // permission held with approval, and a refusal for one not held at all. Elsewhere the
-        // catalogue's PIN flag decides, as it always has.
-        if session.permissions_enforced {
-            if ctx.granted_directly.contains(permission) {
-                return Ok(None);
-            }
-            if !session
-                .staff
-                .permissions_with_approval_for(ctx.actor.employee_id)
-                .contains(permission)
-            {
-                return Err(AppError::Domain(DomainError::PermissionDenied {
-                    permission: permission.meta().id,
-                }));
-            }
-        } else if !permission.meta().pin_required {
-            return Ok(None);
-        }
-        let approval = approval.ok_or(AppError::ApprovalRequired)?;
-        // An unknown code is refused without touching the lockout, as sign-in refuses one: there is
-        // nobody to count the failure against, and a probe cannot tell a real code from a missing one.
-        let (approver, phc, held) = session
-            .staff
-            .approver(&approval.code)
-            .ok_or(AppError::ApprovalRefused)?;
-        // The store's own lockout numbers (ADR-0160), the same ones its sign-in counts against.
-        match self.pin_lockout.authenticate(
-            approver,
-            phc,
-            &approval.pin,
-            self.clock.now(),
-            LockoutPolicy::of(&session.session_settings),
-        ) {
-            SignIn::Ok => {}
-            SignIn::Wrong { .. } => return Err(AppError::ApprovalRefused),
-            SignIn::LockedOut { .. } => return Err(AppError::ApproverLockedOut),
-        }
-        if !held.contains(permission) {
-            return Err(AppError::ApprovalRefused);
-        }
-        // Approving is vouching for somebody else (decision 5). Only once the store enforces each
-        // person's own set: until then a manager alone on shift has nobody else to approve their own
-        // void, and approving it themselves is how they do it.
-        if session.permissions_enforced && approver == ctx.actor.employee_id {
-            return Err(AppError::ApprovalRefused);
-        }
-        ctx.granted = ctx.granted.with(permission);
-        Ok(Some(approver))
-    }
-
-    /// The `security.permission.overridden` a verified step-up owes the log.
-    ///
-    /// `docs/pos-spec.md` §11.4 makes a manager-PIN override a fraud control, and until roadmap B2.2
-    /// this event had no producer anywhere in the tree — the control had no auditable record at all,
-    /// exactly as the event's own declaration says. `exceeded_by` is `None` here: a void is not an
-    /// amount over a ceiling, it is an act a role does not hold, and inventing a figure would be
-    /// worse than saying there is none.
-    fn override_record(
-        permission: Permission,
-        approver: EmployeeId,
-        exceeded_by: Option<Money>,
-    ) -> SecurityPermissionOverridden {
-        SecurityPermissionOverridden {
-            permission_key: PermissionKey::new(permission.meta().id),
-            approver_employee_id: approver,
-            exceeded_by,
-        }
     }
 
     /// Voids one order line, citing a reason from the store's managed list (`docs/pos-spec.md` §5,
@@ -6690,54 +6267,6 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
-    /// Refuses `actor` an act no decision covers unless they hold `permission`, as a decision would
-    /// refuse it (ADR-0158).
-    ///
-    /// For the routes that write no event and so decide nothing — printing a pre-bill — but still
-    /// do what a role grants. The same set and the same refusal as every command, so a till cannot
-    /// tell the two apart.
-    ///
-    /// # Errors
-    ///
-    /// [`AppError::Domain`] carrying `PermissionDenied` when the actor does not hold `permission`,
-    /// or [`AppError::Clock`] if the business date cannot be derived.
-    pub fn authorise(&self, actor: Actor, permission: Permission) -> Result<(), AppError> {
-        self.decision_ctx(actor)?.require(permission)?;
-        Ok(())
-    }
-
-    /// Assembles the decision context from the clock and the session.
-    fn decision_ctx(&self, actor: Actor) -> Result<DecisionCtx, AppError> {
-        let now = self.clock.now();
-        let session = self.session();
-        let business_date = derive_business_date(now, &session.timezone, session.cutoff)
-            .map_err(|_| AppError::Clock)?;
-        // Each person's own set once the store enforces it (ADR-0158): what their roles grant
-        // directly, and nothing for an identity the roster does not know. What they hold only with
-        // approval joins a context one act at a time, in `resolve_step_up`. Until then the
-        // store-wide set, in which nobody holds anything directly, so a PIN-flagged permission asks
-        // for a PIN as it always has.
-        let (granted, granted_directly) = if session.permissions_enforced {
-            let own = session
-                .staff
-                .permissions_for(actor.employee_id)
-                .unwrap_or(PermissionSet::EMPTY);
-            (own, own)
-        } else {
-            (session.granted, PermissionSet::EMPTY)
-        };
-        Ok(DecisionCtx {
-            now,
-            business_date,
-            actor,
-            granted,
-            granted_directly,
-            capabilities: session.capabilities,
-            connectivity: session.connectivity,
-            currency: session.currency,
-        })
-    }
-
     /// A fresh id for a print job no event stands behind — a manager's test page. Other jobs take
     /// the id of the event that caused them, which is what makes a retried print idempotent.
     #[must_use]
@@ -6799,14 +6328,14 @@ mod tests {
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3)))
     }
 
-    fn actor() -> Actor {
+    pub(in crate::app) fn actor() -> Actor {
         Actor {
             employee_id: EmployeeId::new(Ulid::from_u128(10)),
             device_id: DeviceId::new(Ulid::from_u128(20)),
         }
     }
 
-    fn edge() -> Edge<FakeStore> {
+    pub(in crate::app) fn edge() -> Edge<FakeStore> {
         Edge::new(
             FakeStore::default(),
             identity(),
@@ -6816,7 +6345,7 @@ mod tests {
         .expect("seeds")
     }
 
-    fn vnd(minor: i64) -> Money {
+    pub(in crate::app) fn vnd(minor: i64) -> Money {
         Money::new(CurrencyCode::VND, minor)
     }
 
@@ -6845,7 +6374,7 @@ mod tests {
         .expect("seeds")
     }
 
-    fn a_line() -> LineDraft {
+    pub(in crate::app) fn a_line() -> LineDraft {
         LineDraft {
             menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
             display_name: DisplayName::new("Margherita"),
@@ -8633,113 +8162,6 @@ mod tests {
         });
     }
 
-    /// Narrows what the store grants to everything but `withheld`: what a person whose roles lack
-    /// it will hold once each person's own set decides (ADR-0158).
-    fn withhold(edge: &Edge<FakeStore>, withheld: pos_core::permission::Permission) {
-        edge.apply_session(EdgeSession {
-            granted: pos_core::permission::Permission::ALL
-                .iter()
-                .copied()
-                .filter(|permission| *permission != withheld)
-                .collect(),
-            ..(*edge.session()).clone()
-        });
-    }
-
-    /// Asserts the edge refused for want of exactly `permission`.
-    fn denied_for<T: core::fmt::Debug>(
-        result: Result<T, super::AppError>,
-        permission: pos_core::permission::Permission,
-    ) {
-        match result {
-            Err(super::AppError::Domain(pos_core::error::DomainError::PermissionDenied {
-                permission: id,
-            })) => assert_eq!(id, permission.meta().id),
-            other => panic!(
-                "expected a refusal for {}, got {other:?}",
-                permission.meta().id
-            ),
-        }
-    }
-
-    /// The commands that decide nothing in `pos-core` still need their permission at the edge
-    /// (ADR-0158 decision 2): taking an order, opening and printing the bill, bumping a ticket and
-    /// opening a shift. Each is refused naming it, and nothing is written.
-    #[test]
-    fn each_command_the_core_does_not_decide_still_needs_its_permission() {
-        use pos_core::permission::Permission;
-        pos_fakes::executor::run_ready(async {
-            let table = TableId::new(Ulid::from_u128(150));
-
-            let taking = edge();
-            taking
-                .seat_table(actor(), table, None)
-                .await
-                .expect("seats");
-            withhold(&taking, Permission::AddLine);
-            denied_for(
-                taking.add_line(actor(), table, a_line()).await,
-                Permission::AddLine,
-            );
-            denied_for(
-                taking
-                    .open_counter_order(actor(), SalesChannel::Takeaway)
-                    .await,
-                Permission::AddLine,
-            );
-            let order_id = taking
-                .order_for_table(table)
-                .expect("the seated table holds an order");
-            assert!(
-                taking.order_line_ids(order_id).is_empty(),
-                "no line was written"
-            );
-
-            let billing = edge();
-            billing
-                .seat_table(actor(), table, None)
-                .await
-                .expect("seats");
-            billing
-                .add_line(actor(), table, a_line())
-                .await
-                .expect("adds");
-            withhold(&billing, Permission::OpenBill);
-            denied_for(
-                billing.open_bill(actor(), table).await,
-                Permission::OpenBill,
-            );
-            denied_for(
-                billing.authorise(actor(), Permission::OpenBill),
-                Permission::OpenBill,
-            );
-            assert_eq!(billing.table_state(table), TableState::Occupied);
-
-            let kitchen = edge();
-            withhold(&kitchen, Permission::BumpTicket);
-            denied_for(
-                kitchen
-                    .bump_ticket(
-                        actor(),
-                        OrderId::new(Ulid::from_u128(151)),
-                        StationId::new(Ulid::from_u128(152)),
-                        vec![pos_proto::ids::OrderLineId::new(Ulid::from_u128(153))],
-                    )
-                    .await,
-                Permission::BumpTicket,
-            );
-            assert!(kitchen.bumped_line_ids().is_empty());
-
-            let drawer = edge();
-            withhold(&drawer, Permission::OpenShift);
-            denied_for(
-                drawer.open_shift(actor(), vnd(500_000)).await,
-                Permission::OpenShift,
-            );
-            assert!(drawer.current_shift().is_none());
-        });
-    }
-
     #[test]
     fn a_store_on_the_default_sells_and_takes_payment_without_a_shift_as_before() {
         pos_fakes::executor::run_ready(async {
@@ -9040,35 +8462,6 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the merge returned rather than deadlocking on the projection lock");
         assert!(merged, "the merge succeeds");
-    }
-
-    #[test]
-    fn a_roster_is_ready_for_sign_in_once_someone_has_an_id_and_a_pin() {
-        use super::{StaffAuth, StaffRoster};
-        use pos_core::permission::PermissionSet;
-
-        let member = |employee_id: Option<u128>, pin_phc: Option<&str>| StaffAuth {
-            employee_id: employee_id.map(|id| EmployeeId::new(Ulid::from_u128(id))),
-            permissions: PermissionSet::default(),
-            permissions_with_approval: PermissionSet::EMPTY,
-            discount_ceiling: None,
-            pin_phc: pin_phc.map(str::to_owned),
-        };
-        let mut roster = StaffRoster::new();
-        assert!(
-            !roster.sign_in_ready(),
-            "a roster nobody published signs nobody in"
-        );
-
-        roster.insert("1001", member(Some(1), None));
-        roster.insert("1002", member(None, Some("$argon2id$v=19$stand-in")));
-        assert!(
-            !roster.sign_in_ready(),
-            "a member with no PIN, or with no id, cannot sign in either"
-        );
-
-        roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
-        assert!(roster.sign_in_ready());
     }
 
     /// A table already stuck on a bill on nothing is recovered once (ADR-0163): a manager voids the

@@ -70,3 +70,6 @@ cf79d45af82eb57c382047eddc15b8aea38d1721
 
 # #792 — the archive, OTA rollout, raw config and admitted-device routes and their tests move into their own modules
 dc8c5eb97db492c7daa013c0d6f7f3a8c442a1e7
+
+# #800 — the edge's session, roster, errors, views and records move into their own modules (app.rs becomes app/mod.rs)
+e14828d075c16e9b5e2603e3ec80321898124973
