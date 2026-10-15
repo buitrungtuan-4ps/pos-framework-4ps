@@ -3,7 +3,7 @@
 
 //! Inventory authoring: the ingredients, recipes and suppliers a tenant authors under
 //! `/admin/inventory/*`, and their publish to a store as its `inventory` node
-//! ([ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md)).
+//! ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)).
 //!
 //! The state, the request bodies and their checks, and the router are here; each list's
 //! handlers are in a module of their own, and the publish in [`publish`].

@@ -8,7 +8,7 @@
 //! - [`inventory`]: the records, the `InventoryStore` seam, and the compile to the `inventory` node.
 //! - [`routes`]: `/admin/inventory/*` and `/admin/config/inventory`, which `pos-cloud`'s router
 //!   mounts.
-//! - [`persistence`]: the seam over PostgreSQL, through `store-postgres`.
+//! - `persistence`: the seam over PostgreSQL, through `store-postgres`.
 //!
 //! `pos-cloud` re-exports [`inventory`] under its old path, and its `http` module imports
 //! [`routes`] as `inventory`, so `pos_cloud::http::inventory_router` and the store-group batch's
