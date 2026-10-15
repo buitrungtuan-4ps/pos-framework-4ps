@@ -44,13 +44,13 @@ enum ConfigSyncResponse {
     UpToDate,
     /// The store should apply this snapshot or delta.
     Update {
-        /// The snapshot or collapsed delta to apply ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
+        /// The snapshot or collapsed delta to apply ([ADR-0033](../../../docs/adr/0033-config-tree.md)).
         update: ConfigUpdate,
     },
 }
 
 /// Serves a store its own configuration update: nothing (up to date), a delta, or a full snapshot
-/// past *K* versions behind ([ADR-0039](../../../../docs/adr/0039-config-delivery.md)).
+/// past *K* versions behind ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
 ///
 /// Requires a valid API key with the `read_config` scope, and answers **only** for that key's tenant:
 /// the tenant comes from the verified grant, never the path, so a store can pull a `store_id` only
@@ -92,7 +92,7 @@ where
         },
     };
     // Record the store's contact and the version it reported holding, for the fleet view
-    // ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)). Best-effort telemetry: a liveness-write
+    // ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)). Best-effort telemetry: a liveness-write
     // failure is logged and swallowed, never failing the config pull the store actually needs.
     if let Err(error) = app
         .config_trees
@@ -122,7 +122,7 @@ where
 }
 
 /// `POST /sync/stores/{store_id}/heartbeat` — a store's lightweight liveness ping
-/// ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped
+/// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped
 /// API key the config pull uses (`read_config`), it advances the store's `last_seen_at` and nothing
 /// else, so a store that is up but not currently pulling config (a parked long-poll, a quiet period
 /// between publishes) still registers as online. `204` on success; unlike the config-pull capture,
@@ -192,7 +192,7 @@ where
 }
 
 /// The most envelopes one `POST /sync/stores/{store_id}/events` may carry
-/// ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 pub const MAX_PUBLISHED_EVENTS: usize = 256;
 
 /// The largest body that route reads, 4 MiB (ADR-0143). A bigger one is answered `413` before it is
@@ -213,7 +213,7 @@ struct PublishedEventsAccepted {
 }
 
 /// `POST /sync/stores/{store_id}/events` — a store publishes its own events over HTTPS
-/// ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 ///
 /// Scope `publish_events`, which a box's device credential always carries, and the store in the
 /// path must be the credential's. **Every envelope must name that store**: a batch with any other
@@ -276,7 +276,7 @@ where
 }
 
 /// `POST /sync/stores/{store_id}/events/hello` — the protocol negotiation for the HTTPS event link
-/// ([ADR-0024](../../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with
+/// ([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with
 /// the cloud's own window. Answers `200` with the [`HelloOutcome`](pos_proto::protocol::HelloOutcome)
 /// either way: a refusal is an answer, not an error, and the store keeps trading on it.
 pub(in crate::http) async fn edge_events_hello<S, R, K, C, A, T, W>(
@@ -344,7 +344,7 @@ where
     Ok(store_id)
 }
 
-/// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)).
+/// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
 ///
 /// Every field is optional and the whole body is optional, because the body is younger than the
 /// route: a store running an older binary posts nothing at all, and must keep being recorded as
@@ -357,13 +357,13 @@ struct HeartbeatBody {
     #[serde(default)]
     outbox_depth: Option<u64>,
     /// The lease generation the box holds
-    /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md)), so the console can
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), so the console can
     /// tell a store that has been *replaced* from one that is merely quiet. `None` when the store did
     /// not say — an older edge, or one whose lease row could not be read — and that must not be
     /// recorded as `0`, because `0` is a store's real first generation.
     #[serde(default)]
     lease_generation: Option<u64>,
-    /// One standing per bound print agent ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), or
+    /// One standing per bound print agent ([ADR-0112](../../../docs/adr/0112-print-agents.md)), or
     /// `None` when the store said nothing about them — an older edge, or one whose record could not
     /// be read.
     ///

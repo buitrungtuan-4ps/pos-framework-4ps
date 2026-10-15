@@ -64,7 +64,7 @@ pub(crate) use versions::__path_admin_config_nodes;
 /// Drops the version a config-tree read was handed, keeping the state.
 ///
 /// A read of the tree wants the four layers and the history; the version the row was read at is a
-/// *writer's* precondition ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// *writer's* precondition ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 /// Read paths say so by calling this, rather than silently discarding a field.
 pub(crate) fn strip_tree_version(
     loaded: Option<Versioned<ConfigTreeState>>,
@@ -111,14 +111,14 @@ where
 /// Bounded so a pathological hot store cannot spin. Three is far beyond what a console's publish
 /// rate can lose; exhausting them means the caller is contending with something other than a racing
 /// operator, and a `412` is then the honest answer
-/// ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 pub(in crate::http) const CONDITIONAL_WRITE_ATTEMPTS: u8 = 3;
 
 /// Sets `nodes` on a store's tree at `level` and saves it, retrying if another publish lands first.
 ///
 /// Twelve routes used to hand-roll the load→compose→publish→save cycle, and each copy was a place
 /// the conditional write could be forgotten. It is one function now
-/// ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+/// ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
 ///
 /// # Why this retries instead of refusing
 ///
@@ -172,7 +172,7 @@ where
 /// read-merge-append is only safe under retry if the merge re-reads. Building the merged value once,
 /// outside the loop, and re-publishing it on each attempt would silently drop a concurrent
 /// append — two admins each retiring one till would end with one of the two retirements gone, which
-/// for a deny-list ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6)
+/// for a deny-list ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6)
 /// is a device left trading that somebody was told had been retired.
 ///
 /// `compose` may refuse: returning `Err` abandons the publish with that response, which is how a
@@ -262,7 +262,7 @@ where
     Err(version_mismatch())
 }
 
-/// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**).
+/// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**).
 ///
 /// Checked against the **effective** document — every layer merged as they stand — because that is
 /// what the store receives: a `tax` node inherited from the tenant layer satisfies a menu's
@@ -317,7 +317,7 @@ pub(in crate::http) fn check_prerequisites(
 }
 
 /// Whether `value`, the store's `node`, carries only fields the settings register writes there
-/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 ///
 /// Such a node is the settings and nothing else: a `locale` holding `tax_rounding` alone has no
 /// currency, timezone or cutoff, so it is not the locale a menu waits for.

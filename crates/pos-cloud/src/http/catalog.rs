@@ -78,12 +78,12 @@ struct CatalogState<Cat, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// Builds the catalog authoring sub-router ([ADR-0066](../../../../docs/adr/0066-cloud-catalog.md)).
+/// Builds the catalog authoring sub-router ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
 ///
 /// The write surface for the menu source of truth an operator edits — items, menus (with an
 /// inheritance edge), and the per-channel placements a menu is compiled from. Every route is behind
 /// the super-admin session guard and names a tenant the admin-is-global way
-/// ([ADR-0060](../../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
+/// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// reads and deletes, the request body for a create or upsert. A placement is addressed by its
 /// `(menu_id, menu_item_id)` pair: `PUT` upserts it, `DELETE` removes it. The routes live under
 /// `/admin/catalog/`, a fresh prefix that never collides with the registry or device surfaces.

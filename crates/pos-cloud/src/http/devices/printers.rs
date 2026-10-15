@@ -34,10 +34,10 @@ pub(super) struct SetPrintAgentRequest {
 }
 
 /// A super-admin picks (or clears) the print agent for an approved device
-/// ([ADR-0112](../../../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
 ///
 /// Behind `ManageDevices` with an `If-Match`
-/// ([ADR-0094](../../../../../docs/adr/0094-console-optimistic-concurrency.md)) and an audit entry: two
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)) and an audit entry: two
 /// managers picking different agents for one printer is the ordinary race, and last-write-wins would
 /// leave the loser believing a decision that is not in the database.
 ///
@@ -116,7 +116,7 @@ pub(super) struct SetDrawerRequest {
 }
 
 /// A super-admin ticks (or clears) **Cash drawer attached** on an approved printer
-/// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
 /// decision 4).
 ///
 /// The agent pick's guards, for the agent pick's reasons: `ManageDevices`, an `If-Match`, and an
@@ -213,7 +213,7 @@ pub(super) struct SetPaperRequest {
     tag = "printers",
 )]
 /// A super-admin says what paper an approved printer takes and whether it cuts it
-/// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2).
 ///
 /// The drawer mark's guards, for the drawer mark's reasons: `ManageDevices`, an `If-Match`, and an

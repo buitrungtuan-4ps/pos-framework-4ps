@@ -25,7 +25,7 @@ use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
 
 /// A super-admin lists a tenant's courses, **in service order**
-/// ([ADR-0130](../../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 pub(super) async fn admin_list_courses<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,

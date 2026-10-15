@@ -94,7 +94,7 @@ pub(super) fn add_country_pack_facts(
         );
     }
     // How long the store keeps a personal record before its own sweep scrubs it
-    // ([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)), which the edge has read from
+    // ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)), which the edge has read from
     // this node since that record and which this node has never carried.
     //
     // Harmless so far, and worth saying why rather than implying a breach: every pack,
@@ -116,7 +116,7 @@ pub(super) fn add_country_pack_facts(
         );
     }
     // How the country writes a number
-    // ([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Compiled into
+    // ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Compiled into
     // every pack since ADR-0027 and, until now, read by nothing anywhere: the till grouped `en-US`,
     // the receipt grouped with a comma, and Vietnam's own `1.234.567,50` appeared on neither.
     //

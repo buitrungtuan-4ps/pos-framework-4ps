@@ -85,7 +85,7 @@ impl ReasonCodePublishSummary {
 /// Two are skipped ([`ReasonAction::blocks_when_uncovered`]). `Unspecified` is the wire enum's
 /// mandatory zero value, not an act anyone performs. And a drawer closed over or short still closes
 /// where the list offers no reason for it
-/// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so the
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so the
 /// notice must not say staff can no longer record it.
 fn uncovered_actions(node: &PublishedReasonCodes) -> Vec<String> {
     ReasonAction::ALL
@@ -97,7 +97,7 @@ fn uncovered_actions(node: &PublishedReasonCodes) -> Vec<String> {
 }
 
 /// Builds the reason-code publish sub-router
-/// ([ADR-0115](../../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), B2.2 slice 4).
+/// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), B2.2 slice 4).
 ///
 /// One route: assemble the tenant's authored entries into a [`PublishedReasonCodes`], write it as
 /// the store's `reason_codes` config node, and version it through the config tree — the same
@@ -176,7 +176,7 @@ fn unusable_reason_code(code: &ReasonCode) -> Response {
 /// refusals here are the operator's to fix — an empty list, and an entry no action recognises —
 /// and they refuse the batch as a whole rather than one store, because neither depends on which
 /// store is being published to
-/// ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3).
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3).
 pub(in crate::http) async fn reason_code_nodes<R>(
     reason_codes: &R,
     tenant_id: TenantId,

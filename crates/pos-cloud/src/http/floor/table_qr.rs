@@ -49,8 +49,8 @@ struct TableQrView {
     tokens: Vec<TableQrEntry>,
 }
 
-/// Builds the table-QR sub-router ([ADR-0072](../../../../../docs/adr/0072-floor-and-kitchen.md),
-/// [ADR-0057](../../../../../docs/adr/0057-qr-ordering.md)).
+/// Builds the table-QR sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md),
+/// [ADR-0057](../../../docs/adr/0057-qr-ordering.md)).
 ///
 /// One read, `GET /admin/floor/qr`, behind [`ConsolePermission::Read`]: mints the signed QR token for
 /// each of a store's active tables so the console can print a QR sheet. Wired only when a table-token

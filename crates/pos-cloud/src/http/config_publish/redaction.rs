@@ -41,7 +41,7 @@ pub(in crate::http) fn without_staff_credentials(
 
 /// Removes each staff member's name and staff code from a console read for a caller without
 /// [`ConsolePermission::ReadPeople`]
-/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// The `permissions` node names every member of staff a store authorises: the till shows the name,
 /// and the person signs in with the code. Both are **T1** personal data (ADR-0070), and the console's
@@ -77,7 +77,7 @@ pub(in crate::http) fn without_staff_identities(document: &serde_json::Value) ->
 /// A config document with its staff as `role` may read them: never a PIN hash, whoever asks
 /// ([`without_staff_credentials`], **S7**), and a name or staff code only for a role holding
 /// [`ConsolePermission::ReadPeople`] ([`without_staff_identities`],
-/// [ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 ///
 /// The two rules always travel together, so every console surface that hands back configuration
 /// applies them through this one function: the current and past config reads, and the merge patch
@@ -112,7 +112,7 @@ pub(in crate::http) fn staff_redacted_for(
 ///   redaction that closes one price surface and leaves its sibling open is not a fix; a promotion's
 ///   economics are the same **T2** class as a menu price.
 /// - **`fees`** — each fee's rate or amount, and which items and channels it covers
-///   ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md)), the same class again; the fee
+///   ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), the same class again; the fee
 ///   routes read them only with `ReadRevenue` for the same reason.
 ///
 /// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`

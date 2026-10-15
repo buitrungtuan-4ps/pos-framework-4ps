@@ -105,7 +105,7 @@ struct TaskHealthReport {
     tasks: Vec<TaskHealthView>,
 }
 
-/// Builds the background-task health sub-router ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)
+/// Builds the background-task health sub-router ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)
 /// slice 4). One read, `GET /admin/health/tasks`, behind [`ConsolePermission::Read`] (every console
 /// role). `expected` names the loops this deployment turned on, so a loop that never ticked is
 /// surfaced as unhealthy rather than missing.

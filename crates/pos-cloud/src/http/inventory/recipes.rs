@@ -97,7 +97,7 @@ where
 /// `create`/`update` audit action, then wrote unconditionally. That read raced its own write — a
 /// concurrent create or delete in between made *both* the status code and the audit entry wrong —
 /// and a caller asking to add a recipe silently replaced the bill of materials of one already
-/// there. [ADR-0095](../../../../../docs/adr/0095-conditional-writes-for-collections.md) §(ii).
+/// there. [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md) §(ii).
 pub(super) async fn admin_create_recipe<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
     headers: HeaderMap,

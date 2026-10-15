@@ -24,7 +24,7 @@ use crate::lease::LeaseStore;
 use crate::ota::{ArtifactStore, validate_release_tag};
 
 /// Refuses a rollout whose `target_version` the cloud does not host
-/// ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 2).
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 2).
 ///
 /// Without this, the console's happy path was: publish a typo, and every store in the ring fetches,
 /// gets a `404`, and stays on the old version. A `404` on the artifact route means "install nothing",

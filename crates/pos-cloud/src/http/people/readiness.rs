@@ -43,7 +43,7 @@ struct ReadinessState<P, St, Rg, Grp, A, C> {
 }
 
 /// Builds the permissions-readiness sub-router
-/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
 ///
 /// One read: what each role held at a store does not grant ([`crate::people_readiness`]), beside
 /// whether the store enforces each person's own permissions and which level says so. Behind

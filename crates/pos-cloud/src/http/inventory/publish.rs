@@ -83,7 +83,7 @@ where
     ))
 }
 
-/// Builds the inventory-publish sub-router ([ADR-0079](../../../../../docs/adr/0079-inventory-and-suppliers.md), M6).
+/// Builds the inventory-publish sub-router ([ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md), M6).
 ///
 /// One route: assemble the tenant's authored ingredients, recipes, and suppliers into a
 /// `PublishedInventory`, write it as the store's `inventory` config node, and version it through the
@@ -122,7 +122,7 @@ where
 /// publishes.
 /// Compiles a tenant's authored inventory into the store's `inventory` node, with a summary.
 ///
-/// Shared with the batch fan-out ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
+/// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
 /// the node is the same at every member, so a batch compiles it once and writes it *N* times.
 pub(in crate::http) async fn inventory_nodes<Inv>(
     inventory: &Inv,

@@ -22,7 +22,7 @@ use crate::http::RegistryTenantQuery;
 use crate::version::{UpdateOutcome, Versioned};
 use crate::{export, import};
 
-/// A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../../../docs/adr/0075-media-and-file-rail.md),
+/// A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5). Behind [`ConsolePermission::ManageCatalog`] and audited — the entry records who exported
 /// which domain and how many rows, never the row contents. No price is exported (prices are per-channel
 /// placements, a deferred T2 export); this is the item master only.
@@ -189,7 +189,7 @@ where
 }
 
 /// `POST /admin/catalog/import/items/dry-run` — what an item-master CSV **would** do, row by row,
-/// writing nothing (roadmap-v3 **F15**, [ADR-0075](../../../../../docs/adr/0075-media-and-file-rail.md)).
+/// writing nothing (roadmap-v3 **F15**, [ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)).
 ///
 /// The file is the one `GET /admin/catalog/export/items` writes, which is what makes the pair a
 /// round-trip: export the master, edit it in a spreadsheet, bring it back. It carries no price —

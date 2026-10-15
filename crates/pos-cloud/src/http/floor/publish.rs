@@ -48,7 +48,7 @@ struct PublishFloorRequest {
     store_id: String,
 }
 
-/// Builds the floor & kitchen publish sub-router ([ADR-0072](../../../../../docs/adr/0072-floor-and-kitchen.md)).
+/// Builds the floor & kitchen publish sub-router ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
 ///
 /// One route: compile a store's areas/tables into a `FloorPlan` and its stations/routing into a
 /// `StationPlan`, run the §10 referential validation (`pos_core::floor`), and — only if valid — merge
@@ -96,7 +96,7 @@ pub(in crate::http) struct FloorPublishSummary {
 /// Compiles one store's areas, tables, stations and routing into its `floor` and `stations` nodes.
 ///
 /// Per store, like [`permissions_nodes`] and for the same reason: every shop's plan is its own. A
-/// batch ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4) calls this
+/// batch ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4) calls this
 /// once per member — the instruction "recompile each of these shops' own floors" carries nothing
 /// store-specific even though every result does.
 ///

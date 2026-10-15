@@ -46,7 +46,7 @@ struct CreateTerminalResponse {
 }
 
 /// A super-admin creates an approved `terminal` device
-/// ([ADR-0112](../../../../../docs/adr/0112-print-agents.md)).
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
 ///
 /// Behind `ManageDevices` rather than `PublishConfig`, and audited, because this is the human gate:
 /// nothing on a LAN announces itself as a till, so there is no proposal for an operator to approve
@@ -198,7 +198,7 @@ pub(super) struct SetReceiptRequest {
 )]
 /// A super-admin says which printer a till's receipts, receipt copies and pre-bills go to, and the
 /// languages they print in
-/// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 4).
 ///
 /// The paper's guards, for the paper's reasons: `ManageDevices`, an `If-Match`, and an audit entry.
@@ -391,7 +391,7 @@ pub(super) struct SetFloatRequest {
     tag = "printers",
 )]
 /// A super-admin says what a till's drawer opens with by default
-/// ([ADR-0167](../../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4).
 ///
 /// The receipts' guards, for the receipts' reasons: `ManageDevices`, an `If-Match`, and an audit
 /// entry, since the float is the cash the Shift screen proposes a till's drawer start with. The

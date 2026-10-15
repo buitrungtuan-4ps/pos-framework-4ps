@@ -30,7 +30,7 @@ pub(in crate::http) struct RegisterWebhookRequest {
     /// The store whose event log the endpoint follows (a 26-character ULID).
     store_id: String,
     /// The destination URL. Must be `https`, must carry no credentials, and must resolve only to
-    /// public-unicast addresses — vetted here before the endpoint is stored ([ADR-0032](../../../../../docs/adr/0032-webhooks.md)).
+    /// public-unicast addresses — vetted here before the endpoint is stored ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
     url: String,
 }
 
@@ -59,7 +59,7 @@ pub(in crate::http) struct WebhookTenantQuery {
 ///
 /// Behind the session guard. The destination is SSRF-vetted before anything is stored: `https` only,
 /// no credentials, and every resolved address must be public unicast — so a webhook URL can never
-/// become a probe into the cloud's own network ([ADR-0032](../../../../../docs/adr/0032-webhooks.md)). The
+/// become a probe into the cloud's own network ([ADR-0032](../../../docs/adr/0032-webhooks.md)). The
 /// id and signing secret are minted at the edge; the secret in the `201` body is the only time it is
 /// visible, because the cloud stores it to *sign* with rather than to verify a hash of.
 pub(in crate::http) async fn admin_register_webhook<S, R, K, C, A, T, W>(
@@ -233,7 +233,7 @@ where
 
 /// Re-enables a webhook endpoint that a day of continuous failure had auto-disabled (super-admin
 /// only). Delivery resumes from the endpoint's stored cursor, so nothing that queued while it was
-/// down is skipped ([ADR-0032](../../../../../docs/adr/0032-webhooks.md)).
+/// down is skipped ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
 ///
 /// Tenant-scoped like deletion, but enforced differently: [`WebhookEndpointStore::set_disabled`]
 /// addresses an endpoint by id alone — the delivery task, which also calls it, holds no tenant — so

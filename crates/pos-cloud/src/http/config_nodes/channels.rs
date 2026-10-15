@@ -214,7 +214,7 @@ where
 }
 
 /// A super-admin publishes the origins a store's edge answers as its `origins` node
-/// ([ADR-0111](../../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// Every entry is validated here, against the very rule the edge applies
 /// ([`pos_proto::origins::validate_origins`]), so a typo is a `400` the operator sees rather than a

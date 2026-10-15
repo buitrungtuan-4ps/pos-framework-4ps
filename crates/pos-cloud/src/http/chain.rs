@@ -38,8 +38,8 @@ const CHAIN_FINDINGS_MAX_LIMIT: u32 = 500;
 /// Builds the chain-finding sub-router, stated independently of [`CloudApp`](crate::http::CloudApp).
 ///
 /// One route: `GET /admin/chain-findings`, the contradictions the cloud refused
-/// ([ADR-0131](../../../../docs/adr/0131-a-chained-event-log.md) decision 4,
-/// [ADR-0132](../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). Until this
+/// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4,
+/// [ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). Until this
 /// existed a finding reached a human only as a line in the server's log and a row nobody could
 /// read — which for a mechanism whose entire product is *being noticed* is most of the way to not
 /// having it.

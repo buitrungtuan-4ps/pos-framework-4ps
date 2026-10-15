@@ -44,7 +44,7 @@ struct InviteAdminResponse {
     expires_at_ms: i64,
 }
 
-/// Invites a new console admin ([ADR-0067](../../../../../docs/adr/0067-multi-admin-console-rbac.md)). Needs
+/// Invites a new console admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Needs
 /// `console.admins.invite` (owner or admin); only an owner may invite another owner, so an admin
 /// cannot escalate. Refuses an address that is already an admin. Returns the single-use token once.
 pub(in crate::http) async fn admin_invite_admin<S, R, K, C, A, T, W>(
@@ -264,7 +264,7 @@ impl fmt::Debug for AcceptInviteRequest {
 }
 
 /// Accepts an invitation and self-enrols the new admin — **pre-auth**: the invite token is the
-/// authorisation, so there is no session guard ([ADR-0067](../../../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// authorisation, so there is no session guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
 /// Mints the admin's own Argon2id password hash and TOTP secret exactly as first-boot enrolment does,
 /// claims the invite single-use, creates the admin, and returns the one-time TOTP enrolment. A bad or
 /// expired token is a generic `401`.

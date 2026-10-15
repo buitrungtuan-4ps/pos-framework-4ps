@@ -48,7 +48,7 @@ struct TranslationTenantQuery {
 }
 
 /// Builds the translation-grid sub-router, stated independently of [`CloudApp`](crate::http::CloudApp)
-/// ([ADR-0043](../../../../docs/adr/0043-translation-grid.md)).
+/// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)).
 ///
 /// A super-admin reads and replaces a tenant's whole grid behind the session guard; a `PUT` is
 /// validated so every key carries a non-empty `en` fallback before anything is stored. Like the other
@@ -156,7 +156,7 @@ where
         Err(refusal) => return refusal,
     };
     // The version the console read the grid at, or `None` from `If-Match: *` for a tenant that has
-    // authored no grid yet ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    // authored no grid yet ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
     // This route replaces a grid an operator edited cell by cell, so a second writer really does
     // destroy their work — unlike the CSV import below, which merges and can retry.
     let expected = match if_match_collection(&headers) {
@@ -216,7 +216,7 @@ where
     }
 }
 
-/// A super-admin exports a tenant's translation grid as CSV ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md),
+/// A super-admin exports a tenant's translation grid as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5). Behind [`ConsolePermission::ManageTranslations`] and audited (who exported which domain
 /// and how many rows, never the row contents). The grid is business copy (menu/UI strings), not
 /// personal data.
@@ -267,11 +267,11 @@ where
     csv_download_response("translations.csv", body)
 }
 
-/// The hard cap on a CSV import body ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md)): a
+/// The hard cap on a CSV import body ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)): a
 /// translation grid is small copy, so 4 MB is generous while bounding the parse.
 const MAX_CSV_IMPORT_BYTES: usize = 4 * 1024 * 1024;
 
-/// A super-admin dry-runs a translation-grid CSV import ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md),
+/// A super-admin dry-runs a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5): the server parses and classifies every row (would-create / would-update / rejected) and
 /// returns the report, **writing nothing**. Behind [`ConsolePermission::ManageTranslations`]; not
 /// audited (it changes nothing). The confirm step (`.../apply`) does the write.
@@ -313,7 +313,7 @@ where
     }
 }
 
-/// A super-admin applies a translation-grid CSV import ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md),
+/// A super-admin applies a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5) — the confirm after a dry-run. The valid rows are merged onto the tenant's grid (existing
 /// keys not in the file are preserved; rejected rows are skipped) and saved; rejected rows are reported,
 /// never written. Behind [`ConsolePermission::ManageTranslations`] and audited (the row counts, never
@@ -349,7 +349,7 @@ where
     // writer is not a lost update — it is a stale read, and re-reading fixes it. Retrying is the
     // right answer where refusing would be for `PUT /admin/translations`, because there is no
     // operator holding a version to be told about, and the rows to apply are in the request
-    // ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    // ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
     let mut applied = None;
     for _ in 0..CONDITIONAL_WRITE_ATTEMPTS {
         let loaded = match state.translations.load(tenant_id).await {

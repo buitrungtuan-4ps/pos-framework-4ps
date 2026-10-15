@@ -45,7 +45,7 @@ struct ClaimState<Cl, A, C> {
 }
 
 /// Builds the claim sub-router
-/// ([ADR-0148](../../../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+/// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
 ///
 /// A box installed with no store opens a claim on `/claim` and polls `/claim/{claim_id}/collect`.
 /// Neither is authenticated, as `/activate` is not: the box has no credential yet. `/claim` shares

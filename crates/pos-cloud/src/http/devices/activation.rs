@@ -35,7 +35,7 @@ struct ActivationState<X, A, C> {
     clock: C,
 }
 
-/// Builds the activation sub-router ([ADR-0050](../../../../../docs/adr/0050-activation-code-exchange.md)).
+/// Builds the activation sub-router ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 ///
 /// A super-admin issues a code bound to a device slot and can cancel a slot's pending code, both
 /// behind the `/admin` session guard. A device presents its code on `/activate` and receives its
@@ -305,7 +305,7 @@ where
 }
 
 /// The one generic activation refusal. A spent, revoked, unknown, or raced code all collapse to this,
-/// so a prober cannot tell them apart ([ADR-0050](../../../../../docs/adr/0050-activation-code-exchange.md)).
+/// so a prober cannot tell them apart ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
 fn activation_refused() -> Response {
     api_error(ErrorStatus::PermissionDenied, "activation refused")
 }

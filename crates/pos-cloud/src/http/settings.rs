@@ -63,7 +63,7 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
 }
 
 /// Builds the settings sub-router
-/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 3).
 ///
 /// A value is written once, at the tenant, a brand, a store group or one store, and every store it

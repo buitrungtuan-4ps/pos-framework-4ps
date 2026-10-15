@@ -41,7 +41,7 @@ use crate::http::{CloudApp, Json};
     tag = "devices",
 )]
 /// Which devices a store has admitted, which it has retired, and when
-/// ([ADR-0118](../../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
 ///
 /// The read that makes `device.admission.granted` and `device.admission.revoked` a feature rather
 /// than two events with no reader — the state the tree already had one of, and which that record

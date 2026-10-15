@@ -51,7 +51,7 @@ struct PublishCampaignsRequest {
     store_id: String,
 }
 
-/// Builds the campaign-publish sub-router ([ADR-0077](../../../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
+/// Builds the campaign-publish sub-router ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), M3).
 ///
 /// One route: assemble the tenant's authored campaigns into a `PublishedCampaigns`, write it as the
 /// store's `campaigns` config node, and version it through the config tree — the same node-merge the
@@ -93,7 +93,7 @@ where
 /// publishes.
 /// Compiles a tenant's authored promotions into the store's `campaigns` node, with the count.
 ///
-/// Shared with the batch fan-out ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
+/// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
 /// the node is the same at every member, so a batch compiles it once and writes it *N* times.
 pub(in crate::http) async fn campaigns_nodes<Camp>(
     campaigns: &Camp,

@@ -107,7 +107,7 @@ where
         );
     }
     // And the course it matches on must be one the tenant actually carries, and still carries
-    // ([ADR-0130](../../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+    // ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
     //
     // Refused at the write rather than at publish, the way the menu graph's cycle is (`would_cycle`)
     // and for the same reason: a rule that can never match is a rule an operator will never find out

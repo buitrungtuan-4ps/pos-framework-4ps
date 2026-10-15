@@ -54,7 +54,7 @@ where
 ///
 /// The tenant then gets its six starting roles, one for each of `pos-core`'s built-in roles,
 /// granting what the catalogue's defaults say ([`crate::starting_roles`],
-/// [ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). They are
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). They are
 /// audited as one `role.seed` entry carrying their ids and counts. The tenant exists whatever the
 /// seeding does, so a seeding failure is logged rather than refused: the tenant then starts with
 /// fewer roles, and its owner creates the rest in People.

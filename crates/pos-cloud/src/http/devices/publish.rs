@@ -52,7 +52,7 @@ struct PublishDevicesRequest {
 }
 
 /// Builds the device-publish sub-router
-/// ([ADR-0100](../../../../../docs/adr/0100-receipt-and-ticket-printing.md), C2 slice 2b).
+/// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md), C2 slice 2b).
 ///
 /// Separate from [`device_router`](crate::http::device_router) because it needs the config tree, which the propose/approve
 /// surface does not — the same split [`floor_publish_router`](crate::http::floor_publish_router) makes for the same reason.
@@ -84,7 +84,7 @@ where
 }
 
 /// Compiles a store's **approved** devices into its `devices` config node and versions it
-/// ([ADR-0100](../../../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+/// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 ///
 /// The same load→compile→write→version shape as the floor publish beside it, onto the `devices` key.
 /// A device whose stored `kind` or `connection` this build does not know keeps its token through
@@ -206,7 +206,7 @@ where
 /// A `terminal` is the one exception, and the exception does not widen the rule: that rule exists to
 /// stop a USB printer's cash drawer being silently published as a network device's, and a terminal
 /// has neither a drawer nor an address to guess. Nothing dials it — the agent connects outbound to
-/// the edge ([ADR-0112](../../../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
+/// the edge ([ADR-0112](../../../docs/adr/0112-print-agents.md)) — so `DEVICE_CONNECTION_UNSPECIFIED`
 /// is not a guess here, it is the accurate answer.
 pub(in crate::http) fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
     PublishedDevices::new(with_listed_receipt_printers(

@@ -54,7 +54,7 @@ use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore};
 /// A write republishes every store it reaches by itself. What it cannot see is a store that moved:
 /// a store given another brand, or added to or removed from a store group, keeps the values it was
 /// last published until this runs for it, as a group's batch publish works
-/// ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
 pub(super) async fn admin_publish_settings<St, Rg, Grp, Cfg, A, C>(
     State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
     headers: HeaderMap,

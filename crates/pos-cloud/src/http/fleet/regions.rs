@@ -24,7 +24,7 @@ use crate::http::{Json, not_found};
 use crate::lease::{RegionAcknowledgement, RegionAcknowledgementStore};
 
 /// What a console sends to answer a store's region warning
-/// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// **The two country codes are the precondition, and they are in the body rather than in an
 /// `If-Match` header.** ADR-0114's Consequences said `If-Match`; the code does not, and the reason
@@ -149,7 +149,7 @@ struct RegionDifference {
     tag = "fleet",
 )]
 /// An admin records why a store's region difference is correct
-/// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Behind [`ConsolePermission::ManageStores`] rather than `PublishConfig`: this is a judgement about
 /// where a store's data may rest, which is the same judgement the bump that put it there was, and
@@ -286,7 +286,7 @@ where
 }
 
 /// The country a store's published `locale` node names, or `None` when it has never published one
-/// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
 /// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant

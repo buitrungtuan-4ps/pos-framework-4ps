@@ -27,7 +27,7 @@ use crate::http::{
 /// Signs a super-admin in: a two-factor login that, on success, sets a host-only session cookie.
 ///
 /// The session token is minted here — a 256-bit CSPRNG value, at the binary edge — and passed to
-/// [`login`], which stores only its hash ([ADR-0034](../../../../../docs/adr/0034-super-admin-auth.md)); the
+/// [`login`], which stores only its hash ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)); the
 /// browser gets the token in a `__Host-` cookie. Every credential failure is one generic `401`; a
 /// store outage is a `503`. Described in the console document (`/admin/openapi.json`), not the
 /// integrator one.
@@ -105,7 +105,7 @@ where
 
 /// First-boot super-admin enrolment.
 ///
-/// [ADR-0045](../../../../../docs/adr/0045-first-boot-admin-enrolment.md).
+/// [ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md).
 ///
 /// Token-gated and self-disabling: `404` when no setup token is configured, `401` on a token mismatch
 /// (compared in constant time), `400` if the chosen password is shorter than [`MIN_PASSWORD_LEN`],
@@ -168,7 +168,7 @@ where
         return service_unavailable("setup");
     };
     // `admin_users` first, because since
-    // [ADR-0119](../../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) that row *is* the
+    // [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) that row *is* the
     // credential sign-in reads. It was written second and best-effort while `super_admin` was the
     // authority; leaving that order would have made a store blip here enrol an operator who could
     // then never sign in. `create_admin_user` is first-writer-wins on the `lower(email)` unique
@@ -279,7 +279,7 @@ where
 /// The acting admin's own identity — id, email, name, role, status.
 ///
 /// So a console can label the signed-in operator and show only the areas their role grants
-/// ([ADR-0067](../../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available
+/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 7). Self-service: available
 /// to any authenticated admin regardless of role, so it is gated by the plain session guard rather
 /// than a [`ConsolePermission`]. It returns the same credential-free [`AdminUser`] shape the roster
 /// lists — never a password hash or a TOTP secret — and role gating in the console is only a UX

@@ -28,7 +28,7 @@ use crate::http::{Json, unprocessable_violations};
 
 /// What publishing a candidate node *would* change, computed without minting a version or saving:
 /// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
-/// console can show a real before/after before anyone commits ([ADR-0077](../../../../../docs/adr/0077-campaigns-and-scheduling.md)).
+/// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
 #[derive(Debug, Clone, serde::Serialize)]
 pub(in crate::http) struct ConfigPreview {
     /// The version the diff is computed against — the store's current version — or `null` when the
@@ -180,7 +180,7 @@ struct NodePreview {
 /// hash. Publishing that node shows nobody any of them, and `PublishConfig` is Ops's permission
 /// too, so the diff gets a config read's treatment ([`staff_redacted_for`]): never a PIN hash, and
 /// a name or code only for a role holding [`ConsolePermission::ReadPeople`]
-/// ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every
 /// node's preview is redacted, not only that one's: a store with layers and no published version
 /// has nothing to diff against, so the diff of any node is the whole document, staff included.
 ///

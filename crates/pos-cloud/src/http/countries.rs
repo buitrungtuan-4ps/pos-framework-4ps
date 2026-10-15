@@ -27,7 +27,7 @@ use crate::auth::console_rbac::ConsolePermission;
 /// quoting habit fix. What the platform can serve — not a per-store setting, and not fiscalization.
 ///
 /// The last three are what make a country **choosable** rather than merely listed
-/// ([ADR-0105](../../../../docs/adr/0105-a-country-pack-is-values.md)): a store-settings form reads them
+/// ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)): a store-settings form reads them
 /// to fill its own fields in, so provisioning a Japanese shop does not depend on somebody remembering
 /// that Japanese prices are tax-inclusive.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,7 +36,7 @@ struct CountryView {
     display_name: String,
     currency_code: String,
     /// How many decimal places that currency has
-    /// ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)). Beside the
+    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)). Beside the
     /// code because the console's own money fields edit minor units and need the same fact the till
     /// does.
     currency_exponent: u8,
@@ -60,7 +60,7 @@ struct CountryState<A, C> {
     clock: C,
 }
 
-/// Builds the countries/locales sub-router ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md), M4).
+/// Builds the countries/locales sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
 ///
 /// `GET /admin/countries` lists the compiled country modules; `GET /admin/locales` lists the content
 /// locales the platform can serve (each module's preferred language plus the enforced `en` fallback,

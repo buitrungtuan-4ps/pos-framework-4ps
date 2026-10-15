@@ -44,7 +44,7 @@ struct PublishTaxRequest {
     store_id: String,
 }
 
-/// Builds the tax-publish sub-router ([ADR-0074](../../../../../docs/adr/0074-localization-and-tax.md), M4).
+/// Builds the tax-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
 ///
 /// One route: assemble the tenant's authored `(tax class × channel)` rates into a `TaxRateTable`, write
 /// it as the store's `tax` config node, and version it through the config tree — the node-merge the
@@ -81,7 +81,7 @@ where
 ///
 /// A read, not a write: the publish composes the node from whatever the table holds now, so the
 /// version it was read at is nothing this path can use. Shared with the batch fan-out
-/// ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) — the node is the
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) — the node is the
 /// same at every member, so a batch compiles it once.
 pub(in crate::http) async fn tax_nodes<Tax>(
     tax_rates: &Tax,

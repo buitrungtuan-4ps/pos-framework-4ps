@@ -21,7 +21,7 @@ use crate::config_tree::ConfigTreeState;
 pub(in crate::http) type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// One node kind a batch publish can deliver
-/// ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
 ///
 /// # Why a registry of trait objects and not thirteen routes
 ///

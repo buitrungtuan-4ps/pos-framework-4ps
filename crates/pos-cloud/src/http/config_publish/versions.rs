@@ -279,7 +279,7 @@ where
 /// Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's
 /// effective document is re-published as a *new* current version, so nothing in the history is altered
 /// or removed and the store pulls the restored config on its next sync. The action is audited as
-/// `config.rollback` ([ADR-0069](../../../../../docs/adr/0069-audit-trail.md)). `404` if the store or the
+/// `config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). `404` if the store or the
 /// named version is unknown.
 pub(in crate::http) async fn admin_config_rollback<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,

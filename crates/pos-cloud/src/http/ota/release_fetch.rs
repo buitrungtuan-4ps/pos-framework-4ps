@@ -43,7 +43,7 @@ struct OtaReleaseFetchState<B, L, A, C, S> {
 /// A `POST /admin/ota/releases/fetch` body: which version to go and get.
 ///
 /// `release` is spelled the way the registry keys it and a rollout's `target_version` names it —
-/// bare, without a leading `v` ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md)
+/// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). Which tag that is on the forge is the source's business, and it tries both.
 #[derive(Debug, Clone, Deserialize)]
 struct FetchReleaseRequest {
@@ -64,7 +64,7 @@ struct FetchedArtifactResponse {
 }
 
 /// Builds the `/admin` release-fetch sub-router — the door that does not need the operator to hold
-/// the bytes ([ADR-0088](../../../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+/// the bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
 ///
 /// Merged wherever `[artifacts]` is, and `source` is `None` when no `[release_source]` is
 /// configured. That is the opposite posture from the *store-facing* artifact route, deliberately:

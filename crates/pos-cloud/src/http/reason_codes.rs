@@ -114,7 +114,7 @@ impl ReasonCodeAuditSummary {
 }
 
 /// Builds the reason-code sub-router
-/// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), B2.2 slice 3).
+/// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), B2.2 slice 3).
 ///
 /// Per-record CRUD over a tenant's managed reason codes — the list a void, a discount, a comp, a
 /// refund, a drawer opening, a staff rejection, either cash movement and either stock correction

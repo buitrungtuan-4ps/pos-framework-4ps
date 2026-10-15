@@ -58,7 +58,7 @@ pub(crate) use publish::__path_admin_publish_to_store_group;
 
 // --- Store groups (`/admin/store-groups`, ADR-0122) ---------------------------------------------
 
-/// The most stores one group may hold ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §8).
+/// The most stores one group may hold ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §8).
 ///
 /// A batch publish runs synchronously inside its request and fans out over the membership, so the
 /// cap is what keeps that request finite: at roughly 10–30 ms per store publish, 200 is a handful of
@@ -90,7 +90,7 @@ struct StoreGroupState<Grp, Reg, Cfg, A, C> {
 }
 
 /// What a change to a group's membership asks of the people side
-/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decisions 3 and 7): an assignment that names the group reaches each store it holds, so a store
 /// that joins or leaves the group gains or loses those people, and is told at once.
 ///
@@ -203,7 +203,7 @@ struct SetStoreGroupMembersRequest {
     store_ids: Vec<String>,
 }
 
-/// Builds the store-group sub-router ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+/// Builds the store-group sub-router ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
 ///
 /// CRUD over the cohorts a tenant publishes to. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); the
 /// writes are behind [`ConsolePermission::ManageStores`](crate::auth::console_rbac::ConsolePermission::ManageStores), the same permission that creates and
@@ -215,7 +215,7 @@ struct SetStoreGroupMembersRequest {
 ///
 /// `people` is the roster a membership change reaches: a store that joins or leaves a group some
 /// assignment names is published its `permissions` node at once
-/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 pub fn store_group_router<Grp, Reg, Cfg, P, A, C>(
     groups: Grp,
     registry: Reg,

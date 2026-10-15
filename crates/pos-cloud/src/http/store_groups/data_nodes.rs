@@ -170,7 +170,7 @@ where
 
 // The prerequisite table moved to `config_tree` when releases became its third reader: a release has
 // to apply `tax` before `menu` as well as refuse a `menu` without one, and a table beside any one of
-// its readers is a table the other two can drift from ([ADR-0125](../../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6).
+// its readers is a table the other two can drift from ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6).
 // [`BatchNode::prerequisites`] explains the four candidate rules that were examined and deliberately
 // not adopted.
 use crate::config_tree::prerequisites_for;

@@ -43,7 +43,7 @@ struct PeoplePublishState<P, Cfg, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// Builds the people-publish sub-router ([ADR-0070](../../../../../docs/adr/0070-people-and-access.md) slice 5).
+/// Builds the people-publish sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md) slice 5).
 ///
 /// One route: compile a store's people + roles + assignments into the edge-shaped `permissions`
 /// document and write it onto the store's `permissions` config node, versioned through the config tree
@@ -87,7 +87,7 @@ struct PublishPermissionsRequest {
 ///
 /// Unlike the other twelve batchable nodes this one is genuinely **per store**: the assignments and
 /// therefore the document differ at every member, so a batch calls this once per store rather than
-/// compiling once and fanning out ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
+/// compiling once and fanning out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
 /// The instruction is still store-agnostic — "recompile each of these shops' own rosters" — which
 /// is what makes it batchable at all.
 pub(in crate::http) async fn permissions_nodes<P>(
@@ -198,7 +198,7 @@ where
 
 /// The collaborators a `permissions` publish needs, borrowed from whichever route's state holds
 /// them: the people publish's, and the people routes' own, whose removals and archives publish at
-/// once ([ADR-0158](../../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// once ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 7).
 ///
 /// One publish for both is the point. A store is sent the node its people compile to, written and

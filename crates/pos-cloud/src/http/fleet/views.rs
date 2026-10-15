@@ -42,7 +42,7 @@ pub(super) struct FleetStoreView {
     /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
     outbox_reported_at_ms: Option<i64>,
     /// The print agents the store last reported, or `null` if it never has
-    /// ([ADR-0112](../../../../../docs/adr/0112-print-agents.md)).
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
     ///
     /// `null` and `[]` are different answers and the console renders them differently: `null` is a
     /// store that has said nothing about agents — every store whose edge runs in the shop, and every
@@ -52,7 +52,7 @@ pub(super) struct FleetStoreView {
     /// beat that carried it, so the instant travels with the list.
     print_agents_reported_at_ms: Option<i64>,
     /// The lease generation the box last reported holding
-    /// ([ADR-0108](../../../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
+    /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
     lease_generation_held: Option<u64>,
     /// Unix ms of the heartbeat that reported it, or `null`.
@@ -70,7 +70,7 @@ pub(super) struct FleetStoreView {
     /// badge on every store the day this shipped.
     lease_superseded: bool,
     /// Where the machine holding the authoritative generation runs — the `EDGE_PLACEMENT_*` token,
-    /// or `null` ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    /// or `null` ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
     /// `null` covers two different things on purpose, and the console must not read it as a mode:
     /// the cloud has never bumped this store, or the stored token is one this build cannot decode.
@@ -83,7 +83,7 @@ pub(super) struct FleetStoreView {
     /// undecodable token with the hosted case rather than the in-store one.
     edge_placement: Option<&'static str>,
     /// Where in the world that machine is — its ISO 3166-1 alpha-2 country — or `null`
-    /// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// `null` for a store nobody has bumped, for one whose edge placement is in-store (the machine
     /// is in the shop and has no region), and for a row written before migration `0058`. All three
@@ -98,7 +98,7 @@ pub(super) struct FleetStoreView {
     /// fleet page open, not afterwards.
     region_label: Option<String>,
     /// The country this store publishes in its `locale` node
-    /// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// **Present only on the single-store read**, which is the one route that loads a store's
     /// configuration; the listing omits the key entirely rather than sending `null`, so a console
@@ -108,7 +108,7 @@ pub(super) struct FleetStoreView {
     pub(super) profile_country: Option<String>,
     /// Whether the region agrees with that country — `agrees`, `differs`, `country-not-recorded` —
     /// or absent when there is nothing to compare
-    /// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// Derived by [`region_agreement`] rather than in the console, for the reason `handover` beside
     /// it is: the third case is the one that is easy to get wrong, and getting it wrong means a
@@ -119,7 +119,7 @@ pub(super) struct FleetStoreView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) region_agreement: Option<&'static str>,
     /// The answer somebody recorded for **this** difference, or absent
-    /// ([ADR-0114](../../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// Present only when a stored acknowledgement names the same two country codes the store has
     /// right now. An answer written about a difference the store no longer has is not returned —
@@ -130,7 +130,7 @@ pub(super) struct FleetStoreView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) region_acknowledgement: Option<RegionAcknowledgementView>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
-    /// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
     /// Shown beside [`handover`](Self::handover) rather than in place of it: the state says *what*
     /// is happening and this says *which machine* it is about, which is the number an operator needs
@@ -138,7 +138,7 @@ pub(super) struct FleetStoreView {
     lease_superseded_generation: Option<u64>,
     /// Which state this store's handover is in — `taking-over`, `settled`, `retired` — or `null`
     /// when it has never had one
-    /// ([ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
     /// Derived here, not stored, exactly as `online` and `config_current` are, and by
     /// [`handover_state`] so the console never re-implements the rule — in particular the same-beat

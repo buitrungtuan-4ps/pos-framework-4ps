@@ -58,7 +58,7 @@ struct IntegrationsPublishSummary {
 }
 
 /// Builds the integrations-publish sub-router
-/// ([ADR-0153](../../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 5).
+/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 5).
 ///
 /// One route: resolve which of the tenant's connections serve one store — its own, its brand's, its
 /// tenant's, one per exclusive family — and write the `integrations` node onto that store's Store

@@ -26,7 +26,7 @@ use crate::lease::{LeaseBumpOutcome, LeaseStore, lease_node, resolve_region};
 use crate::ota::ArtifactStore;
 
 /// `POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it
-/// ([ADR-0108](../../../../../docs/adr/0108-the-lease-generation-is-authority.md)).
+/// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
 ///
 /// This is the act of saying **"a different machine is the store now"**. One request does two things
 /// that must not drift apart: it advances the authoritative counter in `store_lease`, and it
@@ -47,7 +47,7 @@ use crate::ota::ArtifactStore;
 ///
 /// # The third thing that must not drift apart
 ///
-/// [ADR-0110](../../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) makes *where* the store
+/// [ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) makes *where* the store
 /// runs an attribute of the store, and this route the only writer of it. A body naming
 /// `edge_placement` is a **move**; a body omitting it is a swap in place, and keeps whatever the
 /// store had. Either way the value is written inside the bump's own statement, so a reader can never

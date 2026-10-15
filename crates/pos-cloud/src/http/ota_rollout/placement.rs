@@ -22,7 +22,7 @@ use crate::lease::LeaseStore;
 use crate::ota::ArtifactStore;
 
 /// Composes a `device_ota` node onto a store's **Device** layer and publishes it — the placement half
-/// of the rollout decision ([ADR-0052](../../../../../docs/adr/0052-ota-rollout-config.md)). Same
+/// of the rollout decision ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)). Same
 /// load→merge→publish→version shape as the rollout lever, on a different layer and key, so the store's
 /// other Device-level settings survive. The config tree's `CapabilityValidator` checks the node before
 /// it commits, so a ring that names no ring or a bucket past 99 is a `422` carrying the reasons.

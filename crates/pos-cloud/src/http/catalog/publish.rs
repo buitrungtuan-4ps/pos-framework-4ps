@@ -50,16 +50,16 @@ struct CatalogPublishState<Cat, F, Rg, Cfg, A, C> {
     audit: Arc<dyn AuditRecorder>,
 }
 
-/// Builds the catalog publish sub-router ([ADR-0066](../../../../../docs/adr/0066-cloud-catalog.md)).
+/// Builds the catalog publish sub-router ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
 ///
 /// The step that turns authored catalog into what a store actually pulls: compile a menu into a
 /// per-channel [`pos_proto::MenuBook`] and write it onto the `menu` node of the store's **Store**
 /// config layer, so it rides the config tree to the store like every other configuration change
-/// ([ADR-0033](../../../../../docs/adr/0033-config-tree.md)) — no new channel. It is a separate sub-router
+/// ([ADR-0033](../../../docs/adr/0033-config-tree.md)) — no new channel. It is a separate sub-router
 /// because it needs the config-tree store the CRUD routes do not.
 ///
 /// The store's `fees` node goes in the same version
-/// ([ADR-0159](../../../../../docs/adr/0159-a-fee-is-configuration.md)): a fee rule naming a category is
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)): a fee rule naming a category is
 /// compiled into the items the category holds, so the publish that adds an item to a store is the
 /// one that brings its fees along. That is what the fee rules and the registry are for.
 pub fn catalog_publish_router<Cat, F, Rg, Cfg, A, C>(
@@ -113,7 +113,7 @@ struct PublishMenuRequest {
 /// Compiles a tenant's catalog into the `menu` and `layout` nodes one publish writes.
 ///
 /// Both keys move together and neither names a store, which is what makes a menu the headline
-/// batchable node ([ADR-0122](../../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4):
+/// batchable node ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4):
 /// a batch compiles the book once and writes the identical document to every member.
 pub(in crate::http) async fn menu_nodes<Cat>(
     catalog: &Cat,

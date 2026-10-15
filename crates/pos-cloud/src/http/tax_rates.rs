@@ -56,12 +56,12 @@ struct TaxRateView {
     sales_channel: String,
     rate_bps: u32,
     /// The named parts the invoice prints, which must sum to `rate_bps`
-    /// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty for a rate
+    /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). Empty for a rate
     /// printed as one line, which is most of the world.
     components: Vec<TaxComponentView>,
     /// `true` when one of `components` is named with anything but a [`TaxComponentName`]: two to
     /// eight upper-case letters and digits, starting with a letter
-    /// ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
+    /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
     ///
     /// Only a row saved before the grid checked names can be so. It is kept as it was saved, and
     /// its stores charge its rate without a breakdown. A save replaces the whole grid and refuses
@@ -100,7 +100,7 @@ struct TaxRateRowRequest {
     components: Vec<TaxComponentView>,
 }
 
-/// Builds the tax-rate sub-router ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md), M4).
+/// Builds the tax-rate sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
 ///
 /// One resource: the tenant's per-(tax class × channel) rate table. `GET` lists it (behind
 /// [`ConsolePermission::Read`]); `PUT` replaces it wholesale (behind
@@ -155,7 +155,7 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
 }
 
 /// Checks one row's breakdown and returns the components to store
-/// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
+/// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
 ///
 /// The invariant is that the parts sum to the row's own rate, and it is checked **here**, where the
 /// table is authored, rather than at the till. A row that fails it would print an invoice whose
@@ -165,7 +165,7 @@ fn tax_rate_view(entry: &TaxRateEntry) -> TaxRateView {
 ///
 /// A name, trimmed as it is stored, must be a [`TaxComponentName`], because a settled bill records
 /// and the reports sum a component under its name, and record nothing for a name that is not one
-/// ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
+/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 2).
 /// The refusal names the row by its class and channel and states the rule, and never the name,
 /// which neither a response nor the log carries.
 ///
@@ -327,7 +327,7 @@ where
             let response = (StatusCode::OK, Json(view)).into_response();
             // The collection is the entity, so its version rides on the response's `ETag` rather
             // than inside the body — the body is a JSON array, which has nowhere to put a field
-            // ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)). A tenant
+            // ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)). A tenant
             // that has never saved rates has no version, and sends `If-Match: *` to say so.
             match version {
                 Some(version) => with_etag(response, &version),
@@ -372,7 +372,7 @@ where
         Err(refusal) => return refusal,
     };
     // The version the console read the grid at, or `None` from `If-Match: *` for a tenant that has
-    // never saved rates ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
+    // never saved rates ([ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)).
     let expected = match if_match_collection(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
