@@ -517,9 +517,10 @@ fn registered_admin_paths() -> std::collections::BTreeSet<String> {
 /// The business-area crates whose routes `pos-cloud`'s router mounts, each declaring them in its own
 /// `src/routes.rs` and `src/routes/` (ADR-0170 decision 4).
 #[cfg(test)]
-const ROUTE_CRATES: [&str; 3] = [
+const ROUTE_CRATES: [&str; 4] = [
     "pos-cloud-catalog",
     "pos-cloud-devices",
+    "pos-cloud-floor",
     "pos-cloud-inventory",
 ];
 

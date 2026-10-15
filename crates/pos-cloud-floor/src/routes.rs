@@ -38,7 +38,7 @@ mod tables;
 
 pub use publish::floor_publish_router;
 // What the batch fan-out uses.
-pub(super) use publish::floor_nodes;
+pub use publish::floor_nodes;
 pub use table_qr::table_qr_router;
 
 // --- Floor & kitchen master data (`/admin/floor`, `/admin/kitchen`, ADR-0072) -------------------

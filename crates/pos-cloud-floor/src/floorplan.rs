@@ -293,8 +293,8 @@ pub struct StationUpdate {
     pub status: EntityStatus,
 }
 
-/// A routing rule's identifier — a ULID minted at creation. Cloud-local (like
-/// [`EmployeeId`](crate::people::EmployeeId)): a rule is authoring-only and compiles into the
+/// A routing rule's identifier — a ULID minted at creation. Cloud-local (like `pos-cloud`'s
+/// `people::EmployeeId`): a rule is authoring-only and compiles into the
 /// `stations` node's flat routing list, which carries no rule id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct RoutingRuleId(Ulid);

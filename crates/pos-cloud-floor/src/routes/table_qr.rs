@@ -16,9 +16,9 @@ use super::{floor_error_response, floor_tenant_store};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::floorplan::TableStore;
-use crate::http::Json;
 use crate::qr::{TableTokenSecret, mint_table_token};
 use crate::registry::EntityStatus;
+use axum::Json;
 
 // --- Table QR tokens (`/admin/floor/qr`, ADR-0072 + ADR-0057) -----------------------------------
 

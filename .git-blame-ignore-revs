@@ -127,3 +127,6 @@ cdfcce9ecc028ddef34e26f503f88ba7495bec89
 
 # #823 — printing, the print-agent lane and its queue move into pos-edge-printing
 b7557135b309c466797e6123ca17e2f2aad5d8a8
+
+# #824 — the catalog with its fees, media, tax rates and translations move into pos-cloud-catalog
+967776d44cdda801a115f54caaec1b2bd0026ebd

@@ -26,7 +26,10 @@ use crate::floor_compiler::{compile_floor, compile_stations};
 use crate::floorplan::{
     Area, AreaStore, RoutingRuleStore, Station, StationStore, Table, TableStore,
 };
-use crate::http::{Json, PublishedConfig, publish_config_nodes, unprocessable_violations};
+use axum::Json;
+use pos_cloud_api::refusal::unprocessable_violations;
+use pos_cloud_config::publish::publish_config_nodes;
+use pos_cloud_config::route::PublishedConfig;
 
 // --- Floor & kitchen publish (`/admin/floor/publish`, ADR-0072) ---------------------------------
 
@@ -87,7 +90,7 @@ where
 /// backup): an invalid plan is a `422` with the violated rules, never a stored state.
 /// How big the plan a floor publish compiled was — for the audit trail, never the plan itself.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
-pub(in crate::http) struct FloorPublishSummary {
+pub struct FloorPublishSummary {
     areas: usize,
     tables: usize,
     stations: usize,
@@ -95,14 +98,19 @@ pub(in crate::http) struct FloorPublishSummary {
 
 /// Compiles one store's areas, tables, stations and routing into its `floor` and `stations` nodes.
 ///
-/// Per store, like [`permissions_nodes`] and for the same reason: every shop's plan is its own. A
-/// batch ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4) calls this
-/// once per member — the instruction "recompile each of these shops' own floors" carries nothing
-/// store-specific even though every result does.
+/// Per store, like `pos-cloud`'s `permissions_nodes` and for the same reason: every shop's plan is
+/// its own. A batch ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4)
+/// calls this once per member — the instruction "recompile each of these shops' own floors"
+/// carries nothing store-specific even though every result does.
 ///
 /// The §10 referential validation runs before anything is written, so the cloud never publishes a
 /// plan that names a station, backup, or area that does not exist.
-pub(in crate::http) async fn floor_nodes<F>(
+///
+/// # Errors
+///
+/// The response to answer with: `503` when the floor store fails or a node does not serialise,
+/// `422` when the plan fails the referential validation.
+pub async fn floor_nodes<F>(
     floor: &F,
     tenant_id: TenantId,
     store_id: StoreId,

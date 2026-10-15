@@ -110,7 +110,6 @@ mod config_nodes;
 mod config_publish;
 mod countries;
 mod fleet;
-mod floor;
 mod health;
 mod integrations;
 mod lease_bump;
@@ -275,8 +274,8 @@ use pos_cloud_api::paged::{
     offset_without_limit_refusal, page_bound_refusal, paged_ok, parse_page,
 };
 use pos_cloud_api::refusal::{
-    FieldRefusal, accepted_tokens, enum_refusal, not_found, optional_choice, parse_optional_ulid,
-    present_param, unprocessable_violations,
+    FieldRefusal, accepted_tokens, enum_refusal, not_found, parse_optional_ulid, present_param,
+    unprocessable_violations,
 };
 use pos_cloud_config::route::{
     PublishedConfig, RegistryTenantQuery, config_store_error_response, entity_status_refusal,
@@ -293,7 +292,10 @@ use pos_cloud_devices::routes as devices;
 // Moved to pos-cloud-catalog (ADR-0170 decision 4, ADR-0175); imported under their old names, so
 // `crate::http::catalog::…` and the routers keep their paths.
 use pos_cloud_catalog::routes::{catalog, fees, media, tax_rates, translations};
+// Moved to pos-cloud-floor; imported under its old name, so `crate::http::floor::…` and the
+// routers keep their paths.
 use pos_cloud_devices::routes::CLAIM_PATH;
+use pos_cloud_floor::routes as floor;
 use pos_cloud_reports::xz::admin_xz_report;
 
 use crate::registry::RegistryStore;

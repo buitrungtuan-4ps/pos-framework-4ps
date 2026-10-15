@@ -20,12 +20,12 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
 use crate::floorplan::{AreaStore, AreaUpdate, NewArea};
-use crate::http::{
-    Json, entity_status_refusal, if_match, not_found, parse_entity_status, version_mismatch,
-    versioned_ok, with_etag,
-};
 use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
+use axum::Json;
+use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
+use pos_cloud_api::refusal::not_found;
+use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
 pub(super) async fn admin_list_areas<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,

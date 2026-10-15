@@ -33,6 +33,7 @@ members = [
     "crates/pos-cloud-api",
     "crates/pos-cloud-config",
     "crates/pos-cloud-catalog",
+    "crates/pos-cloud-floor",
     "crates/pos-cloud-devices",
     "crates/pos-cloud-inventory",
     "crates/pos-cloud-reports",

@@ -1770,6 +1770,7 @@ dependencies = [
  "pos-cloud-catalog",
  "pos-cloud-config",
  "pos-cloud-devices",
+ "pos-cloud-floor",
  "pos-cloud-inventory",
  "pos-cloud-reports",
  "pos-contract-tests",
@@ -1885,6 +1886,25 @@ dependencies = [
  "tokio",
  "tracing",
  "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-floor"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "hmac",
+ "pos-cloud-api",
+ "pos-cloud-catalog",
+ "pos-cloud-config",
+ "pos-core",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "store-postgres",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]
