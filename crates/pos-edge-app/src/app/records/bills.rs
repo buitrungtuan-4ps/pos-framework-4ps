@@ -49,9 +49,10 @@ pub(in crate::app) fn component_records(components: &[TaxComponentLine]) -> Vec<
         .collect()
 }
 
-/// [`fee_records`] for a screen: each fee named in `language` where the store's current rule
+/// `fee_records` for a screen: each fee named in `language` where the store's current rule
 /// translates it ([`EdgeSession::fee_translation`]), and as the bill froze it otherwise.
-pub(crate) fn fee_records_in(
+#[must_use]
+pub fn fee_records_in(
     totals: &BillTotals,
     session: &EdgeSession,
     language: Option<&str>,

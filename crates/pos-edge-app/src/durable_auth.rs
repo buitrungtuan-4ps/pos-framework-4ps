@@ -13,9 +13,9 @@
 //! which adapter implements it is decided by what `main.rs` composes, not by configuration.
 //!
 //! The reason a trait object is needed at all is a **`pos-edge`** constraint, so the abstraction
-//! belongs where the constraint lives: [`AppState`](crate::AppState) is not generic, and making it
-//! generic would ripple through [`crate::http::router`], both auth middlewares, and every test that
-//! builds a state. So the boxing happens here, paid once per pairing or sign-in rather than on a
+//! belongs where the constraint lives: `pos_edge::AppState` is not generic, and making it
+//! generic would ripple through `pos_edge::http::router`, both auth middlewares, and every test
+//! that builds a state. So the boxing happens here, paid once per pairing or sign-in rather than on a
 //! request path.
 //!
 //! # How the blanket implementation avoids a new parameter
@@ -39,7 +39,7 @@ use crate::app::Edge;
 /// A boxed future, as a trait object must return.
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// [`DeviceRegistry`] behind a trait object, so the non-generic [`AppState`](crate::AppState) can
+/// [`DeviceRegistry`] behind a trait object, so the non-generic `pos_edge::AppState` can
 /// hold one.
 ///
 /// Only the methods the edge actually calls are mirrored. `paired_devices` and `sign_ins` are here
@@ -47,7 +47,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// [`DeviceRegistry::device_for_token`] is deliberately **not** mirrored, and was removed once it
 /// was found to have no caller (production-readiness **X2**). The edge never resolves one digest
-/// against storage: [`Pairing::load`](crate::pairing::Pairing::load) reads the whole table once at
+/// against storage: `pos_edge::pairing::Pairing::load` reads the whole table once at
 /// boot and the request gate then answers from memory, which is the point of holding the map at
 /// all. A mirror nothing calls is worse than no mirror — it is surface an adapter author reads as a
 /// requirement, and its old doc here claimed a "boot path consistency check" that was never

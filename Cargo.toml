@@ -26,6 +26,7 @@ members = [
     "crates/adapters/shipping-ahamove",
     "crates/adapters/shipping-grabexpress",
     "crates/adapters/erp-sap",
+    "crates/pos-edge-app",
     "crates/pos-edge",
     "crates/pos-print-agent",
     "crates/pos-cloud-api",

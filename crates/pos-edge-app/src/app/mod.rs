@@ -51,11 +51,12 @@ mod shifts;
 mod views;
 
 pub use error::{AppError, Approval};
+pub(crate) use records::fee_records;
+pub use records::fee_records_in;
 use records::{
     BillRecord, LineRecord, LiveSnapshot, OrderOrigin, OrderSnapshot, SettleDrawer, SettledReceipt,
     ShiftRecord, StaffDecision, StaffStanding, another_till, is_till,
 };
-pub(crate) use records::{fee_records, fee_records_in};
 pub use roster::{StaffAuth, StaffRoster, StoreIdentity};
 pub use session::EdgeSession;
 pub use views::{
@@ -208,7 +209,7 @@ pub struct Edge<S> {
     identity: StoreIdentity,
     /// The live session (menu, tax table, capabilities, locale) an inbound `OrderIn` reprices from
     /// and every command reads. Behind an `RwLock<Arc<…>>` so the config-pull loop
-    /// ([`crate::config_client`], ADR-0033/ADR-0039) can swap in a rebuilt session while the store is
+    /// (`pos_edge::config_client`, ADR-0033/ADR-0039) can swap in a rebuilt session while the store is
     /// trading: a reader takes a cheap `Arc` snapshot ([`Edge::session`]) that is coherent for the
     /// duration of its command even if a swap lands mid-flight.
     session_cell: RwLock<Arc<EdgeSession>>,

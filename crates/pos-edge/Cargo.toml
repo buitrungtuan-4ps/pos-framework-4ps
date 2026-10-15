@@ -32,7 +32,7 @@ dev-ui  = []
 # (`.github/workflows/release.yml`), so a store's binary compiles none of it; a
 # `--workspace` build does turn it on, because the example in the same workspace asks
 # for it, exactly as `country-zz` behaves.
-demo-fixtures = []
+demo-fixtures = ["pos-edge-app/demo-fixtures"]
 # Country modules are selected per binary as a Cargo feature (ADR-0027): a cell
 # serves one country, so a fork enables one line and compiles nothing else.
 # `country-zz` is the reference module; the rest are real markets (ADR-0105).
@@ -50,6 +50,8 @@ pos-core    = { path = "../pos-core" }
 pos-ports   = { path = "../pos-ports" }
 pos-proto   = { path = "../pos-proto" }
 pos-country = { path = "../pos-country" }
+# The application layer: `Edge`, its commands, sign-in and the authorities (ADR-0170 decision 4).
+pos-edge-app = { path = "../pos-edge-app" }
 
 # Country modules, selected per binary as features (ADR-0027). Optional, so a fork
 # compiles only the ones it enables; `pos-country-zz` is the reference module.

@@ -279,7 +279,7 @@ pub struct EdgeSession {
     /// How often the store archives its database off the box, from the `backup` node
     /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
-    /// archive loop on this box's own interval ([`crate::backup_client`]).
+    /// archive loop on this box's own interval (`pos_edge::backup_client`).
     pub backup: PublishedBackup,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).

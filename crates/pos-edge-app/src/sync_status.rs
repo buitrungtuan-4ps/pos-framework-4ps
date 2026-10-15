@@ -12,7 +12,7 @@
 //!
 //! # Two facts, measured by the two things that already know them
 //!
-//! - **The cloud link** is what the outbox drain ([`crate::event_publish`]) last saw: a pass that
+//! - **The cloud link** is what the outbox drain (`pos_edge::event_publish`) last saw: a pass that
 //!   published or found nothing to publish means the link is up, a failed one means it is down. Not
 //!   a probe of its own: the drain already talks to the cloud every few seconds, and a second opinion
 //!   from a separate ping would be a way for the bar and the drain to disagree.
@@ -34,6 +34,10 @@ use std::sync::{Mutex, PoisonError};
 use tokio::time::Instant;
 
 use pos_proto::time::Timestamp;
+
+/// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
+/// into this crate so log filters and dashboards see the same target.
+const LOG_TARGET: &str = "pos_edge::sync_status";
 
 /// How many unsent events a store is planned to hold before its warning turns red and stays red.
 ///
@@ -211,7 +215,10 @@ impl SyncStatus {
         self.last_sync_ms
             .store(now.as_milliseconds_since_epoch(), Ordering::Relaxed);
         if before == CloudLink::Offline {
-            tracing::info!("sync: the cloud is reachable again; the outbox is draining");
+            tracing::info!(
+                target: LOG_TARGET,
+                "sync: the cloud is reachable again; the outbox is draining"
+            );
         }
     }
 
@@ -224,6 +231,7 @@ impl SyncStatus {
         );
         if before != CloudLink::Offline {
             tracing::warn!(
+                target: LOG_TARGET,
                 "sync: the cloud is unreachable; the store keeps selling and events wait in the outbox"
             );
         }
@@ -264,6 +272,7 @@ impl SyncStatus {
         if level > before {
             match level {
                 OutboxLevel::Beyond => tracing::error!(
+                    target: LOG_TARGET,
                     depth,
                     planned = OUTBOX_PLANNED_DEPTH,
                     "sync: the outbox is past the depth this store was planned for. The store is still \
@@ -271,6 +280,7 @@ impl SyncStatus {
                      the cloud has not heard from it for days: fix the link"
                 ),
                 OutboxLevel::High | OutboxLevel::Elevated => tracing::warn!(
+                    target: LOG_TARGET,
                     depth,
                     planned = OUTBOX_PLANNED_DEPTH,
                     level = level.as_wire(),
@@ -281,6 +291,7 @@ impl SyncStatus {
             }
         } else if level < before && level == OutboxLevel::Normal {
             tracing::info!(
+                target: LOG_TARGET,
                 depth,
                 "sync: the outbox is back under half its planned depth"
             );

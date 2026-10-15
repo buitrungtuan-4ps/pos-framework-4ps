@@ -231,7 +231,7 @@ impl<S: EventStore> Edge<S> {
     /// The event log this edge owns, lent read-only.
     ///
     /// The one caller is the outbox drain
-    /// ([`event_publish`](crate::event_publish), [ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)),
+    /// (`pos_edge::event_publish`, [ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)),
     /// which needs an [`EventStore`] handle to read `outbox_batch` and acknowledge what the cloud
     /// accepted. Lending the store beats threading a second handle through `serve()` — the `Edge`
     /// already owns it, and a borrow cannot append behind the application layer's back: every write

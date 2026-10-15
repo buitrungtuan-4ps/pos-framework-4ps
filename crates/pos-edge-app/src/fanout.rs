@@ -37,7 +37,7 @@
 //!
 //! Resuming from the durable event log instead, so that a restart could be ridden out as well, is
 //! roadmap-v3 **B6.5**, and it is not a cheap read: the log pages by `event_id`, which is not commit
-//! order (see `pos_ports::event_store`), and `/ws` is served over [`AppState`](crate::state::AppState),
+//! order (see `pos_ports::event_store`), and `/ws` is served over `pos_edge::state::AppState`,
 //! which holds no store.
 //!
 //! # One serialisation, many sends
@@ -78,7 +78,7 @@ pub type Frame = Arc<str>;
 /// The fan-out channel a request handler publishes to and every WebSocket subscribes to.
 ///
 /// Cloneable and cheap to clone: a clone is another handle to the one underlying channel and the one
-/// replay buffer, which is why it can live in [`AppState`](crate::state::AppState) and be handed to
+/// replay buffer, which is why it can live in `pos_edge::state::AppState` and be handed to
 /// every handler.
 #[derive(Debug, Clone)]
 pub struct Fanout {
