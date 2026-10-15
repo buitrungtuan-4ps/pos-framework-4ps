@@ -33,3 +33,8 @@ The cloud's `EventStore` over PostgreSQL, and the tables behind every other clou
 cargo test -p store-postgres
 DATABASE_URL=… cargo test -p store-postgres --features integration -- --test-threads=1
 ```
+
+`tests/integration.rs` runs every store against one shared database, which its cases truncate between
+them. `tests/migrate.rs` holds `PostgresStore::migrate` to the files in `migrations/`: each of its
+cases creates a database of its own and drops it afterwards, so the role in `DATABASE_URL` must be
+allowed to create databases.
