@@ -188,7 +188,7 @@ pub(super) fn hash_pin(pin: &str) -> Option<String> {
 }
 
 /// Maps any people-store failure to a retryable `503`, logging the detail rather than leaking it.
-pub(in crate::http) fn people_error_response(error: &impl std::fmt::Display) -> Response {
+pub fn people_error_response(error: &impl std::fmt::Display) -> Response {
     tracing::error!(%error, "a people & access store operation failed");
     api_error(
         ErrorStatus::Unavailable,

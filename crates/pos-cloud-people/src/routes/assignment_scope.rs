@@ -9,11 +9,11 @@ use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::{ErrorStatus, WireEnum};
 
 use super::requests::CreateAssignmentRequest;
-use crate::http::{accepted_tokens, enum_refusal};
 use crate::people::{
     AssignmentId, AssignmentScope, AssignmentScopeKind, EmployeeId, RoleTemplateId,
 };
 use crate::store_groups::StoreGroupId;
+use pos_cloud_api::refusal::{accepted_tokens, enum_refusal};
 
 /// The `409` an assignment earns where the person already holds one: a person holds one per store,
 /// one per group and one tenant-wide (ADR-0158 decision 3). It names the field that names the place,

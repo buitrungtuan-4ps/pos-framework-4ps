@@ -22,16 +22,15 @@ use super::requests::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
-use crate::http::{
-    entity_status_refusal, if_match, not_found, parse_entity_status, version_mismatch,
-    versioned_ok, with_etag,
-};
 use crate::people::{
     AssignmentStore, EmployeeStore, NewRoleTemplate, PermissionInfo, RoleTemplateId,
     RoleTemplateStore, is_known_permission, is_pin_flagged_permission, permission_catalogue,
 };
 use crate::registry::RegistryStore;
 use crate::version::UpdateOutcome;
+use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
+use pos_cloud_api::refusal::not_found;
+use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
 /// The `pos-core` permission catalogue (§9), for the console's role editor to offer. Behind `Read` and
 /// tenant-independent — the catalogue is the same for every tenant.

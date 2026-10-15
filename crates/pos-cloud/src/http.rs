@@ -116,7 +116,6 @@ mod lease_bump;
 mod locale_node;
 mod ota;
 mod ota_rollout;
-mod people;
 mod reason_codes;
 mod reconcile;
 mod registry;
@@ -207,7 +206,7 @@ pub use ota::{
     ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
 };
 pub use ota_rollout::ota_config_router;
-pub(crate) use people::{__path_admin_permissions_readiness, republish_people};
+pub(crate) use people::__path_admin_permissions_readiness;
 pub use people::{
     capabilities_router, config_capabilities_router, people_publish_router, people_router,
     permissions_readiness_router,
@@ -231,7 +230,7 @@ pub(crate) use settings::{
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
     __path_admin_put_setting, __path_admin_settings_catalogue,
 };
-use settings::{TenantLayout, settings_store_error_response};
+use store_groups::unknown_batch_node;
 pub(crate) use store_groups::{
     __path_admin_create_store_group, __path_admin_list_store_group_batches,
     __path_admin_list_store_groups, __path_admin_publish_to_store_group,
@@ -239,7 +238,6 @@ pub(crate) use store_groups::{
     __path_admin_update_store_group,
 };
 pub use store_groups::{BatchNode, BatchNodePlan, batch_nodes, store_group_router};
-use store_groups::{BoxFuture, store_group_error_response, unknown_batch_node};
 pub use subjects::subjects_router;
 pub use tax_rates::tax_rate_router;
 pub use translations::translation_router;
@@ -265,7 +263,7 @@ pub(crate) use pos_cloud_api::response::{
 // pos-cloud-api too; imported here, so `crate::http::not_found` and the rest still name them.
 use pos_cloud_api::conditional::{
     EntityTagRefusal, already_exists, if_match, parse_entity_tag, version_mismatch,
-    versioned_created, versioned_ok, with_etag,
+    versioned_created, versioned_ok,
 };
 use pos_cloud_api::console::random_hex_32;
 // What the configuration routes share, and the settings refusals, live in pos-cloud-config;
@@ -296,6 +294,9 @@ use pos_cloud_catalog::routes::{catalog, fees, media, tax_rates, translations};
 // routers keep their paths.
 use pos_cloud_devices::routes::CLAIM_PATH;
 use pos_cloud_floor::routes as floor;
+// Moved to pos-cloud-people; imported under its old name, so `crate::http::people::…` and the
+// routers keep their paths.
+use pos_cloud_people::routes as people;
 use pos_cloud_reports::xz::admin_xz_report;
 
 use crate::registry::RegistryStore;

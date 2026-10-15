@@ -70,6 +70,8 @@ pub use pos_cloud_catalog::{
 };
 // Moved to pos-cloud-floor (ADR-0170 decision 4); re-exported so their paths still work.
 pub use pos_cloud_floor::{floor_compiler, floorplan, qr};
+// Moved to pos-cloud-people (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_people::{people, people_compiler, people_readiness, people_republish};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
@@ -92,10 +94,6 @@ mod openapi;
 mod openapi_admin;
 pub mod orders;
 pub mod ota;
-pub mod people;
-pub mod people_compiler;
-pub mod people_readiness;
-pub mod people_republish;
 mod persistence;
 pub mod providers;
 pub mod qr_http;

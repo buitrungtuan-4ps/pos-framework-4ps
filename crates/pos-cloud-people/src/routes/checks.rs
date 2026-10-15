@@ -14,12 +14,13 @@ use pos_proto::ids::{StoreId, TenantId};
 use super::PeopleState;
 use super::requests::{UpdateRoleRequest, people_error_response};
 use super::roles::granted_with_approval;
-use crate::http::{not_found, registry_error_response, store_group_error_response};
 use crate::people::{
     AssignmentScope, AssignmentStore, EmployeeId, EmployeeStore, RoleTemplateId, RoleTemplateStore,
     RoleTemplateUpdate,
 };
 use crate::registry::{EntityStatus, RegistryStore};
+use pos_cloud_api::refusal::not_found;
+use pos_cloud_config::route::{registry_error_response, store_group_error_response};
 
 /// The update `PATCH /admin/roles/{role_id}` writes, and the stores it publishes to at once, from
 /// the request and the role as stored, read once before the write and `404` if there is none.

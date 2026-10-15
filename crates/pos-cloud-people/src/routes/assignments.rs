@@ -25,13 +25,13 @@ use super::requests::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
-use crate::http::{enum_refusal, not_found};
 use crate::people::{
     Assignment, AssignmentId, AssignmentScope, AssignmentScopeKind, AssignmentStore,
     AssignmentStoreError, EmployeeId, EmployeeStore, NewAssignment, RoleTemplateStore,
 };
 use crate::registry::RegistryStore;
 use crate::store_groups::StoreGroupId;
+use pos_cloud_api::refusal::{enum_refusal, not_found};
 
 /// A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store
 /// (`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a
