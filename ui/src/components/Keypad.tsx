@@ -39,7 +39,7 @@ export function Keypad(props: {
   // 56px keys and 8px gaps, the floor `docs/ui-ux.md` §2 sets for a cash keypad — above the 48px
   // touch minimum because this one is pressed repeatedly and under time pressure.
   const key =
-    "min-h-[56px] rounded-token border border-line bg-surface-raised text-xl font-semibold text-ink active:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent";
+    "min-h-[56px] rounded-token border border-line bg-surface-raised text-xl font-semibold text-ink active:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50";
 
   // Pressing a key must not take the caret out of the field it is filling. `pointerdown` is where a
   // button steals focus, so that is where it is refused — `click` still fires and still types.
@@ -70,6 +70,7 @@ export function Keypad(props: {
         class={key}
         onPointerDown={hold}
         aria-label={t("keypad.clear")}
+        disabled={props.value === ""}
         onClick={() => props.onChange("")}
       >
         {t("keypad.clear_short")}
@@ -87,6 +88,7 @@ export function Keypad(props: {
         class={key}
         onPointerDown={hold}
         aria-label={t("keypad.backspace")}
+        disabled={props.value === ""}
         onClick={() => props.onChange(props.value.slice(0, -1))}
       >
         ⌫
