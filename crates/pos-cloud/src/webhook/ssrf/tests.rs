@@ -142,6 +142,7 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
             ForbiddenReason::LinkLocal
         ))
     );
+    // ISATAP with u/g bits permutations (0x0100 and 0x0300).
     assert_eq!(
         classify_ip(ip("2606:2800:220:1:100:5efe:127.0.0.1")),
         Err(SsrfRejection::ForbiddenAddress(
@@ -194,6 +195,10 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
             ForbiddenReason::Loopback
         ))
     );
+}
+
+#[test]
+fn v6_teredo_and_compat_are_refused() {
     // IPv4-compatible IPv6 smuggling cases (`::a.b.c.d`).
     assert_eq!(
         classify_ip(ip("::127.0.0.1")),

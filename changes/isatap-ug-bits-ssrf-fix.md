@@ -1,5 +1,4 @@
 ---
-"pos-cloud": patch
+kind: security
 ---
-
-Fix SSRF bypass in `webhook::ssrf` for ISATAP IPv6 addresses with Universal/Group bit combinations `0x0100` and `0x0300` in segment 4.
+- **`webhook::ssrf` refuses ISATAP IPv6 addresses with Universal/Group bit permutations.** ISATAP interface identifiers with `0x0100` or `0x0300` in segment 4 attached to public IPv6 prefixes are now correctly classified.
