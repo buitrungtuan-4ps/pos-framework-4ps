@@ -455,8 +455,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
 
     if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
-    } else if first & 0xfe00 == 0xfc00 {
-        // fc00::/7 unique-local — the v6 private network.
+    } else if first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfec0 {
+        // fc00::/7 unique-local and fec0::/10 site-local (deprecated RFC 3879) — the v6 private network.
         Some(ForbiddenReason::Private)
     } else if first & 0xffc0 == 0xfe80 {
         // fe80::/10 link-local.
