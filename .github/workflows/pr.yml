@@ -234,7 +234,7 @@ jobs:
         run: |
           read -ra args <<<"$PACKAGES"
           cargo nextest archive "${args[@]}" --locked --archive-file "$RUNNER_TEMP/tests.tar.zst"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nextest-archive
           path: ${{ runner.temp }}/tests.tar.zst
@@ -496,7 +496,7 @@ jobs:
       # `minimal-edge` embeds ui/dist at compile time, so the UI is built first.
       - name: build the example store
         run: cargo build -p minimal-edge --locked
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: replay-edge
           path: target/debug/minimal-edge
@@ -547,7 +547,7 @@ jobs:
       # land" and knowing which one. Only on failure, and only for a fortnight.
       - name: keep the traces of whatever failed
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: replay-traces-${{ matrix.shard }}
           path: ui/test-results/
@@ -663,7 +663,7 @@ jobs:
       # land" and knowing which one. Only on failure, and only for a fortnight.
       - name: keep the traces of whatever failed
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: console-replay-traces
           path: dashboard/test-results/
