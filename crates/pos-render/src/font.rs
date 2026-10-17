@@ -112,6 +112,19 @@ pub(crate) struct LoadedFace {
     /// The codepoints this face has a glyph for, as sorted inclusive ranges. Ranges rather than a
     /// set because a CJK face covers tens of thousands of codepoints in a few hundred runs.
     coverage: Vec<(u32, u32)>,
+    /// The face as harfrust shapes with it: `read-fonts`' font model over the same shared bytes,
+    /// not a copy. Built once, because it caches the layout tables it prepares for shaping, so a
+    /// face shapes every line after the first without preparing them again.
+    shaping: harfrust::Font,
+}
+
+/// The shared bytes, as the font model takes a byte source: another handle on one allocation.
+struct SharedBytes(Arc<[u8]>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for LoadedFace {
@@ -161,10 +174,15 @@ impl LoadedFace {
             .is_ok()
     }
 
-    /// The parsed font, for outlines and for shaping. One parser serves both: `harfrust` and
-    /// `skrifa` are both built on `read-fonts`, so this is the type each of them takes.
+    /// The parsed font, for outlines.
     pub(crate) fn font(&self) -> Option<skrifa::FontRef<'_>> {
         skrifa::FontRef::from_index(&self.data, self.index).ok()
+    }
+
+    /// The face for shaping. One parser serves both this and [`Self::font`]: `harfrust` and
+    /// `skrifa` are both built on `read-fonts`.
+    pub(crate) const fn shaping(&self) -> &harfrust::Font {
+        &self.shaping
     }
 }
 
@@ -366,18 +384,26 @@ impl FontLibrary {
                 self.skipped += 1;
                 continue;
             }
+            let data = Arc::clone(shared.get_or_insert_with(|| Arc::from(data)));
+            let source: Arc<dyn AsRef<[u8]> + Send + Sync> =
+                Arc::new(SharedBytes(Arc::clone(&data)));
+            let Some(shaping) = harfrust::Font::new(harfrust::font::Blob::from(source), index)
+            else {
+                continue;
+            };
             let loaded = LoadedFace {
                 name: if count > 1 {
                     format!("{name}#{index}")
                 } else {
                     name.to_owned()
                 },
-                data: Arc::clone(shared.get_or_insert_with(|| Arc::from(data))),
+                data,
                 index,
                 units_per_em: metrics.units_per_em,
                 ascender: whole(metrics.ascent),
                 descender: whole(metrics.descent),
                 coverage,
+                shaping,
             };
             self.faces.push(loaded);
             self.covered = merged;

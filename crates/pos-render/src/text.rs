@@ -211,24 +211,23 @@ impl TextRenderer {
             let Some(face) = self.library.face(face_index) else {
                 continue;
             };
-            let Some(font) = face.font() else {
-                continue;
-            };
-            // Held in a binding: the shaper borrows the data, so building it inline would drop
-            // the data at the end of the statement.
-            let shaper_data = harfrust::ShaperData::new(&font);
-            let shaper = shaper_data.shaper(&font).build();
-            let mut buffer = harfrust::UnicodeBuffer::new();
+            // In font units: no scale is set, and the conversion to subpixels is below.
+            let shaper = harfrust::ShaperFont::new(face.shaping());
+            let mut buffer = harfrust::Buffer::new();
             buffer.push_str(&run);
             // Script, direction and language from the text itself. This is what selects the Indic
             // or Arabic shaper rather than the default one.
             buffer.guess_segment_properties();
-            let glyphs = shaper.shape(buffer, harfrust::ShapeOptions::default());
+            // It fails only for a buffer already shaped or with no direction, and this one is
+            // fresh and guessed. A run that still fails is skipped like a face that will not parse.
+            if harfrust::shape(&shaper, &mut buffer, harfrust::ShapeOptions::default()).is_err() {
+                continue;
+            }
 
             let upem = i64::from(face.units_per_em());
             let scale = i64::from(size).saturating_mul(i64::from(SUBPIXEL));
-            let infos = glyphs.glyph_infos();
-            let positions = glyphs.glyph_positions();
+            let infos = buffer.glyph_infos();
+            let positions = buffer.glyph_positions();
             for (info, position) in infos.iter().zip(positions.iter()) {
                 // A cluster indexes the run's bytes; a run that shaped to fewer glyphs than
                 // characters (a conjunct) still points every glyph at a real character.
