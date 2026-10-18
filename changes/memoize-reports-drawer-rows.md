@@ -1,1 +1,4 @@
-Memoize `drawerRows` in the dashboard Reports screen `DrawerTable` component to avoid redundant sorting and `Object.entries` conversions on re-render.
+---
+kind: changed
+---
+- **Memoized drawerRows in Reports DrawerTable component.** Avoids redundant sorting and Object.entries conversions on re-render.
