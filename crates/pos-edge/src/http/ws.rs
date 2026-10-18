@@ -4,7 +4,7 @@
 //! The `/ws` endpoint: one socket per device, fed by the fan-out.
 //!
 //! A device opens one WebSocket and receives a typed event stream; it never polls
-//! ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)). Each socket subscribes to the
+//! ([ADR-0018](../../../../docs/adr/0018-http-websocket-stack.md)). Each socket subscribes to the
 //! shared [`Fanout`](crate::fanout::Fanout) and forwards every frame. A device that falls behind is
 //! told to reload ([`ServerMessage::Resync`]) rather than being sent stale frames or making the
 //! server buffer on its behalf.

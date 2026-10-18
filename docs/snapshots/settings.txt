@@ -4,6 +4,8 @@
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
 # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+# A REMOVED confirm line fails CI too: it is a value written only with a recorded
+# confirmation, and dropping that takes an ADR. ADR-0169.
 backup.interval_hours
 backup.interval_hours	default=24
 backup.interval_hours	kind=SETTING_KIND_INT
@@ -187,6 +189,17 @@ shift.close_report	since=0.14.1
 shift.close_report	value=CLOSE_REPORT_COMBINED
 shift.close_report	value=CLOSE_REPORT_NONE
 shift.close_report	value=CLOSE_REPORT_PER_DRAWER
+shift.drawer_access
+shift.drawer_access	confirm=DRAWER_ACCESS_ASSIGNED
+shift.drawer_access	default=DRAWER_ACCESS_SHARED
+shift.drawer_access	kind=SETTING_KIND_CHOICE
+shift.drawer_access	scope=SETTING_SCOPE_BRAND
+shift.drawer_access	scope=SETTING_SCOPE_STORE
+shift.drawer_access	scope=SETTING_SCOPE_STORE_GROUP
+shift.drawer_access	scope=SETTING_SCOPE_TENANT
+shift.drawer_access	since=0.14.1
+shift.drawer_access	value=DRAWER_ACCESS_ASSIGNED
+shift.drawer_access	value=DRAWER_ACCESS_SHARED
 shift.drawer_day_end
 shift.drawer_day_end	default=DRAWER_DAY_END_FLAG
 shift.drawer_day_end	kind=SETTING_KIND_CHOICE

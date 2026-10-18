@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A second origin may address the edge — and only the ones a store published
-//! ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+//! ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 //!
 //! [`crate::origins`](pos_edge::origins) unit-tests the *list*: what validates, what is refused, what
 //! survives a refusal. These tests are one level up and answer the question the list cannot: does a

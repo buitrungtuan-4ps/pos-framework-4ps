@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The activation-code and device-credential tables over PostgreSQL (P9, [ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+//! The activation-code and device-credential tables over PostgreSQL (P9, [ADR-0050](../../../../docs/adr/0050-activation-code-exchange.md)).
 //!
 //! A code is looked up by its SHA-256 hash — the code itself is never stored — and redeemed in one
 //! transaction that also mints the device credential. The single-use guard is the

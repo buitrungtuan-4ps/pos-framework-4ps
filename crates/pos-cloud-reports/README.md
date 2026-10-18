@@ -18,7 +18,7 @@ The cloud's reports. Every store's events are folded into per-trading-day figure
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-cloud-api`, `pos-ports`, `pos-proto`, `store-postgres`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `pos-cloud`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-cloud-catalog`.
 
 ## Entry points
 

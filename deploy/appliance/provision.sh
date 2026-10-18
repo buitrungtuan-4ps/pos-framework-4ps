@@ -278,7 +278,7 @@ install_service_user() {
 }
 
 install_binary() {
-  run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$STATE" "$BIN"
+  run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$STATE" "$BIN"
   if [ -e "$BIN/current" ]; then
     say "bin/current exists: leaving the installed binary alone (the edge manages its own updates)"
   else
@@ -307,7 +307,7 @@ edge_unit() {
 # stop as well as a crash.
 #
 # Install (as root):
-#   install -d -o pos -g pos /var/lib/pos-edge /var/lib/pos-edge/bin
+#   install -d -o pos -g pos -m 0700 /var/lib/pos-edge /var/lib/pos-edge/bin
 #   install -o pos -g pos -m 0755 pos-edge /var/lib/pos-edge/bin/slot-a
 #   ln -sfn slot-a /var/lib/pos-edge/bin/current
 #   chown -h pos:pos /var/lib/pos-edge/bin/current
@@ -338,6 +338,12 @@ Type=exec
 User=pos
 Group=pos
 StateDirectory=pos-edge
+# The store's data is the service's alone (ADR-0174 decision 6): the database holds token digests,
+# staff sessions and subject rows. systemd applies this mode to the directory as the service starts,
+# and the installers set it as well, so a box is closed whichever runs first. Everything the edge
+# creates is private too.
+StateDirectoryMode=0700
+UMask=0077
 WorkingDirectory=/var/lib/pos-edge
 Environment=POS_EDGE_CONFIG=/var/lib/pos-edge/config.toml
 Environment=RUST_LOG=info
@@ -692,6 +698,9 @@ Type=oneshot
 User=pos
 Group=pos
 StateDirectory=pos-edge
+# The same mode as pos-edge.service, which shares the directory (ADR-0174 decision 6).
+StateDirectoryMode=0700
+UMask=0077
 WorkingDirectory=/var/lib/pos-edge
 # Where claim writes config.toml: the path pos-edge.service reads.
 Environment=POS_EDGE_CONFIG=/var/lib/pos-edge/config.toml

@@ -1,0 +1,62 @@
+[package]
+name        = "pos-cloud-config"
+version     = "0.0.0"
+description = "The cloud's configuration base: the config tree, the publish every area's routes write through, the org registry, settings and QR ordering's switch."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Moved out of pos-cloud (ADR-0170 decision 4, P7), with the same dependencies at the same versions:
+# this crate adds edges to crates already in the lockfile, and nothing new.
+[dependencies]
+pos-cloud-api = { path = "../pos-cloud-api" }
+# The config tree validates a version against pos-core's capability rules before publishing
+# (ADR-0033); pos-core is pure, so composing it here is sound.
+pos-core  = { path = "../pos-core" }
+pos-ports = { path = "../pos-ports" }
+pos-proto = { path = "../pos-proto" }
+# The config-tree, registry, settings and data-migration tables (ADR-0016). This crate implements
+# its store traits for them, since a trait can be implemented for another crate's type only where
+# the trait is defined.
+store-postgres = { path = "../adapters/store-postgres" }
+
+axum       = "0.8"
+tracing    = "0.1"
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }
+pos-fakes = { path = "../pos-fakes" }
+
+# The same lint table as pos-cloud, which this code came from.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The cloud's configuration base: the config tree and its store, the publish every area's routes write through, the org registry, settings, and QR ordering's switch."
+adrs = [33, 65, 95, 122, 160, 169, 170]
+owners = ["@maintainers-cloud"]

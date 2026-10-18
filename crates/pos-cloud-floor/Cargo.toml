@@ -1,0 +1,61 @@
+[package]
+name        = "pos-cloud-floor"
+version     = "0.0.0"
+description = "The cloud's floor and kitchen: areas, tables, stations and routing, their compile and publish, and the signed table codes QR ordering reads."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Moved out of pos-cloud (ADR-0170 decision 4, ADR-0175), with the same dependencies at the same
+# versions: this crate adds edges to crates already in the lockfile, and nothing new.
+[dependencies]
+pos-cloud-api     = { path = "../pos-cloud-api" }
+# A routing rule names a menu item, which is checked against the catalog.
+pos-cloud-catalog = { path = "../pos-cloud-catalog" }
+pos-cloud-config  = { path = "../pos-cloud-config" }
+pos-core          = { path = "../pos-core" }
+pos-proto         = { path = "../pos-proto" }
+# The area, table, station and routing-rule tables (ADR-0016). This crate implements its store
+# traits for them, since a trait can be implemented for another crate's type only where the trait is
+# defined.
+store-postgres = { path = "../adapters/store-postgres" }
+
+axum       = "0.8"
+tracing    = "0.1"
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+# A table's QR code carries an HMAC-SHA256-signed token (ADR-0057), as it did in pos-cloud.
+hmac       = "0.13"
+sha2       = "0.11"
+
+# The same lint table as pos-cloud, which this code came from.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The cloud's floor and kitchen: areas, tables, stations and routing rules, their compile to the floor and kitchen nodes and their publish, and the signed table codes QR ordering verifies."
+adrs = [57, 72, 170, 175]
+owners = ["@maintainers-cloud"]

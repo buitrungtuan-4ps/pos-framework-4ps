@@ -3,7 +3,7 @@
 
 //! The axum router.
 //!
-//! Two routers compose the surface ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)): an
+//! Two routers compose the surface ([ADR-0018](../../../../docs/adr/0018-http-websocket-stack.md)): an
 //! infrastructure [`router`] over [`AppState`] (health, the WebSocket fan-out, pairing, and the
 //! embedded UI), and a [`domain_router`] over the application [`Edge`] carrying the floor, order,
 //! bill and shift routes. Each domain route is a thin shell: parse the path, call the synchronous
@@ -35,6 +35,7 @@ mod printers;
 pub mod qr;
 pub mod reason_codes;
 mod reports;
+mod revalidate;
 pub mod route_permissions;
 pub mod shifts;
 mod sync;
@@ -61,6 +62,7 @@ use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::ulid::Ulid;
 
+use self::revalidate::revalidated;
 use crate::app::{AppError, Edge};
 use crate::auth::Sessions;
 use crate::lease_state::CurrentStanding;
@@ -68,7 +70,7 @@ use crate::pairing::Pairing;
 use crate::state::AppState;
 
 /// The header every `/api/*` response carries: the edge's release version
-/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// Named here rather than in [`crate::version`] because it is an HTTP concern; `crate::origins`
 /// reads it too, to expose it across an origin.
@@ -76,7 +78,7 @@ pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-
 
 /// The header every `/api/*` response carries beside the version: whether a replacement machine
 /// has taken this store
-/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+/// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
 ///
 /// One of `active`, `superseded` or `invalid`. `crate::origins` exposes it across an origin for the
 /// same reason it exposes the version: a cross-origin page cannot read a header nobody listed.
@@ -84,7 +86,7 @@ pub(crate) const LEASE_STANDING_HEADER: HeaderName = HeaderName::from_static("po
 
 /// The header a refused or failed domain command carries beside its plain-text reason: a stable,
 /// `UPPER_SNAKE_CASE` token naming *which* refusal it was
-/// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+/// ([ADR-0137](../../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
 ///
 /// The body stays the English sentence it always was, so nothing that reads it changes. The token is
 /// what a till translates: an operator working in Vietnamese was shown *"the store is unavailable"*
@@ -274,7 +276,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// socket and a task **indefinitely** — the probe gave up after five seconds rather than the server
 /// doing so. With this, the same connection is answered `408 Request Timeout` at the budget. That is
 /// the whole of what it is for: a store's till has no business holding a connection open forever for
-/// anyone, least of all on a shop network a guest's phone can reach ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// anyone, least of all on a shop network a guest's phone can reach ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// **It does not touch the fan-out.** A `/ws` upgrade produces its `101` at once and the socket
 /// lives on outside the request this layer is timing, so a kitchen display connected all service is
@@ -306,7 +308,7 @@ pub fn time_out_for(app: Router, budget: Duration) -> Router {
 pub const COMPRESS_ABOVE: u64 = 1024;
 
 /// Gzips a response for a client that asks, when it is large enough to be worth it
-/// ([ADR-0138](../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
+/// ([ADR-0138](../../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
 ///
 /// The menu, the floor and the live orders are re-read on every reload, wake and `resync`, and on
 /// a large store they are about half a megabyte a time uncompressed, over the shop's own Wi-Fi. gzip
@@ -336,8 +338,8 @@ pub fn compress(app: Router) -> Router {
 /// routes bare — which is every route a till actually sells through.
 ///
 /// That made both banners the header feeds read as "nothing to say". The version-drift banner
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
-/// banner ([ADR-0123](../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)) are both
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
+/// banner ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)) are both
 /// fail-silent by design: a missing header leaves the previous value, so absence is indistinguishable
 /// from agreement. A gap here is quiet rather than loud, which is why it needs saying out loud.
 ///
@@ -410,10 +412,10 @@ where
     let guarded = Router::new()
         // The store's published floor plan + kitchen stations, for the UI to render real tables and
         // route fires (ADR-0072).
-        .route("/api/floor", get(floor::plan::<S>))
+        .route("/api/floor", revalidated(get(floor::plan::<S>)))
         // The store's published price book, so the till prices from what the console published
         // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
-        .route("/api/menu", get(menu::catalog::<S>))
+        .route("/api/menu", revalidated(get(menu::catalog::<S>)))
         // Staff mark an item sold out, and bring it back (86). The events have been in the schema
         // since it was written; this is the first thing to emit them.
         .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
@@ -421,14 +423,17 @@ where
         // How the till groups and orders those items, from the `layout` node the same publish writes
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
-        .route("/api/layout", get(layout::plan::<S>))
+        .route("/api/layout", revalidated(get(layout::plan::<S>)))
         // The money facts the pay pad needs — currency, the notes a guest carries, what the total
         // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
-        .route("/api/locale", get(locale::settings::<S>))
+        .route("/api/locale", revalidated(get(locale::settings::<S>)))
         // The store's managed reason list, so a picker offers what the store actually holds
         // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
         // till filters by the act in hand.
-        .route("/api/reason-codes", get(reason_codes::list::<S>))
+        .route(
+            "/api/reason-codes",
+            revalidated(get(reason_codes::list::<S>)),
+        )
         // The floor: seat, clean, move the guests to another table, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
@@ -678,6 +683,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
         AppError::VarianceReasonRequired(_) => "VARIANCE_REASON_REQUIRED",
+        AppError::DrawerAssignedToAnother => "DRAWER_ASSIGNED_TO_ANOTHER",
+        AppError::AssigneeRequired => "ASSIGNEE_REQUIRED",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -736,6 +743,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::CashReasonNotValid
         | AppError::ShiftNotOpen
         | AppError::DrawerDayEnded
+        | AppError::DrawerAssignedToAnother
+        | AppError::AssigneeRequired
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable

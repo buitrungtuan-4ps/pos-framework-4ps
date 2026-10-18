@@ -362,18 +362,21 @@ where
             "GET /api/orders/live",
             p(&mut live_reads, 50),
             p(&mut live_reads, 95),
+            p(&mut live_reads, 100),
             LIVE_ORDERS_P95,
         ),
         (
             "add a line",
             p(&mut adds, 50),
             p(&mut adds, 95),
+            p(&mut adds, 100),
             ADD_LINE_P95,
         ),
         (
             "add a line, another device reading",
             p(&mut contended, 50),
             p(&mut contended, 95),
+            p(&mut contended, 100),
             ADD_LINE_UNDER_READS_P95,
         ),
     ];
@@ -381,16 +384,17 @@ where
         "history: {history} settled orders (seeded in {} ms), {LIVE_TABLES} live tables",
         seed_time.as_millis()
     ));
-    for (name, p50, p95, budget) in &report {
+    for (name, p50, p95, max, budget) in &report {
         report_line(&format!(
-            "{name:<38} p50 {:>8} ms   p95 {:>8} ms   budget {:>5} ms   {}",
+            "{name:<38} p50 {:>8} ms   p95 {:>8} ms   max {:>8} ms   budget {:>5} ms   {}",
             ms(*p50),
             ms(*p95),
+            ms(*max),
             budget.as_millis(),
             if p95 <= budget { "ok" } else { "OVER" }
         ));
     }
-    for (name, _, p95, budget) in report {
+    for (name, _, p95, _, budget) in report {
         assert!(
             p95 <= budget,
             "{name}: p95 {p95:?} is over its budget of {budget:?}"

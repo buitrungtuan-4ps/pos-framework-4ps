@@ -308,17 +308,17 @@ mod tests {
     }
 
     /// Holds [`API_PREFIXES`] against the routers, since axum cannot enumerate a composed `Router`.
-    /// A new top-level surface added to `main.rs` or `http.rs` without a line here would resolve to
+    /// A new top-level surface added to `main.rs` or a router source without a line here would resolve to
     /// the SPA again, so this reads the sources and fails when they disagree.
     #[test]
     fn the_api_prefixes_match_the_routers() {
-        let sources = [
-            include_str!("main.rs"),
-            include_str!("http.rs"),
-            include_str!("relay.rs"),
+        let mut sources = vec![
+            include_str!("main.rs").to_owned(),
+            include_str!("relay.rs").to_owned(),
         ];
+        sources.extend(crate::openapi_admin::router_sources());
         let mut found: Vec<&str> = Vec::new();
-        for source in sources {
+        for source in &sources {
             for (index, _) in source.match_indices("\"/") {
                 // The segment after the opening quote, up to the next `/` or the closing quote.
                 let rest = source.get(index + 2..).unwrap_or_default();

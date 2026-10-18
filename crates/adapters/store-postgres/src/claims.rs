@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The device-claim table over PostgreSQL
-//! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+//! ([ADR-0148](../../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
 //!
 //! Each step is one guarded `UPDATE … WHERE status = …`, so a code binds once and a claim is
 //! collected once even under a race: the loser matches no row and changes nothing. Collection inserts

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Secrets sealed on the machine's own disk under a key systemd unseals at every start
-//! ([ADR-0151](../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)).
+//! ([ADR-0151](../../../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)).
 //!
 //! # Why
 //!
@@ -106,6 +106,12 @@ impl VaultKey {
         let key = Self::from_bytes(&bytes);
         bytes.zeroize();
         key
+    }
+
+    /// The key's bytes, for a test that two keys are the same key.
+    #[cfg(test)]
+    pub(crate) const fn bytes(&self) -> &[u8; VAULT_KEY_LEN] {
+        &self.0
     }
 
     fn cipher(&self) -> XChaCha20Poly1305 {
@@ -244,7 +250,7 @@ impl KeyringBackend for SealedFiles {
 }
 
 /// Reads at most `cap` bytes of `path`; a longer file is an error rather than a large allocation.
-fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     fs::File::open(path)?.take(cap).read_to_end(&mut bytes)?;
     if bytes.len() as u64 >= cap {
@@ -258,7 +264,7 @@ fn read_capped(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 }
 
 /// Creates `dir` if it is missing, readable and writable by the service's user only.
-fn create_private_dir(dir: &Path) -> Result<(), BackendError> {
+pub(crate) fn create_private_dir(dir: &Path) -> Result<(), BackendError> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -274,7 +280,7 @@ fn create_private_dir(dir: &Path) -> Result<(), BackendError> {
 /// Writes `bytes` to `path` so that a power cut leaves either the old file or the new one: a
 /// private temporary file, flushed, then renamed over the old one, then the directory flushed so
 /// the rename itself survives.
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), BackendError> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), BackendError> {
     let fail = |step: &str, error: io::Error| {
         BackendError::Unavailable(format!("could not {step} {}: {error}", path.display()))
     };
@@ -312,23 +318,25 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), BackendError> {
 /// Sealed files first, and the keyring behind them only as the place a secret may still be from
 /// before this box had a vault key.
 ///
-/// A box activated before its installer sealed a vault key holds its credential in the kernel
-/// keyring. The first read finds nothing sealed, finds it there, seals it and removes the keyring
-/// copy, so the activation survives the next reboot without a new code. Every write goes to the
-/// sealed store.
+/// A box activated before it had a vault key holds its credential in the OS keyring: the kernel
+/// keyring on Linux (ADR-0151), Credential Manager on Windows (ADR-0174). The first read finds
+/// nothing sealed, finds it there, seals it and removes the keyring copy, so the activation
+/// survives without a new code. Every write goes to the sealed store.
+///
+/// # A keyring copy is the last copy until the sealed one is proven
+///
+/// Nothing is deleted from the keyring until the sealed copy has been read back and compared, byte
+/// for byte, with what was sealed. A sealed write that cannot be read back, or reads back different,
+/// is an error and leaves the keyring copy where it was, so a fault here can cost a retry but never
+/// the activation. [`SealedFirst::migrate`] moves every secret at once, which is what a box does
+/// before its service changes account and loses sight of the old keyring (ADR-0174 decision 7).
 #[derive(Debug, Clone)]
-pub struct SealedFirst<K> {
-    sealed: SealedFiles,
+pub struct SealedFirst<K, S = SealedFiles> {
+    sealed: S,
     keyring: K,
 }
 
 impl<K> SealedFirst<K> {
-    /// Sealed files in front of `keyring`.
-    #[must_use]
-    pub const fn new(sealed: SealedFiles, keyring: K) -> Self {
-        Self { sealed, keyring }
-    }
-
     /// Where the sealed secrets are.
     #[must_use]
     pub fn dir(&self) -> &Path {
@@ -336,9 +344,69 @@ impl<K> SealedFirst<K> {
     }
 }
 
-impl<K: KeyringBackend> KeyringBackend for SealedFirst<K> {
-    fn set(&self, account: &str, secret: &[u8]) -> Result<(), BackendError> {
+impl<K, S> SealedFirst<K, S> {
+    /// `sealed` in front of `keyring`.
+    #[must_use]
+    pub const fn new(sealed: S, keyring: K) -> Self {
+        Self { sealed, keyring }
+    }
+}
+
+impl<K: KeyringBackend, S: KeyringBackend> SealedFirst<K, S> {
+    /// Seals `secret`, and proves the sealed copy reads back as `secret` before anything relies on
+    /// it.
+    ///
+    /// A copy that does not prove is removed again, so a later read cannot prefer it over the
+    /// keyring copy it failed to replace.
+    fn seal_proven(&self, account: &str, secret: &[u8]) -> Result<(), BackendError> {
         self.sealed.set(account, secret)?;
+        let same = match self.sealed.get(account) {
+            Ok(mut back) => {
+                let same = back.as_deref() == Some(secret);
+                if let Some(bytes) = back.as_mut() {
+                    bytes.zeroize();
+                }
+                same
+            }
+            Err(_unreadable) => false,
+        };
+        if same {
+            return Ok(());
+        }
+        let _unproven = self.sealed.delete(account);
+        Err(BackendError::Unavailable(format!(
+            "the sealed copy of {account} did not read back as it was written; the keyring copy is kept"
+        )))
+    }
+
+    /// Moves every one of `accounts` that is still only in the keyring into the sealed store,
+    /// proving each copy before its keyring entry is deleted. Answers how many it moved.
+    ///
+    /// # Errors
+    ///
+    /// The first [`BackendError`] met. The secrets moved before it stay moved, and the one that
+    /// failed, with every one after it, stays in the keyring.
+    pub fn migrate(&self, accounts: &[&str]) -> Result<usize, BackendError> {
+        let mut moved = 0;
+        for account in accounts {
+            if self.sealed.get(account)?.is_some() {
+                continue;
+            }
+            if let Ok(Some(mut secret)) = self.keyring.get(account) {
+                let proven = self.seal_proven(account, &secret);
+                secret.zeroize();
+                proven?;
+                self.keyring.delete(account)?;
+                moved += 1;
+            }
+        }
+        Ok(moved)
+    }
+}
+
+impl<K: KeyringBackend, S: KeyringBackend> KeyringBackend for SealedFirst<K, S> {
+    fn set(&self, account: &str, secret: &[u8]) -> Result<(), BackendError> {
+        self.seal_proven(account, secret)?;
         // Best effort: an older copy in the keyring is only ever read when nothing is sealed, and
         // `delete` removes both, so a copy this misses cannot come back as the secret.
         let _stale = self.keyring.delete(account);
@@ -351,8 +419,7 @@ impl<K: KeyringBackend> KeyringBackend for SealedFirst<K> {
         }
         match self.keyring.get(account) {
             Ok(Some(mut secret)) => {
-                let moved = self.sealed.set(account, &secret);
-                if let Err(error) = moved {
+                if let Err(error) = self.seal_proven(account, &secret) {
                     secret.zeroize();
                     return Err(error);
                 }
@@ -567,6 +634,205 @@ mod tests {
         assert_eq!(
             vault.get("device_credential").expect("read"),
             Some(b"new".to_vec())
+        );
+    }
+
+    // ---- migration order: the keyring copy is deleted only after the sealed copy reads back ----
+
+    use std::sync::{Arc, Mutex};
+
+    use crate::BackendError;
+
+    /// Every call to either side, in order, as `side.op:account`.
+    type Calls = Arc<Mutex<Vec<String>>>;
+
+    /// A backend that records each call before answering it from `inner`.
+    struct Recording<B> {
+        side: &'static str,
+        inner: B,
+        calls: Calls,
+    }
+
+    impl<B: KeyringBackend> KeyringBackend for Recording<B> {
+        fn set(&self, account: &str, secret: &[u8]) -> Result<(), BackendError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("{}.set:{account}", self.side));
+            self.inner.set(account, secret)
+        }
+        fn get(&self, account: &str) -> Result<Option<Vec<u8>>, BackendError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("{}.get:{account}", self.side));
+            self.inner.get(account)
+        }
+        fn delete(&self, account: &str) -> Result<(), BackendError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("{}.delete:{account}", self.side));
+            self.inner.delete(account)
+        }
+    }
+
+    /// A sealed store whose writes land and whose reads come back different, as a damaged disk would.
+    #[derive(Default)]
+    struct ReadsBackWrong(MemoryBackend);
+
+    impl KeyringBackend for ReadsBackWrong {
+        fn set(&self, account: &str, secret: &[u8]) -> Result<(), BackendError> {
+            self.0.set(account, secret)
+        }
+        fn get(&self, account: &str) -> Result<Option<Vec<u8>>, BackendError> {
+            Ok(self.0.get(account)?.map(|mut bytes| {
+                bytes.push(0);
+                bytes
+            }))
+        }
+        fn delete(&self, account: &str) -> Result<(), BackendError> {
+            self.0.delete(account)
+        }
+    }
+
+    /// A sealed store that refuses every write.
+    #[derive(Default)]
+    struct RefusesWrites(MemoryBackend);
+
+    impl KeyringBackend for RefusesWrites {
+        fn set(&self, _account: &str, _secret: &[u8]) -> Result<(), BackendError> {
+            Err(BackendError::Unavailable("disk full".to_owned()))
+        }
+        fn get(&self, account: &str) -> Result<Option<Vec<u8>>, BackendError> {
+            self.0.get(account)
+        }
+        fn delete(&self, account: &str) -> Result<(), BackendError> {
+            self.0.delete(account)
+        }
+    }
+
+    fn with_credential(calls: &Calls) -> Recording<MemoryBackend> {
+        let keyring = MemoryBackend::new();
+        keyring
+            .set("device-credential", b"the activation")
+            .expect("seed");
+        Recording {
+            side: "keyring",
+            inner: keyring,
+            calls: Arc::clone(calls),
+        }
+    }
+
+    #[test]
+    fn a_migration_deletes_the_keyring_copy_only_after_the_sealed_copy_reads_back() {
+        let calls: Calls = Arc::default();
+        let sealed = Recording {
+            side: "sealed",
+            inner: MemoryBackend::new(),
+            calls: Arc::clone(&calls),
+        };
+        let vault = SealedFirst::new(sealed, with_credential(&calls));
+        assert_eq!(vault.migrate(&["device-credential"]).expect("migrate"), 1);
+        let order = calls.lock().expect("calls").clone();
+        assert_eq!(
+            order,
+            [
+                "sealed.get:device-credential",
+                "keyring.get:device-credential",
+                "sealed.set:device-credential",
+                "sealed.get:device-credential",
+                "keyring.delete:device-credential",
+            ]
+        );
+        assert_eq!(
+            vault.get("device-credential").expect("get").as_deref(),
+            Some(&b"the activation"[..])
+        );
+    }
+
+    #[test]
+    fn a_sealed_copy_that_reads_back_wrong_keeps_the_keyring_copy() {
+        let calls: Calls = Arc::default();
+        let keyring = with_credential(&calls);
+        let vault = SealedFirst::new(ReadsBackWrong::default(), keyring);
+        assert!(vault.migrate(&["device-credential"]).is_err());
+        assert!(
+            !calls
+                .lock()
+                .expect("calls")
+                .iter()
+                .any(|call| call.starts_with("keyring.delete"))
+        );
+        assert!(
+            vault
+                .keyring
+                .inner
+                .get("device-credential")
+                .expect("get")
+                .is_some()
+        );
+        // The unproven sealed copy is gone, so nothing can prefer it to the keyring's.
+        assert!(
+            vault
+                .sealed
+                .0
+                .get("device-credential")
+                .expect("get")
+                .is_none()
+        );
+        // And the lazy path on a read keeps the keyring copy the same way.
+        assert!(vault.get("device-credential").is_err());
+        assert!(
+            vault
+                .keyring
+                .inner
+                .get("device-credential")
+                .expect("get")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn a_sealed_store_that_refuses_writes_keeps_the_keyring_copy() {
+        let calls: Calls = Arc::default();
+        let vault = SealedFirst::new(RefusesWrites::default(), with_credential(&calls));
+        assert!(vault.migrate(&["device-credential"]).is_err());
+        assert!(
+            vault
+                .keyring
+                .inner
+                .get("device-credential")
+                .expect("get")
+                .is_some()
+        );
+        assert!(
+            !calls
+                .lock()
+                .expect("calls")
+                .iter()
+                .any(|call| call.starts_with("keyring.delete"))
+        );
+    }
+
+    #[test]
+    fn a_migration_moves_nothing_already_sealed_and_skips_what_the_keyring_does_not_hold() {
+        let calls: Calls = Arc::default();
+        let sealed = MemoryBackend::new();
+        sealed.set("sync-key", b"sealed already").expect("seed");
+        let vault = SealedFirst::new(sealed, with_credential(&calls));
+        assert_eq!(
+            vault
+                .migrate(&["sync-key", "lease-token", "device-credential"])
+                .expect("migrate"),
+            1
+        );
+        assert!(
+            !calls
+                .lock()
+                .expect("calls")
+                .iter()
+                .any(|call| call == "keyring.get:sync-key")
         );
     }
 }

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The vendor connections this store was published
-//! ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 5).
+//! ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 5).
 //!
 //! `GET /api/integrations` lists what the `integrations` node says serves this store — the family,
 //! the provider and the name the console gave it — so the Devices screen can say which e-invoice

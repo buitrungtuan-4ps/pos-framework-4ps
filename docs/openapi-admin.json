@@ -396,7 +396,7 @@
             "description": "The release is scheduled, and the body is its node × store report. Every pair is `PENDING` until its instant arrives"
           },
           "400": {
-            "description": "An id is not a ULID, or the node is not one of the batchable kinds",
+            "description": "An id is not a ULID, the node is not one of the batchable kinds, or a pair would make its store run a value that needs a recorded confirmation, which it does not run now (the setting key, CONFIRMATION_REQUIRED; confirm it on Settings). Nothing is written",
             "content": {
               "application/json": {
                 "schema": {
@@ -2577,7 +2577,7 @@
         "summary": "`PUT /admin/settings` — writes one value and republishes every store it reaches.",
         "operationId": "admin_put_setting",
         "requestBody": {
-          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, and the value",
+          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, the value, and notice_confirmed (default false), true when the person confirmed the notice of a value its catalogue entry's confirm names",
           "content": {
             "application/json": {}
           }
@@ -2587,7 +2587,7 @@
             "description": "Written, and every store it reaches republished. The body lists each store with SETTING_PUBLISH_APPLIED and the new config version, SETTING_PUBLISH_UNCHANGED, or SETTING_PUBLISH_FAILED"
           },
           "400": {
-            "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, or a tenant-scope value names another tenant",
+            "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, the value needs its notice confirmed and notice_confirmed is not true, or a tenant-scope value names another tenant",
             "content": {
               "application/json": {
                 "schema": {
@@ -2758,7 +2758,7 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, and the first release that honours it"
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)"
           },
           "401": {
             "description": "No session",

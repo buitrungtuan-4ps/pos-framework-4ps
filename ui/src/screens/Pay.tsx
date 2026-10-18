@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
+import { DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import type {
   BillResponse,
@@ -13,6 +14,7 @@ import type {
   ReprintResponse,
 } from "../api/types";
 import { t, type MessageKey } from "../i18n";
+import { WhyUnavailable } from "../components/StoreData";
 import {
   formatQuantity,
   money,
@@ -1297,6 +1299,7 @@ export function Pay() {
               the guest's money already on the counter. A bill put on screen mid-flow (the next part of
               a split) starts in exactly that state, so the window is not only the first load's.
             */}
+            <DrawerOwner own approver />
             <div class="mt-4 flex flex-col gap-2">
               <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button
@@ -1370,6 +1373,7 @@ export function Pay() {
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
                   disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
+                  aria-describedby="why-reasons"
                   data-step="askDiscount"
                   onClick={() => askDiscount()}
                 >
@@ -1444,11 +1448,13 @@ export function Pay() {
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
                   disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
+                  aria-describedby="why-reasons"
                   data-step="askVoidBill"
                   onClick={() => askVoidBill()}
                 >
                   {t("pay.void")}
                 </button>
+                <WhyUnavailable entry="reason_codes" id="why-reasons" />
                 </Show>
               }
             >

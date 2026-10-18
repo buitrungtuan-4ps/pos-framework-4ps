@@ -22,6 +22,7 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
 use pos_proto::ClockSource;
+use pos_proto::settings::Setting;
 
 use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore,
@@ -29,6 +30,10 @@ use crate::config_tree::{
 use crate::health::{TaskHealthStore, tick_detail};
 use crate::releases::{PairTally, ReleaseStatus, ReleaseStore, status_from_tally};
 use crate::version::UpdateOutcome;
+
+mod confirm;
+
+pub use confirm::check_confirmations;
 
 /// The canonical name of the scheduled-publish activator loop, for task-health reporting.
 pub const SCHEDULED_PUBLISH_ACTIVATOR: &str = "scheduled_publish_activator";
@@ -232,11 +237,12 @@ fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
 /// through the config tree — the same load→merge→publish→save shape the immediate publishes use.
 /// Returns the new config version id.
 ///
-/// A snapshotted `qr` or `channels` node, or a capability flag, is applied as an immediate publish
-/// of it is: with what QR ordering's switch makes follow it, composed on the tree as it stands when
-/// the row comes due ([`crate::qr_ordering::align`]).
+/// A node that would make the store run a value that needs a recorded confirmation, which it did not
+/// run before, is not applied, and is reported as a node that no longer validates
+/// ([`check_confirmations`]). Nothing is saved for it.
 async fn apply_one<Cfg>(
     config_trees: &Cfg,
+    register: &[Setting],
     publish: &ScheduledPublish,
     now_ms: i64,
 ) -> Result<ConfigVersionId, String>
@@ -251,23 +257,7 @@ where
         Some(versioned) => (Some(versioned.record), Some(versioned.etag)),
         None => (None, None),
     };
-    let mut store_layer = state_before.as_ref().map_or_else(
-        || serde_json::Value::Object(serde_json::Map::new()),
-        |existing| existing.layers[2].clone(),
-    );
-    if !store_layer.is_object() {
-        store_layer = serde_json::Value::Object(serde_json::Map::new());
-    }
-    let nodes = crate::qr_ordering::align(
-        state_before.as_ref(),
-        vec![(publish.node_key.clone(), publish.node_value.clone())],
-    );
-    let node_keys: Vec<String> = nodes.iter().map(|(key, _)| key.clone()).collect();
-    if let serde_json::Value::Object(map) = &mut store_layer {
-        for (key, value) in nodes {
-            map.insert(key, value);
-        }
-    }
+    let (store_layer, node_keys) = confirm::composed(register, state_before.as_ref(), publish)?;
     let mut tree = match state_before {
         Some(existing) => ConfigTree::from_state(publish.store_id, CapabilityValidator, existing),
         None => ConfigTree::new(publish.store_id, CapabilityValidator),
@@ -459,13 +449,30 @@ where
     Cfg: ConfigTreeStore,
     R: ReleaseStore,
 {
+    let register = pos_proto::settings::register();
+    pass_against(scheduled, config_trees, releases, &register, now_ms).await
+}
+
+/// [`pass`] against `register`, which a test passes its own of.
+async fn pass_against<S, Cfg, R>(
+    scheduled: &S,
+    config_trees: &Cfg,
+    releases: &R,
+    register: &[Setting],
+    now_ms: i64,
+) -> Result<usize, String>
+where
+    S: ScheduledPublishStore,
+    Cfg: ConfigTreeStore,
+    R: ReleaseStore,
+{
     let due = scheduled
         .due(now_ms)
         .await
         .map_err(|error| error.to_string())?;
     let mut applied = 0_usize;
     for publish in in_dependency_order(due) {
-        match apply_one(config_trees, &publish, now_ms).await {
+        match apply_one(config_trees, register, &publish, now_ms).await {
             Ok(version_id) => {
                 if let Err(error) = scheduled
                     .mark_applied(&publish.id, &version_id.to_string())
@@ -579,7 +586,7 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct FakeReleases {
+    pub(super) struct FakeReleases {
         rows: Mutex<Vec<Release>>,
     }
 
@@ -690,7 +697,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeScheduled {
+    pub(super) struct FakeScheduled {
         rows: Mutex<Vec<ScheduledPublish>>,
     }
 
@@ -813,15 +820,15 @@ mod tests {
         }
     }
 
-    fn tenant() -> TenantId {
+    pub(super) fn tenant() -> TenantId {
         TenantId::new(Ulid::from_u128(1))
     }
 
-    fn store() -> StoreId {
+    pub(super) fn store() -> StoreId {
         StoreId::new(Ulid::from_u128(2))
     }
 
-    fn new_publish(id: &str, effective_at_ms: i64) -> NewScheduledPublish {
+    pub(super) fn new_publish(id: &str, effective_at_ms: i64) -> NewScheduledPublish {
         NewScheduledPublish {
             id: id.to_owned(),
             tenant_id: tenant(),
@@ -887,7 +894,7 @@ mod tests {
 
     /// An in-memory `ConfigTreeStore` for the activator's pass test.
     #[derive(Default)]
-    struct FakeConfigTrees {
+    pub(super) struct FakeConfigTrees {
         states: Mutex<Vec<(TenantId, StoreId, crate::config_tree::ConfigTreeState)>>,
         /// When set, every `save` reports a lost race. That is the shape of a real failure the
         /// activator is built to survive — the row stays pending and the next pass retries — and it

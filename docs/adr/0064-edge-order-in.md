@@ -62,7 +62,7 @@ as `(menu_item_id, quantity)` — no price, no display name, no staff member.
 - **A tableless order gets a durable, daily-resetting queue number.** An order with no table (a
   marketplace, public-API, or takeaway order) is called back by `OrderAcceptance::queue_number`,
   allocated through a `QueueNumberAuthority` injected into `EdgeOrderIn` — the same static-dispatch,
-  in-memory-vs-`SqliteStore` split as the ledger and [`ReceiptAuthority`](../../crates/pos-edge/src/receipt.rs).
+  in-memory-vs-`SqliteStore` split as the ledger and [`ReceiptAuthority`](../../crates/pos-edge-app/src/receipt.rs).
   Unlike the receipt number, the counter is keyed by `(store, business_date)`, so it **resets each
   trading day** with no midnight job (a date the counter has never seen starts at 1), and it is
   **durable**: it must not be an in-memory counter, because a box that lost power mid-service would

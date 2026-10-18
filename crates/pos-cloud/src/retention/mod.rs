@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The retention + PII-masking cron (P7 / Track A6,
-//! [ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+//! [ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 //!
 //! Personal data — a marketplace order's name/phone/address, a corporate invoice's buyer fields —
 //! lives in the subject store, keyed by [`SubjectId`](pos_proto::ids::SubjectId), never in the event

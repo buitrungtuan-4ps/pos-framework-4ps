@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The layout read route ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md),
+//! The layout read route ([ADR-0066](../../../../docs/adr/0066-cloud-catalog.md),
 //! production-readiness **C4**).
 //!
 //! `GET /api/layout` serves how the till should group and order its buttons: the display categories,

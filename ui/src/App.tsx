@@ -22,8 +22,11 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { locked, takeSession } from "./state/session";
-import { fold, loadConfiguration, loadLiveOrders, loadStore, setLink } from "./state/store";
+import { locked } from "./state/session";
+import { StoreGate, StoreDataBanner } from "./components/StoreData";
+import { prime, readAgain } from "./state/engine";
+import { loadConfiguration, loadStore } from "./state/registry";
+import { fold, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
 // versions and nothing else: the operator cannot fix it, and the person who can needs the two
@@ -100,7 +103,10 @@ function Shell(props: ParentProps) {
         <Superseded />
         <LeaseAhead />
         <VersionDrift />
-        <main class="flex-1 overflow-y-auto">{props.children}</main>
+        <StoreDataBanner />
+        <main class="flex-1 overflow-y-auto">
+          <StoreGate>{props.children}</StoreGate>
+        </main>
       </div>
       <IdleLock />
     </>
@@ -130,16 +136,17 @@ export function App() {
 
   const link = new LiveLink({
     onEvent: fold,
-    onResync: () => {
+    onResync: () =>
       // A resync says this client fell behind, so what it holds may be stale — and the events it
-      // missed are exactly the ones it will never be sent. Re-reading what is open is the answer:
-      // the same read the boot gate makes, merged over whatever the fold has since established.
-      // What it missed may include a new configuration, so that is read again too.
-      void loadLiveOrders();
-      void loadConfiguration();
-    },
-    // A new configuration is live on the edge: read it again, without a new sign-in (ADR-0160).
-    onConfigApplied: () => void loadConfiguration(),
+      // missed are exactly the ones it will never be sent. Re-reading is the answer: the same reads
+      // the boot gate makes, merged over whatever the fold has since established. What it missed
+      // may include a new configuration, so every entry is read again (ADR-0173).
+      readAgain(),
+    // A new configuration is live on the edge: read again what it changed, without a new sign-in
+    // (ADR-0160, ADR-0173).
+    onConfigApplied: (changed) => void loadConfiguration(changed),
+    // What a link that was down missed comes back on the link itself: the edge replays it after the
+    // position the link names, or says `resync`, which reads everything again (`./api/live`).
     onStatus: setLink,
   });
   // The device half of the boot gate, once the store server itself is known to be usable: pair, then
@@ -162,13 +169,14 @@ export function App() {
           return;
         }
         // What this person may do and when the till locks, from the read already in hand, so the
-        // till hides what they cannot do before it draws the store (ADR-0158 decision 6).
-        takeSession(session);
+        // till hides what they cannot do before it draws the store (ADR-0158 decision 6), and the
+        // store's load does not read it a second time.
+        prime("session", session);
         // Signed in: draw the store's real floor, its own price book, the console's button plan and
         // its money settings (ADR-0072, ADR-0066, ADR-0105, E5). A failure or an empty node leaves
         // the never-blank fallback in place. The sign-in screen loads the same set on success,
         // because a device that signs in navigates client-side and never reaches this again.
-        void loadStore();
+        void loadStore(["session"]);
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {

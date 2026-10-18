@@ -3,7 +3,7 @@
 
 //! Cash-shift routes: open with a float, pay cash in and out, enter the blind count, close (P5,
 //! §6/§11.1), and open the drawer outside a sale
-//! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+//! ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 //!
 //! The count is **blind** — the count request carries only the physical amount, and the response to
 //! counting reveals no expectation or variance. Only the close response does. `expected_amount` and
@@ -11,11 +11,11 @@
 //! in every response, because the cashier entered it: it tells them nothing the close keeps blind.
 //!
 //! A store that turns `shift.blind_close` off
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2) is sent `expected_amount` in every response, so the Shift screen can show it beside
 //! the count. `variance` is still the close's alone.
 //!
-//! A store that keeps a drawer per till ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
+//! A store that keeps a drawer per till ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
 //! on each. The till a device is comes from its print-agent binding, read only then; a request may
 //! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
 //! /api/shifts` lists every drawer. A paid in, a paid out and a no-sale opening are made at a till,
@@ -31,6 +31,11 @@
 //! close would show it, so the till can show the variance beside the reasons and send the close
 //! again. The count is final by then, so this reveals what the close reveals, to the person
 //! closing, and a blind close stays blind.
+//!
+//! A store that assigns drawers (`shift.drawer_access`, ADR-0167 decision 9) gives each drawer's
+//! session to one person, and every response names them by `assigned_employee_id`, never by name.
+//! Anybody else's act on that drawer takes `cash.drawer.override_assignment`, held directly or
+//! approved by the same approver fields, and is otherwise refused `DRAWER_ASSIGNED_TO_ANOTHER`.
 
 use std::sync::Arc;
 
@@ -45,9 +50,9 @@ use pos_core::business_date::StoreTimeZone;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{DeviceId, EventId, ReasonCodeId, ShiftId};
+use pos_proto::ids::{DeviceId, EmployeeId, EventId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
-use pos_proto::shift::DrawerModel;
+use pos_proto::shift::{DrawerAccess, DrawerModel};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 
@@ -77,6 +82,14 @@ pub(crate) struct OpenRequest {
     /// own, and where the store keeps one drawer it is ignored.
     #[serde(default)]
     terminal_device_id: Option<DeviceId>,
+    /// The person another till's drawer is for, where the store assigns drawers: somebody on its
+    /// roster. A drawer started at its own till is the starter's, and this is ignored there.
+    #[serde(default)]
+    assigned_employee_id: Option<EmployeeId>,
+    /// The same person by their staff code, which is what a till types. Read only where
+    /// `assigned_employee_id` is absent; a code nobody on the roster has names nobody.
+    #[serde(default)]
+    assigned_staff_code: Option<String>,
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
@@ -158,11 +171,16 @@ struct BatchCloseResponse {
     shift_report_print: Option<String>,
 }
 
-/// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1).
+/// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the
+/// approver for a drawer assigned to somebody else.
 #[derive(Debug, Deserialize)]
 pub(crate) struct MovementRequest {
     amount_minor: i64,
     reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).
@@ -195,6 +213,10 @@ pub(crate) struct ShiftResponse {
     /// The till whose drawer it is, absent for the store's one drawer (ADR-0167).
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_device_id: Option<String>,
+    /// The person the drawer is assigned to for this session, where the store assigns drawers:
+    /// an id, never a name. Absent where drawers are shared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assigned_employee_id: Option<String>,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
     /// Revealed at close (§11.1), and before it only where the store's count is not blind.
@@ -229,6 +251,7 @@ impl From<ShiftView> for ShiftResponse {
         Self {
             shift_id: view.shift_id.to_string(),
             terminal_device_id: view.till.map(|till| till.to_string()),
+            assigned_employee_id: view.owner.map(|owner| owner.to_string()),
             state: view.state.as_wire().to_owned(),
             expected_amount: view.expected_amount,
             counted_amount: view.counted_amount,
@@ -269,9 +292,19 @@ where
         request.approver_code.as_ref(),
         request.approver_pin.as_ref(),
     );
+    let assignee = request.assigned_employee_id.or_else(|| {
+        let code = request.assigned_staff_code.as_deref()?;
+        edge.employee_with_code(code.trim())
+    });
     respond(
-        edge.open_shift_at(actor, scope, request.opening_float, approval.as_ref())
-            .await,
+        edge.open_shift_at(
+            actor,
+            scope,
+            request.opening_float,
+            approval.as_ref(),
+            assignee,
+        )
+        .await,
     )
 }
 
@@ -310,6 +343,11 @@ struct DrawersResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_device_id: Option<String>,
     drawers: Vec<DrawerResponse>,
+    /// `DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167
+    /// decision 9), so the till asks whom another till's drawer is for and tells a person's own
+    /// drawer by `assigned_employee_id`. Absent where drawers are shared, as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drawer_access: Option<&'static str>,
 }
 
 /// One drawer: absent `terminal_device_id` and `name` for the store's one drawer.
@@ -337,6 +375,7 @@ impl DrawersResponse {
             drawer_model: view.model.as_wire(),
             waiting_drawer_model: view.waiting.map(DrawerModel::as_wire),
             terminal_device_id: view.own.map(|till| till.to_string()),
+            drawer_access: (view.access == DrawerAccess::Assigned).then(|| view.access.as_wire()),
             drawers: view
                 .drawers
                 .into_iter()
@@ -499,6 +538,10 @@ where
         Ok(scope) => scope,
         Err(error) => return error_response(&error),
     };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
     let view = match edge
         .record_cash_movement_at(
             actor,
@@ -507,6 +550,7 @@ where
             movement,
             amount,
             request.reason_code_id,
+            approval.as_ref(),
         )
         .await
     {

@@ -44,6 +44,12 @@ The layout:
 /var/lib/pos-edge/store.sqlite.pre-update   the database as it was before the install
 ```
 
+`/var/lib/pos-edge` is mode **0700**, readable by `pos` alone, and the unit's `UMask=0077` keeps
+everything the edge creates in it private ([ADR-0174](../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)
+decision 6): the database holds token digests, staff sessions and subject rows. The unit's
+`StateDirectoryMode=0700` and the installers both set it, so a box set up before this is closed the
+next time its installer runs. Read the files as root; the edge's log is in the journal, not here.
+
 An install writes the spare slot, retargets `current` with one atomic `rename(2)`, and **exits**;
 `Restart=always` is what turns that exit into a start on the new binary. If a committed version
 never reaches a healthy boot, the edge counts its attempts, and past three it points `current` back
@@ -162,7 +168,9 @@ sc.exe start pos-edge
   and a relative path is resolved against the working directory, so the default `store.sqlite` puts
   the store's database — and `bin\`, which is derived from the database's parent — under `System32`.
   The systemd unit sets `WorkingDirectory=` and has no equivalent problem. Write
-  `store_path = "C:\\ProgramData\\pos-edge\\store.sqlite"` (TOML, so the separators are doubled).
+  `store_path = "C:\\ProgramData\\pos-edge\\data\\store.sqlite"` (TOML, so the separators are doubled).
+  With the database in `data\`, the edge keeps its update slots in the `bin\` beside `data\`, not
+  inside it.
 * **The `failure` line is not optional.** See below.
 
 There is a fourth line, and it is not an `sc.exe` one — **the port**:
@@ -182,6 +190,47 @@ the install continues: the service runs either way, and it is the port that need
 
 `POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
 variable — the next section says why.
+
+### Its own account, and state only it can read
+
+The installer runs the service as **`NT SERVICE\pos-edge`**, Windows' virtual account for this
+service, and splits the state directory so other local accounts cannot copy the database
+([ADR-0174](../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)):
+
+| Path | Holds | Who can read it |
+|---|---|---|
+| `C:\ProgramData\pos-edge\` | `config.toml`, the rescue `pos-edge.exe` | SYSTEM and Administrators (full), the service and Users (read) |
+| `bin\` | the update slots | as its parent, and the service may modify |
+| `data\` | `store.sqlite` and its WAL files, the sealed vault (`vault\`, `vault.key`), `pairing-url.txt` | SYSTEM and Administrators (full), the service (modify). **Nobody else** |
+| `logs\` | `pos-edge.log`, `pos-edge.log.1` | as its parent: the service may modify, Users read |
+
+- **One path.** The state lives at `%ProgramData%\pos-edge` and nowhere else. `-Root` is still
+  accepted, but any other value stops the installer before it changes anything. So does a directory
+  there that is a link or junction, or that is owned by an account other than SYSTEM or
+  Administrators.
+- **An existing box moves on a re-run.** The installer stops the service and moves the database, with
+  its WAL files, into `data\` and the logs into `logs\`. If the database cannot move, everything it
+  moved goes back and the store keeps its old layout. It then starts the service **once more as
+  LocalSystem**, so the store server seals the secrets it kept in LocalSystem's Credential Manager
+  into `data\vault`, under a key it protects with DPAPI for this machine. It stops it again, sets the
+  permissions, reads them back with `Get-Acl`, grants the service `SeCreateSymbolicLinkPrivilege` in
+  local security policy, restricts it to that and `SeChangeNotifyPrivilege` (`sc.exe privs`), moves
+  it to `NT SERVICE\pos-edge` and starts it.
+- **Any failure keeps LocalSystem.** LocalSystem can still read everything, so the store keeps
+  trading, and the summary says what failed. A box that is never re-installed keeps working on its
+  old layout, and its setup screen warns that its state is open to other accounts.
+- **The pairing file is for administrators only.** Read it from an elevated window, or from the
+  installer's own output. The log stays readable by a standard-user till account.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `ok pos-edge runs as NT SERVICE\pos-edge…` | The account, the permissions and the privilege are in place and read back as they should. | Nothing. |
+| `FAIL the store did not answer on its first start as LocalSystem` | The start that moves the secrets did not come up. Nothing else was changed. | The first error in `logs\pos-edge.log` is the cause. Fix it, then run the installer again. |
+| `FAIL the store made no vault key…` | The release running is older than the installer and ignores the vault settings, so the installer removed them again. | Update the store, then run the installer again. |
+| `FAIL the store could not move every secret out of Credential Manager` | One secret did not read back from the vault, so its Credential Manager copy was kept. | The log names it. Run the installer again. |
+| `FAIL the permissions did not come out as ADR-0174 sets them…` | `Get-Acl` read back an ACL the table above does not allow, for example inherited by group policy. | The line names the path and the account. Fix it, then run the installer again. |
+| `FAIL icacls … failed`, `FAIL sc.exe … failed` | A Windows tool refused. | The line gives the exit code and the tool's message. |
+| `FAIL could not move the database into …data` | A database file is open, or `data\` already has one. | Close what holds it, then run the installer again. |
 
 ### Read the summary it ends with
 
@@ -319,10 +368,9 @@ The slot layout is the same as on Linux and the same code lays it out; only the 
 knowing:
 
 - **Creating a symlink needs a privilege.** `SeCreateSymbolicLinkPrivilege` is held by
-  Administrators and by `LocalSystem`, which is the account `sc.exe create` uses when no `obj=` is
-  given. A service running as a named low-privilege account will not have it unless it was granted,
-  and the edge reports the absence rather than failing an install every ten minutes: with no
-  `bin\current` the updater is not started at all and the box trades on the binary it has.
+  Administrators and by `LocalSystem`. The installer grants it to `NT SERVICE\pos-edge` in local
+  security policy before it moves the service to that account. A domain policy that sets this user
+  right can take it away again, and then the box trades on the binary it has but cannot update itself.
 - **Nothing in this repository has watched it happen.** The Windows CI job compiles the wrapper, so
   a rename or a signature change fails a pull request, and it now also *parses* `install-pos-edge.ps1`
   and the wizard's generated one, so a script that could not run at all cannot ship. Neither is the
@@ -352,11 +400,12 @@ would only produce a second copy.
 ### Windows
 
 ```powershell
-Get-Content C:\ProgramData\pos-edge\pos-edge.log -Tail 50 -Wait
+Get-Content C:\ProgramData\pos-edge\logs\pos-edge.log -Tail 50 -Wait
 ```
 
-The installer points `POS_EDGE_LOG_FILE` at that path on the service's own environment key. Notes
-that matter when you are reading it:
+The installer points `POS_EDGE_LOG_FILE` at that path on the service's own environment key. A box
+installed before ADR-0174 kept it at `C:\ProgramData\pos-edge\pos-edge.log` until the installer is
+run again. Notes that matter when you are reading it:
 
 * **It is rewritten at every start-up**, with the previous run kept beside it as `pos-edge.log.1`. So
   a crash loop leaves you the *last* run and the one before, and nothing older. Copy the file before
@@ -372,7 +421,7 @@ that matter when you are reading it:
   The pairing URL goes to its own file instead:
 
   ```powershell
-  Get-Content C:\ProgramData\pos-edge\pairing-url.txt
+  Get-Content C:\ProgramData\pos-edge\data\pairing-url.txt   # in an elevated window
   ```
 
   Treat that file as a five-minute password: the code in it expires with `CODE_TTL`, is single-use,
@@ -401,7 +450,7 @@ Three caveats, all of them the reason this is break-glass and not the procedure:
 
 1. **Stop the service first.** Two processes on one `store.sqlite` is not a supported state.
 2. It runs as **you**, not as the service account, so a permissions problem — the very thing you may
-   be chasing — will not reproduce.
+   be chasing — will not reproduce. Only an elevated window can open `data\` at all.
 3. It uses the **rescue copy** at the root of the state directory, not `bin\current`. If the box has
    updated itself over the air, that is a different and older binary
    ([ADR-0055](../../docs/adr/0055-edge-ota-updater.md) Amendment 1).

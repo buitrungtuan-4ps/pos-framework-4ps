@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Releases over PostgreSQL ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+//! Releases over PostgreSQL ([ADR-0125](../../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
 //!
 //! One row per release (`releases`, migration 0064) holding the identity, the moment and the roll-up.
 //! The **writes** are not here: they are `scheduled_publishes` rows carrying this release's id, read

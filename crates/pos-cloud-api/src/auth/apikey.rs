@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Scoped per-tenant API keys — programmatic access to the public `/v1` surface
-//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)).
+//! ([ADR-0037](../../../../docs/adr/0037-api-keys.md)).
 //!
 //! The super-admin ([`super`]) signs in interactively; a machine integrator presents an **API key**
 //! instead. A key is `pos_<id>_<secret>`: the `id` is public and looks the key up, the `secret` is
@@ -42,8 +42,8 @@ use pos_proto::ulid::Ulid;
 pub const TOKEN_PREFIX: &str = "pos_";
 
 /// The prefix of a store box's device credential, the token activation mints
-/// ([ADR-0051](../../../docs/adr/0051-device-credential-provisioning.md)), which authenticates the
-/// box's own `/sync` calls ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+/// ([ADR-0051](../../../../docs/adr/0051-device-credential-provisioning.md)), which authenticates the
+/// box's own `/sync` calls ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 /// Never confused with [`TOKEN_PREFIX`]: the fourth character differs.
 pub const DEVICE_TOKEN_PREFIX: &str = "posdev_";
 
@@ -68,14 +68,14 @@ pub enum CredentialKind {
 /// `read_events` and `manage_webhooks` were variants here until roadmap **Q5**, and **neither gated
 /// a single route**. `read_events` named a raw event feed that was never built; `manage_webhooks`
 /// named webhook CRUD that exists only under `/admin`, behind a console session and RBAC
-/// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)) — not behind a bearer key. The console's
+/// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)) — not behind a bearer key. The console's
 /// scope picker had already stopped offering them, but `POST /admin/api-keys` still **accepted**
 /// them, so an integrator could be handed a key whose scope list promised an authority the cloud
 /// would never honour. Removing the variants is what makes that refusal happen: [`Scope::from_wire`]
 /// now returns `None`, and the issue route's strict parse names the unknown scope back.
 ///
 /// Wiring them instead was considered and is not a tail item. A public event feed is a new read
-/// surface with its own PII, retention and paging questions ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)
+/// surface with its own PII, retention and paging questions ([ADR-0076](../../../../docs/adr/0076-subject-request-tooling.md)
 /// governs the first of those), and a second path to the webhook writes would weaken auth on a
 /// surface that already has stronger auth, for no capability gain. `docs/fork-checklist.md` records
 /// both as removed rather than dead.
@@ -87,21 +87,21 @@ pub enum Scope {
     /// Read per-store activity rollups (`GET /v1/stores/{id}/rollups/daily`).
     ReadRollups,
     /// Pull the store's own configuration updates (`GET /sync/stores/{id}/config`). The credential a
-    /// first-party store holds to keep its config current ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
+    /// first-party store holds to keep its config current ([ADR-0039](../../../../docs/adr/0039-config-delivery.md)).
     ReadConfig,
     /// Propose discovered devices and read the store's approved ones (`/sync/stores/{id}/devices`)
-    /// ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).
+    /// ([ADR-0041](../../../../docs/adr/0041-device-onboarding.md)).
     ManageDevices,
     /// Place orders through the public intake (`POST /v1/orders`)
-    /// ([ADR-0056](../../../docs/adr/0056-public-order-intake.md)). A write, distinct from every read
+    /// ([ADR-0056](../../../../docs/adr/0056-public-order-intake.md)). A write, distinct from every read
     /// scope above.
     PlaceOrders,
     /// Pull the store's own queued orders and report their outcome
-    /// (`/sync/stores/{id}/orders`) ([ADR-0061](../../../docs/adr/0061-order-relay.md)). The credential
+    /// (`/sync/stores/{id}/orders`) ([ADR-0061](../../../../docs/adr/0061-order-relay.md)). The credential
     /// a first-party store holds to receive relayed orders, alongside `read_config`.
     RelayOrders,
     /// Publish the store's own events (`POST /sync/stores/{id}/events`)
-    /// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+    /// ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
     /// A device credential always carries it; a store API key only when an admin grants it.
     PublishEvents,
 }
@@ -522,7 +522,7 @@ pub trait ApiKeyStore {
 }
 
 /// The write side of the API-key store: provisioning, listing, and revoking keys
-/// ([ADR-0037](../../../docs/adr/0037-api-keys.md)). Kept separate from [`ApiKeyStore`] so the
+/// ([ADR-0037](../../../../docs/adr/0037-api-keys.md)). Kept separate from [`ApiKeyStore`] so the
 /// per-request bearer read path depends only on `lookup` and nothing on the far larger admin surface.
 ///
 /// The super-admin drives all three, through the [`super::admin`]-guarded `/admin/api-keys` routes;

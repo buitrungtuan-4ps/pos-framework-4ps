@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The inventory authoring table over PostgreSQL (Track M6, [ADR-0079](../../../docs/adr/0079-inventory-and-suppliers.md)).
+//! The inventory authoring table over PostgreSQL (Track M6, [ADR-0079](../../../../docs/adr/0079-inventory-and-suppliers.md)).
 //!
 //! One row per `(tenant, kind, entity_id)`; the `doc` column is the whole authored record (a wire
 //! `PublishedIngredient` / `PublishedRecipe` / `PublishedSupplier`) held as `jsonb` (`inventory_items`,

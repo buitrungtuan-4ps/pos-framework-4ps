@@ -355,6 +355,19 @@ jobs:
         if: env.RUN_RUST == 'true'
         shell: bash
 
+      # The vault key DPAPI protects, and the KeyVault contract suite over the sealed vault, on the
+      # one runner that has DPAPI (ADR-0174). The Linux legs run the same suite over a raw key file.
+      # Only when either crate is affected.
+      - name: the vault's tests, on Windows
+        if: matrix.os == 'windows-2022' && env.RUN_RUST == 'true'
+        shell: bash
+        run: |
+          case " $PACKAGES " in
+            *" --workspace "*|*" key-vault-keyring "*|*" windows-protect "*)
+              cargo test -p windows-protect -p key-vault-keyring --locked ;;
+            *) echo "neither windows-protect nor key-vault-keyring is affected" ;;
+          esac
+
       # The only runner in the estate with a PowerShell parser, so it is where the Windows
       # installer gets checked (issue #182). `dashboard/src/installers.mjs` emits both the
       # checked-in `deploy/edge/install-pos-edge.ps1` and the per-store script the new-store
@@ -827,7 +840,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Documentation gates. Deliberately escapable with an explicit sentence: the
-  # goal is a conscious decision, not a bureaucratic block.
+  # goal is a conscious decision, not a bureaucratic block. A Dependabot pull
+  # request that changes only manifests and lockfiles needs no change file;
+  # `cargo xtask changelog --exempt` decides that, and its tests hold the rule.
   # ---------------------------------------------------------------------------
   docs-gate:
     if: github.event_name == 'pull_request'
@@ -837,15 +852,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The rules job's cache: it builds the same xtask, and docs-gate never runs on
+      # main to save one of its own.
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: rules
       - name: a code change touches CHANGELOG.md, or says why not
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           changed="$(git diff --name-only "origin/$BASE"...HEAD)"
           if ! grep -qE '^(crates/|ui/|dashboard/)' <<<"$changed"; then
             echo "no change under crates/, ui/ or dashboard/; gate not applicable"
+            exit 0
+          fi
+          exempt="$(cargo run -q -p xtask --locked -- changelog --exempt --base "origin/$BASE")"
+          if [ "$exempt" = "true" ]; then
+            echo "a Dependabot bump of manifests and lockfiles only; no change file needed"
             exit 0
           fi
           # A change file under changes/ (ADR-0170 decision 5), added or edited,
@@ -868,11 +894,6 @@ jobs:
           fi
           echo "::error::This pull request changes crates/, ui/ or dashboard/ but adds no change file. Add changes/<topic>.md (see changes/README.md), or write 'changelog: none <reason>' in the pull-request body."
           exit 1
-      # The rules job's cache: it builds the same xtask, and docs-gate never runs on
-      # main to save one of its own.
-      - uses: ./.github/actions/rust-setup
-        with:
-          cache-key: rules
       - name: every change file is well-formed
         run: cargo run -q -p xtask --locked -- changelog --check
 

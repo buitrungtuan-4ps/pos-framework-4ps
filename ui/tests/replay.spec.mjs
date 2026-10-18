@@ -35,6 +35,54 @@ import { expect, test } from "@playwright/test";
 import { TASKS } from "../scripts/step-tasks.mjs";
 import { startEdge } from "./edge.mjs";
 
+/**
+ * The edge's whole answer to an intercepted request, for a stub that rewrites it. The till names
+ * the tag of the copy it keeps (ADR-0173), and the edge answers a tag it recognises with a `304`
+ * and no body to rewrite, so the stub asks without one.
+ */
+async function fetchWhole(route) {
+  const headers = { ...route.request().headers() };
+  delete headers["if-none-match"];
+  return route.fetch({ headers });
+}
+
+/**
+ * Holds `pattern`'s POST until the test calls `release()`, so "while the request is out" is a moment
+ * the test acts in rather than a race against a timer it has to win on a slow machine.
+ *
+ * With `reachEdge`, the request goes to the edge at once and only its answer is held: the edge has
+ * committed, and its live-link event is on its way, before the till hears the answer. Without it,
+ * the request itself waits, so neither the answer nor the event exists yet. `sent` resolves once
+ * the request has reached that point.
+ */
+async function holdPost(page, pattern, { reachEdge = false } = {}) {
+  let release = () => {};
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  let reached = () => {};
+  const sent = new Promise((resolve) => {
+    reached = resolve;
+  });
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    if (reachEdge) {
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    } else {
+      reached();
+      await released;
+      await route.continue();
+    }
+  });
+  return { release, sent };
+}
+
 /** A declared route as a regular expression: `:param` matches one path segment. */
 function routePattern(route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -513,10 +561,7 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
     // Hold the answer back, so "while the request is in flight" is a moment the test can act in
     // rather than a race it has to win. This is the moment a busy store server gives an operator
     // for free.
-    await page.route("**/api/session/sign-in", async (route) => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      await route.continue();
-    });
+    const held = await holdPost(page, "**/api/session/sign-in");
 
     await page.locator("#signin-code").fill(edge.staffCode);
     await page.locator("#signin-pin").fill("999999");
@@ -524,7 +569,9 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
 
     // The operator does not wait: the button is disabled while the request is out, the field is
     // not, and they have already started the next attempt.
+    await held.sent;
     await page.locator("#signin-pin").fill("4321");
+    held.release();
 
     await expect(page.getByRole("alert")).toBeVisible();
 
@@ -1176,8 +1223,12 @@ test("a kitchen board that drops its link gets the food fired meanwhile, without
     await expect(board.getByText("Store connected")).toBeVisible();
     await seatTable(till);
     await addItem(till);
-    await expect.poll(() => link.heard[0].length).toBeGreaterThan(0);
-    const seen = JSON.parse(link.heard[0][0]);
+    // The board's first socket named no position, so the edge first said `resync`; the frames after
+    // it are the stream's.
+    const events = () =>
+      link.heard[0].map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "event");
+    await expect.poll(() => events().length).toBeGreaterThan(0);
+    const seen = events()[0];
     expect(typeof seen.stream_id, "every frame says which stream it is on").toBe("string");
     expect(typeof seen.sequence, "and where on it").toBe("number");
     await expect(board.locator('[data-outcome="ticket-waiting"]')).toHaveCount(0);
@@ -1218,7 +1269,10 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
     await board.goto(`${edge.baseURL}/kds`);
     await expect(board.getByText("Store connected")).toBeVisible();
     await expect.poll(link.reads).toBeGreaterThan(0);
-    expect(link.heard[0], "the board has heard nothing it could name").toHaveLength(0);
+    const named = link.heard[0]
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => typeof frame.sequence === "number");
+    expect(named, "the board has heard nothing it could name").toHaveLength(0);
 
     await link.drop();
     await seatTable(till);
@@ -1235,6 +1289,136 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
       "resync",
     );
     expect(link.readsSinceRestore(), "so the board reloaded").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A till that has just paired can be on the floor before its live link is up, and what happens
+// meanwhile still reaches it.
+//
+// The link's first attempt is refused until the device pairs, and the retry that succeeds can come
+// after the sign-in has read the store. Here that retry is held while a second screen seats a table
+// and starts its order. The till names no position it does not have: the edge answers `resync` once
+// the socket is subscribed, and the till reads again what is open, so its floor shows the table
+// taken — with no reload of the page. Before, it asked for the live stream alone, and showed the
+// table free until something reloaded it.
+test("a till whose link opens after it reached the floor still hears what happened meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const sockets = [];
+    // Only a paired device's socket is held: the refusal before pairing reaches the edge as before.
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          sockets.push(socket);
+          await opened;
+        }
+        socket.connectToServer();
+      },
+    );
+    let loads = 0;
+    till.on("load", () => {
+      loads += 1;
+    });
+    await pair(till, edge);
+    await signIn(till, edge);
+    await expect.poll(() => sockets.length).toBeGreaterThan(0);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+    const loadsBefore = loads;
+
+    // Another screen on the store takes the first table while the till's link is down.
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await addItem(other);
+
+    open();
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+    const asked = new URL(sockets[0].url()).searchParams;
+    expect(asked.get("stream_id"), "it has no position to name").toBeNull();
+    expect(asked.get("after_sequence")).toBe("0");
+    expect(loads, "read again, not reloaded").toBe(loadsBefore);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// What a till hears while it reads again after a `resync` is applied after the read, never under it.
+//
+// The read can be answered before a change the link then carries; applied in arrival order, the
+// older answer would put the table back to free. Here the till's link opens late, as above, and the
+// floor read its `resync` starts is answered at once but held back from the till while a second
+// screen seats the first table. The till has heard the seating before the read lands, and still
+// shows the table taken after it.
+test("a till reading again after a resync does not undo what it heard meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const carried = [];
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          await opened;
+        }
+        socket.connectToServer().onMessage((message) => {
+          carried.push(JSON.parse(String(message)).event_type);
+          socket.send(message);
+        });
+      },
+    );
+    await pair(till, edge);
+    await signIn(till, edge);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+
+    // From here on, the floor read is answered by the edge at once and handed to the till later.
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const answered = new Promise((resolve) => {
+      reached = resolve;
+    });
+    await till.route("**/api/floor", async (route) => {
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    });
+    open();
+    await answered;
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await expect.poll(() => carried.includes("sales.table.opened")).toBe(true);
+
+    const landed = till.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/floor",
+    );
+    release();
+    await landed;
+    // One turn of the page's own loop, so the answer it was handed is applied before this looks.
+    await till.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await expect(firstDot).toHaveClass(/bg-occupied/);
   } finally {
     await edge.stop();
   }
@@ -1401,6 +1585,9 @@ test("the kitchen marks a dish sold out, a till stops selling it, and the kitche
     const till = await context.newPage();
     await pair(till, edge);
     await signIn(till, edge);
+    // The till hears the board's mark on its live link, which retries on a back-off after its
+    // refusal before pairing and can still be down here; a mark made then never reaches it.
+    await expect(till.getByText("Store connected")).toBeVisible();
     await seatTable(till);
     await till.locator("#menu-search").fill("iced");
     const tea = till.locator('[data-step="onItem"]');
@@ -1850,7 +2037,7 @@ test("a store's own tip keys are offered in its order, and a store that hides th
 
     let hidden = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.tip_percents = [];
       hidden += 1;
@@ -1899,7 +2086,7 @@ test("a store that sets nothing, and an edge too old to send the settings, offer
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.tip_percents;
       delete book.split_ways_max;
@@ -1959,7 +2146,7 @@ test("a store that splits up to twelve ways keeps one row that scrolls, and the 
 
     let rewritten = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.split_ways_max = 8;
       rewritten += 1;
@@ -1994,7 +2181,7 @@ test("a bill larger than the largest note takes any amount handed over", async (
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({
         response,
@@ -2063,7 +2250,7 @@ test("a bill split three ways settles with each guest's own tender, and the cash
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({
         response,
@@ -2432,23 +2619,33 @@ test("a guest's line that joins the table's order is on the table's order as it 
   try {
     let link = null;
     let last = null;
+    const carried = [];
     await page.routeWebSocket(
       (url) => url.pathname === "/ws",
       (socket) => {
         link = socket;
         socket.connectToServer().onMessage((message) => {
-          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          const frame = JSON.parse(String(message));
+          const { stream_id: streamId, sequence } = frame;
           last = typeof sequence === "number" ? { streamId, sequence } : last;
+          carried.push(frame.event_type);
           socket.send(message);
         });
       },
     );
     await pair(page, edge);
     await signIn(page, edge);
+    // The link's first attempt was refused before the device paired, and it retries on a back-off,
+    // so it can still be down when the till reaches the floor. A line added then is announced to no
+    // one and never carried. Seated and added once the link is open, the line's event is.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await seatTable(page);
     await addItem(page);
     const lines = page.locator('[data-outcome="line-added"]');
     await expect(lines).toHaveCount(1);
+    // The link has carried the line's own event, so the frames below are the next ones after
+    // everything the edge has said, rather than ones that race the line's.
+    await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
     const live = await page.evaluate(() =>
       fetch("/api/orders/live", {
         headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
@@ -2641,6 +2838,69 @@ test("a store's float is filled in, the cashier changes it, and the count shows 
     await page.locator('[data-step="closeShift"]').click();
     const closed = page.locator('[data-outcome="shift-closed"]');
     await expect(closed.locator(".text-ok")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till that opened a shift can hear its own `cash.shift.opened` after the edge's answer. The
+// event carries no figures, so it must move the shift it already holds to open and keep what the
+// answer said the drawer should hold, rather than replace it with a shift that says nothing. The
+// live link holds the event, and every frame after it, until the answer is on screen.
+test("a till that hears its own opened shift after the answer still shows what the drawer should hold", async ({
+  page,
+}) => {
+  const edge = await startEdge("shift-settings");
+  try {
+    let link = null;
+    let holding = false;
+    let heard = false;
+    const held = [];
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        link = socket;
+        socket.connectToServer().onMessage((message) => {
+          const frame = JSON.parse(String(message));
+          if (!heard && frame.event_type === "cash.shift.opened") {
+            heard = true;
+            holding = true;
+          }
+          if (holding) {
+            held.push(message);
+          } else {
+            socket.send(message);
+          }
+        });
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    // The event reaches the till only on a link that is open when the shift opens.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await navigateTo(page, "/shift");
+    await page.locator("#float").fill("450000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
+    await expect.poll(() => heard).toBe(true);
+
+    // The event lands after the answer. Hearing it reads the drawers again, so that read is the
+    // moment the event has been applied.
+    const applied = page.waitForRequest(
+      (request) => request.method() === "GET" && new URL(request.url()).pathname === "/api/shifts",
+    );
+    holding = false;
+    for (const message of held.splice(0)) {
+      link.send(message);
+    }
+    await applied;
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
   } finally {
     await edge.stop();
   }
@@ -2857,7 +3117,7 @@ test("the counter's pay pad offers the store's own tip keys, and no tip row wher
 
     let hidden = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       book.tip_percents = [];
       hidden += 1;
@@ -2898,7 +3158,7 @@ test("a store that sets no tip keys, and an edge too old to send them, offer tod
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.tip_percents;
       older += 1;
@@ -2966,7 +3226,7 @@ test("a store that sets no walk-in channel, and an edge too old to send one, sel
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.walk_in_channel;
       older += 1;
@@ -3030,7 +3290,7 @@ test("a store that asks each walk-in guest opens the order eaten in or taken awa
 
     let older = 0;
     await page.route("**/api/menu*", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const book = await response.json();
       delete book.walk_in_channel;
       older += 1;
@@ -3064,7 +3324,7 @@ test("the till draws money with the exponent the store published", async ({ page
   const edge = await startEdge();
   try {
     await page.route("**/api/locale", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const body = await response.json();
       await route.fulfill({ response, json: { ...body, currency_exponent: 2 } });
     });
@@ -3244,7 +3504,7 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
 // three fields and nothing else; `granted()` is asked on every read, so a test can change it.
 async function aSessionThatSays(page, enforced, granted, withApproval = []) {
   await page.route("**/api/session", async (route) => {
-    const response = await route.fetch();
+    const response = await fetchWhole(route);
     if (!response.ok()) {
       await route.fulfill({ response });
       return;
@@ -3721,6 +3981,10 @@ test("a till's own drawer comes first on its own float, and another till's shift
   try {
     await pair(page, edge);
     await signIn(page, edge);
+    // This till hears the counter's drawer open on its live link, which retries on a back-off
+    // after its refusal before pairing and can still be down here; an event sent then never
+    // reaches it.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await bindTill(page, "Bar till");
     await expect(page.locator('[data-outcome="own-drawer"]')).toHaveText(
       "Bar till — this till's drawer",
@@ -4110,7 +4374,7 @@ test("a drawer open past its business day is flagged, and a change of model wait
   try {
     const ended = (shift) => (shift === null ? null : { ...shift, day_ended: true });
     await page.route("**/api/shifts/current", async (route) => {
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       await route.fulfill({ response, json: ended(await response.json()) });
     });
     await page.route("**/api/shifts", async (route) => {
@@ -4118,7 +4382,7 @@ test("a drawer open past its business day is flagged, and a change of model wait
         await route.fallback();
         return;
       }
-      const response = await route.fetch();
+      const response = await fetchWhole(route);
       const read = await response.json();
       await route.fulfill({
         response,
@@ -4152,6 +4416,55 @@ test("a drawer open past its business day is flagged, and a change of model wait
   }
 });
 
+// Where a store assigns drawers (ADR-0167 decision 9), the till says whose a drawer is by id alone,
+// asks for the override approver on another person's, and asks whom another till's drawer is for by
+// staff code. The example shares its drawers, so the two shift reads are rewritten to say the store
+// assigns them and that the counter's drawer is another person's.
+test("an assigned drawer says whose it is and asks for the override on another person's", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    const another = (shift) =>
+      shift === null ? null : { ...shift, assigned_employee_id: "01ANOTHERPERS0NAAAAAAAAAAA" };
+    await page.route("**/api/shifts/current", async (route) => {
+      const response = await fetchWhole(route);
+      await route.fulfill({ response, json: another(await response.json()) });
+    });
+    await page.route("**/api/shifts", async (route) => {
+      if (route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const response = await fetchWhole(route);
+      const read = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...read,
+          drawer_access: "DRAWER_ACCESS_ASSIGNED",
+          drawers: read.drawers.map((drawer) => ({ ...drawer, shift: another(drawer.shift) })),
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await navigateTo(page, "/");
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-drawer-owner="other"]').first()).toHaveText(
+      "Another person's drawer for this shift.",
+    );
+    await expect(page.locator("#override-approver-code")).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await expect(page.locator("#drawer-assignee")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A role changed in the console reaches an open till with the configuration, without a new sign-in:
 // the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
 // session again. The frame is given the next position on the stream, so it is heard as itself.
@@ -4162,22 +4475,32 @@ test("a till hears a new configuration and reads again what the person may do", 
     await aSessionThatSays(page, true, () => granted);
     let link = null;
     let last = null;
+    const carried = [];
     await page.routeWebSocket(
       (url) => url.pathname === "/ws",
       (socket) => {
         link = socket;
         socket.connectToServer().onMessage((message) => {
-          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          const frame = JSON.parse(String(message));
+          const { stream_id: streamId, sequence } = frame;
           last = typeof sequence === "number" ? { streamId, sequence } : last;
+          carried.push(frame.event_type);
           socket.send(message);
         });
       },
     );
     await pair(page, edge);
     await signIn(page, edge);
+    // The link's first attempt was refused before the device paired, and it retries on a back-off,
+    // so it can still be down when the till reaches the floor. A line added then is announced to no
+    // one and never carried. Seated and added once the link is open, the line's event is.
+    await expect(page.getByText("Store connected")).toBeVisible();
     await seatTable(page);
     await addItem(page);
     await expect(page.locator('[data-step="fireOrder"]')).toHaveCount(0);
+    // The link has carried the line's own event, so the frame below is the next one after
+    // everything the edge has said, rather than one that races the line's.
+    await expect.poll(() => carried.includes("sales.order_line.added")).toBe(true);
 
     granted.push("sales.line.fire");
     const position = last === null ? {} : { stream_id: last.streamId, sequence: last.sequence + 1 };
@@ -4281,6 +4604,575 @@ test("a store that publishes no idle lock never locks", async ({ page }) => {
     await page.clock.fastForward(10 * 60_000);
     await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
     expect((await page.evaluate(sessionRead)).signed_in).toBe(true);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The store's data loads through one engine (ADR-0173): a required piece that will not load holds
+// the till behind a Retry, a failed read is retried on its own, and an optional piece that will
+// not load leaves the till working and says what is missing and why a button waits.
+
+/** Types the demo badge and PIN, without waiting for the floor: a gated till does not draw it. */
+async function signInWithoutWaiting(page, edge) {
+  await page.locator("#signin-code").fill(edge.staffCode);
+  await page.locator("#signin-pin").fill(edge.staffPin);
+  await page.locator('[data-step="submit"]').click();
+}
+
+/** Answers `pattern` with a 503 while `failing()` holds, and counts how often it did. */
+async function refuseWhile(page, pattern, failing) {
+  const refused = { count: 0 };
+  await page.route(pattern, async (route) => {
+    if (failing()) {
+      refused.count += 1;
+      await route.fulfill({ status: 503, body: "busy" });
+    } else {
+      await route.continue();
+    }
+  });
+  return refused;
+}
+
+/**
+ * Records, in the page, that someone has tapped a Retry. The engine retries a failed read on its
+ * own as well (ADR-0173), so a stub that started answering before the tap would let that backoff
+ * succeed first: the Retry would unmount under the click, and the flow would wait on a detached
+ * button. Answering only once the tap is recorded leaves the tap the one way through.
+ */
+async function watchRetryTaps(page) {
+  const watch = () => {
+    if (window.__retryWatched === true) {
+      return;
+    }
+    window.__retryWatched = true;
+    addEventListener(
+      "click",
+      (event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest('[data-step="retryLoad"], [data-step="retryRead"]') !== null
+        ) {
+          window.__retryTapped = true;
+        }
+      },
+      { capture: true },
+    );
+  };
+  // Every document from now on, and the one already open: a flow that moves on by a link click
+  // never loads another.
+  await page.addInitScript(watch);
+  await page.evaluate(watch).catch(() => undefined);
+}
+
+/** Whether a Retry has been tapped in the page as it is now; a page between documents has not. */
+async function retryTapped(page) {
+  try {
+    return await page.evaluate(() => window.__retryTapped === true);
+  } catch {
+    return false;
+  }
+}
+
+/** Answers `pattern` with a 503 until a Retry is tapped, and counts how often it did. */
+async function refuseUntilRetried(page, pattern) {
+  await watchRetryTaps(page);
+  const refused = { count: 0 };
+  await page.route(pattern, async (route) => {
+    if (await retryTapped(page)) {
+      await route.continue();
+      return;
+    }
+    refused.count += 1;
+    await route.fulfill({ status: 503, body: "busy" });
+  });
+  return refused;
+}
+
+test("a price book that will not load holds the till behind a Retry, and the Retry draws it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    const refused = await refuseUntilRetried(page, "**/api/menu");
+    await pair(page, edge);
+    await signInWithoutWaiting(page, edge);
+
+    const gate = page.locator('[data-outcome="store-loading"]');
+    await expect(gate).toContainText("Could not load: Price book");
+    await expect(page.locator('[data-outcome="floor"]')).toHaveCount(0);
+    expect(refused.count).toBeGreaterThan(0);
+
+    await page.locator('[data-step="retryLoad"]').click();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(gate).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a read that fails is tried again on its own, and the till is drawn without a tap", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let answered = 0;
+    const refused = await refuseWhile(page, "**/api/locale", () => {
+      answered += 1;
+      return answered <= 2;
+    });
+    await pair(page, edge);
+    await signInWithoutWaiting(page, edge);
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    expect(refused.count, "two refusals, then the read that drew the till").toBe(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("reason codes that will not load leave the till selling, say so, and say why a void waits", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await refuseUntilRetried(page, "**/api/reason-codes");
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    const banner = page.locator('[data-outcome="store-data-missing"]');
+    await expect(banner).toContainText("Reason codes");
+    await seatTable(page);
+    await addItem(page);
+    const voidLine = page.locator('[data-step="askVoid"]').first();
+    await expect(voidLine).toBeDisabled();
+    await expect(page.locator("#why-reasons")).toHaveText("Could not load: Reason codes");
+    await expect(voidLine).toHaveAttribute("aria-describedby", "why-reasons");
+
+    await banner.locator('[data-step="retryLoad"]').click();
+    await expect(banner).toHaveCount(0);
+    await expect(voidLine).toBeEnabled();
+    await expect(page.locator("#why-reasons")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("open orders that will not load hold the till behind a Retry, and the Retry draws them", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const table = new URL(page.url()).pathname;
+
+    await refuseUntilRetried(page, "**/api/orders/live");
+    await page.goto(`${edge.baseURL}${table}`);
+    const gate = page.locator('[data-outcome="store-loading"]');
+    await expect(gate).toContainText("Could not load: Open orders");
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+
+    await page.locator('[data-step="retryLoad"]').click();
+    await expect(gate).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeAttached();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a signed-in till that reloads reads its session once", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let reads = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname === "/api/session" && request.method() === "GET") {
+        reads += 1;
+      }
+    });
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    // Every read the store's load makes has answered once the floor is drawn and the open orders
+    // are in; a second read of the session would have gone out with them.
+    await page.waitForLoadState("networkidle");
+    expect(reads, "the boot gate's read, applied, and not read again by the store's load").toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a screen's own read that fails says so in place, and its Retry reads again", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const refused = await refuseUntilRetried(page, "**/api/bills/settled");
+    await navigateTo(page, "/today");
+
+    const failed = page.locator('[data-outcome="read-failed"]');
+    await expect(failed).toBeVisible();
+    expect(refused.count).toBeGreaterThan(0);
+
+    await failed.locator('[data-step="retryRead"]').click();
+    await expect(failed).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a store server that does not answer is not told it has no cloud", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    // The app's own boot check answers first, "not activated", which keeps the browser on the
+    // setup screen; the screen's reads after it are refused until its Retry is tapped.
+    await watchRetryTaps(page);
+    let asked = 0;
+    await page.route("**/api/activation", async (route) => {
+      asked += 1;
+      if (asked === 1 || (await retryTapped(page))) {
+        await route.fulfill({ json: { activated: false } });
+      } else {
+        await route.fulfill({ status: 503, body: "busy" });
+      }
+    });
+    await page.goto(`${edge.baseURL}/setup`);
+    await expect(page.getByText("Checking whether this store is activated…")).toBeVisible();
+    await expect(page.locator('[data-outcome="read-failed"]')).toBeVisible();
+    await expect(page.getByText(/runs without a cloud/)).toHaveCount(0);
+
+    await page.locator('[data-step="retryRead"]').click();
+    await expect(page.locator('[data-outcome="read-failed"]')).toHaveCount(0);
+    await expect(page.getByText("Checking whether this store is activated…")).toHaveCount(0);
+    await expect(page.locator("input").first()).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till keeps a snapshot of the store's configuration, and nothing else (ADR-0173 decision 3).
+
+/** Every record in the till's snapshot, as `{ key, etag, ... }`, or `[]` where there is none. */
+async function snapshotRecords(page) {
+  return page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const request = indexedDB.open("pos-till-snapshot", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("entries", { keyPath: "key" });
+        request.onerror = () => resolve([]);
+        request.onsuccess = () => {
+          const read = request.result.transaction("entries", "readonly").objectStore("entries").getAll();
+          read.onsuccess = () => {
+            request.result.close();
+            resolve(read.result);
+          };
+          read.onerror = () => resolve([]);
+        };
+      }),
+  );
+}
+
+/** The configuration entries the snapshot may hold on the demo store, whose walk-ins are takeaway. */
+const KEPT = ["layout", "locale", "menu", "menu_takeaway", "reason_codes"];
+
+test("the snapshot holds the store's configuration and nothing about anyone", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect
+      .poll(async () => (await snapshotRecords(page)).map((record) => record.key).sort())
+      .toEqual(KEPT);
+    const records = await snapshotRecords(page);
+    const held = JSON.stringify(records);
+    // Never the session, the person, the token, a drawer, a shift, an order or the floor: none of
+    // the fields that carry them appears anywhere in it.
+    for (const field of [
+      "signed_in",
+      "employee_id",
+      "permissions",
+      "assigned_employee_id",
+      "drawer_model",
+      "shift_id",
+      "order_id",
+      "order_line_id",
+      "table_states",
+      "seated_times",
+    ]) {
+      expect(held, field).not.toContain(`"${field}"`);
+    }
+    expect(held).not.toContain(await page.evaluate(() => localStorage.getItem("pos-edge.device-token")));
+    for (const record of records) {
+      expect(record.schema).toBe(1);
+      expect(record.etag).toMatch(/^W\/"/);
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a reload confirms the snapshot's price book before anything is sold against it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(KEPT.length);
+
+    // The edge cannot be reached for the price book: the snapshot's copy is never drawn, and the
+    // till waits for the edge rather than sell against it.
+    await refuseUntilRetried(page, "**/api/menu");
+    await page.reload();
+    await expect(page.locator('[data-outcome="store-loading"]')).toContainText("Could not load: Price book");
+    await expect(page.locator('[data-step="onCard"]')).toHaveCount(0);
+
+    // Once it answers, the snapshot's tag is confirmed with a `304`, and the till sells. The
+    // refusals before the tap are not that answer.
+    const confirmed = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/menu" &&
+        new URL(response.url()).search === "" &&
+        response.status() !== 503,
+    );
+    await page.locator('[data-step="retryLoad"]').click();
+    const answer = await confirmed;
+    expect(answer.status()).toBe(304);
+    expect(answer.request().headers()["if-none-match"]).toMatch(/^W\/"/);
+    await seatTable(page);
+    await addItem(page);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("signing out clears the snapshot, and a new pairing never reads the old one", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(KEPT.length);
+
+    // Another pairing: whatever the snapshot holds is not this one's, and no tag of it is sent.
+    await page.evaluate(() => localStorage.setItem("pos-edge.pairing-id", "a-later-pairing"));
+    const tags = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/")) {
+        tags.push(request.headers()["if-none-match"]);
+      }
+    });
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    expect(tags.filter((tag) => tag !== undefined)).toEqual([]);
+
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page).toHaveURL(/\/signin$/);
+    await expect.poll(async () => (await snapshotRecords(page)).length).toBe(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a till with no IndexedDB, as in a private window, works and says nothing about it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, "indexedDB", {
+        get() {
+          throw new Error("blocked");
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect(page.locator('[data-outcome="store-data-missing"]')).toHaveCount(0);
+    await seatTable(page);
+    await addItem(page);
+    await page.reload();
+    await expect(page.locator('[data-outcome="line-added"], [data-outcome="floor"]').first()).toBeAttached();
+    await expect(page.locator('[data-outcome="store-loading"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Three acts are painted before the edge answers (ADR-0173 decision 4): adding a line, changing a
+// quantity and moving a table. Each rolls back on a refusal, with the refusal's own sentence.
+
+/** Answers `pattern`'s POST with a refusal carrying `reason`, as the edge does. */
+async function refusePost(page, pattern, reason) {
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({ status: 409, headers: { "pos-error-reason": reason }, body: reason });
+  });
+}
+
+test("an added line shows at once, sending, and payment waits until the edge confirms it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    // The answer, and the live link's event with it, held back: only the till's own paint is left.
+    const held = await holdPost(page, "**/api/tables/*/lines");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
+    await expect(page.locator('[data-step="takePayment"]')).toBeDisabled();
+    await expect(page.locator("#why-pending")).toHaveText(
+      "Waiting for the store to confirm the last change.",
+    );
+    held.release();
+
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await refusePost(page, "**/api/tables/*/lines", "ITEM_NOT_SELLABLE");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByText("That item cannot be sold right now", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator("#why-pending")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till greys the menu once it knows a bill is open, so the edge refuses a line only when
+// another device opened one in the instant before the tap. The edge's answer is stubbed with its
+// own status and token for that instant.
+test("a line refused because a bill is already open is taken back off, with no ghost", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await refusePost(page, "**/api/tables/*/lines", "BILL_ALREADY_OPEN");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByText("A bill is already open for this order.")).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a refused quantity goes back to what it was, with the refusal's sentence", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await refusePost(page, "**/api/lines/*/quantity", "ALREADY_FIRED");
+    await page.locator('[data-step="setQuantity"]').first().click();
+    await expect(page.getByText("Already sent to the kitchen", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-quantity"]').first()).toHaveText("1");
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a refused move brings the guests back to their table, with the refusal's sentence", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const from = new URL(page.url()).pathname;
+    await refusePost(page, "**/api/tables/*/transfer", "UNKNOWN_ORDER");
+    await page.locator('[data-step="openMove"]').click();
+    await page.locator('[data-step="moveTo"]').first().click();
+    await page.waitForURL((url) => url.pathname === from);
+    await expect(page.locator('[data-outcome="order-open"]')).toHaveText("Table 1");
+    await expect(page.getByText("That item, order or bill has changed on another device", { exact: false })).toBeVisible();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("the edge's event arriving before its answer confirms the line once, never twice", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    // The event can confirm the line only on a link that is open when the table is seated and the
+    // line added: the link retries on a back-off after its refusal before pairing, and what the
+    // edge announces while it is down is never carried.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await seatTable(page);
+    // The edge makes the line and the live link carries its event at once; the answer is held
+    // until the event has confirmed the line.
+    const held = await holdPost(page, "**/api/tables/*/lines", { reachEdge: true });
+    await page.locator('[data-step="onItem"]').first().click();
+    await held.sent;
+    // Confirmed by the event, with the edge's figure, while the answer is still held.
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    held.release();
+    // And once the answer lands, still the one line.
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The store server says whether other accounts on its computer can read the store's data
+// (ADR-0174), and the setup screen warns where they can. The example store has no cloud, so the
+// standing it would answer is stubbed with each value.
+test("the setup screen warns when other accounts on the computer can read the store's data", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let access = "STATE_ACCESS_TOO_OPEN";
+    await page.route("**/api/activation", (route) =>
+      route.fulfill({ json: { activated: false, state_access: access } }),
+    );
+    await page.goto(`${edge.baseURL}/setup`);
+    const warning = page.locator('[data-outcome="state-too-open"]');
+    await expect(warning).toHaveText(
+      "Other accounts on this computer can read this store's data. Run the store server's installer again on this computer, as an administrator, to close it.",
+    );
+    await expect(page.locator("input").first()).toBeVisible();
+
+    access = "STATE_ACCESS_OK";
+    await page.reload();
+    await expect(page.locator("input").first()).toBeVisible();
+    await expect(warning).toHaveCount(0);
   } finally {
     await edge.stop();
   }

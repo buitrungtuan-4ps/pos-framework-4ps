@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The HTTP transport seam and its production TLS implementation
-//! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)).
+//! ([ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)).
 //!
 //! [`HttpTransport`] is the one thing that touches a socket; [`TlsHttpTransport`] is the concrete
 //! sender the edge composes, on the rustls/hyper stack already in the tree
-//! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)). Unlike the webhook sender, this dials
+//! ([ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md)). Unlike the webhook sender, this dials
 //! exactly one trusted host — the store's own cloud — so it resolves and connects the ordinary way;
 //! there is no SSRF surface to defend.
 
@@ -46,7 +46,7 @@ pub trait HttpTransport: Send + Sync {
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 
     /// `POST`s `body` to `path` under `content_type`, for the one payload that is not JSON: a
-    /// sealed store archive ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    /// sealed store archive ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
     ///
     /// A separate method rather than a `content_type` parameter on [`Self::post_json`], because
     /// every other call on this transport genuinely is JSON and should not have to say so. Base64
@@ -69,7 +69,7 @@ pub trait HttpTransport: Send + Sync {
 ///
 /// Headers are carried because the artifact fetch needs one: the signature travels in
 /// `X-Pos-Artifact-Signature` while the body stays the raw artifact
-/// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Putting both in a JSON object would
+/// ([ADR-0092](../../../../docs/adr/0092-artifact-trust-chain.md)). Putting both in a JSON object would
 /// mean base64-encoding tens of megabytes to move a few hundred bytes.
 #[derive(Debug, Clone, Default)]
 pub struct HttpResponse {
@@ -112,7 +112,7 @@ impl TransportError {
 }
 
 /// The production transport: one HTTPS request per call, over rustls/hyper
-/// ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)).
+/// ([ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)).
 ///
 /// Cheap to clone — it holds a shared rustls [`ClientConfig`], the parsed base URL, and a per-request
 /// timeout — so the edge keeps one and reuses it across calls.

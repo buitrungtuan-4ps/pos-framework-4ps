@@ -16,3 +16,126 @@
 
 # #732 — five long functions split along their own seams (the moves inside each split)
 d96093fc01f63ca2bcdd0e8c6e01956216ce83d8
+
+# #770 — the inventory routes and their tests move into their own modules
+e0b926e3a891eb9605e6ce4eb5cef735ea254b4e
+
+# #771 — the fee routes and their tests move into their own modules
+0fdb9165fc8c22a7c15fe6f9b936b56e9d059bfb
+
+# #772 — the catalog routes and their tests move into their own modules
+424714f952a9e8797b45f6b79f20b7939e380223
+
+# #773 — the tax-rate and media routes and their tests move into their own modules
+ff336192c5920981fba88a889e6afd4c76359681
+
+# #775 — the campaign routes move into their own module
+56cb6c52cda6c941632d44dfe9719022b68e067b
+
+# #776 — the people routes and their tests move into their own modules
+cc96b577880f638942616eae3be801f09ebc4a86
+
+# #777 — the device routes and their tests move into their own modules
+66dabd07b530c7351044d0699d2355b5ae0974d5
+
+# #778 — the floor routes and their tests move into their own modules
+47699bcc1df99ad56f3c3c567a5176ed0587bfef
+
+# #779 — the settings and reason-code routes and their tests move into their own modules
+3a4668168d96b0aa3c59a0c626f076d69e0fdb2d
+
+# #780 — the per-store config publishes and their tests move into their own modules
+ac5ed387df46d51333366e12989d510776edabb3
+
+# #785 — the store-group routes and their tests move into their own modules
+6282a181e99bddd8c6028a169ce17925799da176
+
+# #786 — the config publish machinery, preview, version history and releases move into their own modules
+a7b61c90e9345195d63abcf7bae5aa6919a04a69
+
+# #787 — the country and translation routes and their tests move into their own modules
+cced71c608b38ca8fb6318e57f1ba99b791ba194
+
+# #788 — the integration routes and their tests move into their own modules
+b09438312281c6d14686d40b8dc854114dc93418
+
+# #789 — the console's own routes and their tests move into their own modules
+d1a5008e818ae5ce8db67d58b1e55e3030d7cb91
+
+# #790 — the registry, fleet, alert, health and subject routes and their tests move into their own modules
+c188487521b485ab1ba01d77c5c75e14213de4bd
+
+# #791 — the store-sync, reconcile, chain and OTA routes and their tests move into their own modules
+cf79d45af82eb57c382047eddc15b8aea38d1721
+
+# #792 — the archive, OTA rollout, raw config and admitted-device routes and their tests move into their own modules
+dc8c5eb97db492c7daa013c0d6f7f3a8c442a1e7
+
+# #800 — the edge's session, roster, errors, views and records move into their own modules (app.rs becomes app/mod.rs)
+e14828d075c16e9b5e2603e3ec80321898124973
+
+# #801 — the edge's composition and who may act move into their own modules
+7ac8f843f3f7ae2ed490634c84ab359288be6077
+
+# #802 — the edge's order commands and their tests move into their own modules
+348e222fb3f7fc01ff6c941196216a88c76d43cc
+
+# #803 — the edge's bill, settle and receipt commands and their tests move into their own modules
+c8754d354a581dc7d13eacf786f032eaf14b9b49
+
+# #805 — the edge's shift and drawer commands and their tests move into their own modules
+a697534c895232aa683aa9cacdcb424a3fc80647
+
+# #806 — the edge's kitchen commands and their tests move into their own modules
+53d159f4f5a88042fef8f3d9c8856175c623aca1
+
+# #807 — the edge's floor commands and their tests move into their own module
+34a75ee5eaf3352bd96d2ea382c3e92f63ade70e
+
+# #808 — the edge's projection and event plumbing move into their own modules
+b99e200e7b609ee9b2f9c1c6a2a29441834ea9dd
+
+# #809 — printing's devices, documents, agents and jobs move into their own modules (printing.rs becomes printing/mod.rs)
+5e3d6cf8e0f9ef17b5bbde2ce3450677ab4721a9
+
+# #810 — printing's unit tests move into their own modules, by area
+f1b338af2527b99f888bcd8cd59a2615071f3dc5
+
+# #811 — the console and fleet stores' integration tests move into their own modules
+e870c7057f9a40a3d24059e0a76282e1595c6a4f
+
+# #812 — the tax, marketing, media, audit and people stores' integration tests move into their own modules
+df30ada5030ce1cfbdc52a277e89d3070dbc7e4d
+
+# #813 — the remaining stores' integration tests move into their own modules
+c3a958edf6711f73a8512c45056af2d462c300c8
+
+# #816 — the response helpers every area shares, and the record version, move into pos-cloud-api
+a0fc27dcb82be94751a0475b838f6b158911feda
+
+# #817 — the config tree, the publish every area writes through, the registry and settings move into pos-cloud-config
+48fb442a290431e2ff5ac8f633dd09f8cc0a6b81
+
+# #818 — the inventory, its routes and its store move into pos-cloud-inventory
+73bad3c40f93b3964d54bdd3037ff7aa1d2c7d76
+
+# #819 — activation, claims, onboarding and their routes and stores move into pos-cloud-devices
+51d39df9d934a1e4b42fef90c9b2d6185e03c79d
+
+# #822 — Edge, its commands, sign-in and the authorities move into pos-edge-app
+cdfcce9ecc028ddef34e26f503f88ba7495bec89
+
+# #823 — printing, the print-agent lane and its queue move into pos-edge-printing
+b7557135b309c466797e6123ca17e2f2aad5d8a8
+
+# #824 — the catalog with its fees, media, tax rates and translations move into pos-cloud-catalog
+967776d44cdda801a115f54caaec1b2bd0026ebd
+
+# #825 — the floor and kitchen, their routes and stores, and the table QR codes move into pos-cloud-floor
+b7b29b66dfc3682d3c3503751d97bd7a5387fe86
+
+# #826 — store groups and the tenant layout move to pos-cloud-config, and task health to pos-cloud-api
+c9823825147a4dd78a89d0f92ea08be23e958463
+
+# #827 — employees, roles, assignments, their publish and republish queue move into pos-cloud-people
+47ea4e44fd842b52dbfb5df16e00091e6565dbab

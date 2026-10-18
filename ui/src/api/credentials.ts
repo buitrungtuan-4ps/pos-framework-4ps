@@ -31,6 +31,9 @@
 // keeps its token exactly where it left it — the read below is the same read it always was.
 const TOKEN_KEY = "pos-edge.device-token";
 const BASE_KEY = "pos-edge.base-url";
+// A random id for this pairing, written beside the token and cleared with it. Not a credential: it
+// only tells what this device kept under one pairing from what it keeps under the next (ADR-0173).
+const PAIRING_KEY = "pos-edge.pairing-id";
 
 // The store this device uses. Every method is total: an implementation that cannot reach its
 // storage answers `null` and swallows a write, because a device that cannot persist its token
@@ -94,6 +97,7 @@ export function edgeBase(): string {
 // keeps its requests root-relative.
 export function rememberPairing(base: string, token: string): void {
   store.write(TOKEN_KEY, token);
+  store.write(PAIRING_KEY, newPairingId());
   if (base === "") {
     store.clear(BASE_KEY);
   } else {
@@ -105,6 +109,36 @@ export function rememberPairing(base: string, token: string): void {
 // `401`, which means this device must pair again with the edge it already knows.
 export function clearDeviceToken(): void {
   store.clear(TOKEN_KEY);
+  store.clear(PAIRING_KEY);
+  for (const listener of forgotten) {
+    listener();
+  }
+}
+
+// What this device keeps under its current pairing goes when the pairing does (ADR-0173).
+const forgotten: Array<() => void> = [];
+
+export function onPairingForgotten(listener: () => void): void {
+  forgotten.push(listener);
+}
+
+function newPairingId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+// This pairing's id, or `null` where the device is not paired. A device paired before the id
+// existed is given one now.
+export function pairingId(): string | null {
+  if (deviceToken() === null) {
+    return null;
+  }
+  const held = store.read(PAIRING_KEY);
+  if (held !== null) {
+    return held;
+  }
+  const fresh = newPairingId();
+  store.write(PAIRING_KEY, fresh);
+  return fresh;
 }
 
 // The `/ws` URL for the base this device paired against.

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The [`ErpSink`] adapter over an [`ErpTransport`]
-//! ([ADR-0059](../../../docs/adr/0059-erp-adapter.md)).
+//! ([ADR-0059](../../../../docs/adr/0059-erp-adapter.md)).
 //!
 //! Everything here is pure but for the one `await` on the transport: build the batch body and map the
 //! ERP's HTTP status to the right [`PortError`]. The status mapping is the load-bearing part — the

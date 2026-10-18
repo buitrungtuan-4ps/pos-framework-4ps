@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A consistent copy of a live store, taken without stopping the shop
-//! ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+//! ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 //!
 //! # Why `VACUUM INTO` and not a file copy
 //!
-//! The database is WAL ([ADR-0015](../../../docs/adr/0015-sqlite-access.md)), so at any instant the
+//! The database is WAL ([ADR-0015](../../../../docs/adr/0015-sqlite-access.md)), so at any instant the
 //! committed truth is spread across `store.sqlite` and `store.sqlite-wal`. Copying the main file
 //! alone yields a database missing every commit since the last checkpoint; copying both with two
 //! `cp`s yields a pair that disagree. `VACUUM INTO` asks SQLite itself for the answer: it reads the
@@ -17,7 +17,7 @@
 //!
 //! `VACUUM INTO` is documented as **read-only with respect to the source database**, and WAL lets a
 //! reader run concurrently with the one writer. So the snapshot runs on its own connection, not on
-//! the writer thread ([ADR-0015](../../../docs/adr/0015-sqlite-access.md) already permits extra
+//! the writer thread ([ADR-0015](../../../../docs/adr/0015-sqlite-access.md) already permits extra
 //! connections for reading), and a sale in progress is not waiting behind it.
 //!
 //! That connection is nevertheless opened **read-write**, because SQLite refuses `VACUUM INTO` on a

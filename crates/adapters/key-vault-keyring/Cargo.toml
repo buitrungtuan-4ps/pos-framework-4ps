@@ -39,6 +39,8 @@ keyring = { version = "3", default-features = false, features = ["linux-native"]
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
+# The vault key, protected with DPAPI in machine scope (ADR-0174).
+windows-protect = { path = "../windows-protect" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
@@ -59,6 +61,6 @@ workspace = true
 
 [package.metadata.pos]
 layer = "adapter"
-purpose = "The edge's KeyVault: device credentials in the OS credential store, sealed with systemd-creds on headless Linux."
-adrs = [3, 86, 151]
+purpose = "The edge's KeyVault: device credentials in the OS credential store, sealed under a systemd-creds key on Linux and a DPAPI key on Windows."
+adrs = [3, 86, 151, 174]
 owners = ["@maintainers-architecture"]

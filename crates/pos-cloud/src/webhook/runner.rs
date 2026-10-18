@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The webhook dispatch background task ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+//! The webhook dispatch background task ([ADR-0032](../../../../docs/adr/0032-webhooks.md)).
 //!
 //! One task drives every enabled endpoint across the fleet. Each tick it loads the enabled
 //! registrations ([`WebhookEndpointStore::load_enabled`], fleet-wide as the trusted role), and for
@@ -13,7 +13,7 @@
 //! returns it.
 //!
 //! The live [`WebhookEndpoint`]s — with their cursors and **breakers** — are held in memory across
-//! ticks ([ADR-0032](../../../docs/adr/0032-webhooks.md): endpoints are runtime state), so the
+//! ticks ([ADR-0032](../../../../docs/adr/0032-webhooks.md): endpoints are runtime state), so the
 //! breaker's consecutive-failure and 24-hour windows accumulate across ticks rather than resetting.
 //! The database holds only the durable facts: the registration, the cursor, the disabled flag.
 

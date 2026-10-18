@@ -26,7 +26,9 @@ cargo xtask <check>
   snapshot        nothing has been removed from a committed snapshot
   migrations      migrations within a release only add
   docs-gate       a code change touches CHANGELOG.md, or says why not
-  changelog       fold changes/*.md into CHANGELOG.md [Unreleased]; --check validates them
+  changelog       fold changes/*.md into CHANGELOG.md [Unreleased]; --check validates them;
+                  --exempt [--base <ref>] prints whether the docs gate exempts the pull request
+                  (PR_AUTHOR is dependabot[bot] and it changes only manifests and lockfiles)
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
@@ -78,6 +80,19 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("xtask code-stats: {error}");
+                ExitCode::from(3)
+            }
+        };
+    }
+
+    if check == "changelog" && rest.iter().any(|argument| argument == "--exempt") {
+        return match checks::changelog::run_exempt(&rest) {
+            Ok(exempt) => {
+                println!("{exempt}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("xtask changelog: {error}");
                 ExitCode::from(3)
             }
         };

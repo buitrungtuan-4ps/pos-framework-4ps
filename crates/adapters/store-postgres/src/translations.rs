@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The translation-grid table over PostgreSQL (P7, [ADR-0043](../../../docs/adr/0043-translation-grid.md)).
+//! The translation-grid table over PostgreSQL (P7, [ADR-0043](../../../../docs/adr/0043-translation-grid.md)).
 //!
 //! One row per tenant; the `grid` column is the whole `key → { locale → string }` map held as
 //! `jsonb`. This adapter keeps only the SQL and hands back the raw JSON text; `pos-cloud` implements

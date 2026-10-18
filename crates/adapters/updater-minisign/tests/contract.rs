@@ -5,7 +5,7 @@
 //!
 //! The harness signs with throwaway Ed25519 keypairs derived from fixed seeds — real signatures,
 //! real verification, but never a production key (those are generated offline and never enter this
-//! repository, [ADR-0047](../../../docs/adr/0047-minisign-verification.md)). The port is synchronous,
+//! repository, [ADR-0047](../../../../docs/adr/0047-minisign-verification.md)). The port is synchronous,
 //! so the suite runs under pos-fakes' one-poll `run_ready` rather than a runtime.
 
 use blake2::{Blake2b512, Digest as _};

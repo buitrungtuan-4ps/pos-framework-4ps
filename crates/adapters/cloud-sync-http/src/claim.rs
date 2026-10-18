@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The box's half of claiming
-//! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)):
+//! ([ADR-0148](../../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)):
 //! open a claim, show its code, and poll until someone at the console binds it.
 //!
 //! Both calls are unauthenticated, like the activation exchange: a box being claimed has no

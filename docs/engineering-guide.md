@@ -141,7 +141,7 @@ Nothing ships without a written trail, because the people who need it most — a
 | **Deprecations** | Listed in every release from the first announcement until removal, never fewer than two releases |
 | **Hotfix** | Branches from `release/x.y`, is cherry-picked back to `main`, and appears in both release notes |
 
-CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**` or `dashboard/**` must also add a `changes/` file (or touch `CHANGELOG.md`) or state `changelog: none` with a reason in the body, and every change file must pass `cargo xtask changelog --check`; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
+CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**` or `dashboard/**` must also add a `changes/` file (or touch `CHANGELOG.md`) or state `changelog: none` with a reason in the body (a Dependabot pull request that changes only `Cargo.toml`, `Cargo.lock`, `package.json` or `pnpm-lock.yaml` files is exempt: `cargo xtask changelog --exempt` decides), and every change file must pass `cargo xtask changelog --check`; a pull request that changes behaviour must touch `docs/**` or state `docs: none needed`. Both gates are deliberately escapable with an explicit sentence — the goal is a conscious decision, not a bureaucratic block.
 
 **Pre-tag checklist:** CI green · change files folded with `cargo xtask changelog` · protocol backwards-compatible for two versions · migrations additive · simulator soak passed · rollback runbook re-read.
 

@@ -74,6 +74,21 @@ describe("the form shell", () => {
     expect(screen.getByText("Edit store")).toBeTruthy();
   });
 
+  // The title is the dialog's accessible name, so a screen reader says what opened rather than
+  // "dialog". Both shells: the drawer is the default, the modal is asked for.
+  it("names the drawer and the modal by their title", () => {
+    const drawer = useEntityCrud<Store>();
+    mount({ crud: drawer, onSubmit: () => {} });
+    drawer.edit(LTT);
+    expect(screen.getByRole("dialog", { name: "Edit store" })).toBeTruthy();
+    cleanup();
+
+    const modal = useEntityCrud<Store>();
+    mount({ crud: modal, onSubmit: () => {}, as: "modal" });
+    modal.create();
+    expect(screen.getByRole("dialog", { name: "Add store" })).toBeTruthy();
+  });
+
   // A destructive question belongs to `ConfirmDialog`. If the panel opened here too, an operator
   // would be asked to confirm a deletion with an edit form on top of the question.
   it("stays shut while a destructive action is being confirmed", () => {

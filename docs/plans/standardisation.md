@@ -1,6 +1,6 @@
 # Standardisation
 
-**Status** Active · **Owner** @maintainers-architecture · **Last updated** 2026-10-13
+**Status** Active · **Owner** @maintainers-architecture · **Last updated** 2026-10-14
 
 ## Goal
 
@@ -17,14 +17,14 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 |---|---|---|---|
 | 0. Prepare and measure | CI test timeout 15 min; ADR-0170 and ADR-0171; the code-stats baseline; changesets under `changes/`; generated files marked | Done | #700, #701, #702, #703, #704 |
 | 1. CI quick wins | Per-job caches saved from `main`, no debug info, mold | Done | #705 |
-| 2. Rules, map, AI context | Naming rules, repository map, docs index (2.1); crate READMEs and contract cards (2.2); crate graph and ADR index (2.3); short root and nested `AGENTS.md`, docs drift (2.4); plans and root cleanup (2.5); size ratchet gate (2.6); ESLint (2.7); `packages/shared` (2.8) | Done, except the 2.4 `AGENTS.md` drafts, which wait for the owner | #707, #708, #709, #710, #712, #713, #714, #715, #716, #717 |
+| 2. Rules, map, AI context | Naming rules, repository map, docs index (2.1); crate READMEs and contract cards (2.2); crate graph and ADR index (2.3); short root and nested `AGENTS.md`, docs drift (2.4); plans and root cleanup (2.5); size ratchet gate (2.6); ESLint (2.7); `packages/shared` (2.8) | Done. The 2.4 nested `AGENTS.md` files landed on 2026-10-14; the root rewrite is deferred | #707, #708, #709, #710, #712, #713, #714, #715, #716, #717, #745 |
 | 3. CI runs what changed | A `changes` job with path classes, `xtask affected`, nextest, build once and shard, `xtask impact` on each PR; `main` and nightly run everything | Done. A docs-only pull request takes 0:34 instead of 9:28; one that runs everything takes about 5:20, with no job over 3:47 ([figures](../metrics/ci-2026-10-phase3.md)) | #720, #721, #722, #723, #724, #725 |
-| 4. Pilot | Reporting split into modules, then `pos-cloud-reports` on a `pos-cloud-api` base; the five longest functions split; build, token and review time measured | Done; **decision gate 1** open (owner). A report is now changed in one crate that builds in 2.4 s; `pos-cloud` still takes about 81 s ([figures](../metrics/pilot-2026-10.md)) | #727, #728, #730, #732 |
-| 5. Module split | `http.rs`, `app.rs`, `persistence.rs`, `printing.rs` and the large test files into modules of ≤ 500 lines by business area and role; a route declared in one place | Not started; needs 4, and the open Jules and Dependabot pull requests cleared first | |
-| 6. Crate split | 14 crates (9 cloud, 5 edge) under `crates/core`, `crates/edge`, `crates/cloud` | Not started; needs 5. **Decision gate 2** after the first 2–3 crates | |
-| 7. Long functions | The functions over 100 lines (64 in the size baseline after the pilot; the roadmap survey counted 55) down to ≤ 60, 3–5 per PR with tests and a mutation check | Not started; needs 5; may run beside 6 | |
+| 4. Pilot | Reporting split into modules, then `pos-cloud-reports` on a `pos-cloud-api` base; the five longest functions split; build, token and review time measured | Done. **Decision gate 1** taken 2026-10-14: option B, below. A report is now changed in one crate that builds in 2.4 s; `pos-cloud` still takes about 81 s ([figures](../metrics/pilot-2026-10.md)) | #727, #728, #730, #732 |
+| 5. Module split | `http.rs`, `app.rs`, `persistence.rs`, `printing.rs` and the large test files into modules of ≤ 500 lines by business area and role; a route declared in one place | Done 2026-10-15: `app.rs`, `printing.rs`, `http.rs`, `tests/cloud.rs` and store-postgres's integration tests split by area ([P6 figures](../metrics/crates-2026-10.md)) | #800–#815 |
+| 6. Crate split | The crates [ADR-0175](../adr/0175-the-crate-list-follows-what-a-move-can-reach.md) lists: `pos-cloud-catalog` (with fees), `-config`, `-people`, `-devices`, `-floor` and `-inventory`, then `-integrations` and `-admin` after a sub-state design; `pos-edge-app` (with billing, shift and floor) and `pos-edge-printing` | Done 2026-10-15 for every area a move can reach: eight crates; integrations and admin wait for a sub-state design (ADR-0175 decision 3). **Decision gate 2** passed on 2026-10-15 ([gate 2](../metrics/crates-2026-10.md), [close-out](../metrics/crates-2026-10-close.md)) | #816–#827 |
+| 7. Long functions | The functions over 100 lines (64 in the size baseline after the pilot; the roadmap survey counted 55) down to ≤ 60, 3–5 per PR with tests and a mutation check | Not started; needs 5; may run beside 6. `pos-cloud`'s `main.rs::run` and `store-postgres`'s `PostgresStore::migrate` get tests before they are split | |
 | 8. Generate and self-register | TypeScript types from 100% OpenAPI; one screen registry; map, graph and CODEOWNERS from the contract cards; `cargo xtask new crate\|route\|setting\|screen\|adapter\|country` | Not started; needs 6 | |
-| 9. Framework guides | Add a country, write an adapter, add a setting, add a business area, each with a runnable example; optionally a merge queue and larger runners | Not started; needs 8 | |
+| 9. Framework guides | Add a country, write an adapter, add a setting, add a business area, each with a runnable example; optionally a merge queue and larger runners | Not started; needs 8. No merge queue or larger runners for now (owner, 2026-10-14) | |
 
 ## Decisions taken
 
@@ -39,6 +39,8 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
   pull request; only uncited ADRs and citations of missing ones are committed (#710).
 - 2026-10-13 — The size baselines (Rust and ESLint) may only shrink against the merge base; a
   pull request grows one only by stating `size-baseline: grow <reason>` in its body (#714, #717).
+- 2026-10-14 — A function the Rust baseline lists may move to another file without a grow line: an
+  entry gone from one path and added under another with figures no larger is a move (phase 5).
 - 2026-10-13 — ESLint, not Biome, checks the front ends' size rules (ADR-0172, #715, #716).
 - 2026-10-13 — A CI job runs only when the change can affect it; an unknown path, a failed
   classifier, a push to `main` and the nightly run all run everything (#720).
@@ -49,13 +51,48 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
 - 2026-10-13 — Changes to `AGENTS.md`, and new nested `AGENTS.md` files, are applied by the owner,
   not by an agent (ADR-0126's reasoning). The phase 2.4 drafts wait for the owner.
 
+- 2026-10-15 — The crate list follows what a move can reach (ADR-0175, superseding ADR-0170
+  decision 4's list on three points): edge billing, shift and floor stay in `pos-edge-app`; catalog
+  and fees are one crate; integrations and admin wait for a written sub-state design.
+
+### The owner's decisions of 2026-10-14
+
+- **Decision gate 1: option B.**
+  - Phase 5 runs in full.
+  - Phase 6 extracts a crate only where phase 5 shows a clear boundary. **Decision gate 2** comes
+    after the first 2–3 crates, measured as the pilot was; the orchestrator approves it on those
+    measurements.
+  - Phase 7 writes tests for `pos-cloud`'s `main.rs::run` and `store-postgres`'s
+    `PostgresStore::migrate` before it splits them. The pilot left both unsplit: the first has no
+    tests, the second is tested only against PostgreSQL ([figures](../metrics/pilot-2026-10.md)).
+- **[ADR-0169](../adr/0169-a-setting-value-can-require-a-recorded-confirmation.md) is approved** as drafted: a setting value can require a recorded confirmation,
+  enforced on every route that can write it. It is built before ADR-0167 slices 7b and 7c land.
+- **`AGENTS.md`:** the phase 2.4 nested files are added. The root rewrite is deferred. This
+  replaces the 2026-10-13 entry for the nested files only.
+- **The pull-request backlog** is cleared through #738–#743, so phase 5 no longer waits on it.
+- **A merge queue and larger runners:** not now.
+- **The size baselines** are listed in `CODEOWNERS`: `tools/code-size-baseline.toml` is today, and
+  the ESLint baselines in `ui/` and `dashboard/` are not yet. That routing does nothing until the
+  repository belongs to an organisation with teams, because GitHub ignores a team that does not exist
+  ([`MAINTAINERS.md`](../../MAINTAINERS.md)). Naming the maintainers is deferred by the owner.
+  Until then a baseline grows only when a pull request's body says `size-baseline: grow <reason>`,
+  which the ratchet checks and a reviewer reads ([gate register](../gate-register.md) H16).
+- **Cloud hosting:** the cloud for Vietnamese stores is hosted in Vietnam, and stays two binaries,
+  with no microservices. PDPD lawful basis (L1), the DPIA, retention and consent (L2) stay with
+  Legal and the DPO, before the first live store ([gate register](../gate-register.md) L6).
+- **Vendors** for e-invoicing, card and QR payment: deferred. The adapter standard comes first, in
+  phase 8.
+- **The live pilot, the v0.15.0 tag and the go-live gate review** come after all phases.
+- **The state directory's access control on Windows** ([gate register](../gate-register.md) P12)
+  is resolved by its own ADR and implementation, which supersede ADR-0117 decision 9's deferral.
+  The check on a real machine stays a gate.
+
 ## Open questions
 
-- The phase 2.4 `AGENTS.md` rewrite and nested files: owner to review and apply.
-- Decision gate 1, after phase 4: continue to the module and crate split, or stop with phases 0–3
-  kept. Owner.
-- Decision gate 2, after the first 2–3 crates of phase 6. Owner.
-- A merge queue and larger runners (ADR-0171, not decided there). Owner.
+- The root `AGENTS.md` rewrite: deferred by the owner.
+- Maintainers, `CODEOWNERS` teams and a GitHub organisation: owner ([gate register](../gate-register.md)
+  H16, H17).
+- The vendors for e-invoicing, card and QR payment: owner, after the phase 8 adapter standard.
 - Root directories outside ADR-0170's layout. None moves in phase 2, since each has references:
 
   | Directory | Proposal | When |

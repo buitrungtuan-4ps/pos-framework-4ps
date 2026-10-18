@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The two routes a print agent lives on
-//! ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+//! ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 //!
 //! `GET /api/print/jobs` hands out at most one job per printer the agent owns;
 //! `POST /api/print/jobs/{job_id}/ack` says the job is written. There is no third route and no
@@ -24,7 +24,7 @@
 //! # A kick goes only to an agent that says it carries one
 //!
 //! A claim says what the agent carries, `?kicks_drawer=true`
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), and the claim
+//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), and the claim
 //! records it on [`Printers`], where opening a drawer reads it. An agent built before kicks says
 //! nothing, so no kick is queued for it, and one queued before it said otherwise is never handed to
 //! it: it could not read the answer, and would print nothing at all. The acknowledgement of a kick
@@ -46,7 +46,7 @@
 //!
 //! # Subscribe, then read, then wait
 //!
-//! [ADR-0062](../../../docs/adr/0062-the-relay-wake.md)'s rule, and this module is where it is
+//! [ADR-0062](../../../../docs/adr/0062-the-relay-wake.md)'s rule, and this module is where it is
 //! obeyed: the loop takes a wake subscription, *then* claims, *then* parks. A job enqueued between
 //! the read and the park is already accounted for, and a missed signal here is a ticket sitting in
 //! the queue while a guest waits at a table.
@@ -101,7 +101,7 @@ struct LeasedJob {
     /// none at all.
     printer_device_id: String,
     /// Where to open it: a host and port for a network printer, a device path for a directly
-    /// attached one ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)).
+    /// attached one ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md)).
     address: String,
     /// Which of those it is. The agent picks its transport from this and nothing else.
     connection: PrinterConnection,

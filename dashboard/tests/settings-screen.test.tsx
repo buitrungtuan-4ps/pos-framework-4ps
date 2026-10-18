@@ -13,7 +13,9 @@
 //   * a write names its scope and its id, and what comes back is shown per store, by name, with a
 //     way to publish again to the ones that failed — "saved" alone would hide them;
 //   * one store shows what it runs and which level that comes from;
-//   * a role without `console.config.publish` is offered no write at all.
+//   * a role without `console.config.publish` is offered no write at all;
+//   * a value whose entry carries `confirm` is saved only once its notice is ticked, and then
+//     carries `notice_confirmed` (ADR-0169).
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -142,6 +144,41 @@ const PRINT_ON_SETTLE = {
   default: true,
   scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
   since: "0.14.1",
+};
+
+/**
+ * A setting with a value that needs a recorded confirmation (ADR-0169), of its own so these tests
+ * do not move with the register's. It carries a key the console has no words for, so its notice
+ * falls back to the key, as a title does.
+ */
+const DRAWER_OWNER = {
+  setting_key: "example.drawer_owner",
+  node: "example",
+  field: "drawer_owner",
+  kind: "SETTING_KIND_CHOICE",
+  values: ["OWNER_SHARED", "OWNER_ONE_PERSON"],
+  default: "OWNER_SHARED",
+  scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+  since: "0.14.1",
+  confirm: { value: "OWNER_ONE_PERSON", notice: "settings.item.example.drawer_owner.confirm" },
+};
+
+/** Whether a drawer is one person's (ADR-0167 decision 9), as the register serves it (ADR-0169). */
+const DRAWER_ACCESS = {
+  setting_key: "shift.drawer_access",
+  node: "shift",
+  field: "drawer_access",
+  kind: "SETTING_KIND_CHOICE",
+  values: ["DRAWER_ACCESS_ASSIGNED", "DRAWER_ACCESS_SHARED"],
+  default: "DRAWER_ACCESS_SHARED",
+  scopes: [
+    "SETTING_SCOPE_TENANT",
+    "SETTING_SCOPE_BRAND",
+    "SETTING_SCOPE_STORE_GROUP",
+    "SETTING_SCOPE_STORE",
+  ],
+  since: "0.14.1",
+  confirm: { value: "DRAWER_ACCESS_ASSIGNED", notice: "settings.item.shift.drawer_access.confirm" },
 };
 
 /** How far over or short a drawer may close before its close asks a reason (ADR-0167 decision 12). */
@@ -763,6 +800,111 @@ describe("shared settings", () => {
       ),
     ).toBeTruthy();
     expect(permissionsReadiness).not.toHaveBeenCalled();
+  });
+
+  it("asks for the notice before it saves the value that needs a confirmation, and sends it", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_OWNER]);
+    putSetting.mockResolvedValue({ stores: [] });
+    await mount();
+    await screen.findByText("example.drawer_owner");
+    const save = screen.getByRole("button", { name: "Save and publish" }) as HTMLButtonElement;
+
+    fireEvent.change(control("Value for every store"), { target: { value: "OWNER_ONE_PERSON" } });
+    const notice = screen.getByRole("checkbox", {
+      name: /^settings\.item\.example\.drawer_owner\.confirm/,
+    }) as HTMLInputElement;
+    expect(notice.checked).toBe(false);
+    // The scope the confirmation covers, on the same screen.
+    expect(
+      screen.getByText(
+        "Your name and the time are recorded with this confirmation. It covers every store, and any store that joins later.",
+      ),
+    ).toBeTruthy();
+    // Save waits for the tick, and says so.
+    expect(save.disabled).toBe(true);
+    expect(screen.getByText("Tick the confirmation above to save this value.")).toBeTruthy();
+
+    fireEvent.click(notice);
+    expect(save.disabled).toBe(false);
+    expect(screen.queryByText("Tick the confirmation above to save this value.")).toBeNull();
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(putSetting).toHaveBeenCalledWith(
+        TENANT.id,
+        DRAWER_OWNER.setting_key,
+        "SETTING_SCOPE_TENANT",
+        TENANT.id,
+        "OWNER_ONE_PERSON",
+        true,
+      ),
+    );
+  });
+
+  it("asks nothing for any other value, and a tick does not outlive the value it was for", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_OWNER]);
+    putSetting.mockResolvedValue({ stores: [] });
+    await mount();
+    await screen.findByText("example.drawer_owner");
+    const save = screen.getByRole("button", { name: "Save and publish" }) as HTMLButtonElement;
+
+    fireEvent.change(control("Value for every store"), { target: { value: "OWNER_ONE_PERSON" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.change(control("Value for every store"), { target: { value: "OWNER_SHARED" } });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(save.disabled).toBe(false);
+
+    // Back to the value that needs one: the earlier tick is gone.
+    fireEvent.change(control("Value for every store"), { target: { value: "OWNER_ONE_PERSON" } });
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    expect(save.disabled).toBe(true);
+
+    fireEvent.change(control("Value for every store"), { target: { value: "OWNER_SHARED" } });
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(putSetting).toHaveBeenCalledWith(
+        TENANT.id,
+        DRAWER_OWNER.setting_key,
+        "SETTING_SCOPE_TENANT",
+        TENANT.id,
+        "OWNER_SHARED",
+      ),
+    );
+  });
+
+  it("asks for the notice in Vietnamese too", async () => {
+    setLocale("vi");
+    settingsCatalogue.mockResolvedValue([DRAWER_OWNER]);
+    await mount();
+    await screen.findByText("example.drawer_owner");
+    fireEvent.change(control("Giá trị cho mọi cửa hàng"), { target: { value: "OWNER_ONE_PERSON" } });
+    expect(screen.getByRole("checkbox")).toBeTruthy();
+    expect(screen.getByText("Đánh dấu ô xác nhận ở trên để lưu giá trị này.")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Lưu và phát hành" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("asks for the drawer notice in the console's words, naming the law in Vietnamese", async () => {
+    settingsCatalogue.mockResolvedValue([DRAWER_ACCESS]);
+    await mount();
+    await screen.findByText("Whose a drawer is");
+    fireEvent.change(control("Value for every store"), {
+      target: { value: "DRAWER_ACCESS_ASSIGNED" },
+    });
+    expect(
+      screen.getByRole("checkbox", {
+        name: /^We have a lawful basis for recording which employee is accountable for a drawer/,
+      }),
+    ).toBeTruthy();
+    cleanup();
+
+    setLocale("vi");
+    await mount();
+    await screen.findByText("Người phụ trách ngăn kéo tiền");
+    fireEvent.change(control("Giá trị cho mọi cửa hàng"), {
+      target: { value: "DRAWER_ACCESS_ASSIGNED" },
+    });
+    expect(screen.getByRole("checkbox", { name: /Nghị định 13\/2023\/NĐ-CP/ })).toBeTruthy();
   });
 
   it("offers a role that cannot publish nothing to write with", async () => {

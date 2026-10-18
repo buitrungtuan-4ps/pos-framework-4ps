@@ -6,7 +6,7 @@ import { CodePad } from "../components/CodePad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { signedInAs } from "../state/session";
-import { loadStore } from "../state/store";
+import { loadStore } from "../state/registry";
 import { errorMessage } from "../lib/errors";
 
 // Staff sign-in on a paired device (S0b, ADR-0084). A paired device commands nothing until a real

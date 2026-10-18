@@ -3,7 +3,7 @@
 
 //! The daily rollup reads (`/v1` by API key, `/admin` by session), their CSV export, and the reset
 //! that makes the projector rebuild a store's rollup
-//! ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
+//! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -112,7 +112,7 @@ impl RollupWindowQuery {
 /// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup
 /// read is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not
 /// a tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The
-/// super-admin is global ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)) — it already reads
+/// super-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads
 /// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
 /// mutated.
 pub async fn admin_daily_rollups<R, K, C, A, T>(
@@ -222,7 +222,7 @@ where
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log
 /// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
 /// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
-/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
+/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 /// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
 pub async fn admin_rollups_reset<R, K, C, A, T>(
     State(app): State<ReportsState<R, K, C, A, T>>,

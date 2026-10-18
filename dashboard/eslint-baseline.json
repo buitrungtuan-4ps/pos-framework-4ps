@@ -3,10 +3,10 @@
     "max-depth": 5
   },
   "src/api/client.ts": {
-    "max-lines": 2081
+    "max-lines": 2083
   },
   "src/api/types.ts": {
-    "max-lines": 1203
+    "max-lines": 1204
   },
   "src/components/AccountMenu.tsx": {
     "max-lines-per-function": 154
@@ -36,14 +36,14 @@
     "max-lines-per-function": 101
   },
   "src/components/kit.tsx": {
-    "max-lines-per-function": 199
+    "max-lines-per-function": 191
   },
   "src/components/ui.tsx": {
     "max-lines-per-function": 156
   },
   "src/installers.mjs": {
-    "max-lines": 1184,
-    "max-lines-per-function": 430
+    "max-lines": 1178,
+    "max-lines-per-function": 427
   },
   "src/screens/Activation.tsx": {
     "max-lines-per-function": 350
@@ -126,7 +126,7 @@
     "max-lines-per-function": 477
   },
   "src/screens/Settings.tsx": {
-    "max-lines-per-function": 811
+    "max-lines-per-function": 804
   },
   "src/screens/Stations.tsx": {
     "max-lines-per-function": 557

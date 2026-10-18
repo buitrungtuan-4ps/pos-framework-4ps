@@ -6,7 +6,7 @@
 // Because it has a second caller that is not a browser: `scripts/installer-syntax.mjs` renders every
 // artifact with representative values and puts the result through a real parser — `sh -n` for the
 // shell script, PowerShell's own parser for the `.ps1` on the Windows CI runner. Plain ESM with no
-// imports is what lets bare `node` run it on a runner with no toolchain set up, and Vite bundles it
+// package imports is what lets bare `node` run it on a runner with no toolchain set up, and Vite bundles it
 // for the screen unchanged. `installers.d.mts` gives the TypeScript side its types.
 //
 // That gate is the whole reason this file exists. These scripts are typed by nobody and run as root
@@ -14,6 +14,8 @@
 // now the generated shell script was checked by nothing at all — `sh -n` appears nowhere in the tree
 // — and the Windows script did not exist, which [issue #182](https://github.com/buitrungtuan-4ps/pos-framework-4ps/issues/182)
 // attributed to the absence of a way to check one.
+
+import * as windowsState from "./installer-windows-state.mjs";
 
 /** The bind port the edge defaults to when `config.toml` names none (`pos_edge`'s `DEFAULT_BIND`). */
 export const DEFAULT_BIND_PORT = "8787";
@@ -434,7 +436,7 @@ export function linuxInstaller(v) {
     "# this installer was handed — a silent downgrade of a shop that had updated itself. So the",
     "# slots are laid out once, and a re-run refreshes the config, the unit and the rescue copy",
     "# without touching the running binary. That is what makes running this twice safe.",
-    'install -d -o pos -g pos "$STATE" "$STATE/bin"',
+    'install -d -o pos -g pos -m 0700 "$STATE" "$STATE/bin"',
     'if [ -e "$STATE/bin/current" ]; then',
     '  echo "bin/current exists — leaving the installed binary alone (the edge manages its own updates)"',
     "else",
@@ -571,6 +573,8 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "}",
     "$Binary = (Resolve-Path -LiteralPath $Binary).Path",
     "",
+    ...windowsState.windowsStateGuard(bindPort),
+    "",
     "# The state directory and the update slot layout (ADR-0055 Amendment 1). `current` is what the",
     "# service runs and what the edge retargets on a successful update; without it the box never",
     "# self-updates.",
@@ -582,7 +586,6 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "# without touching the running binary. That is what makes running this twice safe. The one",
     "# exception is a re-run carrying a newer release than the one running, which goes in through the",
     "# edge's own update steps once the service has stopped (below), never by overwriting a slot here.",
-    "$bin = Join-Path $Root 'bin'",
     "New-Item -ItemType Directory -Force -Path $Root, $bin | Out-Null",
     "",
     "$current = Join-Path $bin 'current'",
@@ -600,12 +603,7 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "# the service runs.",
     "Copy-Item -LiteralPath $Binary -Destination (Join-Path $Root 'pos-edge.exe') -Force",
     "",
-    "# The bootstrap config: which store this is and which cloud to dial. No credential in it.",
-    ...configBlock,
     "$configPath = Join-Path $Root 'config.toml'",
-    "# UTF-8 without a BOM: the TOML parser reads a leading BOM as part of the first key and refuses",
-    "# the file. Set-Content -Encoding utf8 writes one on Windows PowerShell 5.1, which is what ships.",
-    "[System.IO.File]::WriteAllText($configPath, $config, (New-Object System.Text.UTF8Encoding $false))",
     "",
     "# THE PORT, WHICH ON WINDOWS IS NOT OPEN.",
     "#",
@@ -654,50 +652,14 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "$exists = $null -ne (Get-Service -Name $service -ErrorAction SilentlyContinue)",
     "if ($exists) {",
     "    & sc.exe config $service binPath= \"`\"$current`\"\" start= auto | Out-Null",
+    "    $null = Assert-Exit \"sc.exe config $service\"",
     "} else {",
     "    & sc.exe create $service binPath= \"`\"$current`\"\" start= auto | Out-Null",
+    "    $null = Assert-Exit \"sc.exe create $service\"",
     "}",
     "& sc.exe description $service \"Pizza 4P's POS edge (store server)\" | Out-Null",
-    "",
-    "# WITHOUT THESE TWO PATHS A WINDOWS STORE CANNOT BE PAIRED WITH AT ALL (ADR-0117).",
-    "#",
-    "# A service started by the Service Control Manager has no console, so everything the edge logs to",
-    "# standard output is discarded — including the pairing URL, which is minted once per process start",
-    "# and which no route mints a second time. The two variables below are what make a headless box",
-    "# diagnosable and pairable:",
-    "#",
-    "#   * POS_EDGE_LOG_FILE tees the log into a file (the current run, plus the previous run beside it",
-    "#     as pos-edge.log.1). It never contains the pairing code, the staff sign-in stream or a",
-    "#     credential: the writer excludes those, and raising RUST_LOG cannot change it;",
-    "#   * POS_EDGE_PAIRING_FILE is where the pairing URL itself is written, and the edge DELETES it the",
-    "#     moment a device redeems the code. Treat it as a five-minute password: read it, pair, and it",
-    "#     is gone.",
-    "$logPath = Join-Path $Root 'pos-edge.log'",
-    "$pairingPath = Join-Path $Root 'pairing-url.txt'",
-    "",
-    "# The environment, service-scoped rather than machine-wide. A machine environment variable is",
-    "# readable by every local administrator and shows up in process listings of unrelated services;",
-    "# this key is readable only by accounts that can read the service. REG_MULTI_SZ is how SCM passes",
-    "# several variables to one service. SCM reads it at start, not on the fly, which is why the",
-    "# restart below is not optional.",
-    "$environment = @(",
-    "    \"POS_EDGE_CONFIG=$configPath\",",
-    "    \"POS_EDGE_LOG_FILE=$logPath\",",
-    "    \"POS_EDGE_PAIRING_FILE=$pairingPath\",",
-    "    'RUST_LOG=info'",
-    ")",
-    ...keyBlock,
-    "",
-    "# Without an event-bus URL the box publishes its events over HTTPS to the cloud with its device",
-    "# credential. Add one only if your cloud runs the NATS stream for store events. It is ONE secret",
-    "# shared by the whole fleet, held on the cloud box, so the console cannot fill it in without",
-    "# spreading it across every machine in the estate. Recover it on the cloud box, then add it here",
-    "# and restart:",
-    "#",
-    `#   $env = 'POS_EDGE_NATS_URL=tls://:<that token>@${cloudHost}:${NATS_CLIENT_PORT}'`,
-    "",
+    "$null = Assert-Exit \"sc.exe description $service\"",
     "$key = \"HKLM:\\SYSTEM\\CurrentControlSet\\Services\\$service\"",
-    "New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null",
     "",
     "# NOT OPTIONAL. This is the Windows counterpart of the unit's Restart=always, and without it the",
     "# store does not come back from an update or a crash. SCM has no always-restart setting — it has",
@@ -712,6 +674,7 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "#",
     "# reset= 86400 clears the failure count after a day, so three bad days do not exhaust the list.",
     "& sc.exe failure $service reset= 86400 actions= restart/5000/restart/5000/restart/30000 | Out-Null",
+    "$null = Assert-Exit \"sc.exe failure $service\"",
     "",
     "# Which release this store runs, asked while the old process still answers. A re-run keeps that",
     "# binary unless this installer carries a newer release, which is then put in place below; an",
@@ -733,23 +696,53 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "$promote = $false",
     "try { $promote = $kept -and ([version][string]$installerVersion) -gt ([version][string]$runningBefore) } catch { $promote = $false }",
     "",
-    "# Restart rather than start: on a re-run the service is already up on the old environment.",
-    "# `sc.exe stop` returns once SCM has sent the control, not once the edge has drained, and a start",
-    "# sent while the old process is still stopping is refused. So this waits for STOPPED, bounded; a",
-    "# service that has not stopped by then is reported and started anyway.",
-    "if ($exists) {",
-    "    & sc.exe stop $service | Out-Null",
-    "    try {",
-    "        (Get-Service -Name $service).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))",
-    "    } catch {",
-    "        Add-Check 'WARN' \"the old $service process did not stop within 60 seconds, so the start below may be refused. If the service is not running afterwards: sc.exe start $service\"",
-    "    }",
-    "}",
+    ...windowsState.windowsStateMigration(),
     "",
-    "# The pairing file the previous process wrote names a code only that process could redeem, and",
-    "# nothing deletes it when the service stops. Left in place, the wait below takes it for this",
-    "# start's file: it prints a dead code and moves on before the new process is listening.",
-    "Remove-Item -LiteralPath $pairingPath -Force -ErrorAction SilentlyContinue",
+    "# The bootstrap config: which store this is and which cloud to dial. No credential in it.",
+    ...configBlock,
+    "# UTF-8 without a BOM: the TOML parser reads a leading BOM as part of the first key and refuses",
+    "# the file. Set-Content -Encoding utf8 writes one on Windows PowerShell 5.1, which is what ships.",
+    "[System.IO.File]::WriteAllText($configPath, $config, (New-Object System.Text.UTF8Encoding $false))",
+    "",
+    "# WITHOUT THESE TWO PATHS A WINDOWS STORE CANNOT BE PAIRED WITH AT ALL (ADR-0117).",
+    "#",
+    "# A service started by the Service Control Manager has no console, so everything the edge logs to",
+    "# standard output is discarded — including the pairing URL, which is minted once per process start",
+    "# and which no route mints a second time. The two variables below are what make a headless box",
+    "# diagnosable and pairable:",
+    "#",
+    "#   * POS_EDGE_LOG_FILE tees the log into a file (the current run, plus the previous run beside it",
+    "#     as pos-edge.log.1). It never contains the pairing code, the staff sign-in stream or a",
+    "#     credential: the writer excludes those, and raising RUST_LOG cannot change it;",
+    "#   * POS_EDGE_PAIRING_FILE is where the pairing URL itself is written, and the edge DELETES it the",
+    "#     moment a device redeems the code. Treat it as a five-minute password: read it, pair, and it",
+    "#     is gone.",
+    "$logPath = Join-Path $logs 'pos-edge.log'",
+    "$pairingPath = Join-Path $storeDir 'pairing-url.txt'",
+    "",
+    "# The environment, service-scoped rather than machine-wide. A machine environment variable is",
+    "# readable by every local administrator and shows up in process listings of unrelated services;",
+    "# this key is readable only by accounts that can read the service. REG_MULTI_SZ is how SCM passes",
+    "# several variables to one service. SCM reads it at start, not on the fly, which is why the",
+    "# restart below is not optional.",
+    "$environment = @(",
+    "    \"POS_EDGE_CONFIG=$configPath\",",
+    "    \"POS_EDGE_LOG_FILE=$logPath\",",
+    "    \"POS_EDGE_PAIRING_FILE=$pairingPath\",",
+    "    'RUST_LOG=info'",
+    ")",
+    ...windowsState.windowsVaultEnvironment(),
+    ...keyBlock,
+    "",
+    "# Without an event-bus URL the box publishes its events over HTTPS to the cloud with its device",
+    "# credential. Add one only if your cloud runs the NATS stream for store events. It is ONE secret",
+    "# shared by the whole fleet, held on the cloud box, so the console cannot fill it in without",
+    "# spreading it across every machine in the estate. Recover it on the cloud box, then add it here",
+    "# and restart:",
+    "#",
+    `#   $env = 'POS_EDGE_NATS_URL=tls://:<that token>@${cloudHost}:${NATS_CLIENT_PORT}'`,
+    "",
+    "New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null",
     "",
     "# A program already listening on the port is a failure the edge can only report by exiting and",
     "# being restarted, over and over. With the service stopped, whatever holds the port now is",
@@ -794,6 +787,15 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "    }",
     "}",
     "",
+    ...windowsState.windowsFirstStart(),
+    "",
+    ...windowsState.windowsStateHarden(),
+    "",
+    "# The pairing file the previous process wrote names a code only that process could redeem, and",
+    "# nothing deletes it when the service stops. Left in place, the wait below takes it for this",
+    "# start's file: it prints a dead code and moves on before the new process is listening.",
+    "Remove-Item -LiteralPath $pairingPath -Force -ErrorAction SilentlyContinue",
+    "",
     "$startOutput = (& sc.exe start $service | Out-String).Trim()",
     "# 1056: already running, which is what a start racing a slow stop answers; the checks below say",
     "# whether the store came up.",
@@ -802,6 +804,7 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "}",
     "",
     "& sc.exe query $service",
+    "$null = Assert-Exit \"sc.exe query $service\"",
     "Write-Host ''",
     ...doneBlock,
     "Write-Host ''",
@@ -824,11 +827,7 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
     "# over the air rather than the one this installer was handed, so this is the one place that can",
     "# say what the store runs. It is also what the setup page waits for: SCM reports RUNNING before",
     "# the edge has opened its store and bound the port. Bounded like the wait above.",
-    "$health = $null",
-    "$deadline = (Get-Date).AddSeconds(30)",
-    "while ($null -eq $health -and (Get-Date) -lt $deadline) {",
-    `    try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:${bindPort}/healthz" -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 }`,
-    "}",
+    "$health = Wait-Health 30",
     "if ($null -ne $health) {",
     "    $version = $health.PSObject.Properties['version']",
     "    $version = if ($null -ne $version) { $version.Value } else { 'unknown' }",
@@ -991,10 +990,9 @@ function windowsBody({ configBlock, keyBlock, doneBlock, warningBlock, cloudHost
  *
  * @param {readonly string[]} help  the comment-based help block, without its `<#` / `#>`
  * @param {readonly string[]} extraParams  parameters this variant adds, already comma-terminated
- * @param {string} root
  * @returns {string[]}
  */
-function windowsHeader(help, extraParams, root) {
+function windowsHeader(help, extraParams) {
   return [
     "#Requires -RunAsAdministrator",
     "<#",
@@ -1006,7 +1004,8 @@ function windowsHeader(help, extraParams, root) {
     "    [string] $Binary,",
     "",
     ...extraParams,
-    `    [string] $Root = '${root}'`,
+    // Resolved from the system, and any other value is refused before a change (ADR-0174).
+    "    [string] $Root = (Join-Path $env:ProgramData 'pos-edge')",
     ")",
     "",
     "Set-StrictMode -Version Latest",
@@ -1028,10 +1027,10 @@ function windowsHeader(help, extraParams, root) {
  * Three things differ from the Linux script, and each is a property of the platform rather than a
  * translation choice:
  *
- *  * **No service account.** `sc.exe create` with no `obj=` runs the service as `LocalSystem`, which
- *    holds `SeCreateSymbolicLinkPrivilege` — the privilege the update slot layout needs. A named
- *    low-privilege account does not have it unless it was granted, and the edge's response to a
- *    missing `bin\\current` is to not update at all rather than to fail every ten minutes.
+ *  * **A virtual service account.** The service runs as `NT SERVICE\\pos-edge`, with its state in
+ *    `data\\` closed to every other local account, and is granted the one privilege the update slot
+ *    layout needs, `SeCreateSymbolicLinkPrivilege` (ADR-0174, `installer-windows-state.mjs`). Until
+ *    that has been applied and read back it runs as `LocalSystem`.
  *  * **No `env` file.** There is no `EnvironmentFile=` equivalent, so the two variables go in the
  *    service's own registry key as a `REG_MULTI_SZ`, readable only by accounts that can read that
  *    key — not by every process on the box, which is what a machine-wide `setx … /M` would mean.
@@ -1041,7 +1040,6 @@ function windowsHeader(help, extraParams, root) {
  * @returns {string}
  */
 export function windowsInstaller(v) {
-  const root = v.windowsRoot ?? WINDOWS_ROOT;
   return PS_BOM + [
     ...windowsHeader(
       [
@@ -1066,20 +1064,20 @@ export function windowsInstaller(v) {
         "    Path to pos-edge.exe.",
         "",
         ".PARAMETER Root",
-        "    Where the store's state lives. Defaults to the ProgramData path the config below names;",
-        "    change both together or the service will not find its database.",
+        "    Where the store's state lives: only %ProgramData%\\pos-edge is accepted (ADR-0174).",
         "",
         ".EXAMPLE",
         "    powershell -ExecutionPolicy Bypass -File .\\install-pos-edge.ps1 -Binary .\\pos-edge.exe",
       ],
       [],
-      root,
     ),
     ...windowsBody({
       configBlock: [
         "$config = @'",
-        configToml({ ...v, storePath: `${root}\\store.sqlite` }),
+        configToml({ ...v, storePath: "$storeToml" }),
         "'@",
+        // Single-quoted, so the store's name cannot expand; the one path this run chose goes in here.
+        "$config = $config.Replace('$storeToml', $storeToml)",
       ],
       keyBlock: v.key
         ? [
@@ -1123,7 +1121,6 @@ export function windowsInstaller(v) {
  * @returns {string}
  */
 export function windowsInstallerTemplate() {
-  const root = WINDOWS_ROOT;
   return PS_BOM + [
     "# GENERATED FILE — do not edit.",
     "#",
@@ -1165,7 +1162,7 @@ export function windowsInstallerTemplate() {
         `    The port the edge listens on. Defaults to ${DEFAULT_BIND_PORT}.`,
         "",
         ".PARAMETER Root",
-        "    Where the store's state lives.",
+        "    Where the store's state lives: only %ProgramData%\\pos-edge is accepted (ADR-0174).",
         "",
         ".PARAMETER CarriedVersion",
         "    The release -Binary is, which the one-file installer (pos-edge install) passes. The summary",
@@ -1201,7 +1198,6 @@ export function windowsInstallerTemplate() {
         "    [switch] $AskSyncKey,",
         "",
       ],
-      root,
     ),
     ...windowsBody({
       // A double-quoted here-string, so $StoreId and the rest are substituted. The TOML below holds
@@ -1217,7 +1213,7 @@ export function windowsInstallerTemplate() {
           cloudHost: "",
           bindPort: "$BindPort",
           key: null,
-          storePath: `${root}\\store.sqlite`,
+          storePath: "$storeToml",
         })
           // A double-quoted here-string makes ` the escape character, so a literal one is doubled.
           // Without this the prose backticks in the comments below would vanish from the file the

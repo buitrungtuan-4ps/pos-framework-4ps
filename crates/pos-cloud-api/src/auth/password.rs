@@ -2,9 +2,9 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Argon2id password hashing and verification for the super-admin
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 //!
-//! The same primitive the edge uses for offline PIN hashes ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)),
+//! The same primitive the edge uses for offline PIN hashes ([ADR-0030](../../../../docs/adr/0030-pairing-and-offline-auth.md)),
 //! at `argon2`'s default Argon2id cost. Unlike the four-digit PIN — whose defence is the cost plus a
 //! lockout — the super-admin password is expected to be high-entropy, and the *mandatory* TOTP second
 //! factor ([`super::totp`]) is what makes an online guess of the password alone useless. Only the PHC

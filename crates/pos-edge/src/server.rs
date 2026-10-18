@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use cloud_sync_http::{HttpCloudSync, HttpLink, TlsHttpTransport};
-use key_vault_keyring::{OsVault, VaultStanding};
+use key_vault_keyring::OsVault;
 use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
 use pos_ports::config_store::ConfigStore;
@@ -356,6 +356,8 @@ where
     let public_origin = config.public_origin.clone();
     let store_id = config.store_id;
     let drain_status_path = crate::drain_status::path_beside(&config.store_path);
+    // Whether the store's data is closed to other local accounts, said once at start (ADR-0174).
+    crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
     // The outbox depth is read from the store once the last drain is over, which is after `edge`
     // has moved into the composition.
     let drained_edge = Arc::clone(&edge);
@@ -705,6 +707,8 @@ where
     P: crate::print_agent::PrintAgents + 'static,
     J: crate::print_queue::PrintQueue + 'static,
 {
+    // Read before `config` moves: the directory whose access the activation standing reports.
+    let state_dir = crate::state_access::state_dir(&config.store_path);
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
     // Refuse to start if the compiled-in country modules disagree, and log which countries this
@@ -897,8 +901,11 @@ where
             &origins,
             &revocations,
             backup,
-            shutdown_rx,
-            restart,
+            Lifecycle {
+                shutdown_rx,
+                restart,
+                state_dir,
+            },
         )
         .await;
         app = surface.app;
@@ -964,6 +971,16 @@ where
     revocations
 }
 
+/// How the cloud surface is stopped, restarted and told where the store's data is: what
+/// [`compose_cloud_surface`] passes through to the loops and the activation routes.
+struct Lifecycle<'a> {
+    shutdown_rx: &'a tokio::sync::watch::Receiver<bool>,
+    restart: Option<Arc<dyn RestartRequest>>,
+    /// The directory the database lives in, whose access the activation standing reports
+    /// (ADR-0174).
+    state_dir: std::path::PathBuf,
+}
+
 /// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
 /// the two things whose lifetime outlives composing — the keyed client the OTA loop dials on, and
 /// the publish loop a stop has to wait for.
@@ -1001,8 +1018,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     origins: &Arc<crate::origins::Origins>,
     revocations: &Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-    restart: Option<Arc<dyn RestartRequest>>,
+    lifecycle: Lifecycle<'_>,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -1010,10 +1026,16 @@ where
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
 {
+    let Lifecycle {
+        shutdown_rx,
+        restart,
+        state_dir,
+    } = lifecycle;
     // The device credential (activation) and the scoped sync key: sealed under the vault key when the
     // unit's vault drop-in gave the service one (ADR-0151), in the OS keyring otherwise (ADR-0086).
     let vault = Arc::new(OsVault::from_env());
-    log_vault(vault.standing());
+    crate::vault::log_vault(vault.standing());
+    crate::vault::migrate_vault(&vault).await;
     // One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
     // own bearer-carrying client (cloud_http), keyed by a store key when one is set and by the device
     // credential otherwise (ADR-0143).
@@ -1047,6 +1069,7 @@ where
         Some(Arc::clone(&lease_watch)),
         origins,
         restart,
+        Some(state_dir),
     ));
 
     // Boot gate: start the cloud loops only once the box holds a device credential (ADR-0086). Reading
@@ -1304,29 +1327,6 @@ impl BackupPlan {
 
 /// What [`spawn_cloud_loops`] hands back when it starts: the keyed client the OTA loop dials on, and
 /// the heartbeat task a stop has to release and then wait for.
-/// Says where this run keeps its secrets, once at start: the one line that tells an operator why a
-/// Linux box asked for a new activation code after a reboot, and what fixes it.
-pub(crate) fn log_vault(standing: &VaultStanding) {
-    match standing {
-        VaultStanding::Sealed(dir) => tracing::info!(
-            dir = %dir.display(),
-            "secrets are sealed under this machine's vault key (systemd-creds, ADR-0151)"
-        ),
-        #[cfg(target_os = "linux")]
-        VaultStanding::Keyring => tracing::warn!(
-            "secrets are in the kernel keyring, which a reboot empties: run the installer again so \
-             it seals a vault key and the activation survives a power cut (ADR-0151)"
-        ),
-        #[cfg(not(target_os = "linux"))]
-        VaultStanding::Keyring => tracing::info!("secrets are in the OS credential store"),
-        VaultStanding::Unusable(reason) => tracing::error!(
-            %reason,
-            "the vault key could not be used, so the vault answers errors: the counter keeps \
-             trading and cloud sync waits until it is fixed; run the installer again (ADR-0151)"
-        ),
-    }
-}
-
 struct CloudLoops {
     client: CloudHttpClient,
     heartbeat: tokio::task::JoinHandle<()>,

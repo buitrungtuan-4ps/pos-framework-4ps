@@ -2,8 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The revenue read and its CSV exports: daily totals, fees by code
-//! ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md)) and tax by component
-//! ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)). Revenue is
+//! ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)) and tax by component
+//! ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)). Revenue is
 //! T2, so every route here needs `console.reports.revenue`.
 
 use axum::Json;

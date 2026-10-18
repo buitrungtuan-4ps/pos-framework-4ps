@@ -49,6 +49,19 @@ pos-cloud-api = { path = "../pos-cloud-api" }
 # The reports: rollups, revenue, the X/Z report and their routes (ADR-0170 decision 4). Re-exported,
 # so `pos_cloud::dashboard`, the report types in `pos_cloud::cloud` and the CSV writers keep their paths.
 pos-cloud-reports = { path = "../pos-cloud-reports" }
+# The configuration base: the config tree, the publish every area writes through, the registry,
+# settings and QR ordering's switch (ADR-0170 decision 4). Re-exported, so `pos_cloud::config_tree`
+# and the others keep their paths.
+pos-cloud-config = { path = "../pos-cloud-config" }
+pos-cloud-catalog = { path = "../pos-cloud-catalog" }
+pos-cloud-floor = { path = "../pos-cloud-floor" }
+pos-cloud-people = { path = "../pos-cloud-people" }
+# The inventory: its records, routes and store (ADR-0170 decision 4). Re-exported, so
+# `pos_cloud::inventory` and the inventory routers keep their paths.
+pos-cloud-inventory = { path = "../pos-cloud-inventory" }
+# The devices: activation, claims, onboarding and their routes and stores (ADR-0170 decision 4).
+# Re-exported, so `pos_cloud::devices` and the device routers keep their paths.
+pos-cloud-devices = { path = "../pos-cloud-devices" }
 # The real cloud composes the PostgreSQL event store (ADR-0016); main.rs opens it. Tests compose
 # pos-fakes instead — the same ingest and rollup code runs against both (ADR-0026).
 store-postgres = { path = "../adapters/store-postgres" }

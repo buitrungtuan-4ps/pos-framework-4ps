@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A tenant's fee rules over PostgreSQL
-//! ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
+//! ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
 //!
 //! One row per `(tenant, scope, scope_id, fee_id)`; the `doc` column is the rule as authored, as
 //! `jsonb` (`fee_rules`, migration 0075). This adapter keeps only the SQL and hands back the raw

@@ -49,3 +49,4 @@ The ADRs, issues and documents the plan depends on.
 | Plan | Status |
 |---|---|
 | [standardisation.md](standardisation.md) | Active: phase 2 |
+| [till-store-data.md](till-store-data.md) | Done |

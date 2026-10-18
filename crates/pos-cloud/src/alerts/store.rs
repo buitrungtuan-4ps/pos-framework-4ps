@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The alert store seam ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+//! The alert store seam ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
 //!
 //! One durable row per alert with an open→resolved lifecycle. The evaluator loop [`upsert`]s an alert
 //! while its condition fires and [`resolve`]s it when the condition clears; the console reads the

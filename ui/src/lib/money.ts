@@ -202,7 +202,7 @@ export function formatQuantity(milli: number): string {
 // config node with everything else the cloud publishes. A store trading in a currency nobody had
 // typed in here got a till with one button, and the fix was a front-end edit and a release.
 //
-// It survives as the **fallback** for the window before `loadLocale` lands, which is the same
+// It survives as the **fallback** for the window before `applyLocale` applies, which is the same
 // never-blank contract as `DEFAULT_FLOOR` and `DEFAULT_CURRENCY`. A currency with no row still gets
 // no keys, only the exact amount: the exact amount is always tenderable, and guessing denominations
 // would put wrong buttons on a real till.

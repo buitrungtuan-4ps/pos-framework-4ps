@@ -7,7 +7,9 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
-import { loadSession } from "./session";
+import { load, reload } from "./engine";
+import { ownOverride } from "./drawer-access";
+import { keptShift, shiftInfo } from "./shift-info";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -17,8 +19,6 @@ import type {
   CheckResponse,
   CourseResponse,
   DiscountResponse,
-  LineRequest,
-  OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
   MenuResponse,
@@ -26,7 +26,12 @@ import type {
   PaymentRequest,
   DrawerOutcome,
   DrawersResponse,
+  FloorResponse,
+  LiveOrder,
+  LayoutResponse,
+  LocaleResponse,
   ReasonCodeEntry,
+  ReasonCodesResponse,
   ShiftResponse,
   SyncResponse,
 } from "../api/types";
@@ -42,6 +47,7 @@ import {
 } from "../lib/money";
 
 export interface OrderLine {
+  // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
   orderLineId: string;
   orderId: string;
   name: string;
@@ -78,6 +84,11 @@ export interface OrderLine {
   // `noteLost` is that case, and every screen says it rather than drawing nothing.
   notePresent?: boolean;
   note?: string;
+  // The item it sells, where this device added it: how the edge's event finds the line it confirms.
+  menuItemId?: string;
+  // Painted before the edge confirmed it (ADR-0173 decision 4): no amount is shown, and payment
+  // waits, until the edge's event or a read of the open orders brings the line's own figures.
+  pending?: boolean;
 }
 
 // A kitchen station the store published (`GET /api/floor`), for the board's station filter.
@@ -130,11 +141,13 @@ export interface ShiftInfo {
   // Still open past the business day it opened on, which the Shift screen flags (ADR-0167
   // decision 11). The edge's judgement, read with the shift: the till keeps no business day.
   dayEnded?: boolean;
+  // Whose the drawer is, where the store assigns drawers: an id, never a name (decision 9).
+  assignee?: string;
 }
 
-interface StoreShape {
+export interface StoreShape {
   link: LinkStatus;
-  // The floor the app draws — the store's published tables once `loadFloor` syncs them, and a
+  // The floor the app draws — the store's published tables once `applyFloor` applies them, and a
   // sensible default until it does (the never-blank config contract, ADR-0072).
   floor: TableCard[];
   // The station a fire and a bump route to when no per-item rule applies — the store's published
@@ -289,7 +302,7 @@ interface StoreShape {
 const tid = (code: string): string => code.padStart(26, "0");
 
 // The fallback floor the app draws before the store's real layout syncs from config, and if a store
-// has none published (never-blank, ADR-0072). Replaced wholesale by `loadFloor` once the edge serves
+// has none published (never-blank, ADR-0072). Replaced wholesale by `applyFloor` once the edge serves
 // the published plan.
 const DEFAULT_FLOOR: readonly TableCard[] = Array.from({ length: 8 }, (_, index) => {
   const number = index + 1;
@@ -356,7 +369,7 @@ const [state, setState] = createStore<StoreShape>({
 
 export { state };
 
-// The floor the app draws — reactive, so a screen's `<For>` re-renders when `loadFloor` syncs the
+// The floor the app draws — reactive, so a screen's `<For>` re-renders when `applyFloor` applies the
 // store's real tables.
 export function floorTables(): readonly TableCard[] {
   return state.floor;
@@ -390,15 +403,7 @@ export function areaIsPlaced(area: FloorArea): boolean {
 // in: the real tables replace the default grid, and the plan's default station replaces the bootstrap
 // fallback. Forgiving and never-blank — an empty plan or a failed read leaves the fallback in place,
 // so the floor is never wiped out from under the operator.
-export async function loadFloor(): Promise<void> {
-  let response;
-  try {
-    response = await api.floor();
-  } catch {
-    // The route may be briefly unavailable (a device that just paired, the edge still starting);
-    // keep whatever floor we hold and let a later reload pick it up.
-    return;
-  }
+export function applyFloor(response: FloorResponse): void {
   const tables: TableCard[] = [];
   for (const area of response.floor.areas ?? []) {
     for (const table of area.tables ?? []) {
@@ -470,17 +475,43 @@ export function tableState(tableId: string): string {
 }
 
 export function linesForTable(tableId: string): OrderLine[] {
-  const orderId = state.tableOrder[tableId];
-  if (orderId === undefined) {
-    return [];
-  }
+  // A line added before the table's order was known waits under a provisional order of its own.
+  const orderId = state.tableOrder[tableId] ?? `${PENDING}order:${tableId}`;
   return Object.values(state.lines).filter((line) => line.orderId === orderId);
+}
+
+// The prefix of a provisional id: a line, or an order, this device painted before the edge answered
+// (`./optimistic`).
+export const PENDING = "pending:";
+
+// Changes the store as one draft. For `./optimistic`, which paints and rolls back its own acts.
+export function updateStore(change: (draft: StoreShape) => void): void {
+  setState(produce(change));
+}
+
+// Drops the provisional line the edge's event confirms: the same item, choices and note, added on
+// this device to the same order (or before its order was known), oldest first.
+function confirmProvisional(draft: StoreShape, line: OrderLine): void {
+  const ghost = Object.values(draft.lines).find(
+    (held) =>
+      held.orderLineId.startsWith(PENDING) &&
+      held.menuItemId === line.menuItemId &&
+      (held.orderId === line.orderId || held.orderId.startsWith(PENDING)) &&
+      held.note === line.note &&
+      held.modifierMenuItemIds.join() === line.modifierMenuItemIds.join(),
+  );
+  if (ghost !== undefined) {
+    delete draft.lines[ghost.orderLineId];
+  }
 }
 
 // The lines on this table that the kitchen has not been told about yet — what one tap on Send acts
 // on, and the number the button carries. `docs/ui-ux.md` §3 has asked for that count since P6.
 export function unfiredLinesForTable(tableId: string): OrderLine[] {
-  return linesForTable(tableId).filter((line) => line.state === "ORDER_LINE_STATE_ADDED");
+  // Not a line still sending: the edge has nothing to fire for it yet.
+  return linesForTable(tableId).filter(
+    (line) => line.state === "ORDER_LINE_STATE_ADDED" && line.pending !== true,
+  );
 }
 
 // The bill the pay screen settles next on this table: the oldest one still open, so a split table's
@@ -522,7 +553,7 @@ function orderStillOwes(draft: StoreShape, orderId: string): boolean {
 // and the seat a server was ringing for go with them, and the table they left waits to be cleared —
 // the same move the edge folds from `sales.table.transferred`. The states are the caller's: the edge's
 // answer on this device, and what that answer always is on the fan-out.
-function moveOrder(
+export function moveOrder(
   draft: StoreShape,
   orderId: string,
   from: string,
@@ -712,6 +743,7 @@ export function fold(event: ServerEvent): void {
       if (line !== null) {
         setState(
           produce((draft) => {
+            confirmProvisional(draft, line);
             draft.lines[line.orderLineId] = line;
             draft.liveOrders[line.orderId] = true;
           }),
@@ -754,9 +786,8 @@ export function fold(event: ServerEvent): void {
         if (quantity !== null && typeof quantity["milli"] === "number") {
           setState("lines", lineId, "quantityMilli", quantity["milli"]);
         }
-        if (lineTotal !== null) {
-          setState("lines", lineId, "lineTotal", lineTotal);
-        }
+        // The edge's figure is here, so a quantity this device changed is confirmed.
+        setState("lines", lineId, { pending: false, ...(lineTotal === null ? {} : { lineTotal }) });
       }
       break;
     }
@@ -802,7 +833,7 @@ export function fold(event: ServerEvent): void {
       const item = str(payload, "menu_item_id");
       if (item !== null) {
         setSoldOut(item, false);
-        void loadMenu();
+        void reload("menu");
       }
       break;
     }
@@ -870,11 +901,16 @@ export function fold(event: ServerEvent): void {
     //
     // Where the store keeps a drawer per till, the shift a device shows is its own till's, so an
     // event about another till's drawer changes only the list of drawers (ADR-0167).
+    //
+    // An event about the shift already held moves only its state: the device that opened or counted
+    // it may already hold the edge's answer, whose figures the event does not carry, and the event
+    // can reach the live link after that answer. A shift not yet held is replaced and read back for
+    // its figures.
     case "cash.shift.opened": {
       const shiftId = str(payload, "opened_shift_id");
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
-        replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+        heardShift(shiftId, "SHIFT_STATE_OPEN");
       } else if (own === null) {
         void loadShift();
       }
@@ -889,7 +925,7 @@ export function fold(event: ServerEvent): void {
       if (shiftId !== null) {
         const oneDrawer = state.drawers?.drawer_model === "DRAWER_MODEL_PER_STORE";
         if (oneDrawer || state.shift?.shiftId === shiftId) {
-          replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+          heardShift(shiftId, "SHIFT_STATE_COUNTED", counted ?? undefined);
         } else if (state.drawers === null) {
           void loadShift();
         }
@@ -978,6 +1014,7 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
   return {
     orderLineId,
     orderId,
+    menuItemId: str(payload, "menu_item_id") ?? undefined,
     name,
     quantityMilli: milli,
     lineTotal,
@@ -1022,45 +1059,9 @@ export function modifierNames(line: OrderLine): string[] {
   return line.modifierMenuItemIds.map((id) => named(id) ?? id);
 }
 
-// How long a board waits before asking the counter list again for a number it has not got. A
-// counter order is numbered when it is opened, so one read almost always answers; the wait only
-// stops an order that has no number from being asked about on every change to the board.
-const QUEUE_NUMBER_READ_MS = 5_000;
-let queueNumbersReadAt = 0;
-
-// The number the guest was given for a counter order, or undefined when the till has not read it,
-// or the order was never given one.
-export function queueNumberFor(orderId: string): number | undefined {
-  return state.queueNumbers[orderId];
-}
-
-// Reads the counter list for the numbers of the counter orders on a board, keeping only those.
-// A failed read keeps what the board had: it goes on showing the order's reference until the next
-// read answers.
-export async function refreshQueueNumbers(onBoard: readonly string[]): Promise<void> {
-  const now = Date.now();
-  if (now - queueNumbersReadAt < QUEUE_NUMBER_READ_MS) {
-    return;
-  }
-  queueNumbersReadAt = now;
-  try {
-    const counter = await api.openOrders();
-    const wanted = new Set(onBoard);
-    const next: Record<string, number> = {};
-    for (const [orderId, number] of Object.entries(state.queueNumbers)) {
-      if (wanted.has(orderId)) {
-        next[orderId] = number;
-      }
-    }
-    for (const order of counter) {
-      if (order.queue_number !== undefined && wanted.has(order.order_id)) {
-        next[order.order_id] = order.queue_number;
-      }
-    }
-    setState("queueNumbers", reconcile(next));
-  } catch {
-    // Kept as it was; see above.
-  }
+// Replaces the queue numbers the boards show (`./queue-numbers`).
+export function setQueueNumbers(next: Record<string, number>): void {
+  setState("queueNumbers", reconcile(next));
 }
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.
@@ -1219,7 +1220,7 @@ export async function setItemSoldOut(menuItemId: string, soldOut: boolean): Prom
   await (soldOut ? api.markSoldOut(menuItemId) : api.restoreItem(menuItemId));
   setSoldOut(menuItemId, soldOut);
   if (!soldOut) {
-    void loadMenu();
+    void reload("menu");
   }
 }
 
@@ -1252,28 +1253,7 @@ export async function releaseTable(tableId: string): Promise<void> {
   );
 }
 
-// Moves the guests at a table, and their order, to a free table. The fan-out brings the same move to
-// every other device; this one shows it at once.
-export async function moveTable(from: string, to: string): Promise<void> {
-  const response = await api.transferTable(from, to);
-  setState(
-    produce((draft) =>
-      moveOrder(
-        draft,
-        response.order_id,
-        from,
-        to,
-        response.from_table.state,
-        response.to_table.state,
-      ),
-    ),
-  );
-}
 
-// Adds one of the store's own menu items to a table. Every amount on the line is the edge's, passed
-// straight back rather than recomputed here: the price and the rate are what the store published and
-// what the guest was shown (roadmap-v3 E5). An item the edge reported unavailable is refused before
-// the round-trip — the button is disabled too, but the guard belongs with the action.
 /// The groups this item attaches, in the order it names them (ADR-0127).
 ///
 /// A group the item names and the store has not published is skipped rather than blocking the sale,
@@ -1303,68 +1283,6 @@ export function modifiersSatisfied(
   });
 }
 
-export async function addItem(
-  tableId: string,
-  item: MenuItemResponse,
-  modifiers: string[] = [],
-  note?: string,
-): Promise<void> {
-  if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
-    throw new Error(`${item.display_name} is not sellable`);
-  }
-  const walkIn = walkInOrder(tableId);
-  if (walkIn !== undefined) {
-    return addItemToWalkIn(walkIn, tableId, item, modifiers, note);
-  }
-  const line: LineRequest = {
-    menu_item_id: item.menu_item_id,
-    display_name: item.display_name,
-    quantity: { milli: 1000 },
-    unit_price: item.unit_price,
-    // One unit, so the line total is the unit price — the only quantity the till offers today, and
-    // the edge is the authority on the figure either way.
-    line_total: item.unit_price,
-    tax_class_id: item.tax_class_id,
-    tax_rate: item.tax_rate,
-    // Whose dish it is, when the store assigns seats and a server has said. Left off otherwise —
-    // the edge refuses a seat on a store with the capability off, so sending one unasked would turn
-    // every add into a refusal on the stores that make up most of them.
-    seat: state.seatsEnabled ? state.seatForTable[tableId] : undefined,
-    // The course the *catalog* says this item goes out on (ADR-0130) — a pizza is a main, and making
-    // a server say so on every tap would be a tap per dish for a fact the store already published.
-    //
-    // Gated the way the seat is, and for the same reason: the edge refuses a fire-by-course on a
-    // store with courses off, so a line stamped on such a store would carry an id nothing can act
-    // on. `?? undefined` because the wire form is nullable and `null` is not an absent field.
-    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
-    // The choices a guest made, which the edge validates against the published groups before it
-    // writes anything (ADR-0127 decision 5). Empty on every item that attaches none.
-    modifier_menu_item_ids: modifiers,
-    // The flag as well as the text, so an edge older than the note still records that one exists.
-    note_present: note !== undefined,
-    note,
-  };
-  const response = await api.addLine(tableId, line);
-  setState(
-    produce((draft) => {
-      draft.tableOrder[tableId] = response.order_id;
-      draft.orderTable[response.order_id] = tableId;
-      draft.lines[response.order_line_id] = {
-        orderLineId: response.order_line_id,
-        orderId: response.order_id,
-        name: item.display_name,
-        quantityMilli: 1000,
-        lineTotal: item.unit_price,
-        state: response.state,
-        seat: line.seat,
-        modifierMenuItemIds: modifiers,
-        courseId: line.course_id,
-        notePresent: note !== undefined,
-        note,
-      };
-    }),
-  );
-}
 
 // ---- counter orders the till starts itself (ADR-0146) ----------------------
 
@@ -1408,41 +1326,6 @@ export async function startWalkIn(channel?: string): Promise<string> {
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
 // edge's figure; the counter shows the book of the channel its walk-ins open on (`walkInMenu`), the
 // one the edge prices a walk-in from, so the two agree.
-async function addItemToWalkIn(
-  orderId: string,
-  key: string,
-  item: MenuItemResponse,
-  modifiers: string[],
-  note: string | undefined,
-): Promise<void> {
-  const line: OrderLineRequest = {
-    menu_item_id: item.menu_item_id,
-    quantity: { milli: 1000 },
-    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
-    modifier_menu_item_ids: modifiers,
-    note_present: note !== undefined,
-    note,
-  };
-  const response = await api.addOrderLine(orderId, line);
-  setState(
-    produce((draft) => {
-      draft.tableOrder[key] = response.order_id;
-      draft.lines[response.order_line_id] = {
-        orderLineId: response.order_line_id,
-        orderId: response.order_id,
-        name: item.display_name,
-        quantityMilli: 1000,
-        lineTotal: item.unit_price,
-        state: response.state,
-        seat: undefined,
-        modifierMenuItemIds: modifiers,
-        courseId: line.course_id,
-        notePresent: note !== undefined,
-        note,
-      };
-    }),
-  );
-}
 
 // The currency every amount on screen is in, as the edge reported it with the price book.
 //
@@ -1456,7 +1339,7 @@ async function addItemToWalkIn(
 // `DEFAULT_CURRENCY` is the never-blank fallback for the window before the price book loads, in
 // keeping with `DEFAULT_FLOOR` and `DEFAULT_STATION`: a till that shows no currency at all is worse
 // than one showing the deployment's own, and the value is replaced wholesale by the edge's the
-// moment `loadMenu` succeeds. A fork ships its own here.
+// moment `applyMenu` applies. A fork ships its own here.
 const DEFAULT_CURRENCY = "VND";
 
 export function storeCurrency(): string {
@@ -1574,8 +1457,8 @@ export function tenderAccepted(method: string): boolean {
 
 // The channels the counter reads a book for (ADR-0146): takeaway, the channel every walk-in took
 // before a store could choose, and the dining room, for a store whose walk-ins are eaten in.
-const TAKEAWAY = "SALES_CHANNEL_TAKEAWAY";
-const DINE_IN = "SALES_CHANNEL_DINE_IN";
+export const TAKEAWAY = "SALES_CHANNEL_TAKEAWAY";
+export const DINE_IN = "SALES_CHANNEL_DINE_IN";
 
 // What a store may set its walk-ins to (ADR-0160 decision 2).
 const WALK_IN_CHANNELS: readonly string[] = [
@@ -1622,54 +1505,37 @@ function readWalkInChannel(sent: unknown): string | null {
 }
 
 // Holds the book an edge served for `channel`, merged by id as the store's own book is.
-function setWalkInBook(channel: string, book: MenuResponse): void {
+// Applies one walk-in channel's price book (ADR-0146), from the engine's read.
+export function setWalkInBook(channel: string, book: MenuResponse): void {
   setState("walkInMenu", channel, reconcile(book.items, { key: "menu_item_id" }));
   setState("walkInModifierGroups", channel, book.modifier_groups);
 }
 
-// Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
-// failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
-// empty menu is a real answer — the store has published none — and the screen says so.
-export async function loadMenu(): Promise<void> {
-  // Two reads, each applied on its own: a walk-in book that fails to arrive must not keep the store's
-  // own book from loading, and the reverse.
-  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(TAKEAWAY)]);
-  if (own.status === "fulfilled") {
-    const response = own.value;
-    // Merged by id rather than replaced, so an item that did not change keeps its place and its
-    // button: an item brought back reads the price book again, and a till mid-tap in marking mode
-    // must not have every button on the screen swapped under the next tap.
-    setState("menu", reconcile(response.items, { key: "menu_item_id" }));
-    setState("currency", response.currency);
-    setState("tipsEnabled", response.tips_enabled);
-    setState("seatsEnabled", response.seats_enabled);
-    setState("modifierGroups", response.modifier_groups);
-    setState("tablesEnabled", response.tables_enabled);
-    setState("kdsEnabled", response.kds_enabled);
-    setState("acceptedTender", response.accepted_tender);
-    setState("tipPercents", readTipPercents(response.tip_percents));
-    setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
-    setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
-    setState("coursesEnabled", response.courses_enabled);
-    setState("courses", response.courses);
-  }
-  if (walkIn.status === "fulfilled") {
-    setWalkInBook(TAKEAWAY, walkIn.value);
-  }
-  // The dining room's book as well where the store's walk-ins are eaten in, or may be, read once
-  // the store's own book has said so: a store that sets nothing reads what it always read.
-  if (walkInChannel() !== "WALK_IN_CHANNEL_TAKEAWAY") {
-    await api.menu(DINE_IN).then(
-      (book) => setWalkInBook(DINE_IN, book),
-      () => undefined,
-    );
-  }
-  // A read that failed keeps whatever it last loaded; the next boot or reload tries again.
+// Applies the store's published price book (ADR-0063) to the projection, from the engine's read
+// (`./registry`). An empty menu is a real answer — the store has published none — and the screen
+// says so.
+export function applyMenu(response: MenuResponse): void {
+  // Merged by id rather than replaced, so an item that did not change keeps its place and its
+  // button: an item brought back reads the price book again, and a till mid-tap in marking mode
+  // must not have every button on the screen swapped under the next tap.
+  setState("menu", reconcile(response.items, { key: "menu_item_id" }));
+  setState("currency", response.currency);
+  setState("tipsEnabled", response.tips_enabled);
+  setState("seatsEnabled", response.seats_enabled);
+  setState("modifierGroups", response.modifier_groups);
+  setState("tablesEnabled", response.tables_enabled);
+  setState("kdsEnabled", response.kds_enabled);
+  setState("acceptedTender", response.accepted_tender);
+  setState("tipPercents", readTipPercents(response.tip_percents));
+  setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
+  setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
+  setState("coursesEnabled", response.courses_enabled);
+  setState("courses", response.courses);
 }
 
 // The quick-cash keys the pay pad offers, in minor units, ascending (ADR-0105).
 //
-// The published list once `loadLocale` lands, and the compiled-in table for that currency until it
+// The published list once `applyLocale` applies, and the compiled-in table for that currency until it
 // does. The fallback is the same never-blank contract as `DEFAULT_FLOOR` and `DEFAULT_CURRENCY`: a
 // till whose locale has not synced keeps the keys it had, and the published list replaces them
 // wholesale — including with an empty list, which is a store saying "exact amount only" rather than
@@ -1686,13 +1552,13 @@ export function cashRoundingIncrement(): number | null {
 }
 
 // How many decimal places this store's currency has (ADR-0134): the published answer once
-// `loadLocale` lands, and the compiled-in one for that currency until it does — the same
+// `applyLocale` applies, and the compiled-in one for that currency until it does — the same
 // never-blank contract `cashDenominations` keeps.
 export function currencyExponent(): number {
   return state.currencyExponent ?? fallbackExponent(storeCurrency());
 }
 
-// How this store's country writes a number (ADR-0136): the published answer once `loadLocale`
+// How this store's country writes a number (ADR-0136): the published answer once `applyLocale`
 // lands, and the widespread `1,234.50` convention until it does — the same never-blank contract
 // `cashDenominations` and `currencyExponent` keep.
 //
@@ -1723,44 +1589,25 @@ export function parseAmount(text: string): number | null {
   return parseWhole(text, currencyExponent());
 }
 
-// Reads the store's money settings from the edge (ADR-0105). Forgiving in the same way `loadMenu`
-// is: a failed read leaves the previous keys in place, so a blip does not strand a cashier with one
-// button mid-service.
-export async function loadLocale(): Promise<void> {
-  try {
-    const response = await api.locale();
-    setState("cashDenominations", response.cash_denominations);
-    setState("cashRoundingIncrement", response.cash_rounding_increment);
-    setState("currencyExponent", response.currency_exponent);
-    setState("numberFormat", response.number_format);
-    adoptStoreLanguage(response.display_language);
-  } catch {
-    // Keep whatever is loaded; the next boot or reload tries again.
-  }
+// Applies the store's money settings (ADR-0105), from the engine's read. A failed read leaves the
+// previous keys in place, so a blip does not strand a cashier with one button mid-service.
+export function applyLocale(response: LocaleResponse): void {
+  setState("cashDenominations", response.cash_denominations);
+  setState("cashRoundingIncrement", response.cash_rounding_increment);
+  setState("currencyExponent", response.currency_exponent);
+  setState("numberFormat", response.number_format);
+  adoptStoreLanguage(response.display_language);
 }
 
-// Reads the store's published button plan (ADR-0066, C4). Forgiving in the same way `loadMenu` is: a
-// failed read leaves whatever is already arranged, and an empty plan is a real answer — the console
-// has laid nothing out, and the screen falls back to the flat price book.
-export async function loadLayout(): Promise<void> {
-  try {
-    const response = await api.layout();
-    setState("layout", response.categories);
-  } catch {
-    // Keep the last arrangement; the next boot or reload tries again.
-  }
+// Applies the store's published button plan (ADR-0066, C4). An empty plan is a real answer — the
+// console has laid nothing out, and the screen falls back to the flat price book.
+export function applyLayout(response: LayoutResponse): void {
+  setState("layout", response.categories);
 }
 
 // The reasons a void, a comp or a refund may cite, from the edge's live session (ADR-0115).
-// Forgiving in the same way `loadMenu` is: a failed read leaves whatever is loaded, so a blip does
-// not strand an operator whose next act needs a reason.
-export async function loadReasonCodes(): Promise<void> {
-  try {
-    const response = await api.reasonCodes();
-    setState("reasonCodes", response.reasons);
-  } catch {
-    // Keep whatever is loaded; the next boot or reload tries again.
-  }
+export function applyReasonCodes(response: ReasonCodesResponse): void {
+  setState("reasonCodes", response.reasons);
 }
 
 // The entries a picker may offer for one action (a `REASON_ACTION_*` wire name).
@@ -1784,20 +1631,26 @@ export function reasonsFor(action: string): ReasonCodeEntry[] {
 //
 // It **merges** rather than replaces. Events can land while the request is in flight, and the fold
 // is the authority on anything newer than this snapshot; replacing wholesale would drop a line added
-// a moment ago. Forgiving like every other loader: a failed read leaves what we hold.
-export async function loadLiveOrders(): Promise<void> {
-  let orders;
-  try {
-    orders = await api.liveOrders();
-  } catch {
-    // An edge that predates this route answers 404, and a device that just paired may be asking
-    // early. Neither is worth emptying a screen over.
-    return;
-  }
-  // What the kitchen still has to make: the live orders again, plus each paid order with no table
-  // whose food no station has bumped (ADR-0161). An edge that predates the route answers 404, and
-  // the board then works from the live orders alone, as it always did.
+// a moment ago. Read through the engine (`./registry`): a failed read leaves what we hold.
+export function loadLiveOrders(): Promise<void> {
+  return load("live_orders");
+}
+
+// The live orders, and what the kitchen still has to make: the live orders again, plus each paid
+// order with no table whose food no station has bumped (ADR-0161). An edge that predates the
+// kitchen route answers 404, and the board then works from the live orders alone, as it always did.
+export interface LiveOrdersRead {
+  orders: LiveOrder[];
+  kitchen: LiveOrder[] | null;
+}
+
+export async function readLiveOrders(): Promise<LiveOrdersRead> {
+  const orders = await api.liveOrders();
   const kitchen = await api.kitchenOrders().catch(() => null);
+  return { orders, kitchen };
+}
+
+export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
   const live = new Set(orders.map((order) => order.order_id));
   const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
@@ -1865,73 +1718,29 @@ export async function loadLiveOrders(): Promise<void> {
   );
 }
 
-// Everything the till has to read from the edge before it can sell: the floor, the price book, the
-// button plan, the money settings and the reasons an act may cite.
-//
-// One function rather than five call sites, because there are two moments a device becomes able to
-// sell and both have to load the same set. The boot gate is the obvious one; **signing in is the
-// other**, and it was missing. A device that pairs and signs in navigates client-side to the floor,
-// so `App`'s `onMount` does not run again — the till drew the fallback floor, an empty price book
-// and no quick-cash keys until somebody reloaded the page. Found by the browser step gate
-// ([ADR-0109](../../../docs/adr/0109-counting-the-taps-an-operator-makes.md)), which could not add
-// an item to an order for exactly this reason.
-//
-// Every loader is individually forgiving, so this is too: a blip leaves whatever was already loaded
-// rather than emptying the till.
-export async function loadStore(): Promise<void> {
-  await Promise.all([loadConfiguration(), loadLiveOrders(), loadShift()]);
-}
-
-// What the till draws from the store's configuration: the floor, both price books, the console's
-// button plan, the money settings, the reason codes, the idle lock and what the signed-in person
-// may do, which the published `permissions` node decides (ADR-0158 decision 6). The edge says
-// `config_applied` on the live link when a new version is live (ADR-0160 item 7), and an open till
-// reloads these then, without a new sign-in; the boot gate and sign-in read them through loadStore.
-// Forgiving like each loader it calls.
-export async function loadConfiguration(): Promise<void> {
-  await Promise.all([
-    loadFloor(),
-    loadMenu(),
-    loadLayout(),
-    loadLocale(),
-    loadReasonCodes(),
-    // One read of `GET /api/session` for the idle lock and the person's permissions both.
-    loadSession(),
-    // How many drawers the store keeps, which its configuration decides (ADR-0167).
-    loadDrawers(),
-  ]);
-}
-
 // The shift open on this store right now (F4).
 //
 // A shift used to live only in the browser that opened it: a reload, a second till or a tablet that
 // restarted mid-shift drew "No shift open" and offered to open one, the edge refused because one was
-// open, and nothing on screen could count or close it. Forgiving like the other loaders — an edge
-// that predates the route, or a blip, leaves whatever is held.
-export async function loadShift(): Promise<void> {
-  let response: ShiftResponse | null;
-  try {
-    response = await api.currentShift();
-  } catch {
-    return;
-  }
-  // The expectation only where the store's count is not blind (ADR-0160): a blind store is sent none.
+// open, and nothing on screen could count or close it. Read through the engine: an edge that
+// predates the route, or a blip, leaves whatever is held.
+export function loadShift(): Promise<void> {
+  return load("shift");
+}
+
+// Applies the shift the edge answered, or none. The expectation only where the store's count is
+// not blind (ADR-0160): a blind store is sent none.
+export function applyShift(response: ShiftResponse | null): void {
   replaceShift(response === null ? null : shiftInfo(response));
 }
 
-// A shift as the edge answered it, every field named.
-function shiftInfo(response: ShiftResponse): ShiftInfo {
-  return {
-    shiftId: response.shift_id,
-    state: response.state,
-    expected: response.expected_amount,
-    counted: response.counted_amount,
-    variance: response.variance,
-    reportPrint: response.shift_report_print,
-    paidIn: response.paid_in_amount,
-    paidOut: response.paid_out_amount,
-    dayEnded: response.day_ended === true,
-  };
+// Applies a shift event about this device's drawer. The shift already held keeps every figure the
+// edge answered (the expectation, what was paid in and out) and takes the event's state, and its
+// count where the event carries one; any other shift replaces it, and is read back for its figures.
+function heardShift(shiftId: string, shiftState: string, counted?: Money): void {
+  const kept = keptShift(state.shift, shiftId, shiftState, counted);
+  replaceShift(kept ?? { shiftId, state: shiftState, counted });
+  if (kept === null) void loadShift();
 }
 
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
@@ -1951,19 +1760,18 @@ function replaceShift(info: ShiftInfo | null): void {
           paidIn: info.paidIn,
           paidOut: info.paidOut,
           dayEnded: info.dayEnded,
+          assignee: info.assignee,
         },
   );
 }
 
-// Every drawer the store keeps (ADR-0167). Forgiving like the other loaders: an edge that predates
-// the read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
-export async function loadDrawers(): Promise<void> {
-  let response: DrawersResponse;
-  try {
-    response = await api.drawers();
-  } catch {
-    return;
-  }
+// Every drawer the store keeps (ADR-0167). Read through the engine: an edge that predates the
+// read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
+export function loadDrawers(): Promise<void> {
+  return load("drawers");
+}
+
+export function applyDrawers(response: DrawersResponse): void {
   setState("drawers", reconcile(response));
 }
 
@@ -2054,17 +1862,6 @@ export async function fireCourse(tableId: string, courseId: string): Promise<voi
 // Sends a quantity and no money: the edge holds the unit price captured when the line was added and
 // extends the line itself, so this cannot quote the guest a total that does not follow from the
 // price on the menu they were shown.
-export async function setQuantity(lineId: string, quantityMilli: number): Promise<void> {
-  const line = await api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } });
-  setState(
-    produce((draft) => {
-      const held = draft.lines[line.order_line_id];
-      if (held !== undefined) {
-        held.state = line.state;
-      }
-    }),
-  );
-}
 
 export async function fire(lineId: string): Promise<void> {
   // The edge derives the fired line's station from the published routing (ADR-0072); the station we
@@ -2254,7 +2051,7 @@ export async function settle(
   payments: PaymentRequest[],
   buyer?: BuyerRequest,
 ): Promise<BillResponse> {
-  const response = await api.settleBill(billId, { payments, buyer });
+  const response = await api.settleBill(billId, { payments, buyer, ...ownOverride() });
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
@@ -2286,7 +2083,7 @@ export async function openShift(openingFloatMinor: number): Promise<void> {
 }
 
 export async function countShift(shiftId: string, countedMinor: number): Promise<void> {
-  const response = await api.countShift(shiftId, { counted_minor: countedMinor });
+  const response = await api.countShift(shiftId, { counted_minor: countedMinor, ...ownOverride() });
   setState("shift", "state", response.state);
   setState("shift", "counted", response.counted_amount);
   setState("shift", "expected", response.expected_amount);
@@ -2296,7 +2093,9 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
 export async function closeShift(shiftId: string, reasonCodeId?: string): Promise<ShiftInfo> {
   const response = await api.closeShift(
     shiftId,
-    reasonCodeId === undefined ? undefined : { reason_code_id: reasonCodeId },
+    reasonCodeId === undefined && ownOverride().approver_code === undefined
+      ? undefined
+      : { ...ownOverride(), reason_code_id: reasonCodeId },
   );
   const info = shiftInfo(response);
   replaceShift(info);
@@ -2314,10 +2113,12 @@ export async function openDrawerShift(
   till: string,
   floatMinor: number,
   approval?: ApproverRequest,
+  assignee?: string,
 ): Promise<ShiftResponse> {
   const response = await api.openShift({
     opening_float: { currency_code: storeCurrency(), amount_minor: floatMinor },
     terminal_device_id: till,
+    assigned_staff_code: assignee?.trim() || undefined,
     ...approval,
   });
   if (till === ownTill()) {
@@ -2389,7 +2190,7 @@ export async function recordCashMovement(
   amountMinor: number,
   reasonCodeId: string,
 ): Promise<DrawerOutcome | undefined> {
-  const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId };
+  const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId, ...ownOverride() };
   const response =
     direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
   setState("shift", "paidIn", response.paid_in_amount);
@@ -2405,6 +2206,6 @@ export async function openDrawerNoSale(
   reasonCodeId: string,
   approval?: ApproverRequest,
 ): Promise<DrawerOutcome> {
-  const response = await api.openDrawer({ reason_code_id: reasonCodeId, ...approval });
+  const response = await api.openDrawer({ reason_code_id: reasonCodeId, ...(approval ?? ownOverride()) });
   return response.drawer_open;
 }

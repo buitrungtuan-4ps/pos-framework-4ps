@@ -12,7 +12,9 @@
 
 import { createSignal } from "solid-js";
 
-import { api, type SessionState } from "../api/client";
+import type { SessionState } from "../api/client";
+import { load } from "./engine";
+import { clearSnapshot } from "./snapshot";
 import { adoptSession, forgetPermissions } from "./permissions";
 
 const [signedIn, setSignedIn] = createSignal(false);
@@ -35,16 +37,10 @@ export function takeSession(session: SessionState): void {
   adoptSession(session);
 }
 
-// Reads the session again: whenever the store's configuration is read, and when a PIN opens the
-// lock. Forgiving like the store's loaders: a blip leaves what is held.
-export async function loadSession(): Promise<void> {
-  let session;
-  try {
-    session = await api.session();
-  } catch {
-    return;
-  }
-  takeSession(session);
+// Reads the session again, through the engine (`./registry`): whenever the store's configuration
+// is read, and when a PIN opens the lock. A blip leaves what is held.
+export function loadSession(): Promise<void> {
+  return load("session");
 }
 
 // A person has just signed in with `code` and become `employee`.
@@ -66,4 +62,11 @@ export function lockTill(): void {
   setSignedIn(false);
   setLocked(true);
   forgetPermissions();
+}
+
+// A person signed out on this device: they hold nothing, and the store's configuration goes with
+// them (ADR-0173). The idle lock, which keeps the device in the same service, does not call this.
+export async function signedOut(): Promise<void> {
+  forgetPermissions();
+  await clearSnapshot();
 }

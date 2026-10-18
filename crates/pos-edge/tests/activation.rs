@@ -109,14 +109,15 @@ fn valid_code() -> String {
 /// Builds an edge over the fakes, a stub cloud accepting `code`, and the activation router — handing
 /// back the vault and the edge so a test can inspect what the flow left behind.
 fn harness(code: &str) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
-    harness_with_origins(code, &[])
+    harness_with_origins(code, &[], None)
 }
 
 /// The same harness with a store that has published `origins`
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 fn harness_with_origins(
     code: &str,
     published: &[&str],
+    state_dir: Option<std::path::PathBuf>,
 ) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
     let edge = Arc::new(
         Edge::new(
@@ -146,6 +147,7 @@ fn harness_with_origins(
         None,
         &origins,
         None,
+        state_dir,
     );
     (router, vault, edge)
 }
@@ -210,6 +212,29 @@ async fn a_valid_code_activates_the_device() {
         events.try_recv().is_ok(),
         "device.activation.completed was published to the fan-out"
     );
+}
+
+/// A router given no state directory says nothing about it; one given a directory says whether
+/// the store's data in it is closed to other local accounts (ADR-0174 decision 5).
+#[tokio::test]
+async fn the_standing_says_whether_the_store_s_data_is_closed_where_it_was_told_where() {
+    let (router, _vault, _edge) = harness(&valid_code());
+    let (_, body) = call(router, "GET", "/api/activation", "").await;
+    let standing: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(standing.get("state_access").is_none(), "{standing}");
+
+    #[cfg(unix)]
+    for (mode, expected) in [(0o700, "STATE_ACCESS_OK"), (0o755, "STATE_ACCESS_TOO_OPEN")] {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("dir");
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).expect("mode");
+        let (router, _vault, _edge) =
+            harness_with_origins(&valid_code(), &[], Some(dir.path().to_path_buf()));
+        let (status, body) = call(router, "GET", "/api/activation", "").await;
+        assert_eq!(status, StatusCode::OK);
+        let standing: serde_json::Value = serde_json::from_str(&body).expect("json");
+        assert_eq!(standing["state_access"], expected, "mode {mode:o}");
+    }
 }
 
 #[tokio::test]
@@ -316,7 +341,7 @@ async fn the_standing_route_is_reachable_cross_origin_and_the_exchange_is_not() 
     // every boot, ahead of pairing, and routes the operator to `/setup` when the box is not
     // activated. Leaving it same-origin-only would make a second origin's very first request fail —
     // and fail *softly*, because that call is wrapped in a `.catch`.
-    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN]);
+    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN], None);
     assert_eq!(
         preflighted(router, "GET", "/api/activation")
             .await
@@ -329,7 +354,7 @@ async fn the_standing_route_is_reachable_cross_origin_and_the_exchange_is_not() 
     // activates at the `/setup` screen the box itself serves. Pinned because the two routes are
     // layered separately, and `Router::layer` covering "everything added so far" would silently
     // pull this one in if they were ever merged back together.
-    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN]);
+    let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN], None);
     assert_eq!(preflighted(router, "POST", "/api/activate").await, None);
 }
 
@@ -380,6 +405,7 @@ async fn activating_forgets_a_lease_generation_inherited_from_a_copied_disk() {
         Arc::clone(&vault),
         Some(Arc::clone(&lease)),
         &origins,
+        None,
         None,
     );
 
@@ -443,6 +469,7 @@ async fn a_successful_activation_restarts_the_box_so_its_cloud_loops_start() {
         None,
         &Arc::new(pos_edge::origins::Origins::new()),
         Some(Arc::clone(&restarted) as Arc<dyn pos_edge::ota_client::RestartRequest>),
+        None,
     );
 
     let (status, _) = call(
@@ -535,6 +562,7 @@ async fn every_activation_refusal_names_a_token_the_till_can_translate() {
         Arc::new(FakeKeyVault::new()),
         None,
         &Arc::new(pos_edge::origins::Origins::new()),
+        None,
         None,
     );
     let (status, reason) = reason_of(down, &format!("{{\"code\":\"{accepted}\"}}")).await;

@@ -146,8 +146,29 @@ pub struct Setting {
     /// The first release that honours the setting. A store running an earlier release is not
     /// offered it (ADR-0160 decision 5).
     pub since: &'static str,
+    /// The value, if any, that is written only with a recorded confirmation of a notice
+    /// ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)).
+    pub confirm: Option<Confirm>,
     /// What the setting decides, in one sentence.
     pub summary: &'static str,
+}
+
+/// A value of a setting that the cloud writes only when the person writing it confirms a notice,
+/// and records that they did
+/// ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+/// decision 1).
+///
+/// For a value that records something about a person, which data protection law lets a tenant do
+/// only on a lawful basis it has told its staff about. The register says which value; the notice's
+/// wording is its translation's, so nothing here names a country.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Confirm {
+    /// The wire token that needs confirming. Never the setting's default or its preset, so a store
+    /// runs it only after somebody confirmed it.
+    pub value: &'static str,
+    /// The translation key of the sentence the person confirms,
+    /// `settings.item.<node>.<field>.confirm`.
+    pub notice: &'static str,
 }
 
 impl Setting {
@@ -217,6 +238,14 @@ impl Setting {
                 .then_some(())
                 .ok_or(ValueRefusal::NotTrueOrFalse),
         }
+    }
+
+    /// Whether writing `value` needs a recorded confirmation: whether it is the value the setting's
+    /// [`Confirm`] names. Any other value, and a setting with no `confirm`, needs none.
+    #[must_use]
+    pub fn needs_confirming(&self, value: &serde_json::Value) -> bool {
+        self.confirm
+            .is_some_and(|confirm| value.as_str() == Some(confirm.value))
     }
 
     /// What the setting takes, for the sentence a refusal says: its tokens, its bounds, or `true or
@@ -295,7 +324,8 @@ fn scalar(value: &serde_json::Value) -> String {
 /// Sorted, so the output depends on what the register holds and not on its order. A bare key, a
 /// `kind=`, a `value=` and a `scope=` line are contracts: a value stored in the cloud and an edge on
 /// an older release both rely on them. A `default=`, a `preset=`, a `since=`, and a whole number's
-/// `min=`, `max=` and `unit=` lines may change.
+/// `min=`, `max=` and `unit=` lines may change. A `confirm=` line is a contract too: dropping a
+/// confirmation takes an ADR (ADR-0169).
 #[must_use]
 pub fn render_snapshot() -> String {
     render_snapshot_of(&register())
@@ -335,6 +365,9 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
         for scope in setting.scopes {
             lines.push(format!("{key}\tscope={scope}"));
         }
+        if let Some(confirm) = setting.confirm {
+            lines.push(format!("{key}\tconfirm={}", confirm.value));
+        }
         lines.push(format!("{key}\tsince={}", setting.since));
     }
     lines.sort();
@@ -345,7 +378,9 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
          #\n\
          # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both\n\
          # rely on it, so it may be added to but never renamed or removed. A default, a preset, a\n\
-         # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.\n",
+         # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.\n\
+         # A REMOVED confirm line fails CI too: it is a value written only with a recorded\n\
+         # confirmation, and dropping that takes an ADR. ADR-0169.\n",
     );
     for line in lines {
         out.push_str(&line);
@@ -383,8 +418,17 @@ fn render_markdown_of(settings: &[Setting]) -> String {
          - **New store** is the value the console gives a store it creates, where that differs \
          from the default.\n\
          - **Honoured from** is the first release that honours the setting. A store running an \
-         earlier release ignores it.\n\n",
+         earlier release ignores it.\n",
     );
+    // Said only once a setting has such a value, so the page describes the register it prints.
+    if settings.iter().any(|setting| setting.confirm.is_some()) {
+        out.push_str(
+            "- A value marked **confirmed** is written only when the person writing it confirms \
+             a notice, and the audit trail records who confirmed it and when \
+             ([ADR-0169](adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)).\n",
+        );
+    }
+    out.push('\n');
     out.push_str(
         "| Setting | Values | Default | New store | Where it is set | Honoured from | What it decides |\n",
     );
@@ -400,6 +444,10 @@ fn render_markdown_of(settings: &[Setting]) -> String {
                 format!("{}, `{min}` to `{max}`", unit_phrase(*unit))
             }
             SettingShape::Bool { .. } => "`true`, `false`".to_owned(),
+        };
+        let values = match setting.confirm {
+            Some(confirm) => format!("{values}; `{}` is confirmed", confirm.value),
+            None => values,
         };
         let scopes = setting
             .scopes
@@ -454,453 +502,4 @@ fn scope_label(scope: SettingScope) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::path::PathBuf;
-
-    use serde_json::{Value, json};
-
-    use super::{
-        DOC_PATH, SNAPSHOT_PATH, Setting, SettingKind, SettingScope, SettingShape, SettingUnit,
-        ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
-        render_snapshot_of,
-    };
-    use crate::backup::{DEFAULT_INTERVAL_HOURS, PublishedBackup};
-    use crate::counter::PublishedCounter;
-    use crate::locale::LocaleSettings;
-    use crate::people::PublishedPermissions;
-    use crate::printing::{DEFAULT_FONT_SIZE_DOTS, PublishedPrinting};
-    use crate::qr::PublishedQr;
-    use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
-    use crate::shift::PublishedShift;
-    use crate::tender_keys::PublishedTenderKeys;
-    use crate::wire_enum::WireEnum;
-
-    fn committed(path: &str) -> PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(path)
-    }
-
-    /// Compares a rendering with its committed file, or rewrites the file under
-    /// `POS_UPDATE_SNAPSHOTS=1`. Opt-in, because a check that fixes itself is not a check.
-    fn check_committed(path: &str, rendered: &str) {
-        let file = committed(path);
-        if std::env::var_os("POS_UPDATE_SNAPSHOTS").is_some() {
-            std::fs::write(&file, rendered).expect("write the committed file");
-            return;
-        }
-        let on_disk = std::fs::read_to_string(&file).unwrap_or_else(|_| {
-            panic!("{path} is missing. Generate it with:\n\n    just snapshot\n")
-        });
-        assert!(
-            on_disk == rendered,
-            "{path} no longer matches the register in crates/pos-proto/src/settings.rs. \
-             Regenerate it with:\n\n    just snapshot\n"
-        );
-    }
-
-    /// A whole-number setting built here rather than taken from the register, so these tests pin the
-    /// shape and do not move when a register entry does.
-    fn seconds() -> Setting {
-        Setting {
-            node: "example",
-            field: "wait_seconds",
-            shape: SettingShape::Int {
-                min: 0,
-                max: 3600,
-                unit: SettingUnit::Seconds,
-                default: 0,
-                preset: Some(120),
-            },
-            scopes: &[SettingScope::Tenant, SettingScope::Store],
-            since: "0.15.0",
-            summary: "How long to wait.",
-        }
-    }
-
-    /// An on-or-off setting built here, for the same reason.
-    fn switch() -> Setting {
-        Setting {
-            node: "example",
-            field: "print_on_settle",
-            shape: SettingShape::Bool {
-                default: true,
-                preset: None,
-            },
-            scopes: &[SettingScope::Store],
-            since: "0.15.0",
-            summary: "Whether to print.",
-        }
-    }
-
-    #[test]
-    fn the_committed_settings_snapshot_matches_the_register() {
-        check_committed(SNAPSHOT_PATH, &render_snapshot());
-    }
-
-    #[test]
-    fn the_committed_configuration_doc_matches_the_register_snapshot() {
-        // Named for `just snapshot`, which regenerates every test of this crate whose name says
-        // "snapshot".
-        check_committed(DOC_PATH, &render_markdown());
-    }
-
-    #[test]
-    fn the_renderings_are_deterministic() {
-        assert_eq!(render_snapshot(), render_snapshot());
-        assert_eq!(render_markdown(), render_markdown());
-    }
-
-    #[test]
-    fn a_choice_takes_one_of_its_tokens_and_nothing_else() {
-        let Some(choice) = register()
-            .into_iter()
-            .find(|setting| setting.kind() == SettingKind::Choice)
-        else {
-            panic!("the register has a choice");
-        };
-        assert_eq!(choice.check(&json!("NO_SHIFT_SELLING_REFUSE")), Ok(()));
-        for wrong in [
-            json!("NO_SHIFT_SELLING_LATER"),
-            json!(1),
-            json!(true),
-            Value::Null,
-        ] {
-            assert_eq!(
-                choice.check(&wrong),
-                Err(ValueRefusal::NotOneOfItsValues),
-                "{wrong}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_whole_number_takes_a_whole_number_from_its_minimum_to_its_maximum() {
-        let setting = seconds();
-        for good in [0, 1, 120, 3600] {
-            assert_eq!(setting.check(&json!(good)), Ok(()), "{good}");
-        }
-        for outside in [-1, 3601, i64::MIN, i64::MAX] {
-            assert_eq!(
-                setting.check(&json!(outside)),
-                Err(ValueRefusal::OutOfRange),
-                "{outside}"
-            );
-        }
-        // The JSON type is the contract: the edge reads an integer, so a float, a string or a
-        // boolean that a lenient reader might coerce is refused here rather than misread there.
-        for wrong in [
-            json!(1.5),
-            json!(120.0),
-            json!("120"),
-            json!(true),
-            Value::Null,
-            json!(u64::MAX),
-        ] {
-            assert_eq!(
-                setting.check(&wrong),
-                Err(ValueRefusal::NotAWholeNumber),
-                "{wrong}"
-            );
-        }
-        assert_eq!(setting.takes(), "a whole number from 0 to 3600");
-    }
-
-    #[test]
-    fn a_switch_takes_true_or_false_and_nothing_else() {
-        let setting = switch();
-        assert_eq!(setting.check(&json!(true)), Ok(()));
-        assert_eq!(setting.check(&json!(false)), Ok(()));
-        for wrong in [json!("true"), json!(1), json!(0), Value::Null] {
-            assert_eq!(
-                setting.check(&wrong),
-                Err(ValueRefusal::NotTrueOrFalse),
-                "{wrong}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_whole_number_and_a_switch_carry_their_values_as_json() {
-        assert_eq!(seconds().kind(), SettingKind::Int);
-        assert_eq!(seconds().default_value(), json!(0));
-        assert_eq!(seconds().preset_value(), Some(json!(120)));
-        assert_eq!(switch().kind(), SettingKind::Bool);
-        assert_eq!(switch().default_value(), json!(true));
-        assert_eq!(switch().preset_value(), None);
-    }
-
-    #[test]
-    fn the_snapshot_names_a_whole_numbers_bounds_and_unit_and_a_switchs_two_values() {
-        let snapshot = render_snapshot_of(&[seconds(), switch()]);
-        for line in [
-            "example.wait_seconds",
-            "example.wait_seconds\tkind=SETTING_KIND_INT",
-            "example.wait_seconds\tmin=0",
-            "example.wait_seconds\tmax=3600",
-            "example.wait_seconds\tunit=SETTING_UNIT_SECONDS",
-            "example.wait_seconds\tdefault=0",
-            "example.wait_seconds\tpreset=120",
-            "example.wait_seconds\tscope=SETTING_SCOPE_TENANT",
-            "example.print_on_settle\tkind=SETTING_KIND_BOOL",
-            "example.print_on_settle\tvalue=false",
-            "example.print_on_settle\tvalue=true",
-            "example.print_on_settle\tdefault=true",
-        ] {
-            assert!(
-                snapshot.lines().any(|held| held == line),
-                "the snapshot has no line `{line}`:\n{snapshot}"
-            );
-        }
-        assert!(
-            !snapshot.contains("print_on_settle\tpreset="),
-            "a switch with no preset has no preset line"
-        );
-        assert!(
-            !snapshot.contains("wait_seconds\tvalue="),
-            "a whole number is held by its bounds, not by a list of values"
-        );
-    }
-
-    #[test]
-    fn the_register_names_a_whole_numbers_bounds_in_its_unit() {
-        let markdown = render_markdown_of(&[seconds(), switch()]);
-        assert!(markdown.contains(
-            "| `example.wait_seconds` | a whole number of seconds, `0` to `3600` | `0` | `120` |"
-        ));
-        assert!(
-            markdown
-                .contains("| `example.print_on_settle` | `true`, `false` | `true` | the default |")
-        );
-    }
-
-    #[test]
-    fn every_key_is_unique_and_snake_case() {
-        let mut seen = BTreeSet::new();
-        for setting in register() {
-            let key = setting.key();
-            assert!(seen.insert(key.clone()), "{key} is registered twice");
-            for part in [setting.node, setting.field] {
-                assert!(
-                    !part.is_empty()
-                        && part
-                            .chars()
-                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
-                    "{key}: `{part}` is not snake_case"
-                );
-            }
-        }
-    }
-
-    /// The facts every setting must hold, whatever its shape: a default it takes, a preset it takes
-    /// that is not the default, a scope, a release and a sentence.
-    fn assert_well_formed(setting: &Setting) {
-        let key = setting.key();
-        assert_eq!(
-            setting.check(&setting.default_value()),
-            Ok(()),
-            "{key}: the default is not a value it takes"
-        );
-        if let Some(preset) = setting.preset_value() {
-            assert_eq!(
-                setting.check(&preset),
-                Ok(()),
-                "{key}: the preset is not a value it takes"
-            );
-            assert_ne!(
-                preset,
-                setting.default_value(),
-                "{key}: a preset equal to the default gives a new store nothing"
-            );
-        }
-        match &setting.shape {
-            SettingShape::Choice { values, .. } => {
-                assert!(!values.is_empty(), "{key} takes no value");
-            }
-            SettingShape::Int { min, max, unit, .. } => {
-                assert!(min <= max, "{key}: its bounds are the wrong way round");
-                assert_ne!(*unit, SettingUnit::Unspecified, "{key} counts nothing");
-            }
-            SettingShape::Bool { .. } => {}
-        }
-        assert!(!setting.scopes.is_empty(), "{key} can be set nowhere");
-        assert!(
-            !setting.scopes.contains(&SettingScope::Unspecified),
-            "{key} names an unspecified scope"
-        );
-        assert!(!setting.since.is_empty(), "{key} names no release");
-        assert!(
-            !setting.summary.is_empty(),
-            "{key} says nothing about itself"
-        );
-    }
-
-    #[test]
-    fn every_setting_has_a_default_and_a_preset_it_takes_a_scope_and_a_release() {
-        for setting in register() {
-            assert_well_formed(&setting);
-        }
-        // And the two built here hold to the same rules.
-        assert_well_formed(&seconds());
-        assert_well_formed(&switch());
-    }
-
-    /// The values a test reads back through a setting's node: every token of a choice; a whole
-    /// number's bounds, default and preset; both values of a switch.
-    fn samples(setting: &Setting) -> Vec<Value> {
-        match &setting.shape {
-            SettingShape::Choice { values, .. } => {
-                values.iter().map(|value| json!(value)).collect()
-            }
-            SettingShape::Int {
-                min,
-                max,
-                default,
-                preset,
-                ..
-            } => [Some(*min), Some(*max), Some(*default), *preset]
-                .into_iter()
-                .flatten()
-                .map(|value| json!(value))
-                .collect(),
-            SettingShape::Bool { .. } => vec![json!(false), json!(true)],
-        }
-    }
-
-    /// Reads one field of a node back through the node's own type, as the edge reads it — from a
-    /// node carrying `value`, or from an empty node when `value` is `None`.
-    ///
-    /// A setting on a node this function has no arm for fails the tests below, so a new node cannot
-    /// join the register without the reader that proves the register right about it.
-    fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
-        let document = value.map_or_else(|| json!({}), |value| json!({ field: value }));
-        match node {
-            PublishedShift::NODE => {
-                let shift: PublishedShift = serde_json::from_value(document).ok()?;
-                match field {
-                    "no_shift_selling" => Some(json!(shift.no_shift_selling().as_wire())),
-                    "opening_float_minor" => Some(json!(shift.opening_float_minor())),
-                    "blind_close" => Some(json!(shift.blind_close())),
-                    "drawer_model" => Some(json!(shift.drawer_model().as_wire())),
-                    "close_report" => Some(json!(shift.close_report().as_wire())),
-                    "drawer_day_end" => Some(json!(shift.drawer_day_end().as_wire())),
-                    "variance_reason_minor" => Some(json!(shift.variance_reason_minor())),
-                    _ => None,
-                }
-            }
-            PublishedSession::NODE => {
-                let session: PublishedSession = serde_json::from_value(document).ok()?;
-                match field {
-                    "idle_lock_seconds" => Some(json!(session.idle_lock_seconds())),
-                    // A node that sets no window leaves the edge on its deprecated local file and
-                    // then on this default, so the default is what a store with neither runs.
-                    "sign_in_idle_timeout_minutes" => Some(json!(
-                        session
-                            .sign_in_idle_timeout_minutes()
-                            .unwrap_or(DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES)
-                    )),
-                    "lockout_attempts" => Some(json!(session.lockout_attempts())),
-                    "lockout_minutes" => Some(json!(session.lockout_minutes())),
-                    "pin_min_length" => Some(json!(session.pin_min_length())),
-                    _ => None,
-                }
-            }
-            PublishedPermissions::NODE => {
-                let permissions: PublishedPermissions = serde_json::from_value(document).ok()?;
-                match field {
-                    "enforced" => Some(json!(permissions.enforced)),
-                    _ => None,
-                }
-            }
-            PublishedPrinting::NODE => {
-                let printing: PublishedPrinting = serde_json::from_value(document).ok()?;
-                match field {
-                    "receipt_language" => Some(json!(printing.receipt_language().as_wire())),
-                    "receipt_second_language" => {
-                        Some(json!(printing.receipt_second_language().as_wire()))
-                    }
-                    "receipt_printed_on_settle" => {
-                        Some(json!(printing.receipt_printed_on_settle()))
-                    }
-                    "receipt_tax_components" => Some(json!(printing.receipt_tax_components())),
-                    // A node that sets no size leaves the edge on its deprecated local file and
-                    // then on this default, so the default is what a store with neither runs.
-                    "font_size_dots" => Some(json!(
-                        printing.font_size_dots().unwrap_or(DEFAULT_FONT_SIZE_DOTS)
-                    )),
-                    _ => None,
-                }
-            }
-            PublishedQr::NODE => {
-                let qr: PublishedQr = serde_json::from_value(document).ok()?;
-                match field {
-                    "table_order" => Some(json!(qr.table_order().as_wire())),
-                    _ => None,
-                }
-            }
-            LocaleSettings::NODE => {
-                let locale: LocaleSettings = serde_json::from_value(document).ok()?;
-                match field {
-                    "tax_rounding" => Some(json!(locale.tax_rounding().as_wire())),
-                    _ => None,
-                }
-            }
-            PublishedTenderKeys::NODE => {
-                let keys: PublishedTenderKeys = serde_json::from_value(document).ok()?;
-                match field {
-                    "first_tip_percent" => Some(json!(keys.first_tip_percent())),
-                    "second_tip_percent" => Some(json!(keys.second_tip_percent())),
-                    "third_tip_percent" => Some(json!(keys.third_tip_percent())),
-                    "split_ways_max" => Some(json!(keys.split_ways_max())),
-                    _ => None,
-                }
-            }
-            PublishedCounter::NODE => {
-                let counter: PublishedCounter = serde_json::from_value(document).ok()?;
-                match field {
-                    "walk_in_channel" => Some(json!(counter.walk_in_channel().as_wire())),
-                    _ => None,
-                }
-            }
-            PublishedBackup::NODE => {
-                let backup: PublishedBackup = serde_json::from_value(document).ok()?;
-                match field {
-                    // A node that sets no interval leaves the edge on its deprecated local file and
-                    // then on this default, so the default is what a store with neither runs.
-                    "interval_hours" => Some(json!(
-                        backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
-                    )),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn every_value_reads_back_through_its_node() {
-        for setting in register() {
-            for value in samples(&setting) {
-                assert_eq!(
-                    read_back(setting.node, setting.field, Some(&value)),
-                    Some(value.clone()),
-                    "{}: the edge does not read `{value}` as the register says",
-                    setting.key()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_default_is_what_an_empty_node_reads_as() {
-        for setting in register() {
-            assert_eq!(
-                read_back(setting.node, setting.field, None),
-                Some(setting.default_value()),
-                "{}: no reader for its node, or an empty node does not read as the default",
-                setting.key()
-            );
-        }
-    }
-}
+mod tests;

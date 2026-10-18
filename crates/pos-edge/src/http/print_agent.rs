@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Claiming and releasing a terminal's print-agent identity, and the read the till's Devices screen
-//! draws them from ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+//! draws them from ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 //!
 //! Three routes, and they carry **both** gates: a paired device *and* an employee signed in on it
 //! holding [`Permission::ManageDevices`]. Binding a terminal is a managerial act performed in front

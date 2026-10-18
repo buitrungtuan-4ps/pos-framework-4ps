@@ -1798,12 +1798,15 @@ export const api = {
       `/admin/settings/effective?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ).then((body) => body.settings),
   // `scopeId` is the tenant itself for `SETTING_SCOPE_TENANT`, else the brand, group or store.
+  // `noticeConfirmed` only for the value a setting's `confirm` names, once its notice is ticked
+  // (ADR-0169). Left out, it is left out of the body, which the cloud reads as `false`.
   putSetting: (
     tenantId: string,
     settingKey: string,
     scope: SettingScope,
     scopeId: string,
     value: Json,
+    noticeConfirmed?: true,
   ) =>
     requestJson<SettingPublishReport>("PUT", "/admin/settings", {
       tenant_id: tenantId,
@@ -1811,6 +1814,7 @@ export const api = {
       scope,
       scope_id: scopeId,
       value,
+      notice_confirmed: noticeConfirmed,
     }),
   // A `404` here means nothing is written at that scope any more.
   clearSetting: (tenantId: string, settingKey: string, scope: SettingScope, scopeId: string) =>

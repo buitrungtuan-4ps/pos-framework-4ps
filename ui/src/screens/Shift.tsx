@@ -1,10 +1,12 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApproverFields } from "../components/ApproverFields";
+import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/types";
 import { t, type MessageKey } from "../i18n";
+import { WhyUnavailable } from "../components/StoreData";
 import { money, type Money } from "../lib/money";
 import {
   closeDrawerShifts,
@@ -30,6 +32,7 @@ import { openingFloatMinor } from "../state/session";
 import { errorMessage, owedVariances } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
+import { overrideAsks } from "../state/drawer-access";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
@@ -325,9 +328,14 @@ export function Shift() {
 
   // Another till's drawer also takes `cash.shift.manage_other_till`, which a person may hold only
   // with a manager's approval: their code and PIN, for this one act, dropped after it.
+  // A drawer that is another person's takes the override too, under the same approver (decision 9).
+  const othersPicked = () =>
+    pickedDrawers().some((drawer) => drawer.terminal_device_id !== ownTill());
   const listAsks = () =>
-    pickedDrawers().some((drawer) => drawer.terminal_device_id !== ownTill()) &&
-    asksApprover("cash.shift.manage_other_till");
+    (othersPicked() && asksApprover("cash.shift.manage_other_till")) ||
+    pickedDrawers().some((drawer) => overrideAsks(drawer.shift?.assigned_employee_id));
+  // Whom another till's drawer starting now is for, where the store assigns drawers.
+  const [assignee, setAssignee] = createSignal("");
   const listApproval = (): ApproverRequest | undefined =>
     listAsks() ? { approver_code: listCode(), approver_pin: listPin() } : undefined;
   const listReady = () =>
@@ -435,6 +443,7 @@ export function Shift() {
             till,
             typed ?? drawer.default_float.amount_minor,
             till === ownTill() ? undefined : approval,
+            till === ownTill() ? undefined : assignee(),
           );
           started.push(drawerName(drawer));
         } catch (caught) {
@@ -555,6 +564,8 @@ export function Shift() {
         )}
       </Show>
 
+      <DrawerOwner own approver />
+
       {/* Still open once the business day it opened on has ended (decision 11). */}
       <Show when={shift()?.dayEnded === true && phase() !== "SHIFT_STATE_CLOSED"}>
         <p
@@ -632,6 +643,7 @@ export function Shift() {
               class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
               classList={{ "border-primary": direction() === "in" }}
               disabled={movementParsed() === null || reasonsFor(PAID_IN).length === 0}
+              aria-describedby="why-movement-reasons"
               data-step="askPaidIn"
               onClick={() => askPaidIn()}
             >
@@ -642,12 +654,14 @@ export function Shift() {
               class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
               classList={{ "border-primary": direction() === "out" }}
               disabled={movementParsed() === null || reasonsFor(PAID_OUT).length === 0}
+              aria-describedby="why-movement-reasons"
               data-step="askPaidOut"
               onClick={() => askPaidOut()}
             >
               {t("shift.paid_out")}
             </button>
           </div>
+          <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
           <Show when={direction()}>
             {(way) => (
               <>
@@ -864,11 +878,13 @@ export function Shift() {
               type="button"
               class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
               disabled={reasonsFor(DRAWER_OPEN).length === 0}
+              aria-describedby="why-drawer-reasons"
               data-step="askOpenDrawer"
               onClick={() => askOpenDrawer()}
             >
               {t("shift.open_drawer")}
             </button>
+            <WhyUnavailable entry="reason_codes" id="why-drawer-reasons" />
             </Show>
           }
         >
@@ -962,6 +978,7 @@ export function Shift() {
                       </span>
                     )}
                   </Show>
+                  <DrawerOwner assignee={drawer.shift?.assigned_employee_id} />
                   <Show when={drawer.shift?.day_ended === true}>
                     <span class="mt-1 block text-sm font-semibold text-danger" data-outcome="drawer-day-ended">
                       {t("shift.drawer_day_ended")}
@@ -1003,6 +1020,9 @@ export function Shift() {
                     onInput={(event) => setListAmount(event.currentTarget.value)}
                   />
                   <Keypad value={listAmount()} onChange={setListAmount} />
+                </Show>
+                <Show when={picking() === "closed" && othersPicked()}>
+                  <AssigneeField value={assignee()} onChange={setAssignee} />
                 </Show>
                 <Show when={listAsks()}>
                   <p class="mt-3 text-sm text-ink-muted">{t("shift.other_till_manager")}</p>

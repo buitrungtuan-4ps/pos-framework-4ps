@@ -932,6 +932,7 @@ async fn cash_sale(
             tip: Money::zero(due.currency_code),
         }],
         None,
+        None,
     )
     .await
     .expect("settles");
@@ -1022,7 +1023,7 @@ async fn combined_slip_of(
     let mut shifts = Vec::new();
     for (till, table, lines) in [(BAR, 41, bar), (COUNTER, 42, counter)] {
         let shift = edge
-            .open_shift_at(server(), at(till), float, None)
+            .open_shift_at(server(), at(till), float, None, None)
             .await
             .expect("opens")
             .shift_id;

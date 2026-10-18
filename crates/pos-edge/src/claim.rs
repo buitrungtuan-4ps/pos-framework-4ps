@@ -148,7 +148,7 @@ pub fn run(arguments: &[String], config_path: &Path) -> Result<(), EdgeError> {
         // The same vault the service will read: sealed when the claim unit was given the vault key
         // (ADR-0151), so the credential the claim collects survives the reboot before first sale.
         let vault = OsVault::from_env();
-        crate::server::log_vault(vault.standing());
+        crate::vault::log_vault(vault.standing());
         let claimed = claim(
             &HttpClaim::new(transport),
             &vault,

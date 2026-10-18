@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The [`CloudSync`] adapter over an [`HttpTransport`]
-//! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)).
+//! ([ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)).
 //!
 //! Everything here is pure but for the one `await` on the transport: build the request body, map the
 //! cloud's HTTP status to the right [`PortError`] status. The status mapping is the load-bearing part
@@ -21,11 +21,11 @@ use crate::wire::{HttpResponse, HttpTransport};
 /// The port this adapter serves, for every [`PortError`] it raises.
 const PORT: PortName = PortName::CloudSync;
 
-/// The cloud route the activation exchange posts to ([ADR-0050](../../../docs/adr/0050-activation-code-exchange.md)).
+/// The cloud route the activation exchange posts to ([ADR-0050](../../../../docs/adr/0050-activation-code-exchange.md)).
 const ACTIVATE_PATH: &str = "/activate";
 
 /// The cloud route the OTA artifact fetch posts to
-/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
+/// ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
 ///
 /// **On `/sync`, not `/internal`.** ADR-0054 pinned this at `/internal/ota/artifact` when `/internal`
 /// was believed to be the store-facing surface. It is not: `deploy/Caddyfile.d/site.caddy` answers
@@ -37,17 +37,17 @@ fn artifact_path(store_id: StoreId) -> String {
 }
 
 /// The response header carrying the artifact's detached signature, as lowercase hex
-/// ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)). Named after the existing
+/// ([ADR-0092](../../../../docs/adr/0092-artifact-trust-chain.md)). Named after the existing
 /// artifact pair's own convention (this name and the cloud's must agree, and they are compared
 /// case-insensitively as HTTP requires). It rides a header rather than the body so the body stays
 /// the raw artifact: a JSON envelope would mean encoding tens of megabytes to move a few hundred
 /// bytes.
 const SIGNATURE_HEADER: &str = "X-Pos-Artifact-Signature";
 
-/// The cloud route an update report posts to ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
+/// The cloud route an update report posts to ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)),
 /// store-scoped for the same reason [`artifact_path`] is — and for one more.
 ///
-/// [ADR-0097](../../../docs/adr/0097-internal-route-authentication.md) recorded that a fleet-wide
+/// [ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md) recorded that a fleet-wide
 /// shared secret could never make the `/internal` report *attributable*: that route read `tenant_id`
 /// and `store_id` out of the body, so it believed the caller's claim about which store it was. On
 /// `/sync` the cloud takes the tenant from the scoped key and the store from the path. The ADR said
@@ -57,7 +57,7 @@ fn report_path(store_id: StoreId) -> String {
 }
 
 /// The route that mints-if-absent and returns this store's archive key
-/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+/// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 ///
 /// A `POST` for a value that reads like a `GET`, and deliberately: the first call **mints** the
 /// key. A `GET` with a side effect is one a caching proxy or a browser prefetch may perform
@@ -90,7 +90,7 @@ impl<T> HttpCloudSync<T> {
     /// Both are properties of the **box**, not of any single call, so they are constructor state
     /// rather than parameters on [`CloudSync::fetch_update`]. That also keeps the port unchanged: the
     /// store id became part of the path when the store-called routes moved to `/sync`, and `arch` is
-    /// the additive body field [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+    /// the additive body field [ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md)
     /// Correction 2 added — neither is something a caller should have to remember to pass.
     #[must_use]
     pub const fn new(transport: T, store_id: StoreId, arch: &'static str) -> Self {
@@ -124,7 +124,7 @@ struct ActivateResponse {
 
 /// The artifact-fetch request body: the release to fetch, and the architecture to fetch it for.
 ///
-/// `arch` is additive per [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Correction 2.
+/// `arch` is additive per [ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md) Correction 2.
 /// R1's workflow cross-compiles two targets, so a request without one cannot say which binary it
 /// means — and guessing hands an `aarch64` box an `x86_64` executable that fails its self-test
 /// *after* the install, which is the expensive place to find out.
@@ -137,7 +137,7 @@ struct FetchRequest<'a> {
 /// The update-report request body: the version the store now runs, and its self-test outcome.
 ///
 /// No `tenant_id` and no `store_id` any more. The `/internal` shape carried both, which is exactly
-/// what made a report un-attributable ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md));
+/// what made a report un-attributable ([ADR-0097](../../../../docs/adr/0097-internal-route-authentication.md));
 /// on `/sync` the tenant comes from the scoped key the transport already attaches and the store from
 /// the path. Dropping them from the body is not a courtesy — leaving them would mean the wire still
 /// *offered* a store id the cloud must be careful to ignore.
@@ -360,7 +360,7 @@ fn parse_fetch(response: HttpResponse) -> Result<SignedArtifact, PortError> {
     match response.status {
         200..=299 => {
             // The body is the raw artifact and the signature rides a header
-            // ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)), so a 2xx with no
+            // ([ADR-0092](../../../../docs/adr/0092-artifact-trust-chain.md)), so a 2xx with no
             // signature is bytes with nothing to judge them. Unusable, and reported as retryable:
             // a proxy stripping the header or a cloud mid-deploy is the likely cause, and the edge
             // should back off rather than treat it as terminal. It is never permission to install.

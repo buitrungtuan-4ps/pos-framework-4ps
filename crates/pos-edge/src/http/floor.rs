@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The floor & kitchen read route (Track M2, [ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+//! The floor & kitchen read route (Track M2, [ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 //!
 //! `GET /api/floor` serves the store's published floor plan and kitchen stations from the live
 //! [`EdgeSession`](crate::app::EdgeSession) the config-pull rebuilds — so the in-store UI renders the
