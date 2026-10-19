@@ -1,5 +1,4 @@
 ---
-"pos-cloud-dashboard": minor
+kind: changed
 ---
-
-⚡ Bolt: Memoize drawerRows computation and optimize client-side sorting in Reports component using Schwartzian transform and reusable Intl.Collator.
+- **Dashboard drawer rows performance optimization.** Memoize drawer rows computation and optimize client-side sorting in Reports screen using Schwartzian transform and reusable Intl.Collator.
