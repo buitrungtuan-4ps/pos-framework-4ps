@@ -351,7 +351,7 @@ fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
 /// Whether an IPv6 address, by its first three segments, is in one of IANA's special-purpose blocks
 /// that no webhook receiver lives in: `2001:3::/32` AMT (RFC 7450), `2001:4:112::/48` AS112-v6
 /// (RFC 7535), `2620:4f:8000::/48` Direct Delegation AS112 (RFC 7534), `2001:5::/32` LISP EID space
-/// (RFC 7954), `2001:30::/28` DRIP Entity Tags (RFC 9374), and `5f00::/8` SRv6 Segment Routing SIDs (RFC 8986).
+/// (RFC 7954), `2001:30::/28` DRIP Entity Tags (RFC 9374), and `5f00::/8` `SRv6` Segment Routing SIDs (RFC 8986).
 fn is_special_purpose_v6(first: u16, second: u16, third: u16) -> bool {
     (first & 0xff00 == 0x5f00)
         || (first == 0x2001 && second == 0x0003)
