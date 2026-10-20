@@ -17,3 +17,6 @@ change to a template changes its golden file in the same pull request.
   names a real market. `wiring.golden` is each line it adds to the binaries, by file. The module
   passed the fiscalization suite, its own tests, clippy and rustfmt, and both binaries built with
   `country-xa`, before its files were copied here.
+- `new-screen/ui/`: `cargo xtask new screen --app ui stockCount --path /stock --title "Stock count"
+  --title-vi "Kiểm kho"`. `StockCount.tsx.golden` is the screen it writes; `edits.golden` is each line
+  it adds to an existing file, as `<file>: <line>`.
