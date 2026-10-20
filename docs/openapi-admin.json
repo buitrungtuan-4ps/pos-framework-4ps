@@ -8350,6 +8350,319 @@
         }
       }
     },
+    "/admin/stores/{store_id}/reports/xz": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`\nis optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.\nT2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the\nday's drawers is named from the store's published `devices` node as the report is served\n([`TillNames`]).",
+        "operationId": "admin_xz_report",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "business_date",
+            "in": "query",
+            "description": "The trading day, `YYYY-MM-DD`. Absent, the store's latest day",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The day's report: `kind`, `X` for the current day (interim) or `Z` for a past one (final); `business_date`; `activity`, the day's event counts; `revenue`, its takings and mix; `cash`, its drawers; and `till_names`, each till's name from the store's published devices, which are device names, never a person"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/revenue/daily": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "The materialised **revenue** rollup for one store, windowed exactly as\n[`admin_daily_rollups`](crate::rollups::admin_daily_rollups).",
+        "description": "Prices are **T2** (ADR-0081), so this is gated behind `console.reports.revenue` (Owner/Admin) —\nnarrower than the counts read's `console.data.read`. The rollup carries no customer or employee\nidentifier; the tenant is named explicitly (the console admin is global).",
+        "operationId": "admin_revenue_daily",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's takings for each trading day in the window, oldest first, as an array: `business_date`, `currency_code`, `bills`, `gross`, `reductions`, `service_charge`, `tax`, `net`, and the day's product mix, fees by code and tax by component. Amounts are integers in the currency's minor units. No customer or employee identifier"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/revenue/export": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,\nTrack O4).",
+        "operationId": "admin_export_revenue",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`revenue.csv`, as a `text/csv` attachment: the header `business_date,currency_code,bills,gross,reductions,service_charge,tax,net`, then one row per trading day, oldest first, in the currency's minor units. The audit entry records how many rows, never what they held"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/stores/{store_id}/revenue/fees/export": {
       "get": {
         "tags": [
@@ -8574,6 +8887,309 @@
             }
           }
         }
+      }
+    },
+    "/admin/stores/{store_id}/rollups/daily": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup\nread is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not\na tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The\nsuper-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads\nany tenant's configuration — so this is the same trust boundary, and it is a read: nothing is\nmutated.",
+        "operationId": "admin_daily_rollups",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's activity for each trading day in the window, oldest first, as an array: `business_date`, `total_events` and `by_type`, the count of each kind of event. Counts only, no amounts and no person. Read from the materialised rollup; a store not yet projected reads back empty"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/rollups/export": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read\n(ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by\nrow count.",
+        "operationId": "admin_export_rollups",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`rollups.csv`, as a `text/csv` attachment: the header `business_date,total_events`, then one row per trading day, oldest first. The audit entry records how many rows, never what they held"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/rollups/reset": {
+      "post": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "Resets a store's materialised rollup so the projector rebuilds it from the event log\n(super-admin only). Saving the empty default clears the per-store cursor, and the next projector\npass re-folds every event from the start — the \"reset-cursor-and-replay\" that rebuilds the cloud's\nread model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).\n`204` regardless — a store with no rollup yet is simply reset to the same empty state.",
+        "operationId": "admin_rollups_reset",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Reset. The store's rollup is emptied and its cursor cleared, so the projector's next pass rebuilds it from the event log (ADR-0036). Until then the store's reports read back empty. Nothing in the event log changes"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/subjects/{subject_id}": {
@@ -9560,7 +10176,7 @@
     },
     {
       "name": "reports",
-      "description": "A store's takings over a window of its trading days, read from the materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route here needs `console.reports.revenue`. The daily reads and the revenue export are still coverage debt; the exports of fees by code (ADR-0159) and of tax by component (ADR-0168) are documented because a route new to this surface is."
+      "description": "What a store did over a window of its trading days, read from the materialised rollup and never from the event log (ADR-0036, ADR-0081): its activity counts, its takings, fees by code (ADR-0159) and tax by component (ADR-0168), each as a read or a CSV download, and the X or Z report for one day. Prices are T2, so every read or export of an amount needs `console.reports.revenue`; the activity counts need only `console.data.read`. An export is audited by how many rows it held, never what they held. Resetting a store's rollup has the projector rebuild it from the event log."
     },
     {
       "name": "fleet",
