@@ -1187,6 +1187,9 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
             "each figure is the sum of the two drawers' own: 765k expected at the bar, 250k at \
              the counter, 5k short and 5k over"
         );
+        edge.open_shift_at(person(CASHIER, 0xB1), at(BAR), vnd(500_000), None, None)
+            .await
+            .expect("the closed drawer opens again");
     });
 }
 
