@@ -65,6 +65,20 @@ pub use items::page_shaping_needs_a_limit_refusal;
 pub use publish::catalog_publish_router;
 pub use publish::menu_nodes;
 pub use requests::clean_name_translations;
+// The handlers the console's OpenAPI document names.
+pub use courses::{
+    __path_admin_create_course, __path_admin_list_courses, __path_admin_update_course,
+};
+pub use display_categories::{
+    __path_admin_create_display_category, __path_admin_create_display_subcategory,
+    __path_admin_list_display_categories, __path_admin_list_display_subcategories,
+    __path_admin_update_display_category, __path_admin_update_display_subcategory,
+};
+pub use item_categories::{
+    __path_admin_create_item_category, __path_admin_create_item_subcategory,
+    __path_admin_list_item_categories, __path_admin_list_item_subcategories,
+    __path_admin_update_item_category, __path_admin_update_item_subcategory,
+};
 
 // --- Catalog authoring (`/admin/catalog/...`, ADR-0066) -----------------------------------------
 
