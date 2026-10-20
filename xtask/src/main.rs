@@ -50,11 +50,12 @@ cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number
   write a workspace crate that `xtask crates` accepts: manifest and contract card, README, crate
   root, and its `members` line; owners come from CODEOWNERS; never overwrites (ADR-0176)
 
-cargo xtask new adapter --kind printer|storage|card|fiscal|courier|erp [--dry-run]
+cargo xtask new adapter --kind printer|storage|card|fiscal|courier|erp|delivery
+    [--dry-run]
 
   write crates/adapters/<kind>-sandbox: a port implementation over a transport seam, and the port's
-  contract suite wired in tests/contract.rs; it names no vendor, and a card, fiscal, courier or
-  ERP sandbox carries its `<family>.sandbox` descriptor, registered nowhere (ADR-0176)
+  contract suite wired in tests/contract.rs; it names no vendor, and every kind but printer and
+  storage carries its `<family>.sandbox` descriptor, registered nowhere (ADR-0176)
 
 cargo xtask new country <cc> --display-name <name> --currency <ISO 4217> --exponent <0-4>
     --prices-include-tax <true|false> --cash-rounding <none|minor units>

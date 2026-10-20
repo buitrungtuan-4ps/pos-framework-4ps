@@ -17,25 +17,25 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
 
 ## Start from a generator, or from the template
 
-**A printer, storage, card terminal, e-invoice, courier or ERP adapter** starts from a generated sandbox
+**A printer, storage, card terminal, e-invoice, courier, ERP or delivery adapter** starts from a generated sandbox
 ([ADR-0176](../adr/0176-the-adapter-and-country-standard.md)):
 
 ```bash
-cargo xtask new adapter --kind printer   # or storage, card, fiscal, courier, erp
+cargo xtask new adapter --kind printer   # or storage, card, fiscal, courier, erp, delivery
 ```
 
 It writes `crates/adapters/<kind>-sandbox` and its `members` line. The crate is a pure core over a
-transport seam, and its `tests/contract.rs` already passes the port's suite. A card, fiscal,
-courier or ERP sandbox also carries its `<family>.sandbox` descriptor (`card.sandbox`,
-`einvoice.sandbox`, `courier.sandbox`, `erp.sandbox`), which the generator registers nowhere; step
-4 says where it would go. The command names no vendor: rename the crate and the descriptor's id
+transport seam, and its `tests/contract.rs` already passes the port's suite. Every kind
+but printer and storage also carries its `<family>.sandbox` descriptor (`card.sandbox`,
+`einvoice.sandbox`, `courier.sandbox`, `erp.sandbox`, `delivery.sandbox`), which the generator
+registers nowhere; step 4 says where it would go. The command names no vendor: rename the crate and the descriptor's id
 when you write a real vendor's adapter from it.
 Then do steps 4 to 7 below; the command has done the first three. It prints the README lines to
 paste, which `cargo xtask crates` also shows.
 
-**A delivery adapter**, a network provider, still starts from
-[`templates/adapter-template`](../../templates/adapter-template/README.md) until a generator covers
-it. Do steps 1 to 7.
+**A port no generator covers yet** starts from
+[`templates/adapter-template`](../../templates/adapter-template/README.md) until that template is
+removed (ADR-0176 decision 6). Do steps 1 to 7.
 
 ## Steps
 
