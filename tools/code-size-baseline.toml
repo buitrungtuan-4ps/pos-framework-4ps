@@ -24,7 +24,7 @@
 "crates/pos-edge-app/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
-"crates/pos-edge/src/server.rs" = 2125
+"crates/pos-edge/src/server.rs" = 1935
 "crates/pos-edge/tests/acceptance.rs" = 2564
 "crates/pos-edge/tests/domain_flow.rs" = 2343
 "crates/pos-edge/tests/drawers.rs" = 1543
