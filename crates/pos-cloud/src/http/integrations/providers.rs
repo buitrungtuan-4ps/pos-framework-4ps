@@ -65,7 +65,7 @@ where
                                       to it needs. A secret field is marked as one and has no \
                                       value here or anywhere else the API answers"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "integrations",
 )]

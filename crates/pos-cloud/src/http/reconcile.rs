@@ -325,7 +325,7 @@ impl ReconcileRunView {
                                       and asked for again; zero is in sync) and `ran_at_ms`"),
         (status = 400, description = "tenant_id is absent or not a ULID, or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The reconciliation store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "operations",

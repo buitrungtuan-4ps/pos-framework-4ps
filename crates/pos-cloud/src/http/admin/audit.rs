@@ -175,7 +175,7 @@ where
                                       in range; or order is sent without offset or is not one the \
                                       route accepts", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The audit store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "audit",

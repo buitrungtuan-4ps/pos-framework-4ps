@@ -133,7 +133,7 @@ fn alert_error_response(error: &AlertStoreError) -> Response {
                                       `summary`, `detail`, and the Unix-millisecond instants it was \
                                       first and last seen, acknowledged and resolved"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The alert store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "operations",

@@ -32,7 +32,7 @@ use crate::version::UpdateOutcome;
         (status = 200, description = "Every tenant, as an array: `tenant_id`, `name` and `status`, \
                                       each with the `etag` its version is at"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "registry",

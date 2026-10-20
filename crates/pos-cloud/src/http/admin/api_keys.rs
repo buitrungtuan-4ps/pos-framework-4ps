@@ -197,7 +197,7 @@ where
                                       `expires_at_ms`. Never a token or a secret"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The key store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "integrator access",

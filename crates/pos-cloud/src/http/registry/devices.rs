@@ -40,7 +40,7 @@ use crate::version::UpdateOutcome;
                                       store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "box activation",
