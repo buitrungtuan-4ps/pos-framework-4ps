@@ -18,7 +18,9 @@ use super::{ARTIFACT_SIGNATURE_HEADER, ArtifactRequest, ArtifactState};
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::http::{hex_digest, hex_encode, not_found};
-use crate::ota::{ArtifactKind, ArtifactStore, TargetTriple, artifact_key, validate_release_tag};
+use crate::ota::{
+    ArtifactKind, ArtifactStore, ReleaseArtifact, TargetTriple, artifact_key, validate_release_tag,
+};
 
 /// Reads a release's two blobs — the executable and its raw detached signature.
 ///
@@ -104,67 +106,113 @@ where
     B: BlobStore + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
 {
-    let grant = match authenticate(&state.keys, &state.clock, &headers).await {
+    if let Err(refusal) = authorise_store(&state, &headers, &store_id).await {
+        return refusal;
+    }
+    let target = match requested_target(&request) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
+    };
+    let artifact = match hosted_artifact(&state.releases, &request.release, &target).await {
+        Ok(artifact) => artifact,
+        Err(refusal) => return refusal,
+    };
+    let (bytes, signature) =
+        match verified_blobs(&state.blobs, &request.release, &target, &artifact).await {
+            Ok(pair) => pair,
+            Err(refusal) => return refusal,
+        };
+    signed_artifact_response(bytes, &signature)
+}
+
+/// Refuses unless the key is authenticated, holds `read_config`, and is the named store's own.
+async fn authorise_store<K, C, B, L>(
+    state: &ArtifactState<K, C, B, L>,
+    headers: &HeaderMap,
+    store_id: &str,
+) -> Result<(), Response>
+where
+    K: ApiKeyStore,
+    C: ClockSource,
+{
+    let grant = match authenticate(&state.keys, &state.clock, headers).await {
         Ok(grant) => grant,
-        Err(denied) => return denied.into_response(),
+        Err(denied) => return Err(denied.into_response()),
     };
     if let Err(forbidden) = require_scope(&grant, Scope::ReadConfig) {
-        return forbidden.into_response();
+        return Err(forbidden.into_response());
     }
     // A release is fleet-wide, so there is no per-store row to isolate here — but the key presenting
     // itself is still a *store's* credential, and one store must not fetch a release under another
     // store's name (it is how the OTA progress read model attributes an install). So the id is parsed
     // and then held to the grant, exactly as the config pull beside it does (S1).
-    let store_id = match parse_ulid_fields([("store_id", &store_id)]) {
-        Ok([store_id]) => StoreId::new(store_id),
-        Err(refusal) => return refusal,
-    };
+    let [store_id] = parse_ulid_fields([("store_id", store_id)])?;
+    let store_id = StoreId::new(store_id);
     if let Err(forbidden) = require_store(&grant, store_id) {
-        return forbidden.into_response();
+        return Err(forbidden.into_response());
     }
+    Ok(())
+}
+
+/// The target the request names, once its release tag and architecture are each well-formed.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn requested_target(request: &ArtifactRequest) -> Result<TargetTriple, Response> {
     if let Err(error) = validate_release_tag(&request.release) {
-        return api_error(ErrorStatus::InvalidArgument, format!("release: {error}"));
+        return Err(api_error(
+            ErrorStatus::InvalidArgument,
+            format!("release: {error}"),
+        ));
     }
     // A *shape* check only. `TargetTriple::parse` says whether this could name a target, not
     // whether the cloud hosts one for it — a fork that cross-compiles beyond the two targets R1
     // builds records artifacts for them, and the registry stays the authority on what exists. So a
     // well-formed triple with nothing recorded falls through to the `404` below, exactly like an
     // unknown release tag; only a triple that could never name anything is refused here.
-    let target = match TargetTriple::parse(&request.arch) {
-        Ok(target) => target,
-        Err(error) => return api_error(ErrorStatus::InvalidArgument, format!("arch: {error}")),
-    };
-    let artifact = match state
-        .releases
-        .find_artifact(&request.release, &target)
-        .await
-    {
-        Ok(Some(artifact)) => artifact,
+    TargetTriple::parse(&request.arch)
+        .map_err(|error| api_error(ErrorStatus::InvalidArgument, format!("arch: {error}")))
+}
+
+/// The registry's row for the release on the target, or the answer that the cloud hosts none.
+async fn hosted_artifact<L: ArtifactStore>(
+    releases: &L,
+    release: &str,
+    target: &TargetTriple,
+) -> Result<ReleaseArtifact, Response> {
+    match releases.find_artifact(release, target).await {
+        Ok(Some(artifact)) => Ok(artifact),
         // Not an error: a store asking for a release this cloud does not host is told so, and
         // installs nothing. The adapter maps this onto `PortError::not_found`.
-        Ok(None) => return not_found("release artifact"),
+        Ok(None) => Err(not_found("release artifact")),
         Err(error) => {
             tracing::warn!(%error, "reading the release registry failed");
-            return service_unavailable("release registry");
+            Err(service_unavailable("release registry"))
         }
-    };
+    }
+}
+
+/// The artifact's bytes and signature, once the bytes match the digest the registry recorded.
+async fn verified_blobs<B: BlobStore>(
+    blobs: &B,
+    release: &str,
+    target: &TargetTriple,
+    artifact: &ReleaseArtifact,
+) -> Result<(Vec<u8>, Vec<u8>), Response> {
     let (Ok(binary_key), Ok(signature_key)) = (
-        artifact_key(&request.release, &target, ArtifactKind::Binary),
-        artifact_key(&request.release, &target, ArtifactKind::Signature),
+        artifact_key(release, target, ArtifactKind::Binary),
+        artifact_key(release, target, ArtifactKind::Signature),
     ) else {
         // Unreachable: the tag validated above and the triple parsed, and those are the only two
         // inputs. Reported rather than unwrapped, because a panic here would take the process down
         // for a case the type system nearly rules out but does not.
-        return api_error(
+        return Err(api_error(
             ErrorStatus::Internal,
             "the release's storage key could not be built",
-        );
+        ));
     };
-    let (bytes, signature) =
-        match read_artifact_blobs(&state.blobs, &binary_key, &signature_key).await {
-            Ok(pair) => pair,
-            Err(refusal) => return refusal,
-        };
+    let (bytes, signature) = read_artifact_blobs(blobs, &binary_key, &signature_key).await?;
     // The registry's digest is an integrity check against a truncated upload or a corrupted blob, and
     // is deliberately not a trust boundary — only the minisign signature makes an artifact safe to
     // install, and only the edge verifies it. Checking it here stops the cloud shipping bytes it can
@@ -178,18 +226,23 @@ where
             found = digest,
             "an artifact blob does not match its recorded digest"
         );
-        return api_error(
+        return Err(api_error(
             ErrorStatus::Internal,
             "the stored artifact does not match its recorded digest",
-        );
+        ));
     }
+    Ok((bytes, signature))
+}
+
+/// The raw artifact as `application/octet-stream`, its signature riding the header as hex.
+fn signed_artifact_response(bytes: Vec<u8>, signature: &[u8]) -> Response {
     let mut response = (StatusCode::OK, bytes).into_response();
     let headers = response.headers_mut();
     headers.insert(
         CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    match HeaderValue::from_str(&hex_encode(&signature)) {
+    match HeaderValue::from_str(&hex_encode(signature)) {
         Ok(value) => {
             headers.insert(ARTIFACT_SIGNATURE_HEADER, value);
         }

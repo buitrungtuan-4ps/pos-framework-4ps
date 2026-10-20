@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::fleet::FleetRow;
 use pos_cloud::lease::{Region, StorePlacement};
 use pos_cloud::registry::EntityStatus;
@@ -18,7 +19,7 @@ use tower::ServiceExt;
 use crate::{
     FakeAudit, FakeConfigTrees, FakeFleet, NOW_MS, admin_cookie, fleet_app, fleet_app_with_audit,
     fleet_app_with_config, get, get_with_cookie, json_body, post_with_cookie, provisioned_admin,
-    seen_ago, store_id, store_in_handover, tenant,
+    role_session_cookie, seen_ago, store_id, store_in_handover, tenant,
 };
 
 /// The two fleet rows the listing test reads: one healthy, one that is offline, drifted, backed up
@@ -871,4 +872,121 @@ async fn fleet_needs_a_session() {
         StatusCode::UNAUTHORIZED,
         "the fleet view is behind the admin session guard"
     );
+}
+
+// --- pinned before `admin_acknowledge_region` is split (ADR-0170 decision 7) ---------------------
+
+/// A store whose locale says VN and whose region rests in SG, under `admin`, recording to `audit`.
+fn differing_store(admin: crate::FakeAdmin, audit: &FakeAudit) -> axum::Router {
+    let mut row = store_in_handover(store_id(), Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let fleet = FakeFleet::default().with_row(tenant(), row);
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    fleet_app_with_audit(admin, fleet, trees, Arc::new(AuditSink::new(audit.clone())))
+}
+
+/// An answer is the acknowledgement as stored: both codes, the reason as typed, and when.
+#[tokio::test]
+async fn an_answer_is_the_acknowledgement_as_stored() {
+    let audit = FakeAudit::default();
+    let router = differing_store(provisioned_admin(), &audit);
+    let cookie = admin_cookie(&router).await;
+    let answered = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{}/region-acknowledgement", store_id()),
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "profile_country": "VN",
+                "region_country": "SG",
+                "reason": "Consent recorded.",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(answered).await,
+        serde_json::json!({
+            "profile_country": "VN",
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+            "acknowledged_at_ms": NOW_MS,
+        })
+    );
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "profile_country": "VN",
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+        }))
+    );
+}
+
+/// An answer is refused before anything is recorded: a role that may not manage stores, an id
+/// that is not a ULID, and country codes that are not two letters, each naming its fields.
+#[tokio::test]
+async fn an_answer_is_refused_before_it_is_recorded() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = differing_store(admin.clone(), &audit);
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let body = |profile: &str| {
+        serde_json::json!({
+            "tenant_id": tenant().as_ulid().to_string(),
+            "profile_country": profile,
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+        })
+    };
+    let url = format!("/admin/stores/{}/region-acknowledgement", store_id());
+
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(post_with_cookie(&url, &body("VN"), &ops))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    for (target, sent, fields) in [
+        (
+            "/admin/stores/not-a-ulid/region-acknowledgement".to_owned(),
+            body("Vietnam"),
+            vec!["store_id"],
+        ),
+        (
+            url.clone(),
+            body("Vietnam"),
+            vec!["profile_country", "region_country"],
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(&target, &sent, &cookie))
+            .await
+            .expect("route the acknowledgement");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{target}");
+        let refusal = json_body(refused).await;
+        let named: Vec<&str> = refusal["error"]["details"]
+            .as_array()
+            .expect("details")
+            .iter()
+            .filter_map(|detail| detail["field"].as_str())
+            .collect();
+        assert_eq!(named, fields, "{target}: {refusal}");
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }

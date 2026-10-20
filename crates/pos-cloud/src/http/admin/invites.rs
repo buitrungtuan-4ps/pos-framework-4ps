@@ -15,7 +15,9 @@ use pos_proto::determinism::ClockSource;
 use serde::Deserialize;
 
 use super::admin_service_unavailable;
-use crate::auth::admin::{AdminRole, AdminStore, NewAdminInvite, NewAdminUser, hash_session_token};
+use crate::auth::admin::{
+    AdminContext, AdminRole, AdminStore, NewAdminInvite, NewAdminUser, hash_session_token,
+};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::auth::enrol::{MIN_PASSWORD_LEN, build_enrolment};
 use crate::http::{CloudApp, Json, enum_refusal, mint_credential, random_hex_32};
@@ -72,58 +74,130 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let Some(role) = AdminRole::from_token(&request.role) else {
-        return enum_refusal("role", AdminRole::ALL.iter().map(|role| role.as_token()));
+    let role = match invited_role(&context, &request.role) {
+        Ok(role) => role,
+        Err(refusal) => return refusal,
     };
-    // No privilege escalation: only an owner may mint another owner.
+    let email = match invite_email(&request.email) {
+        Ok(email) => email,
+        Err(refusal) => return refusal,
+    };
+    if let Err(refusal) = refuse_an_existing_admin(&app.admin, &email).await {
+        return refusal;
+    }
+    let (invite, token) = match new_invite(&app, &context, email, request.name, role) {
+        Ok(minted) => minted,
+        Err(refusal) => return refusal,
+    };
+    store_invite(&app, &context, invite, token).await
+}
+
+/// The role the invite grants. No privilege escalation: only an owner may mint another owner.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn invited_role(context: &AdminContext, token: &str) -> Result<AdminRole, Response> {
+    let Some(role) = AdminRole::from_token(token) else {
+        return Err(enum_refusal(
+            "role",
+            AdminRole::ALL.iter().map(|role| role.as_token()),
+        ));
+    };
     if role == AdminRole::Owner && context.admin.role != AdminRole::Owner {
-        return api_error(
+        return Err(api_error(
             ErrorStatus::PermissionDenied,
             "only an owner may invite an owner",
-        );
+        ));
     }
-    let email = request.email.trim().to_ascii_lowercase();
+    Ok(role)
+}
+
+/// The invitee's address, trimmed and lower-cased, once it looks like one.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn invite_email(raw: &str) -> Result<String, Response> {
+    let email = raw.trim().to_ascii_lowercase();
     if email.is_empty() || !email.contains('@') {
-        return api_error_with_details(
+        return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
             "a valid email is required",
             &[("email", "INVALID_FORMAT")],
-        );
+        ));
     }
-    match app.admin.find_admin_user_by_email(&email).await {
-        Ok(Some(_)) => {
-            return api_error_with_details(
-                ErrorStatus::AlreadyExists,
-                "an admin with that email already exists",
-                &[("email", "ALREADY_EXISTS")],
-            );
-        }
-        Ok(None) => {}
+    Ok(email)
+}
+
+/// Refuses an address that is already an admin's.
+async fn refuse_an_existing_admin<A: AdminStore>(admin: &A, email: &str) -> Result<(), Response> {
+    match admin.find_admin_user_by_email(email).await {
+        Ok(Some(_)) => Err(api_error_with_details(
+            ErrorStatus::AlreadyExists,
+            "an admin with that email already exists",
+            &[("email", "ALREADY_EXISTS")],
+        )),
+        Ok(None) => Ok(()),
         Err(error) => {
             tracing::error!(%error, "checking for an existing admin failed");
-            return admin_service_unavailable();
+            Err(admin_service_unavailable())
         }
     }
+}
+
+/// The invite to store and the single-use token it is for: an id and a token from OS entropy, an
+/// expiry one TTL from now, and only the token's hash on the record.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn new_invite<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    context: &AdminContext,
+    email: String,
+    name: String,
+    role: AdminRole,
+) -> Result<(NewAdminInvite, String), Response>
+where
+    C: ClockSource,
+{
     let now_ms = app.clock.now().as_milliseconds_since_epoch();
     let (Some(id), Some(token)) = (mint_ulid(now_ms), random_hex_32()) else {
         tracing::error!("could not read OS entropy to mint an invite");
-        return admin_service_unavailable();
+        return Err(admin_service_unavailable());
     };
     let ttl_ms = i64::try_from(app.admin_invite_ttl_secs.saturating_mul(1000)).unwrap_or(i64::MAX);
     let Ok(expires_at) =
         pos_proto::time::Timestamp::from_milliseconds_since_epoch(now_ms.saturating_add(ttl_ms))
     else {
-        return admin_service_unavailable();
+        return Err(admin_service_unavailable());
     };
     let invite = NewAdminInvite {
         id: id.to_string(),
         email,
-        name: request.name,
+        name,
         role,
         token_hash: hash_session_token(&token),
         invited_by: context.admin.id.clone(),
         expires_at,
     };
+    Ok((invite, token))
+}
+
+/// Stores the invite, records the role it grants, and answers the id, the token (once) and the
+/// expiry.
+async fn store_invite<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    context: &AdminContext,
+    invite: NewAdminInvite,
+    token: String,
+) -> Response
+where
+    C: ClockSource,
+    A: AdminStore,
+{
+    let (id, role, expires_at) = (invite.id.clone(), invite.role, invite.expires_at);
     match app.admin.create_invite(invite).await {
         Ok(()) => {
             // The role granted is the auditable fact; the invite email and single-use token are not
@@ -131,11 +205,11 @@ where
             audit_action(
                 &app.audit,
                 &app.clock,
-                &context,
+                context,
                 None,
                 "admin.invite",
                 "admin_invite",
-                &id.to_string(),
+                &id,
                 None,
                 Some(serde_json::json!({ "role": role.as_token() })),
             )
@@ -143,7 +217,7 @@ where
             (
                 StatusCode::CREATED,
                 Json(InviteAdminResponse {
-                    invite_id: id.to_string(),
+                    invite_id: id,
                     token,
                     expires_at_ms: expires_at.as_milliseconds_since_epoch(),
                 }),
