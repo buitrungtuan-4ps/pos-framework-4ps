@@ -24,6 +24,27 @@ use crate::http::{
 use crate::registry::{DeviceRecord, EntityStatus, RegistryStore};
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/devices",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's device slots, as an array: `device_id`, \
+                                      `tenant_id`, `store_id`, `name`, `kind` and `status`, each \
+                                      with its `etag`. These are the slots a box is activated or \
+                                      claimed into; their ids are not the ids of the devices a \
+                                      store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A super-admin lists a store's devices (tenant named on the query).
 pub(super) async fn admin_list_devices<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -57,6 +78,28 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stores/{store_id}/devices",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+    ),
+    request_body(
+        description = "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, \
+                       `kds` or `tablet`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A super-admin creates a device under a store.
 pub(super) async fn admin_create_device<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -119,6 +162,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/stores/{store_id}/devices/{device_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("device_id" = String, Path, description = "The device slot (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the slot was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or \
+                       `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "An id is not a ULID, status is not `active` or `archived`, or \
+                                      If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has no device slot with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The slot changed since you read it: re-read it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A super-admin renames a device, sets its kind, and/or sets its status.
 pub(super) async fn admin_update_device<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,

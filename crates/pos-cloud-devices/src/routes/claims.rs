@@ -233,6 +233,28 @@ struct BindClaimRequest {
     device_id: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/claims/bind",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The `user_code` a box installed with no store shows on its screen, eight \
+                       letters and digits, and the device slot to give it: `tenant_id`, `store_id` \
+                       and `device_id` (ADR-0148). The box collects its credential on its next poll",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Bound, and audited"),
+        (status = 400, description = "An id is not a ULID, or user_code is not a claim code", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "No box is waiting with that code", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The code has expired, and the box shows a new one, or it has \
+                                      already been used", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// Binds a claim. Needs `console.devices.manage`, and is audited as `device.claim`.
 async fn admin_bind_claim<Cl, A, C>(
     State(state): State<ClaimState<Cl, A, C>>,

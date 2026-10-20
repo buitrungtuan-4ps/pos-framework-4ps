@@ -46,6 +46,8 @@ pub use publish::device_publish_router;
 pub use revoke::device_revoke_router;
 
 // The handlers the console's OpenAPI document names.
+pub use activation::{__path_admin_issue_activation_code, __path_admin_revoke_activation_codes};
+pub use claims::__path_admin_bind_claim;
 pub use printers::{
     __path_admin_set_printer_paper, __path_set_drawer_attached, __path_set_print_agent,
 };
