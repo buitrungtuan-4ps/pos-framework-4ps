@@ -91,6 +91,25 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/translations",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The tenant's grid: each content key to its strings by locale, \
+                                      every key carrying `en`, the fallback. The grid is one entity: \
+                                      its version is the response's ETag. A tenant with no grid yet \
+                                      gets an empty one and no ETag"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The translation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "translations",
+)]
 /// Returns a tenant's translation grid (super-admin only), or an empty grid if it has authored none.
 async fn get_translations<Tr, A, C>(
     State(state): State<TranslationState<Tr, A, C>>,
@@ -128,6 +147,34 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/translations",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the grid was read at, or `*` for a \
+                                                     tenant with no grid yet (ADR-0095)"),
+    ),
+    request_body(
+        description = "The whole grid, as the read returns it: each content key to its strings by \
+                       locale. It replaces the stored grid",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Replaced, and audited. The ETag carries the new version"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or If-Match is absent or \
+                                      malformed", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.translations.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "If-Match named a version, but the tenant has no grid yet", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The grid changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "A key has no non-empty `en` string, naming each such key. \
+                                      Nothing is stored", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The translation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "translations",
+)]
 /// Replaces a tenant's translation grid (super-admin only). A grid whose every key does not carry a
 /// non-empty `en` is a `422` naming the offending keys, and nothing is stored.
 async fn put_translations<Tr, A, C>(
@@ -217,6 +264,26 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/translations/export",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "`translations.csv`, as a `text/csv` attachment: a `key` \
+                                      column, then one column per locale present, sorted, and a row \
+                                      per content key. A cell a spreadsheet would read as a formula \
+                                      is escaped. Audited by row count, never the contents"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.translations.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The translation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "translations",
+)]
 /// A super-admin exports a tenant's translation grid as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5). Behind [`ConsolePermission::ManageTranslations`] and audited (who exported which domain
 /// and how many rows, never the row contents). The grid is business copy (menu/UI strings), not
@@ -272,6 +339,32 @@ where
 /// translation grid is small copy, so 4 MB is generous while bounding the parse.
 const MAX_CSV_IMPORT_BYTES: usize = 4 * 1024 * 1024;
 
+#[utoipa::path(
+    post,
+    path = "/admin/translations/import/dry-run",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    request_body(
+        description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
+                       `key` column, then one column per locale, at most 4 MB. Rows are merged \
+                       onto the grid: the keys in the file are set and every other key is kept",
+        content_type = "text/csv",
+    ),
+    responses(
+        (status = 200, description = "What the file would do, writing nothing: `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A row \
+                                      with no `en` string is rejected. Not audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV of \
+                                      the export's shape", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.translations.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 413, description = "The body is over 4 MB. Answered by the server's body limit, \
+                                      without the error envelope"),
+        (status = 503, description = "The translation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "translations",
+)]
 /// A super-admin dry-runs a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5): the server parses and classifies every row (would-create / would-update / rejected) and
 /// returns the report, **writing nothing**. Behind [`ConsolePermission::ManageTranslations`]; not
@@ -314,6 +407,36 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/translations/import/apply",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    request_body(
+        description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
+                       `key` column, then one column per locale, at most 4 MB. Rows are merged \
+                       onto the grid: the keys in the file are set and every other key is kept",
+        content_type = "text/csv",
+    ),
+    responses(
+        (status = 200, description = "Applied: the valid rows are merged onto the grid and saved, \
+                                      and the report is `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A merge needs no If-Match: the \
+                                      server re-reads and retries when another writer got there \
+                                      first. The ETag carries the grid's new version. Audited by \
+                                      counts, never the contents"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV of \
+                                      the export's shape", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.translations.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt lost a race with another writer: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 413, description = "The body is over 4 MB. Answered by the server's body limit, \
+                                      without the error envelope"),
+        (status = 503, description = "The translation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "translations",
+)]
 /// A super-admin applies a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5) — the confirm after a dry-run. The valid rows are merged onto the tenant's grid (existing
 /// keys not in the file are preserved; rejected rows are skipped) and saved; rejected rows are reported,
