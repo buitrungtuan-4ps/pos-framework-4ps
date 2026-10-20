@@ -19,6 +19,7 @@ use std::sync::Arc;
 use pos_core::billing::BillTotals;
 use pos_core::decision::Actor;
 use pos_core::error::DomainError;
+use pos_core::menu::PricedLine;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
     AppError, Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, StaffAuth, StaffRoster,
@@ -43,7 +44,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{BillState, SalesChannel};
+use pos_proto::{BillState, Open, SalesChannel};
 use serde_json::{Value, json};
 
 /// Each line is 50,000 at 10%, so a bill's arithmetic is readable by eye.
@@ -319,6 +320,69 @@ fn a_bill_keeps_the_fees_in_force_when_it_opened() {
         let restarted = edge_over(store, fees(&[service(10)]));
         restarted.rebuild().await.expect("rebuilds");
         assert_eq!(totals(&restarted, bill), open);
+    });
+}
+
+/// A bill freezes the rules in force on the channel *its order* came in on, not the store's own:
+/// a takeaway order at a dine-in store is charged the takeaway packaging and not the service
+/// charge.
+#[test]
+fn a_bill_freezes_the_fees_of_its_orders_channel() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let packaging = json!({
+            "fee_id": fee_id(3).to_string(),
+            "code": "PACKAGING",
+            "display_name": "Packaging",
+            "kind": "FEE_KIND_AMOUNT_PER_UNIT",
+            "amount": { "currency_code": "VND", "amount_minor": 2_000 },
+            "channels": ["SALES_CHANNEL_TAKEAWAY"],
+        });
+        let dine_in_only = json!({
+            "fee_id": fee_id(5).to_string(),
+            "code": "SERVICE",
+            "display_name": "Service",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+            "channels": ["SALES_CHANNEL_DINE_IN"],
+        });
+        let published = fees(&[dine_in_only, packaging]);
+        let edge = edge_over(store.clone(), published.clone());
+        let line = PricedLine {
+            menu_item_id: item(),
+            display_name: DisplayName::new("Bún chả"),
+            quantity: Quantity::ONE,
+            unit_price: vnd(UNIT_PRICE),
+            line_total: vnd(UNIT_PRICE),
+            tax_class_id: class(),
+            tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+            modifier_menu_item_ids: Vec::new(),
+            modifier_display_names: Vec::new(),
+            repriced: false,
+        };
+        let order = edge
+            .open_inbound_order(
+                server().device_id,
+                Open::from_known(SalesChannel::Takeaway),
+                None,
+                &[(line, None)],
+                None,
+            )
+            .await
+            .expect("a takeaway order opens")
+            .order_id;
+
+        edge.open_bill_for_order(server(), order)
+            .await
+            .expect("opens a bill");
+        let opened = frozen_on_open(&store).await;
+        assert_eq!(opened, vec![published.in_force(SalesChannel::Takeaway)]);
+        let codes: Vec<&str> = opened
+            .iter()
+            .flatten()
+            .map(|rule| rule.code.as_str())
+            .collect();
+        assert_eq!(codes, ["PACKAGING"]);
     });
 }
 

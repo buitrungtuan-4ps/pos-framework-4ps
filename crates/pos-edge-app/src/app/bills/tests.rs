@@ -848,3 +848,121 @@ fn a_table_stuck_on_an_empty_bill_is_recovered_by_a_void_and_a_release() {
         assert!(edge.live_orders().is_empty());
     });
 }
+
+// --- pinned before `open_bill_for_order` and `settle_bill_at` are split (ADR-0170 decision 7) ----
+
+/// The event types the store's log holds, in the order they were appended.
+async fn logged_types(edge: &Edge<FakeStore>) -> Vec<String> {
+    edge.store
+        .read(&EventQuery::first(
+            edge.identity.store_id,
+            NonZeroU32::new(100).expect("100 is not zero"),
+        ))
+        .await
+        .expect("reads the log")
+        .iter()
+        .map(|envelope| envelope.event_type.as_str().to_owned())
+        .collect()
+}
+
+/// Opening a bill names every sold line on the event, moves the table to awaiting payment, and
+/// answers an open bill with nothing to print and no number.
+#[test]
+fn an_opened_bill_names_its_lines_and_the_table_waits_for_payment() {
+    pos_fakes::executor::run_ready(async {
+        let edge = edge();
+        let table = TableId::new(Ulid::from_u128(901));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        assert_eq!(opened.state, BillState::Open);
+        assert_eq!(opened.table_state, Some(TableState::AwaitingPayment));
+        assert_eq!((opened.receipt_number, opened.total_due), (None, None));
+        assert!(opened.totals.is_none() && opened.lines.is_empty());
+        assert!(!opened.print_receipt && !opened.open_drawer && opened.drawer_till.is_none());
+
+        let events = edge
+            .store
+            .read(&EventQuery::first(
+                edge.identity.store_id,
+                NonZeroU32::new(100).expect("100 is not zero"),
+            ))
+            .await
+            .expect("reads the log");
+        let bill_opened = events
+            .iter()
+            .rev()
+            .find(|envelope| {
+                envelope.event_type.as_str()
+                    == pos_proto::events::BillingBillOpened::EVENT_TYPE.as_str()
+            })
+            .expect("the log holds the opened bill")
+            .data
+            .decode::<pos_proto::events::BillingBillOpened>()
+            .expect("decodes");
+        assert_eq!(bill_opened.bill_id, opened.bill_id);
+        assert_eq!(
+            bill_opened.order_line_ids.len(),
+            2,
+            "both sold lines are named"
+        );
+    });
+}
+
+/// A settle appends one captured payment per tender and then the settled event, in that order,
+/// and answers the totals it settled at with the drawer opened for the cash in it.
+#[test]
+fn a_settle_appends_each_payment_then_the_settled_bill() {
+    pos_fakes::executor::run_ready(async {
+        let edge = edge();
+        let table = TableId::new(Ulid::from_u128(902));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        let before = logged_types(&edge).await.len();
+        let mut device = edge.fanout().subscribe();
+        let card = Payment {
+            method: PaymentMethod::Card,
+            tendered: vnd(100_000),
+            applied_to_bill: vnd(100_000),
+            tip: vnd(0),
+        };
+        let settled = edge
+            .settle_bill(actor(), opened.bill_id, vec![cash(65_000), card], None)
+            .await
+            .expect("settles");
+        let appended = logged_types(&edge).await.split_off(before);
+        assert_eq!(
+            appended,
+            [
+                BillingPaymentCaptured::EVENT_TYPE.as_str(),
+                BillingPaymentCaptured::EVENT_TYPE.as_str(),
+                BillingBillSettled::EVENT_TYPE.as_str(),
+            ]
+        );
+        // The devices are told the same three, in the same order, once they are committed.
+        let mut published = Vec::new();
+        while let Ok(frame) = device.try_recv() {
+            published.push(frame);
+        }
+        assert_eq!(published.len(), appended.len());
+        for (frame, event_type) in published.iter().zip(&appended) {
+            assert!(
+                frame.contains(event_type),
+                "{event_type} reached the devices"
+            );
+        }
+        let payload = settled_payload(&edge).await;
+        assert_eq!(payload.total_due, vnd(165_000));
+        assert_eq!(payload.reduction_total, vnd(0));
+        assert_eq!(settled.total_due, Some(vnd(165_000)));
+        assert_eq!(
+            settled.totals.map(|totals| totals.total_due),
+            Some(vnd(165_000))
+        );
+        assert_eq!(settled.table_state, Some(TableState::NeedsCleaning));
+        assert!(settled.open_drawer, "cash was taken");
+        assert!(!settled.lines.is_empty(), "the receipt's rows come back");
+    });
+}
