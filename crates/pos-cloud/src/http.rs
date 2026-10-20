@@ -107,7 +107,7 @@ mod authored_layer;
 pub(crate) mod campaigns;
 mod chain;
 mod cloud_routes;
-mod config_nodes;
+pub(crate) mod config_nodes;
 pub(crate) mod config_publish;
 pub(crate) mod countries;
 pub(crate) mod fleet;

@@ -46,6 +46,24 @@ pub(super) struct PublishQrRequest {
     business_hours: Option<QrBusinessHoursRequest>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/qr",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's `qr` node as the store runs it — whether guests may order by QR and the guardrails on it — \
+                                      composed from all four layers, or `null` when it has none"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `qr` guardrail node, or `null`.
 pub(super) async fn admin_read_qr<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -80,6 +98,29 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/qr",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then the QR guardrails (ADR-0057): optionally `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`, and optionally `business_hours`, an opening and closing hour",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `qr` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, an hour is out of range, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes a store's QR guardrail settings as its `qr` node.
 pub(super) async fn admin_publish_qr<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,

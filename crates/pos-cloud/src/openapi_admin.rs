@@ -227,6 +227,18 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::config_publish::admin_config_versions,
         crate::http::config_publish::admin_config_version_effective,
         crate::http::config_publish::admin_config_rollback,
+        crate::http::config_nodes::admin_read_channels,
+        crate::http::config_nodes::admin_publish_channels,
+        crate::http::config_nodes::admin_read_tender,
+        crate::http::config_nodes::admin_publish_tender,
+        crate::http::config_nodes::admin_read_origins,
+        crate::http::config_nodes::admin_publish_origins,
+        crate::http::config_nodes::admin_read_qr,
+        crate::http::config_nodes::admin_publish_qr,
+        crate::http::config_nodes::admin_read_retention,
+        crate::http::config_nodes::admin_publish_retention,
+        crate::http::config_nodes::admin_read_vendors,
+        crate::http::config_nodes::admin_publish_vendors,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -551,6 +563,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            its list."
         ),
         (
+            name = "config nodes",
+            description = "The per-store configuration a console reads and writes one node at a \
+                           time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
+                           store takes orders on, the payment methods it accepts, the second origins \
+                           its edge answers, its QR ordering guardrails, how long it keeps a synced \
+                           event, and its delivery-marketplace policies. A read gives the node as the \
+                           store runs it, composed from all four layers; a publish writes it on the \
+                           store's own layer as a new configuration version, which the store pulls \
+                           on its next sync."
+        ),
+        (
             name = "config",
             description = "A store's configuration tree (ADR-0033): four layers — tenant, brand, \
                            store and device — composed and validated into the document the store \
@@ -607,7 +630,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/campaigns/preview",
     "/admin/config/campaigns/schedule",
     "/admin/config/capabilities",
-    "/admin/config/channels",
     "/admin/config/inventory",
     // The store's lease (ADR-0108). `GET` reads the authoritative generation; `POST …/bump` issues
     // the next one, which is the act of making a different machine the store. There is no `PUT`,
@@ -620,9 +642,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
-    // Which other origins a store's edge answers (ADR-0111). Enumerated here rather than annotated,
-    // at the fidelity B5 chose: the auth surface is documented, the console surface is enumerated.
-    "/admin/config/origins",
     // The generic publish preview (F11): what publishing one node to one store would change,
     // computed and discarded. Enumerated with the rest of the console's config surface for the same
     // reason they are — and it writes nothing, so a fork reading only this list is not missing a way
@@ -646,15 +665,9 @@ const UNDOCUMENTED: &[&str] = &[
     // pair from the release the workflow published. Enumerated beside its siblings for the same
     // reason, and the runbook step that carries the upload's `curl` carries this one's too.
     "/admin/ota/releases/fetch",
-    "/admin/config/qr",
-    // How long a store's edge keeps a synced event (ADR-0145): one bounded number, enumerated with
-    // the rest of the console's settings surface at the same fidelity.
-    "/admin/config/retention",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",
     "/admin/config/tax",
-    "/admin/config/tender",
-    "/admin/config/vendors",
     "/admin/capabilities",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
     "/admin/inventory/ingredients",
