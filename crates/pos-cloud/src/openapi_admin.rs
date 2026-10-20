@@ -111,6 +111,20 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
         crate::http::admin_permissions_readiness,
+        crate::http::admin_list_permissions,
+        crate::http::admin_list_employees,
+        crate::http::admin_create_employee,
+        crate::http::admin_get_employee,
+        crate::http::admin_update_employee,
+        crate::http::admin_set_employee_pin,
+        crate::http::admin_list_roles,
+        crate::http::admin_create_role,
+        crate::http::admin_get_role,
+        crate::http::admin_update_role,
+        crate::http::admin_list_assignments,
+        crate::http::admin_create_assignment,
+        crate::http::admin_remove_assignment,
+        crate::http::admin_publish_permissions,
         crate::http::admin_list_fees,
         crate::http::admin_create_fee,
         crate::http::admin_put_fee,
@@ -219,11 +233,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         ),
         (
             name = "people",
-            description = "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and \
-                           assignment routes are still coverage debt; the readiness read is \
-                           documented because it is new to this surface, and because a fork's own \
-                           console needs it before a store enforces each person's own permissions. \
-                           It names roles and counts people, and names no person."
+            description = "Who may do what at a store (ADR-0070, ADR-0158): the people a tenant \
+                           employs, the roles that say what each may do, the assignments that give \
+                           a person a role at one store, a store group or every store, and the \
+                           publish that compiles them into a store's `permissions` node. Staff \
+                           records name people, so reading them needs `console.people.read`; the \
+                           permission catalogue and the roles name nobody. A write is audited with \
+                           ids, codes and statuses, never a name or a PIN. Archiving a person or a \
+                           role, removing an assignment, and assigning to a group or every store \
+                           publish to every store the change reaches before they answer, and report \
+                           each store's outcome. The readiness read names roles and counts people, \
+                           and names no person."
         ),
         (
             name = "fees",
@@ -424,16 +444,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/catalog/tax-classes",
     "/admin/catalog/tax-classes/{tax_class_id}",
     "/admin/catalog/tax-rates",
-    // --- people and access (M1, ADR-0070) ---
-    "/admin/employees",
-    "/admin/employees/{employee_id}",
-    "/admin/employees/{employee_id}/pin",
-    "/admin/people/permissions",
-    "/admin/people/publish",
-    "/admin/roles",
-    "/admin/roles/{role_id}",
-    "/admin/assignments",
-    "/admin/assignments/{assignment_id}",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
     "/admin/inventory/ingredients",
     "/admin/inventory/ingredients/{ingredient_id}",

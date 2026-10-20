@@ -33,6 +33,32 @@ use crate::registry::RegistryStore;
 use crate::store_groups::StoreGroupId;
 use pos_cloud_api::refusal::{enum_refusal, not_found};
 
+#[utoipa::path(
+    get,
+    path = "/admin/assignments",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose assignments to list (a 26-character ULID)"),
+        ("store_id" = Option<String>, Query, description = "Everyone who works at this store: every \
+                                                          assignment that reaches it, its own, its \
+                                                          groups' and the tenant's"),
+        ("employee_id" = Option<String>, Query, description = "Everything this person holds"),
+        ("store_group_id" = Option<String>, Query, description = "The assignments naming this store group"),
+        ("scope_kind" = Option<String>, Query, description = "`ASSIGNMENT_SCOPE_TENANT`: the \
+                                                            assignments that reach every store"),
+    ),
+    responses(
+        (status = 200, description = "The assignments, as an array. Each says its scope and names \
+                                      the person it grants, by name and staff code"),
+        (status = 400, description = "tenant_id is absent or not a ULID; not exactly one of \
+                                      store_id, employee_id, store_group_id and scope_kind is sent; \
+                                      the id sent is not a ULID; or scope_kind is not \
+                                      `ASSIGNMENT_SCOPE_TENANT`", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store
 /// (`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a
 /// person holds (`?employee_id=`), those naming a store group (`?store_group_id=`), or those that
@@ -136,6 +162,36 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/assignments",
+    request_body(
+        description = "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: \
+                       a `store_id` for one store, a `store_group_id` for every store the group holds, \
+                       or `scope_kind` `ASSIGNMENT_SCOPE_TENANT` for every store of the tenant \
+                       (ADR-0158 decision 3)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Assigned. The body is `{ \"id\": … }`. An assignment to a \
+                                      group or to every store is published at once to every open \
+                                      store it reaches, and the body also carries `stores`, each \
+                                      with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
+                                      `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`. One to a \
+                                      single store is published when someone publishes"),
+        (status = 400, description = "An id is absent or not a ULID, the scope is named twice or not \
+                                      at all, or scope_kind is not one the route accepts", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no such employee, store, store group or role. \
+                                      The error names the field that carried the id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The employee, store, store group or role is archived, or the \
+                                      person already holds an assignment there. Nothing is written", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store, the registry, the store groups or the \
+                                      entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin assigns an employee with a role, at one store, a store group or every store of the
 /// tenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the
@@ -252,6 +308,29 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/assignments/{assignment_id}",
+    params(
+        ("assignment_id" = String, Path, description = "The assignment's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Removed, and every store the assignment reached is published \
+                                      to at once, so the person cannot sign in there a moment longer \
+                                      (ADR-0158 decision 7): `stores` lists each store with its \
+                                      `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
+                                      `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which \
+                                      `POST /admin/people/publish` retries"),
+        (status = 400, description = "tenant_id or assignment_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no assignment with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store, the registry or the store groups is \
+                                      unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin removes an assignment — offboarding a person from where it reached. Audited
 /// `assignment.remove` when a row was actually removed, with the ids and the scope it bound; a no-op
 /// removal records nothing.
