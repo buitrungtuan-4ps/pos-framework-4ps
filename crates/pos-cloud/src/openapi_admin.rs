@@ -159,6 +159,21 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_generate_vouchers,
         crate::http::countries::admin_list_countries,
         crate::http::countries::admin_list_locales,
+        pos_cloud_catalog::routes::catalog::admin_list_display_categories,
+        pos_cloud_catalog::routes::catalog::admin_create_display_category,
+        pos_cloud_catalog::routes::catalog::admin_update_display_category,
+        pos_cloud_catalog::routes::catalog::admin_list_display_subcategories,
+        pos_cloud_catalog::routes::catalog::admin_create_display_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_update_display_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_list_item_categories,
+        pos_cloud_catalog::routes::catalog::admin_create_item_category,
+        pos_cloud_catalog::routes::catalog::admin_update_item_category,
+        pos_cloud_catalog::routes::catalog::admin_list_item_subcategories,
+        pos_cloud_catalog::routes::catalog::admin_create_item_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_update_item_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_list_courses,
+        pos_cloud_catalog::routes::catalog::admin_create_course,
+        pos_cloud_catalog::routes::catalog::admin_update_course,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -302,6 +317,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
+        ),
+        (
+            name = "catalog taxonomy",
+            description = "How a tenant's catalog is sorted (ADR-0066, ADR-0130): item categories \
+                           and their sub-categories, which reporting groups an item under; display \
+                           categories and their sub-categories, which a till's layout shows; and \
+                           courses, the order a table's dishes are served in. Ids are minted by the \
+                           server, records are archived rather than deleted, and every edit is \
+                           conditional on the version it was read at. An item category or \
+                           sub-category that active items still use cannot be archived. Nothing \
+                           reaches a store until its catalog is published."
         ),
         (
             name = "countries",
@@ -529,23 +555,13 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/vendors",
     "/admin/capabilities",
     // --- the catalog: item master, menus, taxonomies, layout (F3, ADR-0066/0082) ---
-    "/admin/catalog/display-categories",
-    "/admin/catalog/display-categories/{display_category_id}",
-    "/admin/catalog/display-subcategories",
-    "/admin/catalog/display-subcategories/{display_subcategory_id}",
     "/admin/catalog/export/items",
     // The item-master CSV import (F15), beside the export it round-trips with. Enumerated rather
     // than annotated, at B5's chosen fidelity; the body is a CSV upload whose columns are the
     // export's, which `docs/guides` describes better than a schema stub would.
     "/admin/catalog/import/items/apply",
     "/admin/catalog/import/items/dry-run",
-    "/admin/catalog/item-categories",
-    "/admin/catalog/item-categories/{item_category_id}",
-    "/admin/catalog/item-subcategories",
-    "/admin/catalog/item-subcategories/{item_subcategory_id}",
     "/admin/catalog/items",
-    "/admin/catalog/courses",
-    "/admin/catalog/courses/{course_id}",
     "/admin/catalog/items/{menu_item_id}",
     "/admin/catalog/layout-buttons",
     "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
