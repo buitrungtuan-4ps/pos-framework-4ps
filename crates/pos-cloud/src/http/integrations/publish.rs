@@ -13,7 +13,8 @@ use pos_cloud_api::console::{audit_action, require_permission};
 use pos_cloud_api::response::{api_error, parse_ulid_fields, service_unavailable};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
+use pos_proto::integrations::PublishedIntegrations;
 use serde::Deserialize;
 
 use super::connections::connection_error_response;
@@ -149,60 +150,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    // The store's brand decides which brand-scoped connections serve it. A store the tenant does not
-    // have is refused rather than published to: a node written for a typo'd id is a node nobody
-    // reads, and the operator would believe the store had been told.
-    let brand_id = match state.registry.list_stores(tenant_id).await {
-        Ok(stores) => match stores
-            .into_iter()
-            .find(|store| store.record.store_id == store_id)
-        {
-            Some(store) => store.record.brand_id.map(|brand| brand.to_string()),
-            None => return not_found("store"),
-        },
-        Err(error) => {
-            tracing::error!(%error, "the registry could not be read for an integrations publish");
-            return service_unavailable("registry");
-        }
+    let node = match resolved_node(&state, tenant_id, store_id).await {
+        Ok(node) => node,
+        Err(refusal) => return refusal,
     };
-    let connections = match state.connections.list(tenant_id).await {
-        Ok(rows) => rows.into_iter().map(|row| row.record).collect::<Vec<_>>(),
-        Err(error) => return connection_error_response(&error),
-    };
-    let node = crate::connections::resolve_for_store(
-        &connections,
-        &state.providers,
-        &store_id.to_string(),
-        brand_id.as_deref(),
-    );
-    let summary = IntegrationsPublishSummary {
-        connections: node
-            .integrations()
-            .iter()
-            .map(|integration| integration.connection_id.clone())
-            .collect(),
-        providers: node
-            .integrations()
-            .iter()
-            .map(|integration| integration.provider_id.clone())
-            .collect(),
-    };
-    let Ok(value) = serde_json::to_value(&node) else {
-        return api_error(
-            ErrorStatus::Internal,
-            "the integrations node could not be encoded",
-        );
-    };
-    let id = match publish_config_nodes(
-        &state.config_trees,
-        &state.clock,
-        tenant_id,
-        store_id,
-        ConfigLevel::Store,
-        vec![("integrations".to_owned(), value)],
-    )
-    .await
-    {
+    let summary = IntegrationsPublishSummary::of(&node);
+    let id = match write_integrations(&state, tenant_id, store_id, &node).await {
         Ok(id) => id,
         Err(refusal) => return refusal,
     };
@@ -226,4 +179,102 @@ where
         })),
     )
         .into_response()
+}
+
+impl IntegrationsPublishSummary {
+    /// The connections `node` gives the store and the provider of each, in the node's order.
+    fn of(node: &PublishedIntegrations) -> Self {
+        Self {
+            connections: node
+                .integrations()
+                .iter()
+                .map(|integration| integration.connection_id.clone())
+                .collect(),
+            providers: node
+                .integrations()
+                .iter()
+                .map(|integration| integration.provider_id.clone())
+                .collect(),
+        }
+    }
+}
+
+/// The connections that serve the store: its own, its brand's, its tenant's, one per exclusive
+/// family.
+async fn resolved_node<S, Rg, Cfg, A, C>(
+    state: &ConfigIntegrationsState<S, Rg, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<PublishedIntegrations, Response>
+where
+    S: crate::connections::ConnectionStore,
+    Rg: RegistryStore,
+{
+    let brand_id = store_brand(state, tenant_id, store_id).await?;
+    let connections = match state.connections.list(tenant_id).await {
+        Ok(rows) => rows.into_iter().map(|row| row.record).collect::<Vec<_>>(),
+        Err(error) => return Err(connection_error_response(&error)),
+    };
+    Ok(crate::connections::resolve_for_store(
+        &connections,
+        &state.providers,
+        &store_id.to_string(),
+        brand_id.as_deref(),
+    ))
+}
+
+/// The brand of the store being published to, which decides the brand-scoped connections that
+/// serve it.
+///
+/// A store the tenant does not have is refused rather than published to: a node written for a
+/// typo'd id is a node nobody reads, and the operator would believe the store had been told.
+async fn store_brand<S, Rg, Cfg, A, C>(
+    state: &ConfigIntegrationsState<S, Rg, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<Option<String>, Response>
+where
+    Rg: RegistryStore,
+{
+    match state.registry.list_stores(tenant_id).await {
+        Ok(stores) => match stores
+            .into_iter()
+            .find(|store| store.record.store_id == store_id)
+        {
+            Some(store) => Ok(store.record.brand_id.map(|brand| brand.to_string())),
+            None => Err(not_found("store")),
+        },
+        Err(error) => {
+            tracing::error!(%error, "the registry could not be read for an integrations publish");
+            Err(service_unavailable("registry"))
+        }
+    }
+}
+
+/// Writes `node` as the store's `integrations` node and answers the version.
+async fn write_integrations<S, Rg, Cfg, A, C>(
+    state: &ConfigIntegrationsState<S, Rg, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    node: &PublishedIntegrations,
+) -> Result<ConfigVersionId, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let Ok(value) = serde_json::to_value(node) else {
+        return Err(api_error(
+            ErrorStatus::Internal,
+            "the integrations node could not be encoded",
+        ));
+    };
+    publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        vec![("integrations".to_owned(), value)],
+    )
+    .await
 }

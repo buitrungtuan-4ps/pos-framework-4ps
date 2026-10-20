@@ -14,7 +14,7 @@ use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, service
 use pos_country::CountryRegistry;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::locale::CountryCode;
 use pos_proto::store_profile::StoreProfile;
 use serde::Deserialize;
@@ -149,54 +149,11 @@ where
         Err(refusal) => return refusal,
     };
 
-    let registration = trimmed(request.tax_registration_number.as_deref());
-    // Format only, never registration: whether a number *exists* is a call to a tax authority and
-    // belongs behind `Fiscalization` (ADR-0027). This catches the typo that would otherwise reach an
-    // invoice — and only when this cloud carries the country's module, so a fork serving a market it
-    // has not written a pack for still publishes.
-    if let (Some(number), Some(module)) = (
-        registration.as_deref(),
-        trimmed(request.country_code.as_deref())
-            .and_then(|code| CountryCode::parse(&code).ok())
-            .and_then(|code| state.countries.get(code)),
-    ) && !module.is_valid_tax_code(number)
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            format!(
-                "tax_registration_number is not the shape {} issues",
-                module.display_name()
-            )
-            .as_str(),
-            &[("tax_registration_number", "INVALID_FORMAT")],
-        );
-    }
-
-    let profile = StoreProfile {
-        legal_name: request.legal_name.trim().to_owned(),
-        trading_name: trimmed(request.trading_name.as_deref()),
-        address_lines: trimmed_lines(&request.address_lines),
-        tax_registration_number: registration,
-        tax_registration_label: trimmed(request.tax_registration_label.as_deref()),
-        contact_lines: trimmed_lines(&request.contact_lines),
-        footer_lines: trimmed_lines(&request.footer_lines),
+    let profile = match checked_profile(&state.countries, &request) {
+        Ok(profile) => profile,
+        Err(refusal) => return refusal,
     };
-    let Ok(profile_value) = serde_json::to_value(&profile) else {
-        tracing::error!("could not serialise a store profile");
-        return service_unavailable("config-tree");
-    };
-
-    let nodes = vec![("store_profile".to_owned(), profile_value)];
-    let id = match publish_config_nodes(
-        &state.config_trees,
-        &state.clock,
-        tenant_id,
-        store_id,
-        ConfigLevel::Store,
-        nodes,
-    )
-    .await
-    {
+    let id = match write_store_profile(&state, tenant_id, store_id, &profile).await {
         Ok(id) => id,
         Err(refusal) => return refusal,
     };
@@ -221,4 +178,74 @@ where
         }),
     )
         .into_response()
+}
+
+/// The profile as published: every field trimmed, a blank one absent, and the registration number
+/// checked against the shape its country issues where this cloud carries the country.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the 400 the caller returns"
+)]
+fn checked_profile(
+    countries: &CountryRegistry,
+    request: &PublishStoreProfileRequest,
+) -> Result<StoreProfile, Response> {
+    let registration = trimmed(request.tax_registration_number.as_deref());
+    // Format only, never registration: whether a number *exists* is a call to a tax authority and
+    // belongs behind `Fiscalization` (ADR-0027). This catches the typo that would otherwise reach an
+    // invoice — and only when this cloud carries the country's module, so a fork serving a market it
+    // has not written a pack for still publishes.
+    if let (Some(number), Some(module)) = (
+        registration.as_deref(),
+        trimmed(request.country_code.as_deref())
+            .and_then(|code| CountryCode::parse(&code).ok())
+            .and_then(|code| countries.get(code)),
+    ) && !module.is_valid_tax_code(number)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "tax_registration_number is not the shape {} issues",
+                module.display_name()
+            )
+            .as_str(),
+            &[("tax_registration_number", "INVALID_FORMAT")],
+        ));
+    }
+    Ok(StoreProfile {
+        legal_name: request.legal_name.trim().to_owned(),
+        trading_name: trimmed(request.trading_name.as_deref()),
+        address_lines: trimmed_lines(&request.address_lines),
+        tax_registration_number: registration,
+        tax_registration_label: trimmed(request.tax_registration_label.as_deref()),
+        contact_lines: trimmed_lines(&request.contact_lines),
+        footer_lines: trimmed_lines(&request.footer_lines),
+    })
+}
+
+/// Writes `profile` as the store's `store_profile` node and answers the version.
+async fn write_store_profile<Cfg, A, C>(
+    state: &ConfigStoreProfileState<Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    profile: &StoreProfile,
+) -> Result<ConfigVersionId, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let Ok(profile_value) = serde_json::to_value(profile) else {
+        tracing::error!("could not serialise a store profile");
+        return Err(service_unavailable("config-tree"));
+    };
+    let nodes = vec![("store_profile".to_owned(), profile_value)];
+    publish_config_nodes(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
 }
