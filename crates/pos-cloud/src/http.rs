@@ -99,7 +99,7 @@ use crate::config_tree::prerequisites_for;
 use crate::dashboard::RollupStore;
 use crate::openapi::ApiDoc;
 
-mod admin;
+pub(crate) mod admin;
 mod admitted_devices;
 mod alerts;
 mod archives;
@@ -132,12 +132,6 @@ mod sync;
 // beside it, re-exported `pub(crate)` from the area that now holds the handler.
 
 pub use admin::audit_router;
-pub(crate) use admin::{
-    __path_admin_accept_invite, __path_admin_invite_admin, __path_admin_list_admins,
-    __path_admin_list_invites, __path_admin_list_sessions, __path_admin_revoke_invite,
-    __path_admin_revoke_other_sessions, __path_admin_revoke_session, __path_admin_set_admin_role,
-    __path_admin_set_admin_status,
-};
 pub(crate) use admin::{
     __path_admin_generate_recovery_codes, __path_admin_login, __path_admin_logout,
     __path_admin_recovery_codes_status, __path_admin_reenrol_totp, __path_admin_session,
