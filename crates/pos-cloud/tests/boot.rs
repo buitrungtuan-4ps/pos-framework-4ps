@@ -261,9 +261,15 @@ mod full_boot {
         }
     }
 
+    /// One full boot at a time. Two boots migrating a fresh database at once race on its
+    /// `CREATE … IF NOT EXISTS` statements, and the loser refuses to start: true of the binary,
+    /// and not what these tests are about.
+    static ONE_BOOT_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// Boots the binary over `DATABASE_URL` with `extra` configuration, waits for `/health`, stops
     /// it with an interrupt, and answers what it said once it has exited cleanly.
     async fn boot_serve_and_interrupt(extra: &str) -> String {
+        let _one_at_a_time = ONE_BOOT_AT_A_TIME.lock().await;
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL names the test database");
         let port = TcpListener::bind("127.0.0.1:0")
             .expect("a free port")
