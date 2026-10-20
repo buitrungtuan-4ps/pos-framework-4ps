@@ -14,7 +14,7 @@ use pos_proto::ids::{CourseId, MenuItemId, StationId, StoreId, TenantId};
 
 use super::requests::{CreateRoutingRuleRequest, FloorListQuery, FloorTenantQuery};
 use super::{FloorState, floor_entropy_unavailable, floor_error_response, floor_tenant_store};
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
 use crate::floorplan::{NewRoutingRule, RoutingRule, RoutingRuleId, RoutingRuleStore};
@@ -88,50 +88,14 @@ where
         ),
         Err(refusal) => return refusal,
     };
-    let Ok(menu_item_id) = parse_optional_ulid(request.menu_item_id.as_deref(), MenuItemId::new)
-    else {
-        return ulid_refusal(&["menu_item_id"]);
+    let (menu_item_id, course_id) = match routing_target(&request) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
     };
-    let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
-        return ulid_refusal(&["course_id"]);
-    };
-    // A rule must match exactly one of an item or a course — the same rule the §10 validator enforces
-    // at publish, surfaced here so the console cannot store a rule that matches nothing or both.
-    if menu_item_id.is_some() == course_id.is_some() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "a routing rule must match exactly one of menu_item_id or course_id",
-            &[
-                ("menu_item_id", "MUTUALLY_EXCLUSIVE"),
-                ("course_id", "MUTUALLY_EXCLUSIVE"),
-            ],
-        );
-    }
-    // And the course it matches on must be one the tenant actually carries, and still carries
-    // ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
-    //
-    // Refused at the write rather than at publish, the way the menu graph's cycle is (`would_cycle`)
-    // and for the same reason: a rule that can never match is a rule an operator will never find out
-    // about. It publishes, the store honours it, and it routes nothing — for ever, silently, because
-    // no line can carry that id either.
-    //
-    // **Archived counts as gone.** The compiler does not publish an archived course, so a rule
-    // naming one would be exactly as dead as a rule naming an id that never existed; the two are one
-    // answer here so they cannot drift into different behaviour later.
-    if let Some(course_id) = course_id {
-        let carried = match state.catalog.list_courses(tenant_id).await {
-            Ok(rows) => rows.into_iter().any(|row| {
-                row.record.course_id == course_id && row.record.status != EntityStatus::Archived
-            }),
-            Err(error) => return catalog_error_response(&error),
-        };
-        if !carried {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "a routing rule must match a course this tenant carries",
-                &[("course_id", "NOT_FOUND")],
-            );
-        }
+    if let Some(course_id) = course_id
+        && let Err(refusal) = course_carried(&state.catalog, tenant_id, course_id).await
+    {
+        return refusal;
     }
     let Some(rule_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoutingRuleId::new)
@@ -147,35 +111,124 @@ where
         course_id,
         sort: request.sort,
     };
-    match RoutingRuleStore::create(&state.floor, &new_rule).await {
+    store_routing_rule(&state, &context, &new_rule).await
+}
+
+/// Stores a rule, records it, and answers its id.
+async fn store_routing_rule<F, A, C, Cat>(
+    state: &FloorState<F, A, C, Cat>,
+    context: &AdminContext,
+    rule: &NewRoutingRule,
+) -> Response
+where
+    F: RoutingRuleStore,
+    C: ClockSource,
+{
+    match RoutingRuleStore::create(&state.floor, rule).await {
         Ok(()) => {
-            let after = serde_json::json!({
-                "id": rule_id.to_string(),
-                "station_id": station_id.to_string(),
-                "menu_item_id": menu_item_id.map(|id| id.to_string()),
-                "course_id": course_id.map(|id| id.to_string()),
-                "sort": request.sort,
-            });
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "kitchen.routing.create",
-                "station_routing_rule",
-                &rule_id.to_string(),
-                None,
-                Some(after),
-            )
-            .await;
+            record_routing_create(state, context, rule).await;
             (
                 StatusCode::CREATED,
-                Json(serde_json::json!({ "id": rule_id.to_string() })),
+                Json(serde_json::json!({ "id": rule.rule_id.to_string() })),
             )
                 .into_response()
         }
         Err(error) => floor_error_response(&error),
     }
+}
+
+/// What a rule matches on: exactly one of an item or a course, each a ULID when sent.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the 400 the caller returns"
+)]
+fn routing_target(
+    request: &CreateRoutingRuleRequest,
+) -> Result<(Option<MenuItemId>, Option<CourseId>), Response> {
+    let Ok(menu_item_id) = parse_optional_ulid(request.menu_item_id.as_deref(), MenuItemId::new)
+    else {
+        return Err(ulid_refusal(&["menu_item_id"]));
+    };
+    let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
+        return Err(ulid_refusal(&["course_id"]));
+    };
+    // A rule must match exactly one of an item or a course — the same rule the §10 validator enforces
+    // at publish, surfaced here so the console cannot store a rule that matches nothing or both.
+    if menu_item_id.is_some() == course_id.is_some() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a routing rule must match exactly one of menu_item_id or course_id",
+            &[
+                ("menu_item_id", "MUTUALLY_EXCLUSIVE"),
+                ("course_id", "MUTUALLY_EXCLUSIVE"),
+            ],
+        ));
+    }
+    Ok((menu_item_id, course_id))
+}
+
+/// The course a rule matches on must be one the tenant actually carries, and still carries
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+///
+/// Refused at the write rather than at publish, the way the menu graph's cycle is (`would_cycle`)
+/// and for the same reason: a rule that can never match is a rule an operator will never find out
+/// about. It publishes, the store honours it, and it routes nothing — for ever, silently, because
+/// no line can carry that id either.
+///
+/// **Archived counts as gone.** The compiler does not publish an archived course, so a rule
+/// naming one would be exactly as dead as a rule naming an id that never existed; the two are one
+/// answer here so they cannot drift into different behaviour later.
+async fn course_carried<Cat>(
+    catalog: &Cat,
+    tenant_id: TenantId,
+    course_id: CourseId,
+) -> Result<(), Response>
+where
+    Cat: CatalogStore,
+{
+    let carried = match catalog.list_courses(tenant_id).await {
+        Ok(rows) => rows.into_iter().any(|row| {
+            row.record.course_id == course_id && row.record.status != EntityStatus::Archived
+        }),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
+    if !carried {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a routing rule must match a course this tenant carries",
+            &[("course_id", "NOT_FOUND")],
+        ));
+    }
+    Ok(())
+}
+
+/// Records a created rule with what it routes: the station, the item or the course, and its sort.
+async fn record_routing_create<F, A, C, Cat>(
+    state: &FloorState<F, A, C, Cat>,
+    context: &AdminContext,
+    rule: &NewRoutingRule,
+) where
+    C: ClockSource,
+{
+    let after = serde_json::json!({
+        "id": rule.rule_id.to_string(),
+        "station_id": rule.station_id.to_string(),
+        "menu_item_id": rule.menu_item_id.map(|id| id.to_string()),
+        "course_id": rule.course_id.map(|id| id.to_string()),
+        "sort": rule.sort,
+    });
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(rule.tenant_id),
+        "kitchen.routing.create",
+        "station_routing_rule",
+        &rule.rule_id.to_string(),
+        None,
+        Some(after),
+    )
+    .await;
 }
 
 pub(super) async fn admin_remove_routing<F, A, C, Cat>(

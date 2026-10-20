@@ -19,7 +19,7 @@ use super::requests::{
     CreateRoleRequest, PeopleTenantQuery, UpdateRoleRequest, people_entropy_unavailable,
     people_error_response,
 };
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::people::{
@@ -215,40 +215,8 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
-        Ok([tenant_id]) => TenantId::new(tenant_id),
-        Err(refusal) => return refusal,
-    };
-    if request.name.trim().is_empty() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "name is required",
-            &[("name", "REQUIRED")],
-        );
-    }
-    if let Some(unknown) = first_unknown_permission(&request.permissions) {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            format!("unknown permission id: {unknown}"),
-            &[("permissions", "INVALID_ENUM_VALUE")],
-        );
-    }
-    if request
-        .discount_ceiling_minor
-        .is_some_and(|minor| minor < 0)
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "discount_ceiling_minor cannot be negative",
-            &[("discount_ceiling_minor", "OUT_OF_RANGE")],
-        );
-    }
-    let permissions_with_approval = match granted_with_approval(
-        &request.permissions,
-        Some(&request.permissions_with_approval),
-        &[],
-    ) {
-        Ok(listed) => listed,
+    let (tenant_id, permissions_with_approval) = match read_new_role(&request) {
+        Ok(read) => read,
         Err(refusal) => return refusal,
     };
     let Some(role_template_id) =
@@ -266,25 +234,7 @@ where
     };
     match state.people.create(&new_role).await {
         Ok(version) => {
-            let after = serde_json::json!({
-                "id": role_template_id.to_string(),
-                "name": new_role.name,
-                "permissions": new_role.permissions,
-                "permissions_with_approval": new_role.permissions_with_approval,
-                "discount_ceiling_minor": new_role.discount_ceiling_minor,
-            });
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "role.create",
-                "role",
-                &role_template_id.to_string(),
-                None,
-                Some(after),
-            )
-            .await;
+            record_role_create(&state, &context, &new_role).await;
             with_etag(
                 (
                     StatusCode::CREATED,
@@ -296,6 +246,77 @@ where
         }
         Err(error) => people_error_response(&error),
     }
+}
+
+/// The tenant a new role is for and what it grants with approval, refused in the order the
+/// request is read: the tenant, the name, the permissions, the ceiling, then what is granted with
+/// approval.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the 400 the caller returns"
+)]
+fn read_new_role(request: &CreateRoleRequest) -> Result<(TenantId, Vec<String>), Response> {
+    let [tenant_id] = parse_ulid_fields([("tenant_id", &request.tenant_id)])?;
+    if request.name.trim().is_empty() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        ));
+    }
+    if let Some(unknown) = first_unknown_permission(&request.permissions) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("unknown permission id: {unknown}"),
+            &[("permissions", "INVALID_ENUM_VALUE")],
+        ));
+    }
+    if request
+        .discount_ceiling_minor
+        .is_some_and(|minor| minor < 0)
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "discount_ceiling_minor cannot be negative",
+            &[("discount_ceiling_minor", "OUT_OF_RANGE")],
+        ));
+    }
+    let permissions_with_approval = granted_with_approval(
+        &request.permissions,
+        Some(&request.permissions_with_approval),
+        &[],
+    )?;
+    Ok((TenantId::new(tenant_id), permissions_with_approval))
+}
+
+/// Records `role.create` with the id, the name, both permission sets and the ceiling (a role name
+/// is not PII).
+async fn record_role_create<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
+    context: &AdminContext,
+    role: &NewRoleTemplate,
+) where
+    C: ClockSource,
+{
+    let after = serde_json::json!({
+        "id": role.role_template_id.to_string(),
+        "name": role.name,
+        "permissions": role.permissions,
+        "permissions_with_approval": role.permissions_with_approval,
+        "discount_ceiling_minor": role.discount_ceiling_minor,
+    });
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(role.tenant_id),
+        "role.create",
+        "role",
+        &role.role_template_id.to_string(),
+        None,
+        Some(after),
+    )
+    .await;
 }
 
 /// A super-admin updates a role template's name, permission sets, ceiling and status. Audited
