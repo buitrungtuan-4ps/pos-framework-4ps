@@ -17,7 +17,7 @@ use crate::checks::Error;
 use crate::checks::crates::{LAYERS, adr_numbers, codeowner_lines, route_for};
 
 const MANIFEST: &str = include_str!("../../templates/crate/Cargo.toml.tmpl");
-const README: &str = include_str!("../../templates/crate/README.md.tmpl");
+pub(super) const README: &str = include_str!("../../templates/crate/README.md.tmpl");
 const LIB: &str = include_str!("../../templates/crate/lib.rs.tmpl");
 
 /// The owner of a crate whose directory no `CODEOWNERS` line routes.
@@ -93,8 +93,12 @@ pub struct Parts {
     pub owns: String,
     /// The README's Entry points section.
     pub entry_points: String,
+    /// The template for `README.md`.
+    pub readme: &'static str,
     /// The template for `src/lib.rs`.
     pub lib: &'static str,
+    /// Where the crate goes, when not where its layer puts it: a country under `countries/`.
+    pub dir: Option<String>,
     /// More files, each a path relative to the crate and its template.
     pub extra: Vec<(&'static str, &'static str)>,
     /// Values for the placeholders only these templates use.
@@ -111,6 +115,7 @@ impl Parts {
             depends: "no workspace crate".into(),
             owns: "- Nothing yet. List what this crate is the one place for.".into(),
             entry_points: "- [`src/lib.rs`](src/lib.rs)".into(),
+            readme: README,
             lib: LIB,
             ..Self::default()
         }
@@ -140,7 +145,10 @@ pub fn plan_with(
     parts: &Parts,
 ) -> Result<Plan, Error> {
     check_name(&spec.name)?;
-    let dir = directory(&spec.layer, &spec.name)?;
+    let dir = match &parts.dir {
+        Some(dir) => dir.clone(),
+        None => directory(&spec.layer, &spec.name)?,
+    };
     check_purpose(&spec.purpose)?;
     if let Some(missing) = spec.adrs.iter().find(|adr| !adrs.contains(adr)) {
         return Err(format!("ADR {missing} is not under docs/adr/").into());
@@ -167,7 +175,7 @@ pub fn plan_with(
     );
     let mut files = vec![
         (format!("{dir}/Cargo.toml"), render(MANIFEST, &values)?),
-        (format!("{dir}/README.md"), render(README, &values)?),
+        (format!("{dir}/README.md"), render(parts.readme, &values)?),
         (format!("{dir}/src/lib.rs"), render(parts.lib, &values)?),
     ];
     for (path, template) in &parts.extra {
@@ -184,6 +192,7 @@ pub fn plan_with(
         member: dir,
         package: spec.name.clone(),
         next,
+        edits: Vec::new(),
     })
 }
 

@@ -14,6 +14,7 @@
 //! [`render`]: plain `{{placeholder}}` substitution, where a placeholder left unfilled is an error.
 
 mod adapter;
+mod country;
 mod krate;
 
 use std::path::Path;
@@ -24,7 +25,10 @@ use crate::checks::{Error, repo_root};
 /// The usage line, for a missing or unknown generator.
 const USAGE: &str = "usage: cargo xtask new crate <name> --layer <layer> --purpose <one line> \
                      [--adr <number>]... [--dry-run] | cargo xtask new adapter --kind \
-                     printer|storage [--dry-run]";
+                     printer|storage [--dry-run] | cargo xtask new country <cc> --display-name <name> --currency \
+                     <code> --exponent <n> --prices-include-tax <true|false> --cash-rounding \
+                     <none|minor units> --tax-rate <class[@channel]=basis points>... \
+                     --retention-days <n> --language <tag> [--dry-run]";
 
 /// What a generator writes: new files, and the line it adds to the workspace `members`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +41,19 @@ pub struct Plan {
     pub package: String,
     /// What to run once the files are written, one line each.
     pub next: Vec<String>,
+    /// Existing files the plan adds lines to, each with its new contents.
+    pub edits: Vec<Edit>,
+}
+
+/// Lines a generator adds to a file that already exists: a country's wiring into the binaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    /// The file, relative to the repository root.
+    pub path: String,
+    /// Its whole contents with the lines added.
+    pub contents: String,
+    /// The lines added, as they read in the file.
+    pub added: Vec<String>,
 }
 
 /// Runs a generator: `cargo xtask new <kind> …`.
@@ -52,6 +69,7 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     let plan = match args.split_first() {
         Some((kind, rest)) if kind.as_str() == "crate" => krate::plan_from_args(&root, rest)?,
         Some((kind, rest)) if kind.as_str() == "adapter" => adapter::plan_from_args(&root, rest)?,
+        Some((kind, rest)) if kind.as_str() == "country" => country::plan_from_args(&root, rest)?,
         _ => return Err(USAGE.into()),
     };
     apply(&root, &plan, !dry_run.is_empty())?;
@@ -141,6 +159,9 @@ pub fn apply(root: &Path, plan: &Plan, dry_run: bool) -> Result<(), Error> {
             println!("--- {path}\n{contents}");
         }
         println!("--- Cargo.toml: members gains \"{}\"", plan.member);
+        for edit in &plan.edits {
+            println!("--- {} gains:\n{}", edit.path, edit.added.join("\n"));
+        }
         return Ok(());
     }
     for (path, contents) in &plan.files {
@@ -153,6 +174,10 @@ pub fn apply(root: &Path, plan: &Plan, dry_run: bool) -> Result<(), Error> {
     }
     std::fs::write(&manifest_path, manifest)?;
     println!("Cargo.toml: members gains \"{}\"", plan.member);
+    for edit in &plan.edits {
+        std::fs::write(root.join(&edit.path), &edit.contents)?;
+        println!("{} gains {}", edit.path, edit.added.join(" · "));
+    }
     for step in &plan.next {
         println!("next: {step}");
     }
@@ -234,6 +259,7 @@ mod tests {
             member: "crates/c".into(),
             package: "c".into(),
             next: Vec::new(),
+            edits: Vec::new(),
         }
     }
 

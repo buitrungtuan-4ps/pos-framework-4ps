@@ -1,0 +1,36 @@
+# `countries/{{cc}}` — {{display_name}}
+
+**Layer** `{{layer}}` · **Owners** {{owners}}
+
+Written by `cargo xtask new country` ([ADR-0176]({{to_root}}docs/adr/0176-the-adapter-and-country-standard.md))
+from the values below, each given on its command line: none of them is a default. Everything in
+`src/lib.rs` is a constant ([ADR-0105]({{to_root}}docs/adr/0105-a-country-pack-is-values.md)).
+
+| | |
+|---|---|
+| Currency | {{currency}}, {{exponent}} decimal places |
+| Prices quoted | {{prices_quoted}} |
+| Tax rates | {{rates_summary}} |
+| Cash rounding | {{cash_rounding_summary}} |
+| Default retention | {{retention_days}} days |
+| Language | `{{language}}` |
+
+## What is still needed to trade
+
+1. **The number format and the tax-code rule.** `src/lib.rs` starts with the default number format
+   and the reference module's format-only tax-code check. Replace both with what this country uses.
+2. **An e-invoice provider, if the country has one.** The module ships the offline allocator every
+   country shares (`pos_country::offline`), which passes the whole `Fiscalization` contract suite
+   but contacts nobody, and writes a placeholder invoice number. A provider replaces the submission
+   and the number's shape, and keeps the offline path.
+3. **The default retention, confirmed** against the operator's own lawful basis.
+
+## What belongs here, and what does not
+
+The line is [ADR-0027]({{to_root}}docs/adr/0027-country-modules.md): **this module ships what the
+law says; the configuration tree overrides it.**
+
+## Depends on / used by
+
+- **Depends on** (workspace crates): {{depends}}.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`.

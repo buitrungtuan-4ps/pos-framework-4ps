@@ -55,6 +55,14 @@ cargo xtask new adapter --kind printer|storage [--dry-run]
   write crates/adapters/<kind>-sandbox: a port implementation over a transport seam, and the port's
   contract suite wired in tests/contract.rs; it names no vendor (ADR-0176)
 
+cargo xtask new country <cc> --display-name <name> --currency <ISO 4217> --exponent <0-4>
+    --prices-include-tax <true|false> --cash-rounding <none|minor units>
+    --tax-rate <food|alcohol|exempt>=<basis points>... [--tax-rate <class>@<channel>=<bp>]...
+    --retention-days <n> --language <tag> [--dry-run]
+
+  write countries/<cc> from the values its law sets, every one a required flag, passing the
+  Fiscalization suite; wire it into pos-edge and pos-cloud as a feature in no default (ADR-0176)
+
 cargo xtask affected --classes [--base <ref>] [--all]
 
   which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,

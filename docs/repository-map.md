@@ -156,8 +156,9 @@ Guide: [write an adapter](guides/write-an-adapter.md).
 
 | Step | Files | Checked by |
 |---|---|---|
-| Module | `countries/<cc>/`, copied from `countries/zz`, crate `pos-country-<cc>` ([ADR-0027](adr/0027-country-modules.md), [ADR-0105](adr/0105-a-country-pack-is-values.md)) | its tests |
-| Workspace and binaries | `members` in the root `Cargo.toml`; a `country-<cc>` feature in `crates/pos-edge/Cargo.toml` and `crates/pos-cloud/Cargo.toml` | `xtask countries` |
+| Module | `countries/<cc>/`, crate `pos-country-<cc>` ([ADR-0027](adr/0027-country-modules.md), [ADR-0105](adr/0105-a-country-pack-is-values.md)). `cargo xtask new country <cc>` writes it from the values the law sets, each a required flag, with the `Fiscalization` suite passing ([ADR-0176](adr/0176-the-adapter-and-country-standard.md)) | its tests |
+| Workspace and binaries | `members` in the root `Cargo.toml`; a `country-<cc>` feature and optional dependency in `crates/pos-edge/Cargo.toml` and `crates/pos-cloud/Cargo.toml`, and an arm in each binary's `src/countries.rs`. `xtask new country` writes all of these and adds the country to no default feature | `xtask countries` |
+| Neighbouring READMEs | the Depends on line of `pos-edge`'s and `pos-cloud`'s READMEs, and the Used by line of the crates the module depends on | `xtask crates`, which prints each line |
 
 Guide: [add a country module](guides/add-a-country-module.md). Law-specific behaviour never goes in `pos-core`.
 
