@@ -579,6 +579,18 @@ impl CloudConfig {
     ///
     /// A human-readable message naming the field, when a value cannot be honoured.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_proxy_hops()?;
+        self.validate_internal_secret()?;
+        self.validate_archive_key()?;
+        self.validate_integration_secret()?;
+        self.validate_archive_retention()?;
+        self.validate_alert_webhook()?;
+        self.validate_release_source()?;
+        Ok(())
+    }
+
+    /// `trusted_proxy_hops` is at least one.
+    fn validate_proxy_hops(&self) -> Result<(), String> {
         if self.trusted_proxy_hops == 0 {
             // Zero would index past the end of every forwarded chain, so `client_ip` returns `None`
             // and the whole fleet shares one `ip:unknown` rate-limit bucket — a denial of service
@@ -588,6 +600,11 @@ impl CloudConfig {
                     .to_owned(),
             );
         }
+        Ok(())
+    }
+
+    /// `internal_shared_secret` is set and long enough (ADR-0097).
+    fn validate_internal_secret(&self) -> Result<(), String> {
         match &self.internal_shared_secret {
             None => {
                 return Err(format!(
@@ -607,6 +624,11 @@ impl CloudConfig {
             }
             Some(_) => {}
         }
+        Ok(())
+    }
+
+    /// `archive_key_secret`, when set, is a 32-byte key in hex (ADR-0124).
+    fn validate_archive_key(&self) -> Result<(), String> {
         // Absent is a posture (store archives off, said at boot); malformed is a typo that would
         // make every archive key unwrappable and would not be noticed until a restore.
         if let Some(secret) = &self.archive_key_secret
@@ -617,7 +639,11 @@ impl CloudConfig {
                 crate::archive::KEY_TEXT_LEN
             ));
         }
-        self.validate_integration_secret()?;
+        Ok(())
+    }
+
+    /// The archive window is at least a day and below the subject window (ADR-0124).
+    fn validate_archive_retention(&self) -> Result<(), String> {
         // Zero would delete an archive on the sweep that follows the upload, which is a backup that
         // never existed — and would look, in the file, like the tidy choice.
         if self.archive_retention_days == 0 {
@@ -643,6 +669,11 @@ impl CloudConfig {
                 self.archive_retention_days
             ));
         }
+        Ok(())
+    }
+
+    /// The alert webhook's URL and secret come as a pair, the secret long enough (ADR-0073).
+    fn validate_alert_webhook(&self) -> Result<(), String> {
         // An alert webhook without a secret would deliver unsigned batches, which a receiver cannot
         // tell from a forgery. The URL itself is vetted at boot, not here — that needs DNS.
         match (&self.alert_webhook_url, &self.alert_webhook_secret) {
@@ -674,6 +705,11 @@ impl CloudConfig {
             // Both set is armed; neither is console-only. Both are fine, and neither needs a word.
             (None, None) | (Some(_), Some(_)) => {}
         }
+        Ok(())
+    }
+
+    /// A release source names `owner/name` and reaches its forge over https (ADR-0088).
+    fn validate_release_source(&self) -> Result<(), String> {
         // Checked at load rather than at the first fetch: a `owner/name` typo would otherwise surface
         // as a `404` from the forge, which reads exactly like "that release does not exist" and sends
         // an operator looking at the wrong thing.
