@@ -3,6 +3,8 @@
 
 //! `/admin/employees`: a tenant's employees.
 
+use std::collections::BTreeSet;
+
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -11,7 +13,7 @@ use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
-use pos_proto::ids::TenantId;
+use pos_proto::ids::{StoreId, TenantId};
 
 use super::PeopleState;
 use super::requests::{
@@ -19,15 +21,15 @@ use super::requests::{
     UpdateEmployeeRequest, hash_pin, people_entropy_unavailable, people_error_response,
     pin_is_well_formed,
 };
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::people::{
-    AssignmentStore, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
+    AssignmentStore, Employee, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
     EmployeeStoreError, EmployeeUpdate, NewEmployee, RoleTemplateStore,
 };
 use crate::registry::{EntityStatus, RegistryStore};
-use crate::version::UpdateOutcome;
+use crate::version::{UpdateOutcome, Version};
 use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
 use pos_cloud_api::paged::{paged_ok, parse_page};
 use pos_cloud_api::refusal::{enum_refusal, not_found, present_param};
@@ -319,22 +321,9 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, employee_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("employee_id", &employee_id),
-    ]) {
-        Ok([tenant_id, employee_id]) => (TenantId::new(tenant_id), EmployeeId::new(employee_id)),
+    let (tenant_id, employee_id, status) = match read_employee_update(&employee_id, &request) {
+        Ok(read) => read,
         Err(refusal) => return refusal,
-    };
-    if request.name.trim().is_empty() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "name is required",
-            &[("name", "REQUIRED")],
-        );
-    }
-    let Some(status) = parse_entity_status(&request.status) else {
-        return entity_status_refusal();
     };
     // Read the current row for the audit `before` (id/code/status, never the name) and to answer 404.
     let existing = match EmployeeStore::get(&state.people, tenant_id, employee_id).await {
@@ -342,69 +331,134 @@ where
         Ok(None) => return not_found("employee"),
         Err(error) => return people_error_response(&error),
     };
-    // When this update archives the person, the stores to tell are read before the write, so a
-    // failed read refuses a write that has not happened rather than leaving one done with nobody
-    // told: every store any of their assignments reaches, through a group or the tenant as well.
-    // `None` when it archives nobody.
-    let reached = if existing.record.status != EntityStatus::Archived
-        && status == EntityStatus::Archived
-    {
-        let assignments =
-            match AssignmentStore::list_for_employee(&state.people, tenant_id, employee_id).await {
-                Ok(assignments) => assignments,
-                Err(error) => return people_error_response(&error),
-            };
-        let scopes = assignments.iter().map(|assignment| assignment.scope);
-        match state.stores_reached(tenant_id, scopes).await {
-            Ok(stores) => Some(stores),
-            Err(refusal) => return refusal,
-        }
-    } else {
-        None
-    };
     let update = EmployeeUpdate {
         employee_id,
         tenant_id,
         name: request.name,
         status,
     };
-    let expected = match if_match(&headers) {
-        Ok(expected) => expected,
+    let reached = match stores_told_of_archive(&state, &update, existing.record.status).await {
+        Ok(reached) => reached,
         Err(refusal) => return refusal,
     };
-    match EmployeeStore::update(&state.people, &update, &expected).await {
-        Ok(UpdateOutcome::Updated(version)) => {
-            let before = serde_json::json!({
-                "id": employee_id.to_string(),
-                "code": existing.record.code,
-                "status": existing.record.status.as_str(),
-            });
-            let after = serde_json::json!({
-                "id": employee_id.to_string(),
-                "code": existing.record.code,
-                "status": status.as_str(),
-            });
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "employee.update",
-                "employee",
-                &employee_id.to_string(),
-                Some(before),
-                Some(after),
-            )
-            .await;
-            let cause = ("employee_id", employee_id.to_string());
-            state
-                .answer_update(&context, tenant_id, &version, reached, cause)
-                .await
-        }
-        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
-        Ok(UpdateOutcome::NotFound) => not_found("employee"),
-        Err(error) => people_error_response(&error),
+    let version = match write_employee_update(&state, &headers, &update).await {
+        Ok(version) => version,
+        Err(refusal) => return refusal,
+    };
+    record_employee_update(&state, &context, &update, &existing.record).await;
+    let cause = ("employee_id", employee_id.to_string());
+    state
+        .answer_update(&context, tenant_id, &version, reached, cause)
+        .await
+}
+
+/// The ids, the name and the status an update names, refused in that order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the 400 the caller returns"
+)]
+fn read_employee_update(
+    employee_id: &str,
+    request: &UpdateEmployeeRequest,
+) -> Result<(TenantId, EmployeeId, EntityStatus), Response> {
+    let [tenant_id, employee_id] = parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("employee_id", employee_id),
+    ])?;
+    if request.name.trim().is_empty() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        ));
     }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return Err(entity_status_refusal());
+    };
+    Ok((
+        TenantId::new(tenant_id),
+        EmployeeId::new(employee_id),
+        status,
+    ))
+}
+
+/// When the update archives the person, the stores to tell, read before the write, so a failed
+/// read refuses a write that has not happened rather than leaving one done with nobody told: every
+/// store any of their assignments reaches, through a group or the tenant as well. `None` when it
+/// archives nobody.
+async fn stores_told_of_archive<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
+    update: &EmployeeUpdate,
+    was: EntityStatus,
+) -> Result<Option<BTreeSet<StoreId>>, Response>
+where
+    P: AssignmentStore,
+    R: RegistryStore,
+{
+    if was == EntityStatus::Archived || update.status != EntityStatus::Archived {
+        return Ok(None);
+    }
+    let assignments =
+        AssignmentStore::list_for_employee(&state.people, update.tenant_id, update.employee_id)
+            .await
+            .map_err(|error| people_error_response(&error))?;
+    let scopes = assignments.iter().map(|assignment| assignment.scope);
+    state
+        .stores_reached(update.tenant_id, scopes)
+        .await
+        .map(Some)
+}
+
+/// Writes `update` at the version the request's `If-Match` names, and answers the new version or
+/// the refusal: a missing or malformed `If-Match`, a stale version, or a person gone since the read.
+async fn write_employee_update<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
+    headers: &HeaderMap,
+    update: &EmployeeUpdate,
+) -> Result<Version, Response>
+where
+    P: EmployeeStore,
+{
+    let expected = if_match(headers)?;
+    match EmployeeStore::update(&state.people, update, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => Ok(version),
+        Ok(UpdateOutcome::VersionMismatch) => Err(version_mismatch()),
+        Ok(UpdateOutcome::NotFound) => Err(not_found("employee")),
+        Err(error) => Err(people_error_response(&error)),
+    }
+}
+
+/// Records `employee.update` with the id, code and status before and after — never the name.
+async fn record_employee_update<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
+    context: &AdminContext,
+    update: &EmployeeUpdate,
+    existing: &Employee,
+) where
+    C: ClockSource,
+{
+    let before = serde_json::json!({
+        "id": update.employee_id.to_string(),
+        "code": existing.code,
+        "status": existing.status.as_str(),
+    });
+    let after = serde_json::json!({
+        "id": update.employee_id.to_string(),
+        "code": existing.code,
+        "status": update.status.as_str(),
+    });
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(update.tenant_id),
+        "employee.update",
+        "employee",
+        &update.employee_id.to_string(),
+        Some(before),
+        Some(after),
+    )
+    .await;
 }
 
 /// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
