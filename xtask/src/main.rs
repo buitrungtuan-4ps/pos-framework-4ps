@@ -35,7 +35,8 @@ cargo xtask <check>
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
-  guides          every block a guide in docs/guides/ marks is still true to the tree
+  guides          every block a guide in docs/guides/ marks is still true to the tree; --run also
+                  does each guide's `cargo xtask new` commands and verify steps in a scratch worktree
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block

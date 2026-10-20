@@ -56,3 +56,7 @@ line before its fence. `cargo xtask guides --check`, part of `just preflight`, r
 | `<!-- guide:excerpt <path> -->` | Code quoted from `<path>` | Its lines are still in that file, contiguous and verbatim, under one shared indent |
 
 Quote code rather than paraphrase it, so a change to that code fails the check.
+
+`just guides` then does what each guide says, in a scratch worktree of the last commit: the
+`cargo xtask new` lines of its command blocks, then its verify steps. Other lines in a command block,
+such as cleaning up, are the reader's to run.

@@ -10,9 +10,13 @@
 //! must still be in `<path>`, contiguous and verbatim under one shared indent; nothing is marked in
 //! the source, so a guide can quote `pos-core` or `pos-proto` without changing either. An unknown or
 //! dangling marker is a finding, so a typo cannot turn a check off unseen.
+//!
+//! `--run` goes further and does what a guide says, in a scratch worktree ([`run`]).
 
 use super::{Error, repo_root};
 use crate::Finding;
+
+mod run;
 
 const RULE: &str = "guide";
 
@@ -39,12 +43,12 @@ struct Block {
     body: Vec<String>,
 }
 
-/// Checks every marked block of every guide.
+/// Checks every marked block of every guide, or with `--run` does what each says.
 ///
 /// # Errors
 ///
-/// [`Error`] if `docs/guides/` or a guide cannot be read.
-pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
+/// [`Error`] if `docs/guides/` or a guide cannot be read, or a scratch worktree cannot be made.
+pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     let root = repo_root();
     let mut findings = Vec::new();
     let mut paths: Vec<_> = std::fs::read_dir(root.join(GUIDES_DIR))?
@@ -60,7 +64,7 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
             .unwrap_or(&path)
             .display()
             .to_string();
-        findings.extend(check_guide(
+        let checked = check_guide(
             &file,
             &text,
             |args| {
@@ -69,7 +73,12 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
                     .map_err(|error| error.to_string())
             },
             |quoted| std::fs::read_to_string(root.join(quoted)).ok(),
-        ));
+        );
+        // A guide `--check` faults is never run: the rules hold before anything executes.
+        if checked.is_empty() && args.iter().any(|argument| argument == "--run") {
+            findings.extend(run::run_guide(&root, &file, &text)?);
+        }
+        findings.extend(checked);
     }
     Ok(findings)
 }
@@ -104,9 +113,7 @@ fn check_guide(
             }
             Kind::Verify => {
                 for command in commands(&block.body) {
-                    if !VERIFY_COMMANDS.iter().any(|allowed| {
-                        command == *allowed || command.starts_with(&format!("{allowed} "))
-                    }) {
+                    if !is_verify_command(&command) {
                         findings.push(finding(format!(
                             "`{command}` is not a `cargo test`, `cargo check` or `cargo xtask` command"
                         )));
@@ -187,6 +194,13 @@ fn marker(line: &str) -> Option<Result<Kind, String>> {
         Some(("excerpt", path)) => Ok(Kind::Excerpt(path.trim().to_owned())),
         _ => Err(marker.to_owned()),
     })
+}
+
+/// Whether `command` is one a `guide:verify` block may hold, and so one `--run` may execute.
+fn is_verify_command(command: &str) -> bool {
+    VERIFY_COMMANDS
+        .iter()
+        .any(|allowed| command == *allowed || command.starts_with(&format!("{allowed} ")))
 }
 
 /// A block's commands: a line ending in `\` joined to the next, and comments and blanks left out.
