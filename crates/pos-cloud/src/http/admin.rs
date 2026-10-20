@@ -40,6 +40,7 @@ pub(crate) use admins::{
 pub(crate) use api_keys::{
     __path_admin_create_api_key, __path_admin_list_api_keys, __path_admin_revoke_api_key,
 };
+pub(crate) use audit::__path_admin_list_audit;
 pub(crate) use auth::{
     __path_admin_login, __path_admin_logout, __path_admin_session, __path_admin_setup,
     __path_admin_whoami,

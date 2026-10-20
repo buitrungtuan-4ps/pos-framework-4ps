@@ -251,6 +251,197 @@
         ]
       }
     },
+    "/admin/alerts": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "A super-admin (any console role) lists the fleet's alerts: the active set by default, or recent\nhistory (active and resolved, newest-seen first, capped) with `?recent=true`.",
+        "operationId": "admin_list_alerts",
+        "parameters": [
+          {
+            "name": "recent",
+            "in": "query",
+            "description": "`true` for recent history, active and resolved, newest-seen first; absent or `false` for the active alerts only",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "With `recent`, the most alerts to return (default 200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The alerts, fleet-wide, as an array: each with `id`, `tenant_id` (absent for a server-wide condition), `kind`, `dedup_key`, `severity` (`info`, `warning` or `critical`), `summary`, `detail`, and the Unix-millisecond instants it was first and last seen, acknowledged and resolved"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The alert store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/alerts/{id}/ack": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "A super-admin holding `console.alerts.manage` acknowledges an alert (idempotent).",
+        "operationId": "admin_ack_alert",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The alert's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Acknowledged, and audited. Idempotent"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.alerts.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The alert store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/alerts/{id}/resolve": {
+      "post": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "A super-admin holding `console.alerts.manage` resolves an alert by hand (idempotent — a condition\nstill firing reopens on the next evaluator tick).",
+        "operationId": "admin_resolve_alert",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The alert's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Resolved, and audited. Idempotent. A condition still present opens again on the evaluator's next pass"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.alerts.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The alert store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/api-keys": {
       "get": {
         "tags": [
@@ -718,6 +909,159 @@
             }
           }
         }
+      }
+    },
+    "/admin/audit": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "A super-admin (any console role) reads the audit trail, filtered by the query string.",
+        "operationId": "admin_list_audit",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "One tenant's entries (a 26-character ULID). Absent, the fleet-wide trail, tenant-global entries included",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_type",
+            "in": "query",
+            "description": "Only entries about this kind of record, such as `store`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "in": "query",
+            "description": "Only entries about this record",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Only entries with this action, such as `store.update`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor_admin_id",
+            "in": "query",
+            "description": "Only entries by this administrator",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since_ms",
+            "in": "query",
+            "description": "Only entries at or after this instant (Unix ms)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "until_ms",
+            "in": "query",
+            "description": "Only entries at or before this instant (Unix ms)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Without `offset`, the most recent this many entries (default 200, larger values read as 500). With `offset`, the page size, 1 to 500, refused rather than clamped",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Asks for a page: how many entries to skip, 0 to 100000",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`newest` (the default) or `oldest`. Only with `offset`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Without `offset`, the newest matching entries as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each entry has `id`, `tenant_id`, the acting administrator's id, email and role, `action`, `entity_type`, `entity_id`, `before`, `after`, `request_id` and `at_ms`. An entry about an employee carries the person's staff code only for a role holding console.people.read (ADR-0158 decision 9)"
+          },
+          "400": {
+            "description": "tenant_id is not a ULID; limit or offset is not an integer in range; or order is sent without offset or is not one the route accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The audit store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/chain-findings": {
@@ -2638,6 +2982,214 @@
         }
       }
     },
+    "/admin/fleet": {
+      "get": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.",
+        "operationId": "admin_list_fleet",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose stores to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every store of the tenant, as an array, with its last contact, `online` (derived at read time from the last contact), the configuration version it holds against the one published and `config_current`, the binary it runs and its last self-test, its outbox depth, its print agents, its lease standing, and where its edge runs. Instants are Unix milliseconds; a fact the store never reported is `null`, never zero. The region comparison is on the single-store read only"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fleet store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/fleet/{store_id}": {
+      "get": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "A super-admin (any console role) reads one store's fleet detail; `404` if the tenant has no such\nstore.",
+        "operationId": "admin_fleet_store",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store as the fleet list shows it, plus the region comparison (ADR-0114): `profile_country`, the country its configuration publishes; `region_agreement`, `agrees`, `differs` or `country-not-recorded`; and `region_acknowledgement`, the recorded answer to a difference, if one stands. If the store's configuration cannot be read, the comparison degrades to no country rather than failing the read"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fleet store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/health/tasks": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Reports every background loop's health: each expected loop (whether or not it has ticked) plus any\nextra loop that has. `503` if the store is unreachable.",
+        "operationId": "admin_task_health",
+        "responses": {
+          "200": {
+            "description": "`healthy`, whether every loop this deployment expects is healthy, and `tasks`: each loop with `task`, `expected`, `healthy` (it ticked within a few of its intervals and its last tick succeeded), `last_tick_at_ms`, `seconds_since` and the loop's own `detail`. An expected loop that never ticked is listed as unhealthy; a loop that ticks but is not expected is listed and does not count"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The task-health store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/integrations/connections": {
       "get": {
         "tags": [
@@ -3902,6 +4454,96 @@
             }
           }
         }
+      }
+    },
+    "/admin/reconcile": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Lists a tenant's most recent reconciliation runs, newest first\n([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that\nreconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind\n[`ConsolePermission::Read`].",
+        "operationId": "admin_reconcile_runs",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose runs to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "Only this store's runs (a 26-character ULID)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most runs to return (default 100, at most 500)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The runs, newest first, as an array: each with `run_id`, `store_id`, `candidates_offered` (the events the store offered), `missing_found` (how many of them the cloud lacked and asked for again; zero is in sync) and `ran_at_ms`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reconciliation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/recovery-codes": {
@@ -6853,7 +7495,15 @@
     },
     {
       "name": "fleet",
-      "description": "Where each store runs and how it is standing (ADR-0068, ADR-0110, ADR-0114). The reads themselves are still coverage debt; the one write here is documented because it is the only one on this surface a person answers a compliance warning with."
+      "description": "Where each store runs and how it is standing (ADR-0068, ADR-0110, ADR-0114): its last contact and whether it is online, the configuration and binary it runs, what it holds unsent, and whether the country its data rests in agrees with the one it is registered in. Online and current are derived when read, never stored. The one write answers a region difference, the compliance warning the single-store read shows."
+    },
+    {
+      "name": "operations",
+      "description": "Whether the cloud and the fleet are working (ADR-0068, ADR-0073, ADR-0078): the alerts the evaluator keeps, fleet-wide, with their acknowledgement and resolution; the health of each background loop; and the reconciliation runs that show no store's events were lost."
+    },
+    {
+      "name": "audit",
+      "description": "Every console write, who made it and when (ADR-0069), read by any console role. An entry records ids, codes and statuses, never a person's name or a secret; an employee's staff code is shown only to a role that may read the roster (ADR-0158 decision 9)."
     },
     {
       "name": "settings",

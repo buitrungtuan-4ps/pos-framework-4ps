@@ -23,6 +23,29 @@ use crate::lease::{
     RegionAcknowledgementStore, RegionAgreement, region_agreement, standing_acknowledgement,
 };
 
+#[utoipa::path(
+    get,
+    path = "/admin/fleet",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose stores to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every store of the tenant, as an array, with its last contact, \
+                                      `online` (derived at read time from the last contact), the \
+                                      configuration version it holds against the one published and \
+                                      `config_current`, the binary it runs and its last self-test, \
+                                      its outbox depth, its print agents, its lease standing, and \
+                                      where its edge runs. Instants are Unix milliseconds; a fact \
+                                      the store never reported is `null`, never zero. The region \
+                                      comparison is on the single-store read only"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fleet store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fleet",
+)]
 /// A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.
 pub(super) async fn admin_list_fleet<F, A, C, Cfg, Ack>(
     State(state): State<FleetState<F, A, C, Cfg, Ack>>,
@@ -63,6 +86,31 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/fleet/{store_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store as the fleet list shows it, plus the region \
+                                      comparison (ADR-0114): `profile_country`, the country its \
+                                      configuration publishes; `region_agreement`, `agrees`, \
+                                      `differs` or `country-not-recorded`; and \
+                                      `region_acknowledgement`, the recorded answer to a difference, \
+                                      if one stands. If the store's configuration cannot be read, \
+                                      the comparison degrades to no country rather than failing the \
+                                      read"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fleet store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fleet",
+)]
 /// A super-admin (any console role) reads one store's fleet detail; `404` if the tenant has no such
 /// store.
 pub(super) async fn admin_fleet_store<F, A, C, Cfg, Ack>(

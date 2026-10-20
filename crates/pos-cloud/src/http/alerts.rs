@@ -115,6 +115,29 @@ fn alert_error_response(error: &AlertStoreError) -> Response {
     api_error(ErrorStatus::Unavailable, "the alert service is unavailable")
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/alerts",
+    security(("session_cookie" = [])),
+    params(
+        ("recent" = Option<bool>, Query, description = "`true` for recent history, active and \
+                                                      resolved, newest-seen first; absent or `false` \
+                                                      for the active alerts only"),
+        ("limit" = Option<u32>, Query, description = "With `recent`, the most alerts to return \
+                                                    (default 200)"),
+    ),
+    responses(
+        (status = 200, description = "The alerts, fleet-wide, as an array: each with `id`, \
+                                      `tenant_id` (absent for a server-wide condition), `kind`, \
+                                      `dedup_key`, `severity` (`info`, `warning` or `critical`), \
+                                      `summary`, `detail`, and the Unix-millisecond instants it was \
+                                      first and last seen, acknowledged and resolved"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The alert store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// A super-admin (any console role) lists the fleet's alerts: the active set by default, or recent
 /// history (active and resolved, newest-seen first, capped) with `?recent=true`.
 async fn admin_list_alerts<Al, A, C>(
@@ -151,6 +174,21 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/alerts/{id}/ack",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The alert's id"),
+    ),
+    responses(
+        (status = 204, description = "Acknowledged, and audited. Idempotent"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.alerts.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The alert store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// A super-admin holding `console.alerts.manage` acknowledges an alert (idempotent).
 async fn admin_ack_alert<Al, A, C>(
     State(state): State<AlertState<Al, A, C>>,
@@ -193,6 +231,22 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/alerts/{id}/resolve",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The alert's id"),
+    ),
+    responses(
+        (status = 204, description = "Resolved, and audited. Idempotent. A condition still present \
+                                      opens again on the evaluator's next pass"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.alerts.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The alert store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// A super-admin holding `console.alerts.manage` resolves an alert by hand (idempotent — a condition
 /// still firing reopens on the next evaluator tick).
 async fn admin_resolve_alert<Al, A, C>(

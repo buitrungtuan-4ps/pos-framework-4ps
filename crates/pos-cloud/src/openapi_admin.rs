@@ -89,6 +89,14 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::integrations::admin_list_webhooks,
         crate::http::integrations::admin_delete_webhook,
         crate::http::integrations::admin_enable_webhook,
+        crate::http::fleet::admin_list_fleet,
+        crate::http::fleet::admin_fleet_store,
+        crate::http::alerts::admin_list_alerts,
+        crate::http::alerts::admin_ack_alert,
+        crate::http::alerts::admin_resolve_alert,
+        crate::http::health::admin_task_health,
+        crate::http::reconcile::admin_reconcile_runs,
+        crate::http::admin::admin_list_audit,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -249,9 +257,25 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         (
             name = "fleet",
             description = "Where each store runs and how it is standing (ADR-0068, ADR-0110, \
-                           ADR-0114). The reads themselves are still coverage debt; the one write \
-                           here is documented because it is the only one on this surface a person \
-                           answers a compliance warning with."
+                           ADR-0114): its last contact and whether it is online, the configuration \
+                           and binary it runs, what it holds unsent, and whether the country its \
+                           data rests in agrees with the one it is registered in. Online and \
+                           current are derived when read, never stored. The one write answers a \
+                           region difference, the compliance warning the single-store read shows."
+        ),
+        (
+            name = "operations",
+            description = "Whether the cloud and the fleet are working (ADR-0068, ADR-0073, \
+                           ADR-0078): the alerts the evaluator keeps, fleet-wide, with their \
+                           acknowledgement and resolution; the health of each background loop; \
+                           and the reconciliation runs that show no store's events were lost."
+        ),
+        (
+            name = "audit",
+            description = "Every console write, who made it and when (ADR-0069), read by any \
+                           console role. An entry records ids, codes and statuses, never a \
+                           person's name or a secret; an employee's staff code is shown only to a \
+                           role that may read the roster (ADR-0158 decision 9)."
         ),
         (
             name = "settings",
@@ -495,15 +519,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/translations/import/dry-run",
     "/admin/countries",
     "/admin/locales",
-    // --- operations: liveness, alerts, task health, OTA, reconciliation (O1-O3) ---
-    "/admin/fleet",
-    "/admin/fleet/{store_id}",
-    "/admin/alerts",
-    "/admin/alerts/{id}/ack",
-    "/admin/alerts/{id}/resolve",
-    "/admin/health/tasks",
-    "/admin/reconcile",
-    "/admin/audit",
     // --- PDPD subject-request tooling (ADR-0076) ---
     "/admin/subjects/{subject_id}",
     "/admin/subjects/{subject_id}/erase",

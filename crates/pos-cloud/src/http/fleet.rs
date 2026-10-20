@@ -28,6 +28,7 @@ mod views;
 
 // The handler the console's OpenAPI document names.
 pub(crate) use regions::__path_admin_acknowledge_region;
+pub(crate) use stores::{__path_admin_fleet_store, __path_admin_list_fleet};
 
 // --- Fleet liveness (`/admin/fleet`, ADR-0068) --------------------------------------------------
 

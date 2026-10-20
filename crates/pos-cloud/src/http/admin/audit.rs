@@ -138,6 +138,48 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/audit",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = Option<String>, Query, description = "One tenant's entries (a 26-character \
+                                                           ULID). Absent, the fleet-wide trail, \
+                                                           tenant-global entries included"),
+        ("entity_type" = Option<String>, Query, description = "Only entries about this kind of \
+                                                             record, such as `store`"),
+        ("entity_id" = Option<String>, Query, description = "Only entries about this record"),
+        ("action" = Option<String>, Query, description = "Only entries with this action, such as \
+                                                        `store.update`"),
+        ("actor_admin_id" = Option<String>, Query, description = "Only entries by this administrator"),
+        ("since_ms" = Option<i64>, Query, description = "Only entries at or after this instant (Unix ms)"),
+        ("until_ms" = Option<i64>, Query, description = "Only entries at or before this instant (Unix ms)"),
+        ("limit" = Option<String>, Query, description = "Without `offset`, the most recent this many \
+                                                       entries (default 200, larger values read as \
+                                                       500). With `offset`, the page size, 1 to 500, \
+                                                       refused rather than clamped"),
+        ("offset" = Option<String>, Query, description = "Asks for a page: how many entries to skip, \
+                                                        0 to 100000"),
+        ("order" = Option<String>, Query, description = "`newest` (the default) or `oldest`. Only \
+                                                       with `offset`"),
+    ),
+    responses(
+        (status = 200, description = "Without `offset`, the newest matching entries as an array; \
+                                      with it, a page: `items`, `total`, `limit` and `offset`. Each \
+                                      entry has `id`, `tenant_id`, the acting administrator's id, \
+                                      email and role, `action`, `entity_type`, `entity_id`, \
+                                      `before`, `after`, `request_id` and `at_ms`. An entry about an \
+                                      employee carries the person's staff code only for a role \
+                                      holding console.people.read (ADR-0158 decision 9)"),
+        (status = 400, description = "tenant_id is not a ULID; limit or offset is not an integer \
+                                      in range; or order is sent without offset or is not one the \
+                                      route accepts", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The audit store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "audit",
+)]
 /// A super-admin (any console role) reads the audit trail, filtered by the query string.
 async fn admin_list_audit<Au, A, C>(
     State(state): State<AuditReadState<Au, A, C>>,
