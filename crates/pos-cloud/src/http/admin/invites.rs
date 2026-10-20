@@ -46,6 +46,30 @@ struct InviteAdminResponse {
     expires_at_ms: i64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/invites",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The invitee's `email`, the address they will sign in with; their `name`; and \
+                       the `role` they are granted on acceptance: `owner`, `admin`, `ops` or `viewer`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Invited. The body carries `invite_id`, the single-use `token` \
+                                      and `expires_at_ms`. The token is returned exactly once — only \
+                                      its hash is stored — and the inviter hands the link carrying \
+                                      it to the invitee themselves. The audit entry records the role, \
+                                      never the email or the token"),
+        (status = 400, description = "role is not one of the four, or email is not an address", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.invite, or a non-owner invites an \
+                                      owner", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "An administrator already signs in with that address", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Invites a new console admin ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). Needs
 /// `console.admins.invite` (owner or admin); only an owner may invite another owner, so an admin
 /// cannot escalate. Refuses an address that is already an admin. Returns the single-use token once.
@@ -231,6 +255,20 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/invites",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "The invitations not yet accepted and not expired, as an array: \
+                                      each with `id`, `email`, `name`, `role`, `invited_by` and \
+                                      `accepted`. Never the token, which is stored only as a hash"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.invite", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Lists the pending (not accepted, not expired) invitations. Needs `console.admins.invite`.
 pub(in crate::http) async fn admin_list_invites<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
@@ -264,6 +302,23 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/invites/{id}",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The invitation's id"),
+    ),
+    responses(
+        (status = 204, description = "No invitation with that id is pending any more. Idempotent: \
+                                      the answer is the same whether one was pending, and only a \
+                                      revocation that removed one is audited"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.invite", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Revokes a pending invitation by id. `204` whether or not one was pending — revoking is idempotent.
 /// Needs `console.admins.invite`.
 pub(in crate::http) async fn admin_revoke_invite<S, R, K, C, A, T, W>(
@@ -337,6 +392,27 @@ impl fmt::Debug for AcceptInviteRequest {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/invites/accept",
+    request_body(
+        description = "The single-use `token` from the invite link and the `password` the invitee \
+                       chooses, at least 12 characters. No session: the token is the authorisation",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Enrolled. The invitation is used up, and the body carries the \
+                                      new administrator's one-time TOTP enrolment (QR payload and \
+                                      base32 secret) — returned exactly once, never readable again. \
+                                      Sign in with `POST /admin/login`"),
+        (status = 400, description = "The password is shorter than the minimum", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "The invitation is unknown, expired or already accepted — one \
+                                      generic refusal for all three", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "An administrator already signs in with the invited address", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Accepts an invitation and self-enrols the new admin — **pre-auth**: the invite token is the
 /// authorisation, so there is no session guard ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
 /// Mints the admin's own Argon2id password hash and TOTP secret exactly as first-boot enrolment does,

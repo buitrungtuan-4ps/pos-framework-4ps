@@ -37,6 +37,23 @@ struct AdminSessionView {
     current: bool,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/sessions",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "The acting administrator's own live sessions, newest first, as \
+                                      an array: each with `id`, an opaque revocation handle (never \
+                                      the session token, and not reversible to it), the `ip` and \
+                                      `user_agent` it was signed in from where known, \
+                                      `created_at_ms`, `expires_at_ms`, and `current` for the \
+                                      session making this request. Any signed-in administrator, \
+                                      whatever their role"),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// `GET /admin/sessions` — the acting admin's own live sessions, newest first, with the current one
 /// flagged. Self-service: available to any authenticated admin regardless of role (an admin always
 /// manages their own sessions), so it is gated by the plain session guard, not a
@@ -82,6 +99,24 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/sessions/{id}",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The session's handle, as `GET /admin/sessions` lists it"),
+    ),
+    responses(
+        (status = 204, description = "Revoked. The session can no longer be used"),
+        (status = 400, description = "id is not a session handle", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The acting administrator has no session with that handle. \
+                                      Another administrator's session is not found either: a \
+                                      session can be revoked only by its owner", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// `DELETE /admin/sessions/{id}` — revoke one of the acting admin's own sessions by its handle.
 /// Scoped to the caller, so an admin can only revoke a session that is theirs: an unknown or
 /// other-owned handle is a `404`, never a cross-admin revocation.
@@ -121,6 +156,18 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/sessions/revoke-others",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 204, description = "Every session of the acting administrator except the one making \
+                                      this request is revoked: signed out everywhere else"),
+        (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// `POST /admin/sessions/revoke-others` — revoke every one of the acting admin's sessions except the
 /// one making this request ("sign out everywhere else").
 pub(in crate::http) async fn admin_revoke_other_sessions<S, R, K, C, A, T, W>(

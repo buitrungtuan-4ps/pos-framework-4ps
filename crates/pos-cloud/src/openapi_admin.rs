@@ -72,6 +72,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_reenrol_totp,
         crate::http::admin_generate_recovery_codes,
         crate::http::admin_recovery_codes_status,
+        crate::http::admin_list_sessions,
+        crate::http::admin_revoke_session,
+        crate::http::admin_revoke_other_sessions,
+        crate::http::admin_list_admins,
+        crate::http::admin_set_admin_role,
+        crate::http::admin_set_admin_status,
+        crate::http::admin_invite_admin,
+        crate::http::admin_list_invites,
+        crate::http::admin_revoke_invite,
+        crate::http::admin_accept_invite,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -144,8 +154,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         (
             name = "auth",
             description = "Two-factor sign-in, the session it issues, and the second-factor levers \
-                           (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
-                           session these routes establish."
+                           (ADR-0034, ADR-0060); an administrator's own sessions, listed and \
+                           revoked; and who administers the console, by invitation, role and status \
+                           (ADR-0067). An invitation's token and an enrolment's TOTP secret are each \
+                           returned once and stored only as a hash or not at all. The last active \
+                           owner cannot be demoted or suspended. Everything else on this surface \
+                           stands behind the session these routes establish."
         ),
         (
             name = "config releases",
@@ -307,16 +321,6 @@ impl Modify for SessionCookie {
     )
 )]
 const UNDOCUMENTED: &[&str] = &[
-    // --- sessions and administrator management (G1, ADR-0067) ---
-    "/admin/sessions",
-    "/admin/sessions/revoke-others",
-    "/admin/sessions/{id}",
-    "/admin/admins",
-    "/admin/admins/{id}/role",
-    "/admin/admins/{id}/status",
-    "/admin/invites",
-    "/admin/invites/accept",
-    "/admin/invites/{id}",
     // --- the tenant / brand / store registry (WS-C) ---
     "/admin/tenants",
     "/admin/tenants/{tenant_id}",
