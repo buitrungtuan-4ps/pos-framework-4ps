@@ -73,4 +73,3 @@
 "crates/pos-edge/src/server.rs::compose_cloud_surface" = { lines = 118, params = 14 }
 "crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
 "crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
-"crates/pos-fakes/src/store.rs::<FakeTx as TxContext>::commit" = { lines = 102, params = 1 }
