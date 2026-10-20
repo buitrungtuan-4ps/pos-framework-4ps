@@ -9,9 +9,11 @@
 use core::time::Duration;
 use std::sync::Arc;
 
+use blob_garage::S3Blobs;
 use link_nats::NatsConsumer;
 use metrics_vm::VmMetrics;
 use pos_cloud::alerts::{self, AlertThresholds};
+use pos_cloud::archive_retention;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::people_republish;
@@ -318,5 +320,43 @@ pub(crate) fn metrics_heartbeat(config: &CloudConfig) -> Option<JoinHandle<()>> 
              below ~50 stores)"
         );
         None
+    }
+}
+
+/// The store-archive retention sweep, where archiving is on at all.
+pub(crate) fn archive_retention_sweep(
+    config: &CloudConfig,
+    store: &PostgresStore,
+    artifacts: Option<&S3Blobs>,
+) -> Option<JoinHandle<()>> {
+    // The store-archive retention sweep (ADR-0124 slice 3). It needs the same object store the
+    // archives were uploaded to, which is why it is spawned here rather than beside the subject
+    // cron above — and only where archiving is on at all, because a sweep with nothing to sweep is
+    // a daily query for no reason.
+    //
+    // Why it exists is not disk. A store's archive is its whole database, buyer details included
+    // (ADR-0107), taken *before* the masking cron redacted them; capping the archive window below
+    // the subject window is what makes that redaction eventually true in the copies too. The
+    // configuration refuses to start with the two windows the wrong way round, so by the time this
+    // spawns the ordering already holds.
+    match (artifacts.cloned(), config.archive_key_secret.as_ref()) {
+        (Some(blobs), Some(_secret)) => {
+            let interval = Duration::from_secs(config.archive_retention_sweep_interval_secs);
+            tracing::info!(
+                archive_retention_days = config.archive_retention_days,
+                interval_secs = config.archive_retention_sweep_interval_secs,
+                "store-archive retention sweep started"
+            );
+            Some(tokio::spawn(archive_retention::run(
+                store.archives(),
+                blobs,
+                archive_retention::ArchiveWindow::days(config.archive_retention_days),
+                SystemClock,
+                store.task_health(),
+                interval,
+                shutdown_signal(),
+            )))
+        }
+        _other => None,
     }
 }

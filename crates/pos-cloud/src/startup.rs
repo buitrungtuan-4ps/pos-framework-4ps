@@ -8,11 +8,14 @@ pub(super) mod loops;
 
 use std::sync::Arc;
 
+use blob_garage::S3Blobs;
+
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::qr_ordering::OneSwitch;
-use pos_cloud::{Cloud, CloudConfig};
+use pos_cloud::release_source::GithubReleases;
+use pos_cloud::{Cloud, CloudConfig, ReleaseToken};
 use store_postgres::{
     PostgresAdmin, PostgresApiKeys, PostgresConfigTrees, PostgresRollups, PostgresStore,
     PostgresWebhooks,
@@ -130,4 +133,100 @@ pub(super) fn cloud_app(
     .with_admin_setup_token(config.admin_setup_token.clone())
     .with_internal_shared_secret(config.internal_shared_secret.clone())
     .with_qr_switch_since(one_switch.since)
+}
+
+/// The background loops this deployment turned on, for the health endpoint to check against.
+pub(super) fn expected_tasks(config: &CloudConfig) -> Vec<String> {
+    // The background loops this deployment turned on, for the health endpoint to check against: the
+    // projector and webhook dispatcher always run; the retention cron only when a period is set. A loop
+    // in this set that has never ticked reads as unhealthy rather than being silently absent.
+    let mut expected_tasks = vec![
+        pos_cloud::health::ROLLUP_PROJECTOR.to_owned(),
+        pos_cloud::health::WEBHOOK_DISPATCHER.to_owned(),
+        pos_cloud::health::ALERT_EVALUATOR.to_owned(),
+    ];
+    if config.retention_days.is_some() {
+        expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
+    }
+    expected_tasks
+}
+
+/// The object store OTA artifacts and store archives live in, where one is configured and usable.
+pub(super) fn artifact_store(config: &CloudConfig) -> Option<S3Blobs> {
+    // The OTA artifact route exists only where an object store is configured (ADR-0088). A cloud that
+    // ships no edge releases needs none, and the alternative — a route answering with an empty
+    // success — would tell a store it is up to date when nothing was ever published. An absent
+    // endpoint is a `404`, which the adapter already reads as "the cloud publishes no such release".
+    match config.artifacts.as_ref() {
+        None => {
+            tracing::info!(
+                "no [artifacts] configured; the OTA artifact route is off and stores cannot fetch releases"
+            );
+            None
+        }
+        Some(artifacts) => match S3Blobs::new(
+            &artifacts.endpoint,
+            &artifacts.bucket,
+            &artifacts.region,
+            &artifacts.access_key_id,
+            &artifacts.secret_access_key,
+        ) {
+            Ok(blobs) => Some(blobs),
+            // Configured but unusable is a boot-time mistake worth being loud about, and not worth
+            // refusing to start over: selling, config delivery and reporting are unaffected, and a
+            // cloud that will not boot because OTA is misconfigured takes the fleet's dashboards
+            // down with it.
+            Err(error) => {
+                tracing::error!(%error, "the [artifacts] endpoint is unusable; the OTA artifact route is off");
+                None
+            }
+        },
+    }
+}
+
+/// The forge the console fetches a signed release pair from, where one is configured.
+pub(super) fn release_source(config: &CloudConfig) -> Option<GithubReleases> {
+    // Where the console fetches a signed release pair from (ADR-0088 Amendment 4). Absent costs
+    // nothing: the `/admin` upload route is unaffected, and cutting a release stays the `curl` per
+    // target `docs/release-runbook.md` documents. Configured (the deploy writes it for a public
+    // repository), the box needs outbound HTTPS to the forge — an operator's path, never a store's.
+    match config.release_source.as_ref() {
+        None => {
+            tracing::info!(
+                "no [release_source] configured; a release artifact reaches the cloud by upload only"
+            );
+            None
+        }
+        Some(source) => {
+            tracing::info!(
+                repository = %source.repository,
+                api_base = %source.api_base,
+                authenticated = source.token.is_some(),
+                "the console can fetch a release artifact from the release source"
+            );
+            Some(GithubReleases::new(
+                &source.api_base,
+                &source.repository,
+                source.token.as_ref().map(ReleaseToken::expose),
+            ))
+        }
+    }
+}
+
+/// The vendor catalogue, and a warning when no `integration_secret` can seal the credentials a
+/// connection carries.
+pub(super) fn vendor_catalogue(
+    config: &CloudConfig,
+) -> Result<Arc<pos_providers::Registry>, Box<dyn std::error::Error>> {
+    // The vendor catalogue (ADR-0153), built once at boot and refused here if two adapters claim
+    // one id, so a malformed catalogue never serves. Shared by the catalogue read and the
+    // connection routes, which check every write against it.
+    let providers = Arc::new(pos_cloud::providers::registry()?);
+    if config.integration_secret.is_none() {
+        tracing::warn!(
+            "cloud.toml has no integration_secret: vendor connections can be configured, but \
+             any write that carries a credential is refused (ADR-0153)"
+        );
+    }
+    Ok(providers)
 }
