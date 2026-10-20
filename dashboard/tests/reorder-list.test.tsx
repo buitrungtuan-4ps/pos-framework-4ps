@@ -44,6 +44,24 @@ describe("the ReorderList component", () => {
     expect((downButtons[2] as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("renders item-specific ARIA labels when itemLabel prop is provided", () => {
+    const onReorder = vi.fn();
+    render(() => (
+      <ReorderList
+        items={items}
+        itemKey={(item) => item.id}
+        renderItem={(item) => <span>{item.name}</span>}
+        itemLabel={(item) => item.name}
+        onReorder={onReorder}
+        upLabel="Move item up"
+        downLabel="Move item down"
+      />
+    ));
+
+    expect(screen.getByRole("button", { name: "Move item up: Item Two" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Move item down: Item Two" })).toBeDefined();
+  });
+
   it("calls onReorder with correct indices when buttons are clicked", () => {
     const onReorder = vi.fn();
     render(() => (

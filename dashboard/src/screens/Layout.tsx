@@ -732,6 +732,7 @@ export function Layout() {
                       itemKey={(button) => button.menu_item_id}
                       upLabel={t("layout.moveUp")}
                       downLabel={t("layout.moveDown")}
+                      itemLabel={(button) => button.label}
                       onReorder={(from, to) => void reorderFlowing(from, to)}
                       renderItem={(button) => (
                         <div class="flex flex-wrap items-center justify-between gap-2">
