@@ -127,6 +127,11 @@ Add the screen file, its `SCREENS` entry, its strings, and a vitest test. Rules 
 
 ## New crate
 
+`cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number>]...` writes the
+first three rows: the `members` line, the manifest with its card (owners from `CODEOWNERS`), the
+README and the crate root. Add `--dry-run` to print them instead. It never overwrites a file
+([ADR-0176](adr/0176-the-adapter-and-country-standard.md)).
+
 | Step | Files | Checked by |
 |---|---|---|
 | Workspace | `members` in the root `Cargo.toml` | build |

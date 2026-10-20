@@ -14,6 +14,7 @@ mod code_stats;
 mod finding;
 mod gen_docs;
 mod impact;
+mod scaffold;
 
 pub use finding::Finding;
 
@@ -43,6 +44,11 @@ cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 
   write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
   ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+
+cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number>]... [--dry-run]
+
+  write a workspace crate that `xtask crates` accepts: manifest and contract card, README, crate
+  root, and its `members` line; owners come from CODEOWNERS; never overwrites (ADR-0176)
 
 cargo xtask affected --classes [--base <ref>] [--all]
 
@@ -113,6 +119,7 @@ fn main() -> ExitCode {
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),
         "mirrored-files" => checks::mirrored_files::run(&rest),
+        "new" => scaffold::run(&rest),
         "print-agent-deps" => checks::print_agent_deps::run(&rest),
         "tls-modes" => checks::tls_modes::run(&rest),
         "vendor-neutral-core" => checks::vendor_neutral_core::run(&rest),
