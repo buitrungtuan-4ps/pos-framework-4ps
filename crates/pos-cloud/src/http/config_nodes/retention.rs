@@ -29,6 +29,24 @@ pub(super) struct PublishRetentionRequest {
     event_log_days: u32,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/retention",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
+                                      composed from all four layers, or `null` when it has none (the edge then keeps 90 days)"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `retention` node, or `null` (the edge then keeps 90 days).
 pub(super) async fn admin_read_retention<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -63,6 +81,29 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/retention",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then `event_log_days`, how many days the store's edge keeps an event once synced, from 30 to 3650 (ADR-0145)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `retention` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, event_log_days is out of range, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes how many days a store keeps a synced event, as its `retention` node
 /// (ADR-0145). Outside [`EVENT_LOG_DAYS`] is refused, naming the field: a store whose log would
 /// age out in a week, or never, is a typo rather than a policy.

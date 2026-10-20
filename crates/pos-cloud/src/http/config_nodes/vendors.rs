@@ -29,6 +29,24 @@ pub(super) struct PublishVendorsRequest {
     policies: Vec<PublishedVendorPolicy>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/vendors",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's `vendors` node as the store runs it — its policy for each delivery marketplace — \
+                                      composed from all four layers, or `null` when it has none"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `vendors` policy node, or `null`.
 pub(super) async fn admin_read_vendors<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -63,6 +81,29 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/vendors",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then `policies`, one per delivery marketplace: its name, whether the store takes its orders, the store's availability to it, and the preparation time it quotes while the store is busy",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `vendors` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, an availability is not a recognised value, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes a store's per-marketplace policies as its `vendors` node. Each policy's
 /// availability must be a recognised value; the live loop that pushes it to a marketplace is deferred.
 pub(super) async fn admin_publish_vendors<Cfg, A, C>(

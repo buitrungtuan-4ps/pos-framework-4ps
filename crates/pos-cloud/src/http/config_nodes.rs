@@ -44,8 +44,16 @@ mod tax;
 mod vendors;
 
 pub use locale::config_locale_router;
+// The handlers the console's OpenAPI document names.
+pub(crate) use channels::{
+    __path_admin_publish_channels, __path_admin_publish_origins, __path_admin_publish_tender,
+    __path_admin_read_channels, __path_admin_read_origins, __path_admin_read_tender,
+};
+pub(crate) use qr::{__path_admin_publish_qr, __path_admin_read_qr};
+pub(crate) use retention::{__path_admin_publish_retention, __path_admin_read_retention};
 pub use store_profile::config_store_profile_router;
 pub use tax::config_tax_router;
+pub(crate) use vendors::{__path_admin_publish_vendors, __path_admin_read_vendors};
 // What the batch fan-out compiles each store's nodes with.
 pub(super) use compilers::{
     QrGuardrailFields, channels_node, origins_node, qr_guardrail_node, tender_node,
