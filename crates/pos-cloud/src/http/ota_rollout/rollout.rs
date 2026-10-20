@@ -69,6 +69,40 @@ async fn require_hosted_release<L: ArtifactStore>(
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/ota",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`; `target_version`, the release to install as \
+                       `MAJOR.MINOR.PATCH`, which the cloud must already host; `min_ring`, the \
+                       lowest eligible ring (`lab`, `pilot` or `fleet`); `rollout_percent`, the \
+                       share of the fleet ring currently eligible, 0 to 100; `signing_key_id`, the \
+                       key the release is signed by, as sixteen hex digits; and optionally \
+                       `revoked_key_ids`, keys revocation has retired. There is no `halted`: a \
+                       fresh publish is live",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `fleet_update` node on the Store \
+                                      layer, the store's other Store-level settings kept. The body \
+                                      carries `config_version_id`. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID; target_version cannot \
+                                      name a hosted release; or a value needs a recorded \
+                                      confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "No release artifact is hosted for target_version, and the \
+                                      error says so; or the rollout would not validate (a version, \
+                                      ring, percentage or key id that does not parse), with every \
+                                      violation listed", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release registry or the configuration store is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "ota rollout",
+)]
 /// Composes a `fleet_update` node onto a store's Store layer and publishes it — the same
 /// load→merge→publish→version shape as the campaigns/tax node publishes, so the other Store-level keys
 /// survive. The node is validated by the config tree's `CapabilityValidator` before it commits.
@@ -134,6 +168,31 @@ where
     .await
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/ota/halt",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
+                       resumes it. The rest of the rollout is kept as the store runs it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "The kill switch is set on the rollout the store runs, read \
+                                      from the tree the write lands on, and republished on the Store \
+                                      layer. The body carries `config_version_id`. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID; the store has no \
+                                      published rollout to halt; or a value needs a recorded \
+                                      confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "ota rollout",
+)]
 /// Flips the kill switch on a store's published rollout: loads the `fleet_update` the store runs, sets
 /// `halted`, and re-publishes it on the Store layer — preserving the rest of the rollout, so an
 /// operator halts a bad rollout (or resumes a paused one) without re-typing the target, ring, and
@@ -337,6 +396,25 @@ where
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/ota",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The `fleet_update` node the store runs, its layers composed, \
+                                      so a rollout a rollback restored reads as it runs; or `null` \
+                                      when none is published"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "ota rollout",
+)]
 /// Reads a store's currently-published rollout — the `fleet_update` node the store runs, its layers
 /// composed so a rollout a rollback restored reads as it runs — or `null` if none is published.
 /// Behind [`ConsolePermission::Read`].

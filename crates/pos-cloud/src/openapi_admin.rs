@@ -249,6 +249,15 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::ota_rollout::admin_bump_lease,
         crate::http::ota_rollout::admin_settle_handover,
         crate::http::ota_rollout::admin_retire_handover,
+        crate::http::ota_rollout::admin_publish_rollout,
+        crate::http::ota_rollout::admin_halt_rollout,
+        crate::http::ota_rollout::admin_get_rollout,
+        crate::http::ota_rollout::admin_publish_placement,
+        crate::http::ota_rollout::admin_get_placement,
+        crate::http::ota::admin_upload_ota_release,
+        crate::http::ota::admin_list_ota_release,
+        crate::http::ota::admin_download_installer,
+        crate::http::ota::admin_fetch_ota_release,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -584,6 +593,27 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            separate decision. Every one of these is audited with who made it."
         ),
         (
+            name = "ota rollout",
+            description = "Which release a store installs, and when (ADR-0052, ADR-0078): the \
+                           rollout names a hosted release, the lowest eligible ring and how much of \
+                           the fleet ring may take it, and the key it is signed by; the placement \
+                           puts the store in a ring and fixes its place in the ramp. Both are \
+                           configuration-tree nodes the store pulls, validated by the rules the \
+                           store itself applies. The kill switch halts or resumes a rollout without \
+                           restating it. Writes are audited."
+        ),
+        (
+            name = "release hosting",
+            description = "The signed releases the cloud hands its stores (ADR-0088, ADR-0141). An \
+                           operator uploads a release executable with its minisign signature, or \
+                           has the cloud fetch them from the published release. The cloud stores \
+                           the bytes and never signs them or checks the signature: each store \
+                           verifies it itself. A release, once hosted for a target, keeps its bytes. \
+                           A Windows store's one-file installer is a hosted executable named for \
+                           that store. Served only where the cloud is configured to host \
+                           artifacts."
+        ),
+        (
             name = "config nodes",
             description = "The per-store configuration a console reads and writes one node at a \
                            time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
@@ -652,26 +682,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/campaigns/preview",
     "/admin/config/campaigns/schedule",
     "/admin/config/inventory",
-    "/admin/config/ota",
-    "/admin/config/ota/halt",
-    "/admin/config/ota/placement",
-    // --- release hosting (R2, ADR-0088) ---
-    // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
-    // `X-Pos-Minisig` — so `docs/release-runbook.md` step 5 carries the exact `curl`, which is a
-    // better home for it than a document that stops short of response schemas anyway. Listed here
-    // rather than annotated to stay inside the fidelity B5 chose: the auth surface is documented, the
-    // console surface is enumerated.
-    "/admin/ota/releases",
-    "/admin/ota/releases/{release}",
-    // A hosted release's Windows executable, served under a store's one-file installer name
-    // (ADR-0141). Its response is a binary download and its three query parameters are the whole
-    // contract, which the ADR and `docs/guides/bring-a-store-online.md` state; enumerated with its
-    // siblings at the same fidelity.
-    "/admin/ota/releases/{release}/installer",
-    // The other door (Amendment 4): a `{ "release": "1.2.3" }` body, and the cloud goes and gets the
-    // pair from the release the workflow published. Enumerated beside its siblings for the same
-    // reason, and the runbook step that carries the upload's `curl` carries this one's too.
-    "/admin/ota/releases/fetch",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---

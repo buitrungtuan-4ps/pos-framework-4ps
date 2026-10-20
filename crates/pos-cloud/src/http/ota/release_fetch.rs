@@ -144,6 +144,38 @@ fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/ota/releases/fetch",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`release`: the version to fetch, spelled bare, without a leading `v`. The \
+                       cloud tries the release workflow's tag with and without one",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Every signed executable the release publishes is hosted. The \
+                                      body carries `release`, `tag`, the release source's tag it \
+                                      came from, and `artifacts`: for each, `arch`, `size_bytes`, \
+                                      `sha256`, `asset`, and `outcome`, `recorded` or \
+                                      `already_hosted`. Audited"),
+        (status = 400, description = "release cannot name a hosted release", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The release source publishes no release under either \
+                                      spelling", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "No release source is configured on this cloud; the release \
+                                      source refused the cloud's credentials; or a target is \
+                                      already hosted with different bytes. Targets admitted before \
+                                      the refusal stay hosted, and the upload remains the way in", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The release carries no signed executable, or an asset is too \
+                                      large or not what it claims to be", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The storage keys could not be composed", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release source, the object store or the release registry \
+                                      is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// A super-admin points the cloud at a release, and it fetches every pair the forge holds for it.
 ///
 /// The button behind `docs/release-runbook.md` step 5: instead of downloading six files and running

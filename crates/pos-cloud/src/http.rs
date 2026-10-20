@@ -115,7 +115,7 @@ pub(crate) mod health;
 pub(crate) mod integrations;
 mod lease_bump;
 mod locale_node;
-mod ota;
+pub(crate) mod ota;
 pub(crate) mod ota_rollout;
 mod reason_codes;
 pub(crate) mod reconcile;

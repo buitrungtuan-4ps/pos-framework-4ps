@@ -348,6 +348,49 @@ fn already_hosted_refusal(error: ArtifactStoreError) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/ota/releases",
+    security(("session_cookie" = [])),
+    params(
+        ("release" = String, Query, description = "The release the bytes are, spelled bare as a \
+                                                    rollout's `target_version` names it, without a \
+                                                    leading `v`. Required"),
+        ("arch" = String, Query, description = "The target triple the executable is built for. \
+                                                 Required"),
+        ("x-pos-minisig" = String, Header, description = "minisign's signature over these exact \
+                                                           bytes: the second line of the `.minisig` \
+                                                           file, as base64. Required"),
+    ),
+    request_body(
+        description = "The bare release executable, not the release archive: the edge installs \
+                       the bytes it is handed, so the signature has to cover these (ADR-0088). \
+                       `docs/release-runbook.md` step 5 gives the exact request",
+        content_type = "application/octet-stream",
+    ),
+    responses(
+        (status = 200, description = "Already hosted with these exact bytes: the release is \
+                                      unchanged, so a re-run of a release step does not fail. The body is as for \
+                                      201. Audited"),
+        (status = 201, description = "Hosted: the signature, then the executable, are stored, and \
+                                      only then the release is recorded. The body carries \
+                                      `release`, `arch`, `size_bytes` and `sha256`. Audited"),
+        (status = 400, description = "release or arch is absent or unusable; the body is empty; or \
+                                      the signature header is absent, not base64, or not a minisign \
+                                      signature. An absent query parameter is refused by the \
+                                      framework, without the error envelope", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "This release is already hosted for this target with different \
+                                      bytes. A version a ring may have installed does not change", body = crate::openapi_admin::ErrorResponse),
+        (status = 413, description = "The executable is over 128 MiB. Answered by the server's body \
+                                      limit, without the error envelope"),
+        (status = 500, description = "The storage keys could not be composed", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The object store or the release registry is unreachable: send \
+                                      the same upload again later", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// A super-admin uploads one release artifact: the bare executable, plus its minisign signature.
 ///
 /// Idempotent by [`admit_artifact`]'s rule — re-uploading the same release/target with identical
@@ -427,6 +470,25 @@ where
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/ota/releases/{release}",
+    security(("session_cookie" = [])),
+    params(
+        ("release" = String, Path, description = "The release, spelled bare, without a leading `v`"),
+    ),
+    responses(
+        (status = 200, description = "`release` and `artifacts`: for each target it is hosted for, \
+                                      `arch`, `size_bytes`, `sha256` and `recorded_at_ms`. An empty \
+                                      list means the release is not hosted, and a rollout naming it \
+                                      is refused"),
+        (status = 400, description = "The release cannot name a hosted release", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// Which targets a release is hosted for — what an operator checks before promoting it, and what the
 /// promote guard consults on their behalf.
 async fn admin_list_ota_release<B, L, A, C>(

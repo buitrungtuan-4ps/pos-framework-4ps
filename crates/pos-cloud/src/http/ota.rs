@@ -28,6 +28,11 @@ mod report;
 pub use release_fetch::ota_release_fetch_router;
 pub use release_upload::ota_release_admin_router;
 
+// The handlers the console's OpenAPI document names.
+pub(crate) use installer::__path_admin_download_installer;
+pub(crate) use release_fetch::__path_admin_fetch_ota_release;
+pub(crate) use release_upload::{__path_admin_list_ota_release, __path_admin_upload_ota_release};
+
 /// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
 /// report's arrival instant.
 #[derive(Clone)]
