@@ -371,65 +371,10 @@ fn bill_document(
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
 ) -> PrintDocument {
-    let mut blocks = Vec::new();
-
-    // Who sold. The trading name leads and the legal name backs it up; the address and registration
-    // follow, each only if it is there.
-    if let Some(name) = profile.display_name() {
-        blocks.push(centred(name, true));
-    }
-    blocks.extend(
-        profile
-            .address_lines
-            .iter()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| centred(line.clone(), false)),
-    );
-    if let Some(registration) = profile.registration_line() {
-        blocks.push(centred(registration, false));
-    }
-
-    match kind {
-        BillDocument::Receipt { receipt_number } => {
-            blocks.push(centred(format!("#{receipt_number}"), false));
-        }
-        // The number the original printed, then what this paper is: a copy, which copy, and when it
-        // was printed. A copy the guest takes away must not read as a second sale.
-        BillDocument::ReceiptCopy {
-            receipt_number,
-            copy_number,
-            reprinted,
-        } => {
-            blocks.push(centred(format!("#{receipt_number}"), false));
-            blocks.extend(words.centred(|labels| labels.copy, "", true));
-            blocks.extend(words.centred(
-                |labels| labels.reprint,
-                &format!(" {copy_number} - {reprinted}"),
-                false,
-            ));
-        }
-        BillDocument::PreBill { reference } => {
-            blocks.extend(words.centred(|labels| labels.pre_bill, "", true));
-            blocks.push(centred(reference, false));
-        }
-    }
-
-    // Who bought, on a B2B invoice. Left-aligned rather than centred: this is a party to the
-    // document, not a letterhead, and the two must not read as one block.
+    let mut blocks = seller_blocks(profile);
+    blocks.extend(heading_blocks(kind, words));
     if let Some(buyer) = buyer {
-        blocks.extend(Words::lines(
-            words.label(|labels| labels.bill_to, &format!(": {}", buyer.name)),
-        ));
-        for line in [buyer.tax_code.as_ref(), buyer.address.as_ref()]
-            .into_iter()
-            .flatten()
-            .filter(|line| !line.trim().is_empty())
-        {
-            blocks.push(PrintBlock::Text {
-                line: line.clone(),
-                style: TextStyle::default(),
-            });
-        }
+        blocks.extend(buyer_blocks(buyer, words));
     }
 
     // What was sold, before what it came to. A settle always has rows — an empty bill has nothing to
@@ -462,4 +407,72 @@ fn bill_document(
     );
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
+}
+
+/// Who sold. The trading name leads and the legal name backs it up; the address and registration
+/// follow, each only if it is there.
+fn seller_blocks(profile: &StoreProfile) -> Vec<PrintBlock> {
+    let mut blocks = Vec::new();
+    if let Some(name) = profile.display_name() {
+        blocks.push(centred(name, true));
+    }
+    blocks.extend(
+        profile
+            .address_lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| centred(line.clone(), false)),
+    );
+    if let Some(registration) = profile.registration_line() {
+        blocks.push(centred(registration, false));
+    }
+    blocks
+}
+
+/// What the paper is: a receipt under its number, a copy of one, or the check before payment.
+fn heading_blocks(kind: BillDocument<'_>, words: Words<'_>) -> Vec<PrintBlock> {
+    let mut blocks = Vec::new();
+    match kind {
+        BillDocument::Receipt { receipt_number } => {
+            blocks.push(centred(format!("#{receipt_number}"), false));
+        }
+        // The number the original printed, then what this paper is: a copy, which copy, and when it
+        // was printed. A copy the guest takes away must not read as a second sale.
+        BillDocument::ReceiptCopy {
+            receipt_number,
+            copy_number,
+            reprinted,
+        } => {
+            blocks.push(centred(format!("#{receipt_number}"), false));
+            blocks.extend(words.centred(|labels| labels.copy, "", true));
+            blocks.extend(words.centred(
+                |labels| labels.reprint,
+                &format!(" {copy_number} - {reprinted}"),
+                false,
+            ));
+        }
+        BillDocument::PreBill { reference } => {
+            blocks.extend(words.centred(|labels| labels.pre_bill, "", true));
+            blocks.push(centred(reference, false));
+        }
+    }
+    blocks
+}
+
+/// Who bought, on a B2B invoice. Left-aligned rather than centred: this is a party to the
+/// document, not a letterhead, and the two must not read as one block.
+fn buyer_blocks(buyer: &BuyerDetails, words: Words<'_>) -> Vec<PrintBlock> {
+    let mut blocks =
+        Words::lines(words.label(|labels| labels.bill_to, &format!(": {}", buyer.name)));
+    for line in [buyer.tax_code.as_ref(), buyer.address.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter(|line| !line.trim().is_empty())
+    {
+        blocks.push(PrintBlock::Text {
+            line: line.clone(),
+            style: TextStyle::default(),
+        });
+    }
+    blocks
 }
