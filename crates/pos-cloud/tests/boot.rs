@@ -177,6 +177,7 @@ async fn a_boot_whose_database_cannot_be_reached_fails() {
 
 #[cfg(all(feature = "integration", unix))]
 mod full_boot {
+    use std::fmt::Write as _;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
@@ -208,13 +209,81 @@ mod full_boot {
 
     /// `GET /health`, answered or not.
     fn health(port: u16) -> Option<String> {
+        request(port, "GET", "/health", &[], "")
+    }
+
+    /// One request, answered or not: the whole answer, status line first.
+    fn request(
+        port: u16,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> Option<String> {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-        stream
-            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .ok()?;
+        let mut head = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        for (name, value) in headers {
+            let _written = write!(head, "{name}: {value}\r\n");
+        }
+        head.push_str("\r\n");
+        stream.write_all(head.as_bytes()).ok()?;
+        stream.write_all(body.as_bytes()).ok()?;
         let mut answer = String::new();
         stream.read_to_string(&mut answer).ok()?;
         Some(answer)
+    }
+
+    /// The status code of `answer`.
+    fn status(answer: &str) -> &str {
+        answer.split(' ').nth(1).unwrap_or_default()
+    }
+
+    /// What the running cloud was configured with, seen from outside: the `/internal` secret it
+    /// holds, and the sign-in throttle it applies.
+    fn probe_configuration(port: u16) {
+        let ingest = |key: &str| {
+            let answer = request(
+                port,
+                "POST",
+                "/internal/ingest",
+                &[("X-Pos-Internal-Key", key)],
+                "[]",
+            )
+            .expect("an answer");
+            status(&answer).to_owned()
+        };
+        assert_ne!(
+            ingest(super::SECRET),
+            "404",
+            "the configured secret opens /internal"
+        );
+        assert_eq!(
+            ingest("not-the-secret"),
+            "404",
+            "any other key finds no route"
+        );
+
+        let login = || {
+            let answer = request(
+                port,
+                "POST",
+                "/admin/login",
+                &[],
+                r#"{"email":"nobody@example.invalid","password":"not-a-password"}"#,
+            )
+            .expect("an answer");
+            status(&answer).to_owned()
+        };
+        assert_ne!(login(), "429", "the first sign-in attempt is weighed");
+        assert_eq!(
+            login(),
+            "429",
+            "admin_login_max_attempts = 1 throttles the second"
+        );
     }
 
     /// The lines that change when retention and guest QR ordering are configured, in order.
@@ -229,7 +298,8 @@ mod full_boot {
 
     #[tokio::test]
     async fn a_configured_cloud_migrates_serves_and_stops_cleanly_on_an_interrupt() {
-        let text = boot_serve_and_interrupt("").await;
+        let text =
+            boot_serve_and_interrupt("admin_login_max_attempts = 1\n", probe_configuration).await;
         said_in_order(&text, BOOT_ORDER);
     }
 
@@ -237,6 +307,7 @@ mod full_boot {
     async fn a_cloud_with_retention_and_guest_ordering_starts_them_in_their_place() {
         let text = boot_serve_and_interrupt(
             "retention_days = 400\ntable_token_secret = \"a-table-token-secret-for-the-boot-test\"\n",
+            |_port| {},
         )
         .await;
         said_in_order(&text, WITH_OPTIONS_ORDER);
@@ -266,9 +337,10 @@ mod full_boot {
     /// and not what these tests are about.
     static ONE_BOOT_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    /// Boots the binary over `DATABASE_URL` with `extra` configuration, waits for `/health`, stops
-    /// it with an interrupt, and answers what it said once it has exited cleanly.
-    async fn boot_serve_and_interrupt(extra: &str) -> String {
+    /// Boots the binary over `DATABASE_URL` with `extra` configuration, waits for `/health`, runs
+    /// `probe` against its port, stops it with an interrupt, and answers what it said once it has
+    /// exited cleanly.
+    async fn boot_serve_and_interrupt(extra: &str, probe: impl FnOnce(u16)) -> String {
         let _one_at_a_time = ONE_BOOT_AT_A_TIME.lock().await;
         let url = std::env::var("DATABASE_URL").expect("DATABASE_URL names the test database");
         let port = TcpListener::bind("127.0.0.1:0")
@@ -297,6 +369,7 @@ mod full_boot {
             tokio::time::sleep(Duration::from_millis(100)).await;
         };
         assert!(answer.starts_with("HTTP/1.1 200"), "got {answer}");
+        probe(port);
 
         let interrupted = std::process::Command::new("kill")
             .args(["-INT", &child.id().to_string()])
