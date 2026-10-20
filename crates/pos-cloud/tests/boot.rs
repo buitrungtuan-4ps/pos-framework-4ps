@@ -242,6 +242,123 @@ mod full_boot {
         answer.split(' ').nth(1).unwrap_or_default()
     }
 
+    /// The routes this boot leaves unserved: the OTA artifact and store-archive routes need an
+    /// object store, and guest QR ordering a table-token secret, none of which the default boot
+    /// configures.
+    const UNSERVED_BY_DEFAULT: &[&str] = &[
+        "GET /admin/floor/qr",
+        "GET /admin/ota/releases/{release}",
+        "GET /admin/ota/releases/{release}/installer",
+        "POST /admin/ota/releases",
+        "POST /admin/ota/releases/fetch",
+        "POST /sync/stores/{store_id}/archive",
+        "POST /sync/stores/{store_id}/archive-key",
+        "POST /sync/stores/{store_id}/artifact",
+        "POST /v1/qr/orders",
+    ];
+
+    /// Every `.route(` registered in the cloud's router sources, as `METHOD /path`, read from the
+    /// tree the way `pos_cloud::openapi_admin` reads it: the first string literal after `.route(`,
+    /// then each method constructor in the same call.
+    fn registered_routes() -> Vec<String> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&crates)
+            .expect("the crates directory")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "pos-cloud" || name.starts_with("pos-cloud-"))
+            })
+            .map(|path| path.join("src"))
+            .collect();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut routes = std::collections::BTreeSet::new();
+        for file in files {
+            let source = std::fs::read_to_string(&file).unwrap_or_default();
+            // Test modules build routers of their own; only the shipped ones count.
+            let shipped = source.split("#[cfg(test)]").next().unwrap_or_default();
+            for call in shipped.split(".route(").skip(1) {
+                let Some(open) = call.find('"') else { continue };
+                let rest = call.get(open + 1..).unwrap_or_default();
+                let Some(close) = rest.find('"') else {
+                    continue;
+                };
+                let path = rest.get(..close).unwrap_or_default();
+                if !path.starts_with('/') {
+                    continue;
+                }
+                // The method constructors up to where this call's parentheses close.
+                let mut depth = 1_i32;
+                let mut end = call.len();
+                for (at, c) in call.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = at;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let body = call.get(..end).unwrap_or_default();
+                for method in ["get", "post", "put", "patch", "delete"] {
+                    let needle = format!("{method}(");
+                    let mut from = 0;
+                    while let Some(at) = body.get(from..).and_then(|rest| rest.find(&needle)) {
+                        let start = from + at;
+                        let before = body.get(..start).and_then(|b| b.chars().last());
+                        if !before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                            routes.insert(format!("{} {path}", method.to_uppercase()));
+                            break;
+                        }
+                        from = start + needle.len();
+                    }
+                }
+            }
+        }
+        routes.into_iter().collect()
+    }
+
+    /// Every registered route is matched by the running cloud: an unauthenticated request is
+    /// refused by the route (401, 403, 400, …), never answered "no such route" (404) or "not this
+    /// method" (405).
+    fn probe_served_routes(port: u16) {
+        let mut unserved = Vec::new();
+        for route in registered_routes() {
+            let (method, path) = route.split_once(' ').expect("METHOD /path");
+            let concrete: Vec<&str> = path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "01J0000000000000000000000A"
+                    } else {
+                        segment
+                    }
+                })
+                .collect();
+            let answer = request(port, method, &concrete.join("/"), &[], "{}").expect("an answer");
+            if matches!(status(&answer), "404" | "405") {
+                unserved.push(route);
+            }
+        }
+        assert_eq!(unserved, UNSERVED_BY_DEFAULT);
+    }
+
     /// What the running cloud was configured with, seen from outside: the `/internal` secret it
     /// holds, and the sign-in throttle it applies.
     fn probe_configuration(port: u16) {
@@ -298,8 +415,13 @@ mod full_boot {
 
     #[tokio::test]
     async fn a_configured_cloud_migrates_serves_and_stops_cleanly_on_an_interrupt() {
-        let text =
-            boot_serve_and_interrupt("admin_login_max_attempts = 1\n", probe_configuration).await;
+        let text = boot_serve_and_interrupt("admin_login_max_attempts = 1\n", |port| {
+            // The configuration first: the route walk signs in once, which would spend the one
+            // sign-in attempt the throttle allows.
+            probe_configuration(port);
+            probe_served_routes(port);
+        })
+        .await;
         said_in_order(&text, BOOT_ORDER);
     }
 
