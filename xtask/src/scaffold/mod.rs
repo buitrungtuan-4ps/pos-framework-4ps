@@ -14,6 +14,7 @@
 //! [`render`]: plain `{{placeholder}}` substitution, where a placeholder left unfilled is an error.
 
 mod adapter;
+mod console;
 mod country;
 mod krate;
 mod screen;
@@ -30,7 +31,8 @@ const USAGE: &str = "usage: cargo xtask new crate <name> --layer <layer> --purpo
                      <code> --exponent <n> --prices-include-tax <true|false> --cash-rounding \
                      <none|minor units> --tax-rate <class[@channel]=basis points>... \
                      --retention-days <n> --language <tag> [--dry-run] | cargo xtask new screen \
-                     --app ui <id> --path <path> --title <English> --title-<locale> <title>... \
+                     --app ui|dashboard <id> --path <path> --title <English> --title-<locale> \
+                     <title>... [--scope tenant|store|console --icon <name> --nav-group <name>] \
                      [--dry-run]";
 
 /// What a generator writes: new files, and the line it adds to the workspace `members`.

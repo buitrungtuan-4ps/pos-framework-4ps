@@ -14,8 +14,8 @@
 //!   its flag required without a code change;
 //! - the replay test's route walk, so the new route is checked to open its screen.
 //!
-//! The console's screens (`--app dashboard`) also need an icon and a nav group, which are design
-//! choices rather than inputs, so that app is not generated yet.
+//! A console screen (`--app dashboard`) is planned by [`super::console`], from the same arguments
+//! and three more.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -47,18 +47,18 @@ pub struct Spec {
 ///
 /// # Errors
 ///
-/// [`Error`] for a missing, repeated or unknown argument, an app other than `ui`, or anything
-/// [`plan`] refuses.
+/// [`Error`] for a missing, repeated or unknown argument, an app other than `ui` or `dashboard`,
+/// or anything [`plan`] or [`super::console::plan`] refuses.
 pub fn plan_from_args(root: &Path, args: &[&String]) -> Result<Plan, Error> {
-    let spec = spec_from_args(args)?;
-    let mut catalogues = Vec::new();
-    for entry in std::fs::read_dir(root.join(I18N))? {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        if let Some(locale) = name.strip_suffix(".json") {
-            let text = std::fs::read_to_string(root.join(I18N).join(&name))?;
-            catalogues.push((locale.to_owned(), text));
-        }
+    let asked = asked_from_args(args)?;
+    if asked.app == "dashboard" {
+        return super::console::plan_from_args(root, &asked.spec, asked.design);
     }
+    if let Some(flag) = asked.design.keys().next() {
+        return Err(format!("`--{flag}` is for `--app dashboard`, not the till").into());
+    }
+    let spec = asked.spec;
+    let catalogues = read_catalogues(root, I18N)?;
     let read = |path: &str| std::fs::read_to_string(root.join(path));
     plan(
         &spec,
@@ -71,7 +71,33 @@ pub fn plan_from_args(root: &Path, args: &[&String]) -> Result<Plan, Error> {
     )
 }
 
-fn spec_from_args(args: &[&String]) -> Result<Spec, Error> {
+/// Every catalogue under `dir`, as (locale, contents).
+pub(super) fn read_catalogues(root: &Path, dir: &str) -> Result<Vec<(String, String)>, Error> {
+    let mut catalogues = Vec::new();
+    for entry in std::fs::read_dir(root.join(dir))? {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if let Some(locale) = name.strip_suffix(".json") {
+            let text = std::fs::read_to_string(root.join(dir).join(&name))?;
+            catalogues.push((locale.to_owned(), text));
+        }
+    }
+    Ok(catalogues)
+}
+
+/// The arguments after `new screen`, read but not yet checked against the repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Asked {
+    /// `ui` or `dashboard`.
+    app: String,
+    spec: Spec,
+    /// The console's design flags, `scope`, `icon` and `nav-group`, by name without the `--`.
+    design: BTreeMap<String, String>,
+}
+
+/// The console's design flags, which only `--app dashboard` reads.
+const DESIGN: [&str; 3] = ["scope", "icon", "nav-group"];
+
+fn asked_from_args(args: &[&String]) -> Result<Asked, Error> {
     let mut flags: BTreeMap<String, String> = BTreeMap::new();
     let mut id = None;
     let mut iter = args.iter();
@@ -82,7 +108,9 @@ fn spec_from_args(args: &[&String]) -> Result<Spec, Error> {
             }
             continue;
         };
-        let known = matches!(flag, "app" | "path" | "title") || flag.starts_with("title-");
+        let known = matches!(flag, "app" | "path" | "title")
+            || flag.starts_with("title-")
+            || DESIGN.contains(&flag);
         if !known {
             return Err(format!("unexpected argument `{argument}`; {}", super::USAGE).into());
         }
@@ -93,17 +121,14 @@ fn spec_from_args(args: &[&String]) -> Result<Spec, Error> {
             return Err(format!("`{argument}` is given twice").into());
         }
     }
-    match flags.remove("app").as_deref() {
-        Some("ui") => {}
-        Some("dashboard") => {
-            return Err(
-                "`--app dashboard` is not generated yet: a console screen also needs an icon \
-                 and a nav group, which are design choices"
-                    .into(),
-            );
-        }
-        _ => return Err("`--app ui` is required".into()),
-    }
+    let app = match flags.remove("app").as_deref() {
+        Some(app @ ("ui" | "dashboard")) => app.to_owned(),
+        _ => return Err("`--app ui` or `--app dashboard` is required".into()),
+    };
+    let design = DESIGN
+        .iter()
+        .filter_map(|flag| flags.remove(*flag).map(|value| ((*flag).to_owned(), value)))
+        .collect();
     let path = flags.remove("path").ok_or("`--path` is required")?;
     let title = flags.remove("title").ok_or("`--title` is required")?;
     let titles = flags
@@ -113,11 +138,15 @@ fn spec_from_args(args: &[&String]) -> Result<Spec, Error> {
                 .map(|locale| (locale.to_owned(), value))
         })
         .collect();
-    Ok(Spec {
-        id: id.ok_or(super::USAGE)?,
-        path,
-        title,
-        titles,
+    Ok(Asked {
+        app,
+        spec: Spec {
+            id: id.ok_or(super::USAGE)?,
+            path,
+            title,
+            titles,
+        },
+        design,
     })
 }
 
@@ -153,7 +182,7 @@ pub fn plan(spec: &Spec, sources: &Sources<'_>) -> Result<Plan, Error> {
     {
         return Err(format!("a screen already has the path `{}`", spec.path).into());
     }
-    let strings = strings(spec, sources.catalogues, &key)?;
+    let strings = strings(spec, I18N, sources.catalogues, &key)?;
     let walked = spec
         .path
         .split('/')
@@ -202,7 +231,7 @@ pub fn plan(spec: &Spec, sources: &Sources<'_>) -> Result<Plan, Error> {
 }
 
 /// Refuses a value the files could not hold as written.
-fn check(spec: &Spec) -> Result<(), Error> {
+pub(super) fn check(spec: &Spec) -> Result<(), Error> {
     let camel = spec.id.starts_with(|c: char| c.is_ascii_lowercase())
         && spec.id.len() <= 40
         && spec.id.chars().all(|c| c.is_ascii_alphanumeric());
@@ -243,13 +272,18 @@ fn check(spec: &Spec) -> Result<(), Error> {
 
 /// The title's line in each catalogue: English first, then the other locales in order. Every
 /// catalogue but English needs its `--title-<locale>`, and a flag for a locale with no catalogue is
-/// refused, so no string is written that nobody gave.
-fn strings(spec: &Spec, catalogues: &[(String, String)], key: &str) -> Result<Vec<Edit>, Error> {
+/// refused, so no string is written that nobody gave. `dir` is where the catalogues live.
+pub(super) fn strings(
+    spec: &Spec,
+    dir: &str,
+    catalogues: &[(String, String)],
+    key: &str,
+) -> Result<Vec<Edit>, Error> {
     let mut ordered: Vec<&(String, String)> = catalogues.iter().collect();
     ordered.sort_by_key(|(locale, _)| (locale != "en", locale.clone()));
     if ordered.first().is_none_or(|(locale, _)| locale != "en") {
         return Err(format!(
-            "`{I18N}` has no en.json, the catalogue every other is checked against"
+            "`{dir}` has no en.json, the catalogue every other is checked against"
         )
         .into());
     }
@@ -259,7 +293,7 @@ fn strings(spec: &Spec, catalogues: &[(String, String)], key: &str) -> Result<Ve
         .find(|locale| !catalogues.iter().any(|(have, _)| have == *locale))
     {
         return Err(
-            format!("`--title-{stray}` names a locale `{I18N}` has no catalogue for").into(),
+            format!("`--title-{stray}` names a locale `{dir}` has no catalogue for").into(),
         );
     }
     let mut edits = Vec::new();
@@ -277,7 +311,7 @@ fn strings(spec: &Spec, catalogues: &[(String, String)], key: &str) -> Result<Ve
             })?
         };
         edits.push(catalogue(
-            &format!("{I18N}/{locale}.json"),
+            &format!("{dir}/{locale}.json"),
             text,
             key,
             title,
@@ -287,7 +321,7 @@ fn strings(spec: &Spec, catalogues: &[(String, String)], key: &str) -> Result<Ve
 }
 
 /// `stockCount` → `StockCount`.
-fn pascal(id: &str) -> String {
+pub(super) fn pascal(id: &str) -> String {
     let mut chars = id.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_ascii_uppercase().to_string() + chars.as_str()
@@ -309,7 +343,12 @@ fn snake(id: &str) -> String {
 }
 
 /// `text` with `lines` inserted before the one line that is exactly `anchor`.
-fn insert_before(path: &str, text: &str, anchor: &str, lines: &[String]) -> Result<Edit, Error> {
+pub(super) fn insert_before(
+    path: &str,
+    text: &str,
+    anchor: &str,
+    lines: &[String],
+) -> Result<Edit, Error> {
     let at = text
         .find(&format!("\n{anchor}"))
         .ok_or_else(|| format!("`{path}` has no line `{anchor}` to add before"))?
@@ -325,7 +364,7 @@ fn insert_before(path: &str, text: &str, anchor: &str, lines: &[String]) -> Resu
 
 /// `text` with `line` added as the last entry of the list that opens at `opening` and closes at the
 /// first `closing` line after it.
-fn insert_after_opening(
+pub(super) fn insert_after_opening(
     path: &str,
     text: &str,
     opening: &str,
@@ -407,7 +446,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::LazyLock;
 
-    use super::{Sources, Spec, plan, spec_from_args};
+    use super::{Sources, Spec, asked_from_args, plan};
 
     /// The catalogues as they stand, Vietnamese listed before English to show the order is the
     /// generator's own.
@@ -609,34 +648,88 @@ mod tests {
     }
 
     #[test]
-    fn only_the_till_is_generated_and_every_flag_is_read() {
+    fn every_flag_is_read_and_the_design_flags_are_the_consoles() {
         let read = |list: &[&str]| {
             let owned: Vec<String> = list.iter().map(|a| (*a).to_owned()).collect();
             let refs: Vec<&String> = owned.iter().collect();
-            spec_from_args(&refs).map(|spec| spec.titles.get("vi").cloned())
+            asked_from_args(&refs)
         };
-        assert!(read(&["s", "--app", "dashboard", "--path", "/s", "--title", "S"]).is_err());
-        assert!(read(&["s", "--path", "/s", "--title", "S"]).is_err());
+        let console = read(&[
+            "s",
+            "--app",
+            "dashboard",
+            "--path",
+            "/s",
+            "--title",
+            "S",
+            "--scope",
+            "store",
+            "--icon",
+            "package",
+            "--nav-group",
+            "overview",
+        ])
+        .expect("read");
+        assert_eq!(console.app, "dashboard");
         assert_eq!(
-            read(&[
-                "s",
-                "--app",
-                "ui",
-                "--path",
-                "/s",
-                "--title",
-                "S",
-                "--title-vi",
-                "V"
-            ])
-            .ok(),
-            Some(Some("V".to_owned()))
+            console.design.into_iter().collect::<Vec<_>>(),
+            [
+                ("icon".to_owned(), "package".to_owned()),
+                ("nav-group".to_owned(), "overview".to_owned()),
+                ("scope".to_owned(), "store".to_owned()),
+            ]
         );
+        assert!(read(&["s", "--path", "/s", "--title", "S"]).is_err());
+        assert!(read(&["s", "--app", "web", "--path", "/s", "--title", "S"]).is_err());
+        let till = read(&[
+            "s",
+            "--app",
+            "ui",
+            "--path",
+            "/s",
+            "--title",
+            "S",
+            "--title-vi",
+            "V",
+        ])
+        .expect("read");
+        assert_eq!(till.spec.titles.get("vi").map(String::as_str), Some("V"));
         assert!(
             read(&[
                 "s", "--app", "ui", "--path", "/s", "--title", "S", "--colour", "x"
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_till_refuses_the_consoles_design_flags() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("root");
+        let owned: Vec<String> = [
+            "stockCount",
+            "--app",
+            "ui",
+            "--path",
+            "/stock",
+            "--title",
+            "Stock count",
+            "--title-vi",
+            "Kiểm kho",
+            "--icon",
+            "package",
+        ]
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+        let refs: Vec<&String> = owned.iter().collect();
+        let refused = super::plan_from_args(root, &refs)
+            .err()
+            .map(|error| error.to_string());
+        assert!(
+            refused.as_deref().unwrap_or_default().contains("--icon"),
+            "{refused:?}"
         );
     }
 }

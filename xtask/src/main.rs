@@ -72,6 +72,12 @@ cargo xtask new screen --app ui <id> --path <path> --title <English> --title-vi 
   write a till screen and its lines in the registry, App.tsx, every string catalogue and the replay
   route walk; each catalogue other than en needs its --title-<locale>, so nothing is left untranslated
 
+cargo xtask new screen --app dashboard <id> --path <path> --title <English> --title-vi <Vietnamese>
+    --scope <tenant|store|console> --icon <name in ICON_NAMES> --nav-group <group> [--dry-run]
+
+  write a console screen and its vitest test, and its lines in the registry and its nav group,
+  App.tsx and every string catalogue; a nav group already holding six screens is refused
+
 cargo xtask affected --classes [--base <ref>] [--all]
 
   which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,
