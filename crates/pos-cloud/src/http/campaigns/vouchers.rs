@@ -93,6 +93,31 @@ where
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/campaigns/{campaign_id}/vouchers",
+    security(("session_cookie" = [])),
+    params(
+        ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
+    ),
+    request_body(
+        description = "`tenant_id` and `count`, how many codes to mint, from 1 to 10000",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Minted, as an array: each code's `voucher_id`, `code` and \
+                                      `status`, `active`. A code carries redeemable value; the audit \
+                                      entry records the count, never the codes"),
+        (status = 400, description = "An id is not a ULID, count is out of range, or the campaign \
+                                      is not a voucher campaign", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.campaigns.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no campaign with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store, the voucher store or the entropy source \
+                                      is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin mints a batch of voucher codes for a voucher-kind campaign.
 async fn admin_generate_vouchers<V, Camp, A, C>(
     State(state): State<VoucherState<V, Camp, A, C>>,
@@ -189,6 +214,33 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/campaigns/{campaign_id}/vouchers",
+    security(("session_cookie" = [])),
+    params(
+        ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "How many codes to return, 1 to 500. Absent, \
+                                                    every code as an array rather than a page"),
+        ("offset" = Option<u32>, Query, description = "How many codes to skip, 0 to 100000. Only \
+                                                     with `limit`"),
+    ),
+    responses(
+        (status = 200, description = "Without `limit`, every code as an array; with it, a page: \
+                                      `items`, `total`, `limit` and `offset`. Each code has \
+                                      `voucher_id`, `code` and `status` (`active`, `redeemed` or \
+                                      `void`). Listing codes needs the manage permission, because a \
+                                      code carries redeemable value"),
+        (status = 400, description = "tenant_id or campaign_id is absent or not a ULID, limit or \
+                                      offset is not an integer in range, or offset is sent without \
+                                      limit", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.campaigns.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The voucher store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin lists a campaign's minted voucher codes.
 async fn admin_list_vouchers<V, Camp, A, C>(
     State(state): State<VoucherState<V, Camp, A, C>>,

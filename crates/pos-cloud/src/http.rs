@@ -104,7 +104,7 @@ mod admitted_devices;
 pub(crate) mod alerts;
 mod archives;
 mod authored_layer;
-mod campaigns;
+pub(crate) mod campaigns;
 mod chain;
 mod cloud_routes;
 mod config_nodes;
