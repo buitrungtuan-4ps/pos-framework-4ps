@@ -16,6 +16,7 @@
 mod adapter;
 mod country;
 mod krate;
+mod screen;
 
 use std::path::Path;
 
@@ -28,15 +29,17 @@ const USAGE: &str = "usage: cargo xtask new crate <name> --layer <layer> --purpo
                      printer|storage|card|fiscal|courier|erp|delivery [--dry-run] | cargo xtask new country <cc> --display-name <name> --currency \
                      <code> --exponent <n> --prices-include-tax <true|false> --cash-rounding \
                      <none|minor units> --tax-rate <class[@channel]=basis points>... \
-                     --retention-days <n> --language <tag> [--dry-run]";
+                     --retention-days <n> --language <tag> [--dry-run] | cargo xtask new screen \
+                     --app ui <id> --path <path> --title <English> --title-<locale> <title>... \
+                     [--dry-run]";
 
 /// What a generator writes: new files, and the line it adds to the workspace `members`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// Each new file, by its path relative to the repository root, with its whole contents.
     pub files: Vec<(String, String)>,
-    /// The directory to add to the root `Cargo.toml`'s `members`.
-    pub member: String,
+    /// The directory to add to the root `Cargo.toml`'s `members`, for a plan that makes a crate.
+    pub member: Option<String>,
     /// The package the plan creates.
     pub package: String,
     /// What to run once the files are written, one line each.
@@ -70,6 +73,7 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
         Some((kind, rest)) if kind.as_str() == "crate" => krate::plan_from_args(&root, rest)?,
         Some((kind, rest)) if kind.as_str() == "adapter" => adapter::plan_from_args(&root, rest)?,
         Some((kind, rest)) if kind.as_str() == "country" => country::plan_from_args(&root, rest)?,
+        Some((kind, rest)) if kind.as_str() == "screen" => screen::plan_from_args(&root, rest)?,
         _ => return Err(USAGE.into()),
     };
     apply(&root, &plan, !dry_run.is_empty())?;
@@ -153,12 +157,20 @@ pub fn apply(root: &Path, plan: &Plan, dry_run: bool) -> Result<(), Error> {
         return Err(format!("`{path}` already exists; `cargo xtask new` never overwrites").into());
     }
     let manifest_path = root.join("Cargo.toml");
-    let manifest = with_member(&std::fs::read_to_string(&manifest_path)?, &plan.member)?;
+    let manifest = match &plan.member {
+        Some(member) => Some(with_member(
+            &std::fs::read_to_string(&manifest_path)?,
+            member,
+        )?),
+        None => None,
+    };
     if dry_run {
         for (path, contents) in &plan.files {
             println!("--- {path}\n{contents}");
         }
-        println!("--- Cargo.toml: members gains \"{}\"", plan.member);
+        if let Some(member) = &plan.member {
+            println!("--- Cargo.toml: members gains \"{member}\"");
+        }
         for edit in &plan.edits {
             println!("--- {} gains:\n{}", edit.path, edit.added.join("\n"));
         }
@@ -172,8 +184,10 @@ pub fn apply(root: &Path, plan: &Plan, dry_run: bool) -> Result<(), Error> {
         std::fs::write(&target, contents)?;
         println!("created {path}");
     }
-    std::fs::write(&manifest_path, manifest)?;
-    println!("Cargo.toml: members gains \"{}\"", plan.member);
+    if let (Some(manifest), Some(member)) = (manifest, &plan.member) {
+        std::fs::write(&manifest_path, manifest)?;
+        println!("Cargo.toml: members gains \"{member}\"");
+    }
     for edit in &plan.edits {
         std::fs::write(root.join(&edit.path), &edit.contents)?;
         println!("{} gains {}", edit.path, edit.added.join(" · "));
@@ -256,7 +270,7 @@ mod tests {
                 ("crates/c/Cargo.toml".into(), "manifest".into()),
                 ("crates/c/src/lib.rs".into(), "//! c".into()),
             ],
-            member: "crates/c".into(),
+            member: Some("crates/c".into()),
             package: "c".into(),
             next: Vec::new(),
             edits: Vec::new(),

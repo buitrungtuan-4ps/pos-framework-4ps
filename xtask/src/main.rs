@@ -66,6 +66,12 @@ cargo xtask new country <cc> --display-name <name> --currency <ISO 4217> --expon
   write countries/<cc> from the values its law sets, every one a required flag, passing the
   Fiscalization suite; wire it into pos-edge and pos-cloud as a feature in no default (ADR-0176)
 
+cargo xtask new screen --app ui <id> --path <path> --title <English> --title-vi <Vietnamese>
+    [--dry-run]
+
+  write a till screen and its lines in the registry, App.tsx, every string catalogue and the replay
+  route walk; each catalogue other than en needs its --title-<locale>, so nothing is left untranslated
+
 cargo xtask affected --classes [--base <ref>] [--all]
 
   which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,

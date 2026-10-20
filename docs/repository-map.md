@@ -112,7 +112,10 @@ Console permissions are separate: see the cloud route table.
 
 **Till** (`ui/`). One registry: `SCREENS` in `ui/src/state/screens.ts` is the list the router is built
 from, and `COMPONENTS` in `ui/src/App.tsx` maps each screen's id to its component, so one without the
-other does not compile.
+other does not compile. `cargo xtask new screen --app ui <id> --path <path> --title <English>
+--title-vi <Vietnamese>` writes the screen and its lines in each file below except the task budget.
+Each catalogue in `ui/src/i18n/` other than English needs its `--title-<locale>`; the generator
+never writes a string nobody gave it.
 
 | Step | Files | Checked by |
 |---|---|---|
