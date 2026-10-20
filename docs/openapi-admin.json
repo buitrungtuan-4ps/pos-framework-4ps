@@ -10,6 +10,271 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/admin/assignments": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store\n(`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a\nperson holds (`?employee_id=`), those naming a store group (`?store_group_id=`), or those that\nreach every store (`?scope_kind=ASSIGNMENT_SCOPE_TENANT`). Each row says its scope. Behind\n[`ConsolePermission::ReadPeople`], the roster's gate: each row names the person it grants\n([`Assignment`]).",
+        "operationId": "admin_list_assignments",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose assignments to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "Everyone who works at this store: every assignment that reaches it, its own, its groups' and the tenant's",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "employee_id",
+            "in": "query",
+            "description": "Everything this person holds",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_group_id",
+            "in": "query",
+            "description": "The assignments naming this store group",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "description": "`ASSIGNMENT_SCOPE_TENANT`: the assignments that reach every store",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assignments, as an array. Each says its scope and names the person it grants, by name and staff code"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID; not exactly one of store_id, employee_id, store_group_id and scope_kind is sent; the id sent is not a ULID; or scope_kind is not `ASSIGNMENT_SCOPE_TENANT`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin assigns an employee with a role, at one store, a store group or every store of the\ntenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the\nscope ([`assignment_audit`]).",
+        "description": "Each id is checked before anything is written, because the schema declares no foreign keys\nunder row-level security and leaves the check to this route (ADR-0070). An employee, store,\ngroup or role the tenant does not have is `404` — another tenant's group included — and one it\nhas archived is `409` (decision 7): a grant to a retired person, store or group would publish\nnobody, and one with a retired role would grant nothing, while the console showed it as a grant.\nEach refusal names the field that carried the id. A person who already holds an assignment\nthere is `409` too ([`already_assigned`]), and nothing is written, audited or published.\n\nAn assignment to one store publishes as before, when someone presses publish, and answers `201`\nwith its id. One to a group or to every store publishes the `permissions` node at once to every\nstore it reaches — the open stores the group holds, or every open store of the tenant, read\nbefore the write — and answers `201` with its id and each store's outcome (`stores`).",
+        "operationId": "admin_create_assignment",
+        "requestBody": {
+          "description": "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: a `store_id` for one store, a `store_group_id` for every store the group holds, or `scope_kind` `ASSIGNMENT_SCOPE_TENANT` for every store of the tenant (ADR-0158 decision 3)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Assigned. The body is `{ \"id\": … }`. An assignment to a group or to every store is published at once to every open store it reaches, and the body also carries `stores`, each with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`. One to a single store is published when someone publishes"
+          },
+          "400": {
+            "description": "An id is absent or not a ULID, the scope is named twice or not at all, or scope_kind is not one the route accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such employee, store, store group or role. The error names the field that carried the id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The employee, store, store group or role is archived, or the person already holds an assignment there. Nothing is written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the registry, the store groups or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/assignments/{assignment_id}": {
+      "delete": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin removes an assignment — offboarding a person from where it reached. Audited\n`assignment.remove` when a row was actually removed, with the ids and the scope it bound; a no-op\nremoval records nothing.",
+        "description": "The removal publishes the `permissions` node at once to every store the assignment reached — its\nstore, the open stores its group holds, or every open store of the tenant — so the person cannot\nsign in there a moment longer\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 7), and answers `200` with each store's outcome.",
+        "operationId": "admin_remove_assignment",
+        "parameters": [
+          {
+            "name": "assignment_id",
+            "in": "path",
+            "description": "The assignment's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed, and every store the assignment reached is published to at once, so the person cannot sign in there a moment longer (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries"
+          },
+          "400": {
+            "description": "tenant_id or assignment_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no assignment with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the registry or the store groups is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -900,6 +1165,456 @@
           },
           "503": {
             "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/employees": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin lists a tenant's employees. Behind [`ConsolePermission::ReadPeople`]: every row\ncarries a person's name and staff code.",
+        "operationId": "admin_list_employees",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose employees to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many employees to return, 1 to 500. Absent, the whole roster is returned as an array rather than a page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "How many employees to skip, 0 to 100000. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "A case-insensitive substring the person's name or staff code must contain. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`newest` (the default), `name` or `code`. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`asc` (the default) or `desc`, inverting `sort`'s direction. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Without `limit`, every employee as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each employee has `employee_id`, `tenant_id`, `code`, `name`, `status` and `has_pin` — never the PIN or its hash"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID; limit or offset is not an integer in range; offset, q, sort or order is sent without limit; or sort or order is not one the route accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin creates an employee (no PIN yet). Audited `employee.create` with id/code/status —\nnever the name. A staff code the tenant already uses is `409` ([`code_in_use`]), and nothing is\nwritten or audited.",
+        "operationId": "admin_create_employee",
+        "requestBody": {
+          "description": "`tenant_id`, the staff `code` the person types to sign in, unique within the tenant, and their `name`. No PIN: it is set with `PUT …/pin`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new employee's version. The employee starts active"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or code or name is blank",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The tenant already uses that staff code. The error names the `code` field, never the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/employees/{employee_id}": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin reads one employee within its tenant. Behind [`ConsolePermission::ReadPeople`],\nlike the list.",
+        "operationId": "admin_get_employee",
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "description": "The employee's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that employs them (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The employee, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match"
+          },
+          "400": {
+            "description": "tenant_id or employee_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no employee with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin renames an employee and/or sets their status. Audited `employee.update` with\nbefore/after id/code/status — never the name.",
+        "description": "Archiving the person publishes the `permissions` node at once to every store they are assigned\nto, so they cannot sign in at any of them a moment longer\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 7), and the answer is then `200` with each store's outcome. Any other update — a\nrename, or restoring an archived person — publishes as before, and answers `204`.",
+        "operationId": "admin_update_employee",
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "description": "The employee's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the employee was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, the `name` and the `status` (`active` or `archived`) as they should now stand. The staff code cannot be changed",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archived. The person is taken off every store they were assigned to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version"
+          },
+          "204": {
+            "description": "Updated: a rename, or restoring an archived person. Nothing is published until someone publishes. The ETag carries the new version"
+          },
+          "400": {
+            "description": "tenant_id or employee_id is absent or not a ULID, name is blank, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no employee with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The employee changed since you read it: re-read them and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the registry or the store groups is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/employees/{employee_id}/pin": {
+      "put": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never\nreturned, stored raw, or **audited** — the entry records only that a PIN was set, by whom\n(ADR-0070).",
+        "description": "A PIN has at least the digits the tenant's `session.pin_min_length` asks for, four where it asks\nfor none, and at most eight (ADR-0160). This is the one place the minimum is applied: the edge\nholds only a PIN's hash. Raising the minimum leaves a PIN already set as it is. If the tenant's\nsettings cannot be read, the PIN is refused rather than held to four.",
+        "operationId": "admin_set_employee_pin",
+        "parameters": [
+          {
+            "name": "employee_id",
+            "in": "path",
+            "description": "The employee's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and the `pin`: digits only, at least the tenant's `session.pin_min_length` (four where it sets none) and at most eight. The PIN is hashed at once and is never returned, stored in the clear, logged or audited (ADR-0070)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Set. A store learns the new PIN when its people are next published"
+          },
+          "400": {
+            "description": "tenant_id or employee_id is absent or not a ULID, or the PIN is not digits of an allowed length",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no employee with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the settings store or the entropy source is unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1990,6 +2705,120 @@
         ]
       }
     },
+    "/admin/people/permissions": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "The `pos-core` permission catalogue (§9), for the console's role editor to offer. Behind `Read` and\ntenant-independent — the catalogue is the same for every tenant.",
+        "operationId": "admin_list_permissions",
+        "responses": {
+          "200": {
+            "description": "Every permission a role may grant, as an array: each with `id`, `group`, `risk`, `pin_required` (whether it may be granted with approval) and `description`. The same for every tenant"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/people/publish": {
+      "post": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Compiles a store's people into its `permissions` config node and versions it through the config\ntree — the same load→compile→write→version shape as [`admin_publish_menu`], onto the `permissions`\nkey instead of `menu`/`layout`. The PIN hash rides in the node (the edge verifies against it,\nADR-0030); the audit records only the config version and staff count, never a name or PIN.",
+        "operationId": "admin_publish_permissions",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`: the store whose people, roles and assignments to compile into its `permissions` node",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published. The body is `{ \"config_version_id\": … }`, the configuration version the store syncs. The node carries each assigned person's PIN hash for the store to verify against; the audit entry records only the version and the staff count"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/reason-codes": {
       "get": {
         "tags": [
@@ -2464,6 +3293,315 @@
             "session_cookie": []
           }
         ]
+      }
+    },
+    "/admin/roles": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin lists a tenant's role templates.",
+        "operationId": "admin_list_roles",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose roles to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every role template of the tenant, as an array. A role names permissions, never a person"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin creates a role template. Both permission sets are validated against the catalogue\n([`granted_with_approval`]). Audited `role.create` with id, name, both sets and the ceiling (a\nrole name is not PII).",
+        "operationId": "admin_create_role",
+        "requestBody": {
+          "description": "`tenant_id`, `name`, `permissions` (granted directly), `permissions_with_approval` (granted only with a direct holder's approval, each PIN-flagged; absent is none) and `discount_ceiling_minor` (how much the role may discount without a manager, in the currency's minor unit; absent is no ceiling, which a store reads as zero). Every id must be in `GET /admin/people/permissions`, and none may be in both lists",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new role's version"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID; name is blank; a permission id is unknown, not PIN-flagged where granted with approval, or in both lists; or the ceiling is negative",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/roles/{role_id}": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin reads one role template within its tenant.",
+        "operationId": "admin_get_role",
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "description": "The role template's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The role template, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match"
+          },
+          "400": {
+            "description": "tenant_id or role_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no role with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "people"
+        ],
+        "summary": "A super-admin updates a role template's name, permission sets, ceiling and status. Audited\n`role.update` with what was written, both sets included ([`granted_with_approval`]).",
+        "description": "An archived role grants nothing, so archiving one publishes the `permissions` node at once to\nevery store where someone holds it\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 7), and the answer is then `200` with each store's outcome. Any other update — a\nrename, a changed permission set or ceiling, or restoring the role — publishes as before, and\nanswers `204`.",
+        "operationId": "admin_update_role",
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "description": "The role template's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the role was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The role as it should now stand: `tenant_id`, `name`, `permissions`, `discount_ceiling_minor` and `status` (`active` or `archived`), and optionally `permissions_with_approval` — absent, the role keeps what it grants with approval, less anything `permissions` now grants directly",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archived. An archived role grants nothing, so every store where someone holds it is published to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version"
+          },
+          "204": {
+            "description": "Updated: a rename, a changed permission set or ceiling, or restoring the role. Nothing is published until someone publishes. The ETag carries the new version"
+          },
+          "400": {
+            "description": "tenant_id or role_id is absent or not a ULID; name is blank; a permission id is unknown, not PIN-flagged where granted with approval, or in both lists; status is not `active` or `archived`; the ceiling is negative; or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no role with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The role changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the registry or the store groups is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/session": {
@@ -4581,7 +5719,7 @@
     },
     {
       "name": "people",
-      "description": "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and assignment routes are still coverage debt; the readiness read is documented because it is new to this surface, and because a fork's own console needs it before a store enforces each person's own permissions. It names roles and counts people, and names no person."
+      "description": "Who may do what at a store (ADR-0070, ADR-0158): the people a tenant employs, the roles that say what each may do, the assignments that give a person a role at one store, a store group or every store, and the publish that compiles them into a store's `permissions` node. Staff records name people, so reading them needs `console.people.read`; the permission catalogue and the roles name nobody. A write is audited with ids, codes and statuses, never a name or a PIN. Archiving a person or a role, removing an assignment, and assigning to a group or every store publish to every store the change reaches before they answer, and report each store's outcome. The readiness read names roles and counts people, and names no person."
     },
     {
       "name": "fees",

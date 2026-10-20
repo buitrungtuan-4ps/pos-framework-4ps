@@ -149,6 +149,29 @@ where
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/people/publish",
+    request_body(
+        description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
+                       compile into its `permissions` node",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published. The body is `{ \"config_version_id\": … }`, the \
+                                      configuration version the store syncs. The node carries each \
+                                      assigned person's PIN hash for the store to verify against; \
+                                      the audit entry records only the version and the staff count"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// Compiles a store's people into its `permissions` config node and versions it through the config
 /// tree — the same load→compile→write→version shape as [`admin_publish_menu`], onto the `permissions`
 /// key instead of `menu`/`layout`. The PIN hash rides in the node (the edge verifies against it,

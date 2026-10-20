@@ -32,6 +32,19 @@ use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
+#[utoipa::path(
+    get,
+    path = "/admin/people/permissions",
+    responses(
+        (status = 200, description = "Every permission a role may grant, as an array: each with \
+                                      `id`, `group`, `risk`, `pin_required` (whether it may be \
+                                      granted with approval) and `description`. The same for every \
+                                      tenant"),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// The `pos-core` permission catalogue (§9), for the console's role editor to offer. Behind `Read` and
 /// tenant-independent — the catalogue is the same for every tenant.
 pub(super) async fn admin_list_permissions<P, R, Cfg, A, C>(
@@ -62,6 +75,22 @@ where
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/roles",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose roles to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every role template of the tenant, as an array. A role names \
+                                      permissions, never a person"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin lists a tenant's role templates.
 pub(super) async fn admin_list_roles<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
@@ -95,6 +124,24 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/roles/{role_id}",
+    params(
+        ("role_id" = String, Path, description = "The role template's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The role template, with an ETag carrying the version it was \
+                                      read at — the token a PATCH must send back as If-Match"),
+        (status = 400, description = "tenant_id or role_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no role with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin reads one role template within its tenant.
 pub(super) async fn admin_get_role<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
@@ -189,6 +236,30 @@ pub(super) fn granted_with_approval(
     Ok(listed.to_vec())
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/roles",
+    request_body(
+        description = "`tenant_id`, `name`, `permissions` (granted directly), \
+                       `permissions_with_approval` (granted only with a direct holder's approval, \
+                       each PIN-flagged; absent is none) and `discount_ceiling_minor` (how much the \
+                       role may discount without a manager, in the currency's minor unit; absent is \
+                       no ceiling, which a store reads as zero). Every id must be in \
+                       `GET /admin/people/permissions`, and none may be in both lists",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
+                                      the new role's version"),
+        (status = 400, description = "tenant_id is absent or not a ULID; name is blank; a \
+                                      permission id is unknown, not PIN-flagged where granted with \
+                                      approval, or in both lists; or the ceiling is negative", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin creates a role template. Both permission sets are validated against the catalogue
 /// ([`granted_with_approval`]). Audited `role.create` with id, name, both sets and the ceiling (a
 /// role name is not PII).
@@ -319,6 +390,45 @@ async fn record_role_create<P, R, Cfg, A, C>(
     .await;
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/roles/{role_id}",
+    params(
+        ("role_id" = String, Path, description = "The role template's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The ETag the role was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "The role as it should now stand: `tenant_id`, `name`, `permissions`, \
+                       `discount_ceiling_minor` and `status` (`active` or `archived`), and \
+                       optionally `permissions_with_approval` — absent, the role keeps what it \
+                       grants with approval, less anything `permissions` now grants directly",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Archived. An archived role grants nothing, so every store where \
+                                      someone holds it is published to at once (ADR-0158 decision \
+                                      7): `stores` lists each store with its `outcome`, \
+                                      `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or \
+                                      `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` \
+                                      retries. The ETag carries the new version"),
+        (status = 204, description = "Updated: a rename, a changed permission set or ceiling, or \
+                                      restoring the role. Nothing is published until someone \
+                                      publishes. The ETag carries the new version"),
+        (status = 400, description = "tenant_id or role_id is absent or not a ULID; name is blank; a \
+                                      permission id is unknown, not PIN-flagged where granted with \
+                                      approval, or in both lists; status is not `active` or \
+                                      `archived`; the ceiling is negative; or If-Match is absent, \
+                                      malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no role with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The role changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store, the registry or the store groups is \
+                                      unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin updates a role template's name, permission sets, ceiling and status. Audited
 /// `role.update` with what was written, both sets included ([`granted_with_approval`]).
 ///

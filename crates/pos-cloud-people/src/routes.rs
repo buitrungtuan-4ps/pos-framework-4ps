@@ -56,11 +56,23 @@ pub use readiness::permissions_readiness_router;
 
 // What the batch fan-out, the store groups and the people republisher use, and the handler the
 // console's OpenAPI document names.
+pub use assignments::{
+    __path_admin_create_assignment, __path_admin_list_assignments, __path_admin_remove_assignment,
+};
 pub use capabilities::capability_flag_nodes;
+pub use employees::{
+    __path_admin_create_employee, __path_admin_get_employee, __path_admin_list_employees,
+    __path_admin_set_employee_pin, __path_admin_update_employee,
+};
+pub use publish::__path_admin_publish_permissions;
 pub use publish::republish_people;
 pub use publish::{PermissionsPublishResult, PermissionsPublisher, permissions_nodes};
 pub use readiness::__path_admin_permissions_readiness;
 pub use requests::people_error_response;
+pub use roles::{
+    __path_admin_create_role, __path_admin_get_role, __path_admin_list_permissions,
+    __path_admin_list_roles, __path_admin_update_role,
+};
 
 // --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------
 
