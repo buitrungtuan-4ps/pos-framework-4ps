@@ -23,6 +23,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [guides/README.md](guides/README.md) | Index of the task-shaped guides, and the two tiers they assume |
 | [guides/write-an-adapter.md](guides/write-an-adapter.md) | Connect an external system to a port, proven by the contract suite |
 | [guides/add-a-country-module.md](guides/add-a-country-module.md) | Add a country's tax-invoice rules and locale pack in three edits |
+| [guides/add-a-setting.md](guides/add-a-setting.md) | Add a setting a store may run differently: its ADR, field, register entry, edge reader and words |
 | [guides/run-the-simulator.md](guides/run-the-simulator.md) | Drive a virtual fleet through the real decisions |
 | [guides/integrate-with-the-api.md](guides/integrate-with-the-api.md) | For a third party: get a credential, call `/v1`, receive webhooks |
 | [guides/appliance.md](guides/appliance.md) | Turn a stock Debian or Ubuntu PC into a store appliance |

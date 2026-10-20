@@ -18,6 +18,7 @@ The first is for someone **outside** this system calling it; the rest are for so
 | Take a fork all the way to a trading store | [Go live](../go-live.md), and the [gate register](../gate-register.md) it stops at |
 | Write an adapter for a new vendor/device | [Write an adapter](write-an-adapter.md) |
 | Add a new country (tax, locale, vendors) | [Add a country module](add-a-country-module.md) |
+| Let stores run a value differently, from the console | [Add a setting](add-a-setting.md) |
 | Prove the capacity numbers, run fleet scenarios | [Run the simulator](run-the-simulator.md) |
 | Fulfil a data-subject request, backups included | [Data-subject requests](data-subject-requests.md) |
 
