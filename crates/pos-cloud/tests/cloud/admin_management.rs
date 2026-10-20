@@ -4,17 +4,21 @@
 //! API keys (`/admin/api-keys`), and invitations and admin management (`/admin/invites`,
 //! `/admin/admins`, ADR-0067).
 
+use std::sync::Arc;
+
 use axum::http::StatusCode;
-use pos_cloud::auth::admin::{AdminRole, AdminStore, NewAdminUser};
+use pos_cloud::audit::AuditSink;
+use pos_cloud::auth::admin::{AdminRole, AdminStore, NewAdminUser, hash_session_token};
 use pos_cloud::dashboard::project;
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeKeys, FakeRegistry, FakeRollups, admin_cookie, app_with_admin, dated,
-    delete_with_cookie, get, get_with_cookie, json_body, patch_with_cookie, post_json,
-    post_with_cookie, provisioned_admin, registry_app, role_session_cookie, store_id, tenant,
+    FakeAdmin, FakeAudit, FakeKeys, FakeRegistry, FakeRollups, NOW_MS, admin_cookie,
+    app_with_admin, dated, delete_with_cookie, get, get_with_cookie, json_body, patch_with_cookie,
+    post_json, post_with_cookie, provisioned_admin, registry_app, role_session_cookie, store_id,
+    tenant,
 };
 
 // --- API-key provisioning (`/admin/api-keys`, behind the session guard) -------------------------
@@ -397,5 +401,134 @@ async fn an_owner_can_be_demoted_when_another_owner_remains() {
         demote.status(),
         StatusCode::NO_CONTENT,
         "demotion is allowed while another owner remains"
+    );
+}
+
+// --- pinned before `admin_invite_admin` is split (ADR-0170 decision 7) ---------------------------
+
+/// An invite is refused in the order it reads its request — the role, then the email, then an
+/// address that is already an admin's (compared once normalised) — and a refused one stores and
+/// records nothing.
+#[tokio::test]
+async fn an_invite_is_refused_in_the_order_it_reads_its_request_and_stores_nothing() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let audit = FakeAudit::default();
+    let router = http::router(
+        app_with_admin(
+            Cloud::new(FakeStore::new()),
+            FakeRollups::default(),
+            FakeKeys::default(),
+            admin.clone(),
+        )
+        .with_audit(Arc::new(AuditSink::new(audit.clone()))),
+    );
+    for (sent, status, field) in [
+        (
+            serde_json::json!({ "email": "not-an-email", "name": "N", "role": "emperor" }),
+            StatusCode::BAD_REQUEST,
+            Some("role"),
+        ),
+        (
+            serde_json::json!({ "email": "   ", "name": "N", "role": "ops" }),
+            StatusCode::BAD_REQUEST,
+            Some("email"),
+        ),
+        (
+            serde_json::json!({ "email": "no-at-sign", "name": "N", "role": "ops" }),
+            StatusCode::BAD_REQUEST,
+            Some("email"),
+        ),
+        (
+            serde_json::json!({ "email": "  OWNER@Example.test ", "name": "N", "role": "ops" }),
+            StatusCode::CONFLICT,
+            Some("email"),
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/invites", &sent, &cookie))
+            .await
+            .expect("route invite");
+        assert_eq!(response.status(), status, "{sent}");
+        if let Some(field) = field {
+            let body = json_body(response).await;
+            assert_eq!(
+                body["error"]["details"][0]["field"], field,
+                "{sent}: {body}"
+            );
+        }
+    }
+    assert!(admin.invites.lock().expect("lock").is_empty());
+    assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// An invite stores only its token's hash, expires one TTL after it was made, and records only the
+/// role it grants — never the email or the token.
+#[tokio::test]
+async fn an_invite_stores_only_its_tokens_hash_and_records_only_the_role() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let audit = FakeAudit::default();
+    let router = http::router(
+        app_with_admin(
+            Cloud::new(FakeStore::new()),
+            FakeRollups::default(),
+            FakeKeys::default(),
+            admin.clone(),
+        )
+        .with_audit(Arc::new(AuditSink::new(audit.clone()))),
+    );
+    let invited = router
+        .oneshot(post_with_cookie(
+            "/admin/invites",
+            &serde_json::json!({ "email": " New.Ops@Example.test ", "name": "New Ops", "role": "ops" }),
+            &cookie,
+        ))
+        .await
+        .expect("route invite");
+    assert_eq!(invited.status(), StatusCode::CREATED);
+    let body = json_body(invited).await;
+    let invite_id = body["invite_id"].as_str().expect("an id").to_owned();
+    let token = body["token"].as_str().expect("a token").to_owned();
+    assert_eq!(token.len(), 64, "32 random bytes as hex");
+    let three_days_ms = 3 * 24 * 60 * 60 * 1000;
+    assert_eq!(body["expires_at_ms"], NOW_MS + three_days_ms);
+
+    let stored = admin.invites.lock().expect("lock").clone();
+    let [invite] = stored.as_slice() else {
+        panic!("one invite: {} stored", stored.len());
+    };
+    assert_eq!(invite.id, invite_id);
+    assert_eq!(invite.email, "new.ops@example.test");
+    assert_eq!(invite.name, "New Ops");
+    assert_eq!(invite.role, AdminRole::Ops);
+    assert_eq!(invite.invited_by, "id-owner");
+    assert_eq!(
+        invite.token_hash,
+        hash_session_token(&token),
+        "only the hash is kept"
+    );
+    assert_eq!(
+        invite.expires_at.as_milliseconds_since_epoch(),
+        NOW_MS + three_days_ms
+    );
+    assert!(!invite.accepted);
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "admin.invite");
+    assert_eq!(entry.entity_type, "admin_invite");
+    assert_eq!(entry.entity_id, invite_id);
+    assert_eq!(entry.tenant_id, None);
+    assert_eq!(entry.before, None);
+    assert_eq!(entry.after, Some(serde_json::json!({ "role": "ops" })));
+    let recorded = format!("{entry:?}");
+    assert!(!recorded.contains(&token), "the token is never recorded");
+    assert!(
+        !recorded.to_ascii_lowercase().contains("new.ops"),
+        "the invitee's email is never recorded"
     );
 }
