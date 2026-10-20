@@ -20,7 +20,6 @@ use pos_cloud::alerts::AlertThresholds;
 use pos_cloud::archive_retention;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
-use pos_cloud::http::CloudApp;
 use pos_cloud::people_republish;
 use pos_cloud::qr::TableTokenSecret;
 use pos_cloud::qr_http;
@@ -31,8 +30,8 @@ use pos_cloud::starting_roles::RoleSeeder;
 use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, NatsIngestConfig, ReleaseToken, alerts, assets, countries, cursor, dashboard, http,
-    orders, relay,
+    NatsIngestConfig, ReleaseToken, alerts, assets, countries, cursor, dashboard, http, orders,
+    relay,
 };
 
 mod startup;
@@ -66,57 +65,13 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
     let (store, one_switch) = startup::open_store(&config).await?;
-    // One pool, seven views of it: the event-store application layer, the materialised-rollup read
-    // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
-    // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
-    // config routes author, the webhook-endpoint store the `/admin` webhook routes register into,
-    // and the anchor ledger ingest files each store's published chain head in.
-    // Stamped, not trusted: every ingested event's tenant and brand come from this registry lookup,
-    // overwriting what the publishing box claimed
-    // ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md), production-readiness **S2**).
-    // The tenant is the column row-level isolation is defined on, and until this line every store in
-    // the fleet stamped the same constant.
-    let cloud = Cloud::with_store_owners(store.clone(), Arc::new(store.store_directory()));
-    // Every ingested `store.chain.anchored` event is offered to the anchor ledger
-    // ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4). A store's hash chain
-    // catches careless editing and not fraud — the algorithm is in the source, so anyone holding the
-    // shop's database file can rewrite a record and re-derive every later link. What makes the chain
-    // mean something is this: a head recorded where the store cannot reach it.
-    let cloud = cloud
-        .with_anchor_ledger(Arc::new(store.chain_anchors()))
-        // And the log reader that recomputes the chain behind each accepted head
-        // ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor
-        // closes recomputation; this is what closes truncation, because a store cut back and traded
-        // on leaves two different events claiming one position and only the events show it.
-        .with_chain_window(Arc::new(store.chain_anchors()));
+    let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
     // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
     // can emit without threading an `AuditStore` generic through the already-large router types.
     let audit: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(store.audit()));
-    let app = CloudApp::new(
-        cloud.clone(),
-        store.rollups(),
-        store.api_keys(),
-        SystemClock,
-        store.admin(),
-        store.config_trees(),
-        store.webhooks(),
-    )
-    .with_audit(Arc::clone(&audit))
-    .with_admin_session_ttl_secs(config.admin_session_ttl_secs)
-    .with_admin_session_idle_ttl_secs(config.admin_session_idle_ttl_secs)
-    .with_admin_invite_ttl_secs(config.admin_invite_ttl_secs)
-    .with_login_rate_limit(
-        config.admin_login_max_attempts,
-        config.admin_login_window_secs,
-    )
-    .with_orders_rate_limit(config.orders_max_requests, config.orders_window_secs)
-    .with_sync_rate_limit(config.sync_max_requests, config.sync_window_secs)
-    .with_trusted_proxy_hops(config.trusted_proxy_hops)
-    .with_admin_setup_token(config.admin_setup_token.clone())
-    .with_internal_shared_secret(config.internal_shared_secret.clone())
-    .with_qr_switch_since(one_switch.since);
+    let app = startup::cloud_app(&cloud, &store, &config, &audit, &one_switch);
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the
