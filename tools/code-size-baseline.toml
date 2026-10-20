@@ -61,7 +61,6 @@
 "crates/pos-cloud/src/http/admin/invites.rs::admin_invite_admin" = { lines = 109, params = 3 }
 "crates/pos-cloud-catalog/src/routes/catalog.rs::catalog_router" = { lines = 135, params = 4 }
 "crates/pos-cloud/src/http/config_publish/config_releases.rs::config_release_router" = { lines = 50, params = 9 }
-"crates/pos-cloud/src/http/ota/artifacts.rs::serve_ota_artifact" = { lines = 113, params = 4 }
 "crates/pos-cloud/src/http/ota/release_fetch.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
 "crates/pos-cloud/src/main.rs::run" = { lines = 1168, params = 0 }
