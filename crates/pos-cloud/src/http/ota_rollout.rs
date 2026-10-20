@@ -32,6 +32,10 @@ mod leases;
 mod placement;
 mod rollout;
 
+// The handlers the console's OpenAPI document names.
+pub(crate) use handovers::{__path_admin_retire_handover, __path_admin_settle_handover};
+pub(crate) use leases::{__path_admin_bump_lease, __path_admin_get_lease};
+
 // --- OTA rollout levers (`/admin/config/ota`, ADR-0078, Track O3) --------------------------------
 
 /// The collaborators the OTA rollout routes need: the config-tree store the `fleet_update` node is

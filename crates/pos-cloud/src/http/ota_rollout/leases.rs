@@ -25,6 +25,50 @@ use crate::http::{Json, lease_bump};
 use crate::lease::{LeaseBumpOutcome, LeaseStore, lease_node, resolve_region};
 use crate::ota::ArtifactStore;
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/lease/bump",
+    security(("session_cookie" = [])),
+    params(
+        ("If-Match" = String, Header, description = "The lease generation the decision was made \
+                                                     against, or `*` for a store never issued one. \
+                                                     Required"),
+    ),
+    request_body(
+        description = "`tenant_id` and `store_id`; optionally `edge_placement` \
+                       (`EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or \
+                       `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) when the store is moving, absent for a \
+                       swap in place (ADR-0110); for a hosted placement, `region_country` and \
+                       `region_label`, where its data will rest (ADR-0114); and \
+                       `acknowledge_undrained`, the undrained generation this bump knowingly \
+                       abandons. No body names a generation: the server issues it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Issued and published: a different machine is the store now \
+                                      (ADR-0108). The new generation is published as the store's \
+                                      `lease` node, with the receipt floor beside it where the cloud \
+                                      has one (ADR-0149), and the box on the old generation stops \
+                                      installing updates. The body carries `config_version_id`. \
+                                      Audited with the generation issued"),
+        (status = 400, description = "tenant_id or store_id is not a ULID; edge_placement is not one \
+                                      of the three; the region is incomplete, malformed or given \
+                                      where no hosted placement is named; If-Match is absent or \
+                                      malformed; or a value needs a recorded confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The lease moved since you read it: re-read and retry. The \
+                                      error names the current generation", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish the lease node lost a race with \
+                                      another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The previous machine still holds events this cloud has never \
+                                      seen, naming the generation to acknowledge to proceed, which \
+                                      abandons them; or the store's configuration would not validate \
+                                      with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it
 /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
 ///
@@ -183,6 +227,25 @@ async fn receipt_floor<Cfg: LeaseStore>(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/lease",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "`generation`, the store's authoritative lease generation, or \
+                                      `null` if it has never been issued one. Read from the lease \
+                                      itself, not from what the tills were told"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `GET /admin/config/lease` — the store's authoritative lease generation, or `null` if it has never
 /// been issued one. Behind [`ConsolePermission::Read`].
 ///

@@ -6639,6 +6639,375 @@
         }
       }
     },
+    "/admin/config/lease": {
+      "get": {
+        "tags": [
+          "lease"
+        ],
+        "summary": "`GET /admin/config/lease` — the store's authoritative lease generation, or `null` if it has never\nbeen issued one. Behind [`ConsolePermission::Read`].",
+        "description": "Read from the `store_lease` row, not from the published node: the row is the authority and the\nnode is its delivery, and a console that read the node would be reporting what the *tills* were\ntold rather than what is true.",
+        "operationId": "admin_get_lease",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`generation`, the store's authoritative lease generation, or `null` if it has never been issued one. Read from the lease itself, not from what the tills were told"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The lease store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/lease/bump": {
+      "post": {
+        "tags": [
+          "lease"
+        ],
+        "summary": "`POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it\n([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).",
+        "description": "This is the act of saying **\"a different machine is the store now\"**. One request does two things\nthat must not drift apart: it advances the authoritative counter in `store_lease`, and it\npublishes the resulting number as the Store-layer `lease` node — the only rail that reaches a\ntill. The node is *derived* here, never authored: no route accepts a `lease` body, because a\ngeneration a person could type would not be an authority.\n\nA store's **first** bump lands on generation `0` and supersedes nobody — ADR-0049's \"the first\nlease a store ever issues is generation `0`\" — so it is the act of putting a store under the\nlease at all. Every bump after that supersedes whatever box holds the previous number: it stops\ninstalling updates on its next config pull, and stays stopped across reboots, because the edge\ntakes its generation once and thereafter only compares.\n\nBehind [`ConsolePermission::ManageStores`] rather than `PublishOta`: replacing the machine that\n*is* a store is store management, and the person who does it is the person who provisions\nhardware, not the person who runs an upgrade campaign. The audit entry names the generation\nissued, so \"who replaced this box, and when\" has an answer.\n\n# The third thing that must not drift apart\n\n[ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md) makes *where* the store\nruns an attribute of the store, and this route the only writer of it. A body naming\n`edge_placement` is a **move**; a body omitting it is a swap in place, and keeps whatever the\nstore had. Either way the value is written inside the bump's own statement, so a reader can never\ncatch the two disagreeing — which is not fussiness but the difference between a console that says\n\"Offline-capable: yes\" about a hosted store and one that does not.\n\nAn explicit `EDGE_PLACEMENT_UNSPECIFIED` is refused rather than accepted as \"no change\". On the\nwire that token means *this message did not say*, so a caller that sends it has said nothing in a\nfield that looks like it said something; omitting the field is how you mean that, and a refusal\nthat says so beats a request that appears to move a store and does not.",
+        "operationId": "admin_bump_lease",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The lease generation the decision was made against, or `*` for a store never issued one. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`; optionally `edge_placement` (`EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) when the store is moving, absent for a swap in place (ADR-0110); for a hosted placement, `region_country` and `region_label`, where its data will rest (ADR-0114); and `acknowledge_undrained`, the undrained generation this bump knowingly abandons. No body names a generation: the server issues it",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Issued and published: a different machine is the store now (ADR-0108). The new generation is published as the store's `lease` node, with the receipt floor beside it where the cloud has one (ADR-0149), and the box on the old generation stops installing updates. The body carries `config_version_id`. Audited with the generation issued"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID; edge_placement is not one of the three; the region is incomplete, malformed or given where no hosted placement is named; If-Match is absent or malformed; or a value needs a recorded confirmation first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The lease moved since you read it: re-read and retry. The error names the current generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to publish the lease node lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The previous machine still holds events this cloud has never seen, naming the generation to acknowledge to proceed, which abandons them; or the store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The lease store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/lease/retire": {
+      "post": {
+        "tags": [
+          "lease"
+        ],
+        "summary": "`POST /admin/config/lease/retire` — a person decides a settled handover's outgoing machine, its\ndatabase and its hosting are no longer needed. Behind [`ConsolePermission::ManageStores`].",
+        "description": "Nothing transitions into this on its own and nothing ever will: it is a judgement about money and\nrisk that no fact in this system implies\n([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). It refuses while a\nhandover is in flight, because a machine that may hold the only copy of a night's sales is not\none anybody can decide is unnecessary — settle it first, by draining it or by attesting it empty.\n\nPublishes nothing, for the same reason settle does not.",
+        "operationId": "admin_retire_handover",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`: the store whose settled handover's outgoing machine, its database and its hosting are no longer needed. A decision no fact in the system implies (ADR-0110). Publishes nothing",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Retired. Audited with who decided and when"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The store has never been issued a lease",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The handover moved while it was being retired: re-read and retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The handover is still in flight and must be settled first; it has already been retired; or the store has never handed over to another machine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The lease store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/lease/settle": {
+      "post": {
+        "tags": [
+          "lease"
+        ],
+        "summary": "`POST /admin/config/lease/settle` — a person attests that a superseded machine holds no events,\nclosing a handover that will never close itself. Behind [`ConsolePermission::ManageStores`].",
+        "description": "The automatic path is a heartbeat from the outgoing machine reporting that generation with an\nempty outbox ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). This\nroute is for the machine that will never send one: a box already powered off, or one whose disk\nan operator has read directly. It is an attestation, so it is audited with the attester's name.\n\nPublishes nothing. A settled handover changes what the *console* knows, not what any till is\ntold — the lease generation the store runs on is untouched.",
+        "operationId": "admin_settle_handover",
+        "requestBody": {
+          "description": "`tenant_id`, `store_id`, and `superseded_generation`, the machine the caller attests holds no events: a box already powered off, or one whose disk was read directly. Publishes nothing",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Settled. Audited as an attestation, with who made it"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The store has never been issued a lease",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The handover in flight is not on the generation named, naming the one that is, or none is in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The lease store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/config/locale": {
       "put": {
         "tags": [
@@ -17484,6 +17853,10 @@
     {
       "name": "fees",
       "description": "The charges a bill adds — a service charge, a packaging fee, a delivery fee (ADR-0159). A rule is written once, at the tenant, a brand or one store; for each fee a store runs the most specific rule that reaches it, and every store a write reaches is republished in the same request. An item list may name item categories, which are compiled into items when the store is published. Documented because a fork's own console draws its fee screen from these routes, and needs to know that a store which cannot apply a rule is left as it is rather than sent part of its list."
+    },
+    {
+      "name": "lease",
+      "description": "Which machine is the store (ADR-0108, ADR-0110, ADR-0114): the store's lease generation, issued only by the server and only by a bump, which is the act of making a different machine the store and may move where it runs and where its data rests. A bump will not abandon a previous machine that still holds events unless a person acknowledges it by generation. A handover ends when the old machine drains, or when a person settles it by attestation; retiring the old machine afterwards is a separate decision. Every one of these is audited with who made it."
     },
     {
       "name": "config nodes",

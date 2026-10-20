@@ -116,7 +116,7 @@ pub(crate) mod integrations;
 mod lease_bump;
 mod locale_node;
 mod ota;
-mod ota_rollout;
+pub(crate) mod ota_rollout;
 mod reason_codes;
 pub(crate) mod reconcile;
 pub(crate) mod registry;
