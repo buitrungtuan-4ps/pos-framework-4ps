@@ -244,7 +244,6 @@ pub use translations::translation_router;
 
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
-use crate::openapi_admin::AdminApiDoc;
 use pos_cloud_reports::revenue::{
     admin_export_revenue, admin_export_revenue_fees, admin_export_revenue_tax, admin_revenue_daily,
 };
@@ -730,16 +729,6 @@ struct VoucherListQuery {
 /// The generated OpenAPI document for the public `/v1` surface.
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
-}
-
-/// Serves the generated `/admin` console API document (roadmap v3 B5).
-///
-/// Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and
-/// the console SPA this server already ships publicly names every one of these paths in its own
-/// JavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot
-/// already read, while blocking the fork developer the document exists for.
-async fn admin_openapi() -> Json<utoipa::openapi::OpenApi> {
-    Json(AdminApiDoc::openapi())
 }
 
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),

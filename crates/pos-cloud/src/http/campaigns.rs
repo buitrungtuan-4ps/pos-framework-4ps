@@ -46,6 +46,10 @@ pub(crate) use authoring::{
     __path_admin_create_campaign, __path_admin_delete_campaign, __path_admin_get_campaign,
     __path_admin_list_campaigns, __path_admin_update_campaign,
 };
+pub(crate) use publish::{__path_admin_publish_campaigns, __path_preview_publish_campaigns};
+pub(crate) use scheduled::{
+    __path_admin_cancel_scheduled, __path_admin_list_scheduled, __path_admin_schedule_campaigns,
+};
 pub(crate) use vouchers::{__path_admin_generate_vouchers, __path_admin_list_vouchers};
 
 // --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----

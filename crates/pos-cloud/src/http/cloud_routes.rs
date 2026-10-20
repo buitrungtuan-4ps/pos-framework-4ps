@@ -16,13 +16,14 @@ use super::{
     admin_enable_webhook, admin_export_revenue, admin_export_revenue_fees,
     admin_export_revenue_tax, admin_export_rollups, admin_generate_recovery_codes,
     admin_invite_admin, admin_list_admins, admin_list_api_keys, admin_list_invites,
-    admin_list_sessions, admin_list_webhooks, admin_login, admin_logout, admin_openapi,
+    admin_list_sessions, admin_list_webhooks, admin_login, admin_logout,
     admin_recovery_codes_status, admin_reenrol_totp, admin_register_webhook, admin_revenue_daily,
     admin_revoke_api_key, admin_revoke_invite, admin_revoke_other_sessions, admin_revoke_session,
     admin_rollups_reset, admin_session, admin_set_admin_role, admin_set_admin_status, admin_setup,
     admin_whoami, admin_xz_report, daily_rollups, delete, edge_config_sync, edge_events_hello,
     edge_heartbeat, edge_publish_events, get, health, ingest, openapi, post,
 };
+use crate::openapi_admin::admin_openapi;
 
 /// Every route [`super::router`] serves, before its state and its security-headers layer.
 pub(super) fn all_routes<S, R, K, C, A, T, W>() -> Router<CloudApp<S, R, K, C, A, T, W>>
