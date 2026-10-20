@@ -88,11 +88,6 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
-    /// Folds one logged event back into the projection during [`Self::rebuild`].
-    ///
-    /// The reverse of what each command emits, without re-deciding: the events already happened, so
-    /// this trusts them. Events the projection does not track — and unknown types from a newer
-    /// writer — are skipped, which is what keeps a forward-compatible log replayable.
     /// The two staff-decision arms of [`Self::fold`], lifted out to keep that function inside the
     /// line budget rather than by dropping the comments that explain it.
     ///
@@ -314,6 +309,11 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Folds one logged event back into the projection during [`Self::rebuild`].
+    ///
+    /// The reverse of what each command emits, without re-deciding: the events already happened, so
+    /// this trusts them. Events the projection does not track — and unknown types from a newer
+    /// writer — are skipped, which is what keeps a forward-compatible log replayable.
     fn fold(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
@@ -322,40 +322,18 @@ impl<S: EventStore> Edge<S> {
             return Ok(());
         };
         match known {
-            EventType::SalesTableOpened => {
-                let event: SalesTableOpened = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_table(event.table_id, TableState::Occupied);
-                projection.open_order(event.table_id, event.order_id);
-            }
+            EventType::SalesTableOpened
+            | EventType::SalesTableClosed
+            | EventType::SalesTableMerged => Self::fold_table(projection, envelope, known)?,
             EventType::SalesOrderOpened => Self::fold_order_opened(projection, envelope)?,
             EventType::SalesOrderConfirmedByStaff | EventType::SalesOrderRejectedByStaff => {
                 Self::fold_staff_decision(projection, envelope, known)?;
             }
-            EventType::SalesTableClosed => {
-                let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_table(event.table_id, TableState::Free);
-            }
             EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
-            EventType::SalesTableMerged => {
-                let event: SalesTableMerged = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.merge_order(event.target_order_id, event.merged_order_id);
-            }
-            EventType::SalesOrderLineAdded => {
-                let event: SalesOrderLineAdded =
-                    envelope.data.decode().map_err(AppError::Encode)?;
-                projection.add_line(event.order_line_id, LineRecord::from(event));
-            }
-            EventType::SalesOrderLineFired => {
-                let event: SalesOrderLineFired =
-                    envelope.data.decode().map_err(AppError::Encode)?;
-                projection.fold_fired(event.order_line_id, event.fire_time, event.station_id);
-            }
-            EventType::SalesOrderLineUpdated => {
-                let event: SalesOrderLineUpdated =
-                    envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_line_quantity(event.order_line_id, event.quantity, event.line_total);
-            }
+            EventType::SalesOrderLineAdded
+            | EventType::SalesOrderLineFired
+            | EventType::SalesOrderLineUpdated => Self::fold_line(projection, envelope, known)?,
             EventType::SalesOrderLineVoided | EventType::BillingBillVoided => {
                 Self::fold_void(projection, envelope, known)?;
             }
@@ -374,6 +352,86 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingBillSplit | EventType::BillingBillMerged => {
                 Self::fold_regroup(projection, envelope, known)?;
             }
+            EventType::CashShiftOpened
+            | EventType::CashShiftCounted
+            | EventType::CashShiftClosed => Self::fold_shift(projection, envelope, known)?,
+            EventType::CashDrawerPaidIn | EventType::CashDrawerPaidOut => {
+                Self::fold_movement(projection, envelope, known)?;
+            }
+            EventType::KitchenTicketBumped => {
+                let event: KitchenTicketBumped =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.mark_bumped(&event.order_line_ids);
+            }
+            EventType::InventoryItemSoldOut | EventType::InventoryItemRestored => {
+                Self::fold_sold_out(projection, envelope, known)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Replays a table seated, cleared, or merged into another: the tables a waiter works.
+    fn fold_table(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        match known {
+            EventType::SalesTableOpened => {
+                let event: SalesTableOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_table(event.table_id, TableState::Occupied);
+                projection.open_order(event.table_id, event.order_id);
+            }
+            EventType::SalesTableClosed => {
+                let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_table(event.table_id, TableState::Free);
+            }
+            EventType::SalesTableMerged => {
+                let event: SalesTableMerged = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.merge_order(event.target_order_id, event.merged_order_id);
+            }
+            // Unreachable: `fold` delegates only the arms above.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Replays a line added to an order, fired to the kitchen, or changed in quantity.
+    fn fold_line(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        match known {
+            EventType::SalesOrderLineAdded => {
+                let event: SalesOrderLineAdded =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.add_line(event.order_line_id, LineRecord::from(event));
+            }
+            EventType::SalesOrderLineFired => {
+                let event: SalesOrderLineFired =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.fold_fired(event.order_line_id, event.fire_time, event.station_id);
+            }
+            EventType::SalesOrderLineUpdated => {
+                let event: SalesOrderLineUpdated =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_line_quantity(event.order_line_id, event.quantity, event.line_total);
+            }
+            // Unreachable: `fold` delegates only the arms above.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Replays a cash shift opened, counted, or closed.
+    fn fold_shift(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        match known {
             EventType::CashShiftOpened => {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 // A shift that names no till is the store's one drawer's, as every shift was
@@ -389,9 +447,6 @@ impl<S: EventStore> Edge<S> {
                     ),
                 );
             }
-            EventType::CashDrawerPaidIn | EventType::CashDrawerPaidOut => {
-                Self::fold_movement(projection, envelope, known)?;
-            }
             EventType::CashShiftCounted => {
                 let event: CashShiftCounted = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.record_shift_count(
@@ -404,14 +459,7 @@ impl<S: EventStore> Edge<S> {
                 let event: CashShiftClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.close_shift_record(event.closed_shift_id);
             }
-            EventType::KitchenTicketBumped => {
-                let event: KitchenTicketBumped =
-                    envelope.data.decode().map_err(AppError::Encode)?;
-                projection.mark_bumped(&event.order_line_ids);
-            }
-            EventType::InventoryItemSoldOut | EventType::InventoryItemRestored => {
-                Self::fold_sold_out(projection, envelope, known)?;
-            }
+            // Unreachable: `fold` delegates only the arms above.
             _ => {}
         }
         Ok(())
