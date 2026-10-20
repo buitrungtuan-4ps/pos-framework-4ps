@@ -15,6 +15,20 @@ use crate::auth::admin::{AdminRole, AdminStatus, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{CloudApp, Json, enum_refusal, not_found};
 
+#[utoipa::path(
+    get,
+    path = "/admin/admins",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "Every console administrator, as an array: `id`, `email`, \
+                                      `name`, `role` and `status`. Never a password hash or a TOTP \
+                                      secret"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.invite", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Lists the console admins — identity and role only, never a credential. Needs
 /// `console.admins.invite` (owner or admin may view the roster).
 pub(in crate::http) async fn admin_list_admins<S, R, K, C, A, T, W>(
@@ -56,6 +70,28 @@ pub(in crate::http) struct UpdateAdminRoleRequest {
     role: String,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/admins/{id}/role",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The administrator's id"),
+    ),
+    request_body(
+        description = "`role`: `owner`, `admin`, `ops` or `viewer`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "The role is changed, and audited"),
+        (status = 400, description = "role is not one of the four", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "There is no administrator with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The change would demote the last active owner", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Changes an admin's role. Needs `console.admins.manage` (owner). Refuses demoting the last active
 /// owner. `404` if there is no admin with that id.
 pub(in crate::http) async fn admin_set_admin_role<S, R, K, C, A, T, W>(
@@ -122,6 +158,28 @@ pub(in crate::http) struct UpdateAdminStatusRequest {
     status: String,
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/admins/{id}/status",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The administrator's id"),
+    ),
+    request_body(
+        description = "`status`: `active` or `suspended`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "The status is changed, and audited"),
+        (status = 400, description = "status is not `active` or `suspended`", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.admins.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "There is no administrator with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The change would suspend the last active owner", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The admin store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "auth",
+)]
 /// Suspends or reactivates an admin. Needs `console.admins.manage` (owner). Refuses suspending the
 /// last active owner. `404` if there is no admin with that id.
 pub(in crate::http) async fn admin_set_admin_status<S, R, K, C, A, T, W>(

@@ -99,7 +99,7 @@ use crate::config_tree::prerequisites_for;
 use crate::dashboard::RollupStore;
 use crate::openapi::ApiDoc;
 
-mod admin;
+pub(crate) mod admin;
 mod admitted_devices;
 mod alerts;
 mod archives;
