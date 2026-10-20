@@ -97,6 +97,39 @@ fn parse_installer_request(
     Ok((target, file_name))
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/ota/releases/{release}/installer",
+    security(("session_cookie" = [])),
+    params(
+        ("release" = String, Path, description = "The release, spelled bare, without a leading `v`"),
+        ("store_id" = String, Query, description = "The store the installer is for (a 26-character \
+                                                    ULID), written into the file's name. Required"),
+        ("cloud" = String, Query, description = "The cloud the store will dial, as the console's \
+                                                  browser shows it: a host, or a host and port. \
+                                                  Written into the file's name. Required"),
+        ("arch" = Option<String>, Query, description = "A Windows target triple. Absent means the \
+                                                         default Windows build"),
+    ),
+    responses(
+        (status = 200, description = "The release's Windows executable, byte for byte, as an \
+                                      `application/octet-stream` attachment named for the store and \
+                                      the cloud. Nothing is written into the bytes, so the release's \
+                                      signature still verifies; the store's credential arrives only \
+                                      through activation"),
+        (status = 400, description = "The release cannot name a hosted release; store_id is absent \
+                                      or not a ULID; cloud is absent or cannot be written into a \
+                                      file name; or arch is not a target triple or not a Windows \
+                                      build", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The release is not hosted for this target", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The release is recorded but its executable is missing from \
+                                      the object store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release registry or the object store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// `GET /admin/ota/releases/{release}/installer?store_id=&cloud=` — a hosted release's Windows
 /// executable, named as that store's one-file installer
 /// ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).

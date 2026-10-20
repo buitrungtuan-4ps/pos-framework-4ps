@@ -7256,6 +7256,417 @@
         ]
       }
     },
+    "/admin/config/ota": {
+      "get": {
+        "tags": [
+          "ota rollout"
+        ],
+        "summary": "Reads a store's currently-published rollout — the `fleet_update` node the store runs, its layers\ncomposed so a rollout a rollback restored reads as it runs — or `null` if none is published.\nBehind [`ConsolePermission::Read`].",
+        "operationId": "admin_get_rollout",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The `fleet_update` node the store runs, its layers composed, so a rollout a rollback restored reads as it runs; or `null` when none is published"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "ota rollout"
+        ],
+        "summary": "Composes a `fleet_update` node onto a store's Store layer and publishes it — the same\nload→merge→publish→version shape as the campaigns/tax node publishes, so the other Store-level keys\nsurvive. The node is validated by the config tree's `CapabilityValidator` before it commits.",
+        "operationId": "admin_publish_rollout",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`; `target_version`, the release to install as `MAJOR.MINOR.PATCH`, which the cloud must already host; `min_ring`, the lowest eligible ring (`lab`, `pilot` or `fleet`); `rollout_percent`, the share of the fleet ring currently eligible, 0 to 100; `signing_key_id`, the key the release is signed by, as sixteen hex digits; and optionally `revoked_key_ids`, keys revocation has retired. There is no `halted`: a fresh publish is live",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `fleet_update` node on the Store layer, the store's other Store-level settings kept. The body carries `config_version_id`. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID; target_version cannot name a hosted release; or a value needs a recorded confirmation first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.ota.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to publish lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No release artifact is hosted for target_version, and the error says so; or the rollout would not validate (a version, ring, percentage or key id that does not parse), with every violation listed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release registry or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/ota/halt": {
+      "post": {
+        "tags": [
+          "ota rollout"
+        ],
+        "summary": "Flips the kill switch on a store's published rollout: loads the `fleet_update` the store runs, sets\n`halted`, and re-publishes it on the Store layer — preserving the rest of the rollout, so an\noperator halts a bad rollout (or resumes a paused one) without re-typing the target, ring, and\nkey. `400` if the store has no rollout to halt.",
+        "description": "The rollout is read from the tree's layers composed ([`ConfigTreeState::effective`]): a rollback\nrestores a version onto the Tenant layer and empties the Store layer, and a halt that read the\nStore layer alone refused a store running the restored rollout.\n\nIt is read from the tree the halt writes over ([`halted_rollout`], composed inside the\nconditional write's retry), so a rollout published while the halt is in flight is the one it\nhalts. The halt used to read the tree once, before the publish read it again to write, and wrote\nthe rollout it had read first, halted, over the newer one: the kill switch's own write was a lost\nupdate.",
+        "operationId": "admin_halt_rollout",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` resumes it. The rest of the rollout is kept as the store runs it",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The kill switch is set on the rollout the store runs, read from the tree the write lands on, and republished on the Store layer. The body carries `config_version_id`. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID; the store has no published rollout to halt; or a value needs a recorded confirmation first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.ota.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to publish lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/ota/placement": {
+      "get": {
+        "tags": [
+          "ota rollout"
+        ],
+        "summary": "Reads a store's published placement — the `device_ota` node the store runs, its layers composed\nso a placement a rollback restored reads as it runs — or `null` if the store has never been\nplaced. Behind [`ConsolePermission::Read`].",
+        "operationId": "admin_get_placement",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The `device_ota` node the store runs, its layers composed; or `null` when the store has never been placed"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "ota rollout"
+        ],
+        "summary": "Composes a `device_ota` node onto a store's **Device** layer and publishes it — the placement half\nof the rollout decision ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)). Same\nload→merge→publish→version shape as the rollout lever, on a different layer and key, so the store's\nother Device-level settings survive. The config tree's `CapabilityValidator` checks the node before\nit commits, so a ring that names no ring or a bucket past 99 is a `422` carrying the reasons.",
+        "description": "The placement is per **store**, not per terminal, despite the key's name and the Device layer it\nsits on: a config tree is keyed by `StoreId` and its Device layer is one document the store's\nterminals share, so they all take the same ring and bucket. That is the granularity the delivery\nmechanism has, and it is also the granularity a shop wants — a counter running two releases at once\nis worse than a counter a week behind. ADR-0052 Correction 1 records this against that ADR's\noriginal \"per-device\" wording.",
+        "operationId": "admin_publish_placement",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` or `fleet`); and `canary_bucket`, 0 to 99, its fixed place in the fleet ramp. Every terminal of the store takes the same placement",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `device_ota` node on the Device layer, the store's other Device-level settings kept. The body carries `config_version_id`. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or a value needs a recorded confirmation first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.ota.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to publish lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The ring names no ring or the bucket is over 99, with every violation listed; or the store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/config/preview": {
       "post": {
         "tags": [
@@ -11668,6 +12079,421 @@
           },
           "503": {
             "description": "The media store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/ota/releases": {
+      "post": {
+        "tags": [
+          "release hosting"
+        ],
+        "summary": "A super-admin uploads one release artifact: the bare executable, plus its minisign signature.",
+        "description": "Idempotent by [`admit_artifact`]'s rule — re-uploading the same release/target with identical\nbytes answers `200` rather than failing, so a re-run of a release step does not wedge; different\nbytes for a release a ring may already have installed are refused, because a version that can\nchange under a fleet is not a version.",
+        "operationId": "admin_upload_ota_release",
+        "parameters": [
+          {
+            "name": "release",
+            "in": "query",
+            "description": "The release the bytes are, spelled bare as a rollout's `target_version` names it, without a leading `v`. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "The target triple the executable is built for. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "x-pos-minisig",
+            "in": "header",
+            "description": "minisign's signature over these exact bytes: the second line of the `.minisig` file, as base64. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The bare release executable, not the release archive: the edge installs the bytes it is handed, so the signature has to cover these (ADR-0088). `docs/release-runbook.md` step 5 gives the exact request",
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already hosted with these exact bytes: the release is unchanged, so a re-run of a release step does not fail. The body is as for 201. Audited"
+          },
+          "201": {
+            "description": "Hosted: the signature, then the executable, are stored, and only then the release is recorded. The body carries `release`, `arch`, `size_bytes` and `sha256`. Audited"
+          },
+          "400": {
+            "description": "release or arch is absent or unusable; the body is empty; or the signature header is absent, not base64, or not a minisign signature. An absent query parameter is refused by the framework, without the error envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.ota.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "This release is already hosted for this target with different bytes. A version a ring may have installed does not change",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The executable is over 128 MiB. Answered by the server's body limit, without the error envelope"
+          },
+          "500": {
+            "description": "The storage keys could not be composed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The object store or the release registry is unreachable: send the same upload again later",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/ota/releases/fetch": {
+      "post": {
+        "tags": [
+          "release hosting"
+        ],
+        "summary": "A super-admin points the cloud at a release, and it fetches every pair the forge holds for it.",
+        "description": "The button behind `docs/release-runbook.md` step 5: instead of downloading six files and running\nthree `curl`s with a console cookie, the operator names the version. What the cloud *holds*\nafterwards is identical either way — the same blobs, the same rows, the same immutability rule —\nbecause both doors go through [`admit_release_artifact`].\n\nNot a transaction. Each target is admitted on its own, so a refusal on the third leaves the first\ntwo hosted; that is the same grain the upload has always had (one call per target), and the\nrefusal names which target stopped it.",
+        "operationId": "admin_fetch_ota_release",
+        "requestBody": {
+          "description": "`release`: the version to fetch, spelled bare, without a leading `v`. The cloud tries the release workflow's tag with and without one",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Every signed executable the release publishes is hosted. The body carries `release`, `tag`, the release source's tag it came from, and `artifacts`: for each, `arch`, `size_bytes`, `sha256`, `asset`, and `outcome`, `recorded` or `already_hosted`. Audited"
+          },
+          "400": {
+            "description": "release cannot name a hosted release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.ota.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The release source publishes no release under either spelling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No release source is configured on this cloud; the release source refused the cloud's credentials; or a target is already hosted with different bytes. Targets admitted before the refusal stay hosted, and the upload remains the way in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The release carries no signed executable, or an asset is too large or not what it claims to be",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The storage keys could not be composed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release source, the object store or the release registry is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/ota/releases/{release}": {
+      "get": {
+        "tags": [
+          "release hosting"
+        ],
+        "summary": "Which targets a release is hosted for — what an operator checks before promoting it, and what the\npromote guard consults on their behalf.",
+        "operationId": "admin_list_ota_release",
+        "parameters": [
+          {
+            "name": "release",
+            "in": "path",
+            "description": "The release, spelled bare, without a leading `v`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`release` and `artifacts`: for each target it is hosted for, `arch`, `size_bytes`, `sha256` and `recorded_at_ms`. An empty list means the release is not hosted, and a rollout naming it is refused"
+          },
+          "400": {
+            "description": "The release cannot name a hosted release",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release registry is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/ota/releases/{release}/installer": {
+      "get": {
+        "tags": [
+          "release hosting"
+        ],
+        "summary": "`GET /admin/ota/releases/{release}/installer?store_id=&cloud=` — a hosted release's Windows\nexecutable, named as that store's one-file installer\n([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).",
+        "description": "**The bytes are the release's own.** Nothing is appended or rewritten: the store and the cloud\ntravel in the file *name*, which is what lets the minisign signature over these bytes keep\nverifying, and what makes the file safe to hand out — the name carries a store id and a host,\nneither of them a secret, and the credential still arrives only through activation.\n\n**`console.data.read`**, like the list beside it: this reads what the cloud hosts. It writes\nnothing and provisions nothing — a box it installs is unactivated until somebody with\n`console.devices.manage` mints it a code.\n\n**The cloud's host comes from the caller**, not from the `Host` header. The console passes the\naddress its own browser is showing, the same value it writes into every generated installer;\nbehind a reverse proxy the `Host` a handler sees can be the upstream's, and a file naming\n`127.0.0.1` would install a store that dials itself.\n\nBuffered, as the store-facing serve route is ([`read_artifact_blobs`]): a download is a person\nat a console, one file at a time.",
+        "operationId": "admin_download_installer",
+        "parameters": [
+          {
+            "name": "release",
+            "in": "path",
+            "description": "The release, spelled bare, without a leading `v`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store the installer is for (a 26-character ULID), written into the file's name. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cloud",
+            "in": "query",
+            "description": "The cloud the store will dial, as the console's browser shows it: a host, or a host and port. Written into the file's name. Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "arch",
+            "in": "query",
+            "description": "A Windows target triple. Absent means the default Windows build",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release's Windows executable, byte for byte, as an `application/octet-stream` attachment named for the store and the cloud. Nothing is written into the bytes, so the release's signature still verifies; the store's credential arrives only through activation"
+          },
+          "400": {
+            "description": "The release cannot name a hosted release; store_id is absent or not a ULID; cloud is absent or cannot be written into a file name; or arch is not a target triple or not a Windows build",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The release is not hosted for this target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The release is recorded but its executable is missing from the object store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release registry or the object store is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -17857,6 +18683,14 @@
     {
       "name": "lease",
       "description": "Which machine is the store (ADR-0108, ADR-0110, ADR-0114): the store's lease generation, issued only by the server and only by a bump, which is the act of making a different machine the store and may move where it runs and where its data rests. A bump will not abandon a previous machine that still holds events unless a person acknowledges it by generation. A handover ends when the old machine drains, or when a person settles it by attestation; retiring the old machine afterwards is a separate decision. Every one of these is audited with who made it."
+    },
+    {
+      "name": "ota rollout",
+      "description": "Which release a store installs, and when (ADR-0052, ADR-0078): the rollout names a hosted release, the lowest eligible ring and how much of the fleet ring may take it, and the key it is signed by; the placement puts the store in a ring and fixes its place in the ramp. Both are configuration-tree nodes the store pulls, validated by the rules the store itself applies. The kill switch halts or resumes a rollout without restating it. Writes are audited."
+    },
+    {
+      "name": "release hosting",
+      "description": "The signed releases the cloud hands its stores (ADR-0088, ADR-0141). An operator uploads a release executable with its minisign signature, or has the cloud fetch them from the published release. The cloud stores the bytes and never signs them or checks the signature: each store verifies it itself. A release, once hosted for a target, keeps its bytes. A Windows store's one-file installer is a hosted executable named for that store. Served only where the cloud is configured to host artifacts."
     },
     {
       "name": "config nodes",

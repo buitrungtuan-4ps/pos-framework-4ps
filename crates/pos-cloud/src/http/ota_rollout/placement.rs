@@ -21,6 +21,33 @@ use crate::http::{Json, config_store_error_response};
 use crate::lease::LeaseStore;
 use crate::ota::ArtifactStore;
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/ota/placement",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` \
+                       or `fleet`); and `canary_bucket`, 0 to 99, its fixed place in the fleet \
+                       ramp. Every terminal of the store takes the same placement",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `device_ota` node on the Device \
+                                      layer, the store's other Device-level settings kept. The body \
+                                      carries `config_version_id`. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs a \
+                                      recorded confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The ring names no ring or the bucket is over 99, with every \
+                                      violation listed; or the store's configuration would not \
+                                      validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "ota rollout",
+)]
 /// Composes a `device_ota` node onto a store's **Device** layer and publishes it — the placement half
 /// of the rollout decision ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md)). Same
 /// load→merge→publish→version shape as the rollout lever, on a different layer and key, so the store's
@@ -83,6 +110,24 @@ where
     .await
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/ota/placement",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The `device_ota` node the store runs, its layers composed; or \
+                                      `null` when the store has never been placed"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "ota rollout",
+)]
 /// Reads a store's published placement — the `device_ota` node the store runs, its layers composed
 /// so a placement a rollback restored reads as it runs — or `null` if the store has never been
 /// placed. Behind [`ConsolePermission::Read`].
