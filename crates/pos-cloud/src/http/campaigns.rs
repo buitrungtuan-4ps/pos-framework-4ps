@@ -41,6 +41,12 @@ pub use publish::config_campaigns_router;
 pub(super) use scheduled::scheduled_error_response;
 pub use scheduled::scheduled_publish_router;
 pub use vouchers::voucher_router;
+// The handlers the console's OpenAPI document names.
+pub(crate) use authoring::{
+    __path_admin_create_campaign, __path_admin_delete_campaign, __path_admin_get_campaign,
+    __path_admin_list_campaigns, __path_admin_update_campaign,
+};
+pub(crate) use vouchers::{__path_admin_generate_vouchers, __path_admin_list_vouchers};
 
 // --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----
 

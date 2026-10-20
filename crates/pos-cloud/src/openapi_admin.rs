@@ -150,6 +150,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_reports::revenue::admin_revenue_daily,
         pos_cloud_reports::revenue::admin_export_revenue,
         pos_cloud_reports::xz::admin_xz_report,
+        crate::http::campaigns::admin_list_campaigns,
+        crate::http::campaigns::admin_create_campaign,
+        crate::http::campaigns::admin_get_campaign,
+        crate::http::campaigns::admin_update_campaign,
+        crate::http::campaigns::admin_delete_campaign,
+        crate::http::campaigns::admin_list_vouchers,
+        crate::http::campaigns::admin_generate_vouchers,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -293,6 +300,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
+        ),
+        (
+            name = "campaigns",
+            description = "The promotions a tenant authors for its stores' pricing engine \
+                           (ADR-0077): item, combo, bill, voucher and manual campaigns, and the \
+                           codes a voucher campaign redeems. Ids are minted by the server and every \
+                           edit is conditional on the version it was read at. Nothing reaches a \
+                           store until its campaigns are published. A voucher code carries \
+                           redeemable value, so even listing codes needs \
+                           `console.campaigns.manage`, and no audit entry records a code or a \
+                           discount's terms."
         ),
         (
             name = "reports",
@@ -551,10 +569,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/kitchen/routing/{rule_id}",
     "/admin/kitchen/stations",
     "/admin/kitchen/stations/{station_id}",
-    // --- campaigns and vouchers (M3, ADR-0077) ---
-    "/admin/campaigns",
-    "/admin/campaigns/{campaign_id}",
-    "/admin/campaigns/{campaign_id}/vouchers",
     // --- media library and the translation grid (M5, M4) ---
     "/admin/media",
     "/admin/media/{media_id}",

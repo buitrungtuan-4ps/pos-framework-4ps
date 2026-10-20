@@ -1432,6 +1432,613 @@
         ]
       }
     },
+    "/admin/campaigns": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin lists a tenant's authored campaigns.",
+        "operationId": "admin_list_campaigns",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose campaigns to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's campaigns as authored, each with its `etag`. A campaign reaches a store only when the store's campaigns are published"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin creates a campaign; the server mints its id.",
+        "operationId": "admin_create_campaign",
+        "requestBody": {
+          "description": "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` or `manual`), `priority`, and optionally `exclusion_group`, then the `action` the edge's pricing engine applies, its `conditions` (channels, a daily schedule window and the rest) and `quota_remaining`, in the shape of `pos-proto`'s published campaign. The id is never sent: the server owns it",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, with the id minted here. The body is the campaign and the ETag carries its version. Audited with its name, kind and priority, never its discount terms"
+          },
+          "400": {
+            "description": "An id is not a ULID; name is blank; a schedule minute is outside the day; a channel is unknown; or a percentage or amount off is negative",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.campaigns.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A campaign with the minted id already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/campaigns/{campaign_id}": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin reads one campaign by id.",
+        "operationId": "admin_get_campaign",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "description": "The campaign's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The campaign as authored, with its `etag` field — the token a PUT must send back as If-Match"
+          },
+          "400": {
+            "description": "tenant_id or campaign_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no campaign with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin updates a campaign in place, by the path id.",
+        "operationId": "admin_update_campaign",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "description": "The campaign's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the campaign was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` or `manual`), `priority`, and optionally `exclusion_group`, then the `action` the edge's pricing engine applies, its `conditions` (channels, a daily schedule window and the rest) and `quota_remaining`, in the shape of `pos-proto`'s published campaign. The id is never sent: the server owns it",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the campaign and the ETag carries its new version. Audited with its name, kind and priority before and after, never its discount terms"
+          },
+          "400": {
+            "description": "An id is not a ULID; name is blank; a schedule minute is outside the day; a channel is unknown; a percentage or amount off is negative; or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.campaigns.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no campaign with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The campaign changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin deletes a campaign by id.",
+        "operationId": "admin_delete_campaign",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "description": "The campaign's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, and audited. A store keeps running it until its campaigns are next published"
+          },
+          "400": {
+            "description": "tenant_id or campaign_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.campaigns.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no campaign with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/campaigns/{campaign_id}/vouchers": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin lists a campaign's minted voucher codes.",
+        "operationId": "admin_list_vouchers",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "description": "The campaign's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many codes to return, 1 to 500. Absent, every code as an array rather than a page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "How many codes to skip, 0 to 100000. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Without `limit`, every code as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each code has `voucher_id`, `code` and `status` (`active`, `redeemed` or `void`). Listing codes needs the manage permission, because a code carries redeemable value"
+          },
+          "400": {
+            "description": "tenant_id or campaign_id is absent or not a ULID, limit or offset is not an integer in range, or offset is sent without limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.campaigns.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The voucher store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin mints a batch of voucher codes for a voucher-kind campaign.",
+        "operationId": "admin_generate_vouchers",
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "description": "The campaign's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and `count`, how many codes to mint, from 1 to 10000",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Minted, as an array: each code's `voucher_id`, `code` and `status`, `active`. A code carries redeemable value; the audit entry records the count, never the codes"
+          },
+          "400": {
+            "description": "An id is not a ULID, count is out of range, or the campaign is not a voucher campaign",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.campaigns.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no campaign with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store, the voucher store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -10173,6 +10780,10 @@
     {
       "name": "printers",
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+    },
+    {
+      "name": "campaigns",
+      "description": "The promotions a tenant authors for its stores' pricing engine (ADR-0077): item, combo, bill, voucher and manual campaigns, and the codes a voucher campaign redeems. Ids are minted by the server and every edit is conditional on the version it was read at. Nothing reaches a store until its campaigns are published. A voucher code carries redeemable value, so even listing codes needs `console.campaigns.manage`, and no audit entry records a code or a discount's terms."
     },
     {
       "name": "reports",
