@@ -177,6 +177,13 @@ fn tax_is_computed_per_class() {
     // 10% of 100k = 10k, 15% of 200k = 30k
     assert_eq!(totals.tax_total, vnd(40_000));
     assert_eq!(totals.tax_lines.len(), 2);
+    // Each line says the rate it was taxed at, which is what a receipt prints beside it.
+    let rates: Vec<u32> = totals
+        .tax_lines
+        .iter()
+        .map(|line| line.rate_basis_points)
+        .collect();
+    assert_eq!(rates, [1_000, 1_500]);
     assert_reconciles(&totals);
 }
 
