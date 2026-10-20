@@ -189,7 +189,7 @@ pub fn plan_with(
     next.extend(parts.next.iter().cloned());
     Ok(Plan {
         files,
-        member: dir,
+        member: Some(dir),
         package: spec.name.clone(),
         next,
         edits: Vec::new(),
@@ -302,7 +302,7 @@ mod tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         assert_eq!(files, golden);
-        assert_eq!(plan.member, "crates/pos-example");
+        assert_eq!(plan.member.as_deref(), Some("crates/pos-example"));
         assert_eq!(plan.package, "pos-example");
     }
 
@@ -317,7 +317,10 @@ mod tests {
     #[test]
     fn an_adapter_lives_under_adapters_and_links_one_level_further_up() {
         let plan = plan(&spec("printer-sandbox", "adapter"), CODEOWNERS, &adrs()).expect("planned");
-        assert_eq!(plan.member, "crates/adapters/printer-sandbox");
+        assert_eq!(
+            plan.member.as_deref(),
+            Some("crates/adapters/printer-sandbox")
+        );
         let readme = &plan.files.get(1).expect("readme").1;
         assert!(readme.contains("[`AGENTS.md`](../../../AGENTS.md)"));
     }

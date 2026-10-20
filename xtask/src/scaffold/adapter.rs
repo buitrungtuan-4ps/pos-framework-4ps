@@ -525,7 +525,10 @@ mod tests {
             "printer", "storage", "card", "fiscal", "courier", "erp", "delivery",
         ] {
             let planned = plan(kind, CODEOWNERS, &adrs()).expect("planned");
-            assert_eq!(planned.member, format!("crates/adapters/{kind}-sandbox"));
+            assert_eq!(
+                planned.member,
+                Some(format!("crates/adapters/{kind}-sandbox"))
+            );
             assert_eq!(planned.package, format!("{kind}-sandbox"));
         }
     }

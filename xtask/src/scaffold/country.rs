@@ -553,7 +553,7 @@ mod tests {
             .map(|(path, text)| (path.as_str(), text.as_str()))
             .collect();
         assert_eq!(files, golden);
-        assert_eq!(planned.member, "countries/xa");
+        assert_eq!(planned.member.as_deref(), Some("countries/xa"));
         let added: Vec<String> = planned
             .edits
             .iter()

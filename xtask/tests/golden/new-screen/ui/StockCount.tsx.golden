@@ -1,0 +1,17 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+// The Stock count screen, at `/stock`: written by `cargo xtask new screen`, with its title and
+// nothing else yet. Its entry in `state/screens.ts`, its component in `App.tsx`, its strings and its
+// line in the replay test's route walk came with it.
+
+import { PageHeader } from "../components/ui";
+import { t } from "../i18n";
+
+export function StockCount() {
+  return (
+    <section class="p-4">
+      <PageHeader title={t("stock_count.title")} size="xl" />
+    </section>
+  );
+}
