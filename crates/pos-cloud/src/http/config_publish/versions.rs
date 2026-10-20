@@ -14,10 +14,10 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use serde::Deserialize;
 
 use super::if_match::if_match_config;
-use super::redaction::{staff_redacted_for, without_prices};
+use super::redaction::config_redacted_for;
 use super::{load_tree_for_write, strip_tree_version};
 use crate::auth::admin::AdminStore;
-use crate::auth::console_rbac::{ConsolePermission, role_grants};
+use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::setting_refusal::save_if_confirmed;
 use crate::http::{
@@ -277,7 +277,6 @@ where
             Ok(context) => context,
             Err(denied) => return denied,
         };
-    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -303,12 +302,7 @@ where
                 // past staff names (ADR-0158) and past prices (S8) — none is less sensitive for
                 // being last month's.
                 Some(effective) => {
-                    let document = staff_redacted_for(effective, context.admin.role);
-                    let document = if prices {
-                        document
-                    } else {
-                        without_prices(&document)
-                    };
+                    let document = config_redacted_for(effective, context.admin.role);
                     (StatusCode::OK, Json(document)).into_response()
                 }
                 None => not_found("config version"),

@@ -24,8 +24,8 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::campaigns::{CampaignStore, to_node as campaigns_to_node};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::http::{
-    PublishedConfig, load_tree_for_write, preview_config_node, publish_config_nodes,
-    staff_redacted_for, unprocessable_violations,
+    PublishedConfig, config_redacted_for, load_tree_for_write, preview_config_node,
+    publish_config_nodes, unprocessable_violations,
 };
 use crate::version::records;
 
@@ -226,8 +226,12 @@ where
                                       `from_version_id`, the version the diff is against, or `null` \
                                       for a store never published to; `diff`, the merge patch \
                                       (RFC 7386) the publish would apply; and `unchanged`. The diff \
-                                      never shows a staff PIN hash, and shows a name or staff code \
-                                      only to a role holding console.people.read. Not audited"),
+                                      never shows a staff PIN hash; shows a name or staff code \
+                                      only to a role holding console.people.read; and shows the \
+                                      campaigns, and any other priced node, only to a role holding \
+                                      console.reports.revenue, so Ops, who may publish, is not \
+                                      shown their terms. `unchanged` is computed before redaction. \
+                                      Not audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
@@ -241,8 +245,10 @@ where
 /// returns the merge patch it would apply to the store's effective document — without minting a
 /// version, saving, or auditing (it changes nothing). `422` with the same violations a real publish
 /// would reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience
-/// that can actually publish. The diff's staff are redacted for the caller's role, as the generic
-/// preview's are ([`staff_redacted_for`]): it can carry the `permissions` node too.
+/// that can actually publish. The diff is redacted for the caller's role, as the generic preview's
+/// is ([`config_redacted_for`]): its staff, because it can carry the `permissions` node too, and
+/// its prices, because the `campaigns` node it previews carries combo prices, discount amounts and
+/// minimum-bill thresholds — which Ops, who may publish, does not read (S8).
 async fn preview_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -287,7 +293,7 @@ where
     let state_before = &loaded.state;
     match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
         Ok(mut preview) => {
-            preview.diff = staff_redacted_for(&preview.diff, context.admin.role);
+            preview.diff = config_redacted_for(&preview.diff, context.admin.role);
             (StatusCode::OK, Json(preview)).into_response()
         }
         Err(violations) => unprocessable_violations(&violations),

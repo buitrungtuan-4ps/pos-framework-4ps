@@ -432,3 +432,84 @@ async fn a_preview_of_another_node_carries_no_staff_credential_or_unread_identit
         assert_eq!(member["id"], "01J", "{url}: the member stays");
     }
 }
+
+/// A preview withholds prices from a role without `console.reports.revenue`, as the config read
+/// does (production-readiness S8).
+///
+/// Both previews need only `console.config.publish`, which Ops holds and `console.reports.revenue`
+/// does not. A `menu` preview's diff is the store's price book, and a campaigns preview's is the
+/// promotions' terms, so Ops gets neither node; Owner and Admin read revenue and get both. Whether
+/// anything would change is computed before the redaction, so Ops is still told that something
+/// would.
+#[tokio::test]
+async fn a_preview_shows_prices_only_to_a_role_that_reads_revenue() {
+    let tenant_id = TenantId::new(Ulid::from_u128(4));
+    let store_id = StoreId::new(Ulid::from_u128(41));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+    let admin = provisioned_admin();
+    let menus = store_group_app(
+        admin.clone(),
+        FakeStoreGroups::default(),
+        registry,
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let campaigns = people_preview_app(
+        admin.clone(),
+        FakePeople::default(),
+        FakeConfigTrees::default(),
+    );
+    let owner = admin_cookie(&menus).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let store = store_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&menus, &owner, &tenant).await;
+
+    for (role, token, reads_revenue) in [
+        (AdminRole::Ops, "ops-prices", false),
+        (AdminRole::Admin, "admin-prices", true),
+        (AdminRole::Owner, "owner-prices", true),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        for (router, url, body, node) in [
+            (
+                &menus,
+                "/admin/config/preview",
+                serde_json::json!({
+                    "tenant_id": tenant,
+                    "store_id": store,
+                    "node": "menu",
+                    "arguments": { "menu_id": menu_id },
+                }),
+                "menu",
+            ),
+            (
+                &campaigns,
+                "/admin/config/campaigns/preview",
+                serde_json::json!({ "tenant_id": tenant, "store_id": store }),
+                "campaigns",
+            ),
+        ] {
+            let previewed = router
+                .clone()
+                .oneshot(post_with_cookie(url, &body, &cookie))
+                .await
+                .expect("route the preview");
+            assert_eq!(
+                previewed.status(),
+                StatusCode::OK,
+                "{role:?} may publish: {url}"
+            );
+            let preview = json_body(previewed).await;
+            assert_eq!(
+                preview["diff"].get(node).is_some(),
+                reads_revenue,
+                "{role:?} and the `{node}` node: {preview}"
+            );
+            assert_eq!(
+                preview["unchanged"], false,
+                "{role:?}: a store never published to has something to publish: {preview}"
+            );
+        }
+    }
+}

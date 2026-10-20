@@ -17,7 +17,7 @@ use pos_proto::ids::{StoreId, TenantId};
 use serde::{Deserialize, Serialize};
 
 use super::load_tree_for_write;
-use super::redaction::staff_redacted_for;
+use super::redaction::config_redacted_for;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::merge::{diff, merge_layers};
@@ -152,7 +152,7 @@ struct NodePreview {
     /// The version the diff is computed against, or `null` when the store has no tree yet.
     from_version_id: Option<String>,
     /// The RFC 7386 merge patch the publish would apply to the store's effective document, with its
-    /// staff redacted for the caller's role ([`admin_preview_config_node`]).
+    /// staff and prices redacted for the caller's role ([`admin_preview_config_node`]).
     diff: serde_json::Value,
     /// True when nothing would change — there is nothing to publish.
     unchanged: bool,
@@ -174,9 +174,13 @@ struct NodePreview {
                                       for a store never published to; `diff`, the merge patch \
                                       (RFC 7386) the publish would apply; and `unchanged`. The node \
                                       is compiled by the publish's own code, so the preview cannot \
-                                      differ from it. The diff never shows a staff PIN hash, and \
+                                      differ from it. The diff never shows a staff PIN hash; \
                                       shows a name or staff code only to a role holding \
-                                      console.people.read. Not audited"),
+                                      console.people.read; and shows the priced nodes (`menu`, \
+                                      `campaigns`, `fees`) only to a role holding \
+                                      console.reports.revenue, so Ops, who may publish, is not \
+                                      shown prices. `unchanged` is computed before redaction. Not \
+                                      audited"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID, node is not one \
                                       the batch publish knows, or the node's own publish would \
                                       refuse the arguments — with that publish's own words", body = crate::openapi_admin::ErrorResponse),
@@ -208,11 +212,17 @@ struct NodePreview {
 ///
 /// A `permissions` preview carries the store's roster: each member's name, staff code and PIN
 /// hash. Publishing that node shows nobody any of them, and `PublishConfig` is Ops's permission
-/// too, so the diff gets a config read's treatment ([`staff_redacted_for`]): never a PIN hash, and
+/// too, so the diff gets a config read's treatment ([`config_redacted_for`]): never a PIN hash, and
 /// a name or code only for a role holding [`ConsolePermission::ReadPeople`]
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every
 /// node's preview is redacted, not only that one's: a store with layers and no published version
 /// has nothing to diff against, so the diff of any node is the whole document, staff included.
+///
+/// # Whom the diff prices
+///
+/// A `menu` preview carries the store's price book, and a `campaigns` or `fees` one the promotions'
+/// and fees' amounts. `PublishConfig` is Ops's, `ReadRevenue` is not, and the config read already
+/// withholds those nodes from Ops (S8) — so the diff withholds them too ([`config_redacted_for`]).
 ///
 /// It is redacted *after* it is computed, never before. Diffing redacted documents would answer
 /// `unchanged: true` to a PIN reset or a rename, and an operator told that nothing would change
@@ -280,7 +290,7 @@ where
             Json(NodePreview {
                 node: request.node,
                 from_version_id: preview.from_version_id,
-                diff: staff_redacted_for(&preview.diff, context.admin.role),
+                diff: config_redacted_for(&preview.diff, context.admin.role),
                 unchanged: preview.unchanged,
             }),
         )
