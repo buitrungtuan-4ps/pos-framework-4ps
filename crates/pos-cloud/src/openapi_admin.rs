@@ -100,6 +100,15 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::subjects::admin_lookup_subject,
         crate::http::subjects::admin_export_subject,
         crate::http::subjects::admin_erase_subject,
+        crate::http::registry::admin_list_tenants,
+        crate::http::registry::admin_create_tenant,
+        crate::http::registry::admin_update_tenant,
+        crate::http::registry::admin_list_brands,
+        crate::http::registry::admin_create_brand,
+        crate::http::registry::admin_update_brand,
+        crate::http::registry::admin_list_stores,
+        crate::http::registry::admin_create_store,
+        crate::http::registry::admin_update_store,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -274,6 +283,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            and the reconciliation runs that show no store's events were lost."
         ),
         (
+            name = "registry",
+            description = "The organisation a console administers (ADR-0065): its tenants, the \
+                           brands a tenant trades under, and its stores. Every record is created \
+                           active with an id minted by the server and leaves service by being \
+                           archived rather than deleted; every edit is conditional on the version \
+                           it was read at. A new tenant is given its six starting roles (ADR-0158). \
+                           A store's devices, configuration and reports are separate surfaces \
+                           under the store's path."
+        ),
+        (
             name = "subject requests",
             description = "The instrument the Data Protection contact uses to carry out one data \
                            subject's access, portability or erasure request under Vietnam's PDPD \
@@ -381,13 +400,7 @@ impl Modify for SessionCookie {
     )
 )]
 const UNDOCUMENTED: &[&str] = &[
-    // --- the tenant / brand / store registry (WS-C) ---
-    "/admin/tenants",
-    "/admin/tenants/{tenant_id}",
-    "/admin/brands",
-    "/admin/brands/{brand_id}",
-    "/admin/stores",
-    "/admin/stores/{store_id}",
+    // --- a store's configuration, devices and reports (WS-C) ---
     "/admin/stores/{store_id}/config",
     "/admin/stores/{store_id}/config/rollback",
     "/admin/stores/{store_id}/config/versions",

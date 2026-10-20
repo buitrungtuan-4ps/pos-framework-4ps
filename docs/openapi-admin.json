@@ -1064,6 +1064,244 @@
         ]
       }
     },
+    "/admin/brands": {
+      "get": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin lists a tenant's brands.",
+        "operationId": "admin_list_brands",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose brands to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's brands, as an array: `brand_id`, `tenant_id`, `name` and `status`, each with its `etag`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin creates a brand under a tenant.",
+        "operationId": "admin_create_brand",
+        "requestBody": {
+          "description": "The `tenant_id` the brand belongs to and its `name`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+          },
+          "400": {
+            "description": "tenant_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.orgs.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/brands/{brand_id}": {
+      "patch": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin renames a brand and/or sets its status.",
+        "operationId": "admin_update_brand",
+        "parameters": [
+          {
+            "name": "brand_id",
+            "in": "path",
+            "description": "The brand (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The `tenant_id` that owns the brand, and its `name` and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version"
+          },
+          "400": {
+            "description": "brand_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.orgs.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no brand with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The brand changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -6266,6 +6504,244 @@
         }
       }
     },
+    "/admin/stores": {
+      "get": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin lists a tenant's stores.",
+        "operationId": "admin_list_stores",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose stores to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's stores, as an array: `store_id`, `tenant_id`, `brand_id` (absent for a store under no brand), `name` and `status`, each with its `etag`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin creates a store under a tenant, with an optional brand.",
+        "operationId": "admin_create_store",
+        "requestBody": {
+          "description": "The `tenant_id` the store belongs to, its `name`, and optionally the `brand_id` it trades under. A new store has no configuration until one is published to it",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+          },
+          "400": {
+            "description": "tenant_id or brand_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}": {
+      "patch": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin renames a store, (re)assigns or clears its brand, and/or sets its status.",
+        "operationId": "admin_update_store",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The `tenant_id` that owns the store, and its `name`, `brand_id` (absent clears it) and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version"
+          },
+          "400": {
+            "description": "store_id, tenant_id or brand_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no store with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The store changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/stores/{store_id}/archives": {
       "get": {
         "tags": [
@@ -7257,6 +7733,214 @@
         ]
       }
     },
+    "/admin/tenants": {
+      "get": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin lists every tenant.",
+        "operationId": "admin_list_tenants",
+        "responses": {
+          "200": {
+            "description": "Every tenant, as an array: `tenant_id`, `name` and `status`, each with the `etag` its version is at"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin creates a tenant; the id is minted here and returned once in the created record.",
+        "description": "The tenant then gets its six starting roles, one for each of `pos-core`'s built-in roles,\ngranting what the catalogue's defaults say ([`crate::starting_roles`],\n[ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). They are\naudited as one `role.seed` entry carrying their ids and counts. The tenant exists whatever the\nseeding does, so a seeding failure is logged rather than refused: the tenant then starts with\nfewer roles, and its owner creates the rest in People.",
+        "operationId": "admin_create_tenant",
+        "requestBody": {
+          "description": "The tenant's `name`, and optionally `language`, a language tag such as `vi` that the tenant's starting roles are named in. Absent, or one the console's language packs do not carry, names them in English",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. The tenant is given its six starting roles (ADR-0158); if that fails the tenant still stands, with fewer roles"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.orgs.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/tenants/{tenant_id}": {
+      "patch": {
+        "tags": [
+          "registry"
+        ],
+        "summary": "A super-admin renames a tenant and/or sets its status.",
+        "operationId": "admin_update_tenant",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The `name` and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version"
+          },
+          "400": {
+            "description": "tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.orgs.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "There is no tenant with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The tenant changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/totp": {
       "post": {
         "tags": [
@@ -7767,6 +8451,10 @@
     {
       "name": "operations",
       "description": "Whether the cloud and the fleet are working (ADR-0068, ADR-0073, ADR-0078): the alerts the evaluator keeps, fleet-wide, with their acknowledgement and resolution; the health of each background loop; and the reconciliation runs that show no store's events were lost."
+    },
+    {
+      "name": "registry",
+      "description": "The organisation a console administers (ADR-0065): its tenants, the brands a tenant trades under, and its stores. Every record is created active with an id minted by the server and leaves service by being archived rather than deleted; every edit is conditional on the version it was read at. A new tenant is given its six starting roles (ADR-0158). A store's devices, configuration and reports are separate surfaces under the store's path."
     },
     {
       "name": "subject requests",

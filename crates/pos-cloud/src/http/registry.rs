@@ -31,6 +31,17 @@ mod devices;
 mod stores;
 mod tenants;
 
+// The handlers the console's OpenAPI document names.
+pub(crate) use brands::{
+    __path_admin_create_brand, __path_admin_list_brands, __path_admin_update_brand,
+};
+pub(crate) use stores::{
+    __path_admin_create_store, __path_admin_list_stores, __path_admin_update_store,
+};
+pub(crate) use tenants::{
+    __path_admin_create_tenant, __path_admin_list_tenants, __path_admin_update_tenant,
+};
+
 // --- Org registry (`/admin/tenants|brands|stores`, ADR-0065) ------------------------------------
 
 /// The collaborators the registry routes need, stated independently of [`CloudApp`]: the registry

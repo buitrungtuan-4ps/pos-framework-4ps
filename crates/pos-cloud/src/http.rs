@@ -119,7 +119,7 @@ mod ota;
 mod ota_rollout;
 mod reason_codes;
 pub(crate) mod reconcile;
-mod registry;
+pub(crate) mod registry;
 mod release_schedule;
 mod settings;
 mod settings_confirm;
