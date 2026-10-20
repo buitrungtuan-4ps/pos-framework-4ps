@@ -24,6 +24,24 @@ use crate::http::{
 use crate::registry::{BrandId, EntityStatus, RegistryStore, StoreRecord};
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose stores to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The tenant's stores, as an array: `store_id`, `tenant_id`, \
+                                      `brand_id` (absent for a store under no brand), `name` and \
+                                      `status`, each with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin lists a tenant's stores.
 pub(super) async fn admin_list_stores<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -55,6 +73,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stores",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The `tenant_id` the store belongs to, its `name`, and optionally the \
+                       `brand_id` it trades under. A new store has no configuration until one is \
+                       published to it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version"),
+        (status = 400, description = "tenant_id or brand_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin creates a store under a tenant, with an optional brand.
 pub(super) async fn admin_create_store<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -117,6 +155,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/stores/{store_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "The `tenant_id` that owns the store, and its `name`, `brand_id` (absent \
+                       clears it) and `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+                                      version"),
+        (status = 400, description = "store_id, tenant_id or brand_id is not a ULID, status is not \
+                                      `active` or `archived`, or If-Match is absent, malformed, or a \
+                                      wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no store with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The store changed since you read it: re-read it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin renames a store, (re)assigns or clears its brand, and/or sets its status.
 pub(super) async fn admin_update_store<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
