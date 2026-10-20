@@ -239,6 +239,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::config_nodes::admin_publish_retention,
         crate::http::config_nodes::admin_read_vendors,
         crate::http::config_nodes::admin_publish_vendors,
+        crate::http::config_nodes::admin_publish_locale,
+        crate::http::config_nodes::admin_publish_store_profile,
+        crate::http::config_nodes::admin_publish_tax,
+        crate::http::config_publish::admin_preview_config_node,
+        pos_cloud_people::routes::admin_list_capabilities,
+        pos_cloud_people::routes::admin_publish_capabilities,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -568,8 +574,9 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
                            store takes orders on, the payment methods it accepts, the second origins \
                            its edge answers, its QR ordering guardrails, how long it keeps a synced \
-                           event, and its delivery-marketplace policies. A read gives the node as the \
-                           store runs it, composed from all four layers; a publish writes it on the \
+                           event, its delivery-marketplace policies, its locale, its legal identity, \
+                           its tax table and its capability flags, and a preview of any node's \
+                           publish. A read gives the node as the store runs it, composed from all four layers; a publish writes it on the \
                            store's own layer as a new configuration version, which the store pulls \
                            on its next sync."
         ),
@@ -629,7 +636,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/campaigns",
     "/admin/config/campaigns/preview",
     "/admin/config/campaigns/schedule",
-    "/admin/config/capabilities",
     "/admin/config/inventory",
     // The store's lease (ADR-0108). `GET` reads the authoritative generation; `POST …/bump` issues
     // the next one, which is the act of making a different machine the store. There is no `PUT`,
@@ -638,16 +644,9 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/lease/bump",
     "/admin/config/lease/retire",
     "/admin/config/lease/settle",
-    "/admin/config/locale",
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
-    // The generic publish preview (F11): what publishing one node to one store would change,
-    // computed and discarded. Enumerated with the rest of the console's config surface for the same
-    // reason they are — and it writes nothing, so a fork reading only this list is not missing a way
-    // to change anything.
-    "/admin/config/preview",
-    "/admin/config/store-profile",
     // --- release hosting (R2, ADR-0088) ---
     // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
     // `X-Pos-Minisig` — so `docs/release-runbook.md` step 5 carries the exact `curl`, which is a
@@ -667,8 +666,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/ota/releases/fetch",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",
-    "/admin/config/tax",
-    "/admin/capabilities",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
     "/admin/inventory/ingredients",
     "/admin/inventory/ingredients/{ingredient_id}",

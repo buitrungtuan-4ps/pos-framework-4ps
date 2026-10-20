@@ -158,6 +158,36 @@ struct NodePreview {
     unchanged: bool,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/preview",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
+                       compile), and `arguments`, that node's own publish body without the tenant \
+                       and store. Nothing is written",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "What publishing the node would change: `node`; \
+                                      `from_version_id`, the version the diff is against, or `null` \
+                                      for a store never published to; `diff`, the merge patch \
+                                      (RFC 7386) the publish would apply; and `unchanged`. The node \
+                                      is compiled by the publish's own code, so the preview cannot \
+                                      differ from it. The diff never shows a staff PIN hash, and \
+                                      shows a name or staff code only to a role holding \
+                                      console.people.read. Not audited"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, node is not one \
+                                      the batch publish knows, or the node's own publish would \
+                                      refuse the arguments — with that publish's own words", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The publish would be refused, with its violations verbatim", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store or a store the node compiles from is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// `POST /admin/config/preview` — what publishing this node to this store *would* change.
 ///
 /// # Why this exists when `/admin/config/campaigns/preview` already did

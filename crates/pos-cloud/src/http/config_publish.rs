@@ -45,6 +45,7 @@ pub(super) use versions::{
     admin_config_versions,
 };
 // The handlers the console's OpenAPI document names.
+pub(crate) use preview::__path_admin_preview_config_node;
 pub(crate) use release_actions::{
     __path_admin_cancel_release, __path_admin_list_releases, __path_admin_read_release,
     __path_admin_schedule_release,
