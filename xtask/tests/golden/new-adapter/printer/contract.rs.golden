@@ -1,0 +1,107 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `printer-sandbox` against the shared `PrinterDriver` contract suite.
+//!
+//! The harness puts an in-memory recorder behind the adapter's transport: it counts tickets (a write
+//! that starts with [`TICKET`]), sees whether the drawer pulsed, and can take the printer offline or
+//! empty its paper. The adapter's futures never suspend, so the suite runs under `run_ready`, a
+//! one-poll executor, rather than a runtime.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in a recorder is an unrecoverable test fault"
+)]
+
+use std::sync::Mutex;
+
+use pos_contract_tests::harness::{PrinterDriverHarness, Setup};
+use pos_fakes::executor::run_ready;
+use pos_ports::PrinterCapabilities;
+use printer_sandbox::{
+    DRAWER_KICK, SandboxPrinter, TICKET, Transport, TransportStatus, Unreachable,
+};
+
+/// An in-memory printer: records every write, and can be taken offline or emptied of paper.
+#[derive(Debug, Default)]
+struct Recorder {
+    state: Mutex<State>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    writes: Vec<Vec<u8>>,
+    offline: bool,
+    out_of_paper: bool,
+}
+
+impl Recorder {
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().expect("recorder lock")
+    }
+}
+
+impl Transport for Recorder {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        let mut state = self.state();
+        if state.offline {
+            return Err(Unreachable);
+        }
+        state.writes.push(bytes.to_vec());
+        Ok(())
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        let state = self.state();
+        if state.offline {
+            return Err(Unreachable);
+        }
+        Ok(TransportStatus {
+            has_paper: Some(!state.out_of_paper),
+            cover_closed: Some(true),
+        })
+    }
+}
+
+struct Harness;
+
+impl PrinterDriverHarness for Harness {
+    type Printer = SandboxPrinter<Recorder>;
+
+    async fn fresh(&self, capabilities: PrinterCapabilities) -> Setup<Self::Printer> {
+        Ok(SandboxPrinter::new(capabilities, Recorder::default()))
+    }
+
+    async fn take_offline(&self, printer: &Self::Printer) -> Setup<()> {
+        printer.transport().state().offline = true;
+        Ok(())
+    }
+
+    async fn empty_paper(&self, printer: &Self::Printer) -> Setup<()> {
+        printer.transport().state().out_of_paper = true;
+        Ok(())
+    }
+
+    async fn tickets_printed(&self, printer: &Self::Printer) -> Setup<u32> {
+        let state = printer.transport().state();
+        let tickets = state
+            .writes
+            .iter()
+            .filter(|write| write.starts_with(TICKET))
+            .count();
+        Ok(u32::try_from(tickets).unwrap_or(u32::MAX))
+    }
+
+    async fn drawer_opened(&self, printer: &Self::Printer) -> Setup<bool> {
+        let state = printer.transport().state();
+        Ok(state
+            .writes
+            .iter()
+            .any(|write| write.as_slice() == DRAWER_KICK))
+    }
+}
+
+mod printer {
+    use super::{Harness, run_ready};
+    pos_contract_tests::printer_driver_suite!(Harness, run_ready);
+}

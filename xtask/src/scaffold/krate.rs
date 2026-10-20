@@ -82,46 +82,129 @@ fn spec_from_args(args: &[&String]) -> Result<Spec, Error> {
     })
 }
 
-/// The crate `spec` describes, routed by `codeowners` and checked against the ADR numbers in `adrs`.
+/// What a generator built on this one adds to the plain crate.
+#[derive(Debug, Clone, Default)]
+pub struct Parts {
+    /// TOML lines after `[dependencies]`, each ending in a newline; empty for none.
+    pub dependencies: String,
+    /// The README's Depends on listing, as `xtask crates` words it.
+    pub depends: String,
+    /// The README's Owns section.
+    pub owns: String,
+    /// The README's Entry points section.
+    pub entry_points: String,
+    /// The template for `src/lib.rs`.
+    pub lib: &'static str,
+    /// More files, each a path relative to the crate and its template.
+    pub extra: Vec<(&'static str, &'static str)>,
+    /// Values for the placeholders only these templates use.
+    pub values: Vec<(&'static str, String)>,
+    /// What to run once the files are written, after building the crate.
+    pub next: Vec<String>,
+}
+
+impl Parts {
+    /// A crate with no dependency and nothing in it yet.
+    #[must_use]
+    pub fn plain() -> Self {
+        Self {
+            depends: "no workspace crate".into(),
+            owns: "- Nothing yet. List what this crate is the one place for.".into(),
+            entry_points: "- [`src/lib.rs`](src/lib.rs)".into(),
+            lib: LIB,
+            ..Self::default()
+        }
+    }
+}
+
+/// The plain crate `spec` describes; see [`plan_with`].
+///
+/// # Errors
+///
+/// As [`plan_with`].
+pub fn plan(spec: &Spec, codeowners: &str, adrs: &BTreeSet<u32>) -> Result<Plan, Error> {
+    plan_with(spec, codeowners, adrs, &Parts::plain())
+}
+
+/// The crate `spec` describes with `parts`, routed by `codeowners` and checked against the ADR
+/// numbers in `adrs`.
 ///
 /// # Errors
 ///
 /// [`Error`] if the name is not `kebab-case`, the layer is unknown or is `country`, the purpose is
-/// not one plain line, or an ADR does not exist.
-pub fn plan(spec: &Spec, codeowners: &str, adrs: &BTreeSet<u32>) -> Result<Plan, Error> {
+/// not one plain line, an ADR does not exist, or a template has a placeholder with no value.
+pub fn plan_with(
+    spec: &Spec,
+    codeowners: &str,
+    adrs: &BTreeSet<u32>,
+    parts: &Parts,
+) -> Result<Plan, Error> {
     check_name(&spec.name)?;
     let dir = directory(&spec.layer, &spec.name)?;
     check_purpose(&spec.purpose)?;
     if let Some(missing) = spec.adrs.iter().find(|adr| !adrs.contains(adr)) {
         return Err(format!("ADR {missing} is not under docs/adr/").into());
     }
+    let [adr_list, owners_toml, owners_line, to_root] = derived(spec, codeowners, &dir);
+    let mut values = vec![
+        ("name", spec.name.as_str()),
+        ("layer", spec.layer.as_str()),
+        ("purpose", spec.purpose.as_str()),
+        ("adrs", &adr_list),
+        ("owners_toml", &owners_toml),
+        ("owners", &owners_line),
+        ("to_root", &to_root),
+        ("dependencies", &parts.dependencies),
+        ("depends", &parts.depends),
+        ("owns", &parts.owns),
+        ("entry_points", &parts.entry_points),
+    ];
+    values.extend(
+        parts
+            .values
+            .iter()
+            .map(|(key, value)| (*key, value.as_str())),
+    );
+    let mut files = vec![
+        (format!("{dir}/Cargo.toml"), render(MANIFEST, &values)?),
+        (format!("{dir}/README.md"), render(README, &values)?),
+        (format!("{dir}/src/lib.rs"), render(parts.lib, &values)?),
+    ];
+    for (path, template) in &parts.extra {
+        files.push((format!("{dir}/{path}"), render(template, &values)?));
+    }
+    let mut next = vec![format!(
+        "`cargo check -p {}` records it in Cargo.lock, and `cargo xtask gen-docs` adds it to the \
+         crate graph",
+        spec.name
+    )];
+    next.extend(parts.next.iter().cloned());
+    Ok(Plan {
+        files,
+        member: dir,
+        package: spec.name.clone(),
+        next,
+    })
+}
+
+/// The values a crate's templates derive rather than take: its ADR list, its owners as TOML and as
+/// a README line (the team `CODEOWNERS` routes `dir` to, else [`DEFAULT_OWNER`]), and the path from
+/// `dir` back to the repository root.
+fn derived(spec: &Spec, codeowners: &str, dir: &str) -> [String; 4] {
     let routes = codeowner_lines(codeowners);
     let owners: Vec<&str> =
-        route_for(&routes, &dir).map_or_else(|| vec![DEFAULT_OWNER], |(_, owners)| owners.to_vec());
+        route_for(&routes, dir).map_or_else(|| vec![DEFAULT_OWNER], |(_, owners)| owners.to_vec());
     let adr_list = spec.adrs.iter().map(u32::to_string).collect::<Vec<_>>();
     let owners_toml = owners
         .iter()
         .map(|o| format!("\"{o}\""))
         .collect::<Vec<_>>();
-    let to_root = "../".repeat(dir.matches('/').count() + 1);
-    let values = [
-        ("name", spec.name.as_str()),
-        ("layer", spec.layer.as_str()),
-        ("purpose", spec.purpose.as_str()),
-        ("adrs", &adr_list.join(", ")),
-        ("owners_toml", &owners_toml.join(", ")),
-        ("owners", &owners.join(", ")),
-        ("to_root", &to_root),
-    ];
-    Ok(Plan {
-        files: vec![
-            (format!("{dir}/Cargo.toml"), render(MANIFEST, &values)?),
-            (format!("{dir}/README.md"), render(README, &values)?),
-            (format!("{dir}/src/lib.rs"), render(LIB, &values)?),
-        ],
-        member: dir,
-        package: spec.name.clone(),
-    })
+    [
+        adr_list.join(", "),
+        owners_toml.join(", "),
+        owners.join(", "),
+        "../".repeat(dir.matches('/').count() + 1),
+    ]
 }
 
 /// Where a crate of `layer` lives: adapters under `crates/adapters/`, the rest under `crates/`.

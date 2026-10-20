@@ -13,6 +13,7 @@
 //! Templates live in `xtask/templates/`, are embedded with `include_str!`, and are filled in by
 //! [`render`]: plain `{{placeholder}}` substitution, where a placeholder left unfilled is an error.
 
+mod adapter;
 mod krate;
 
 use std::path::Path;
@@ -22,7 +23,8 @@ use crate::checks::{Error, repo_root};
 
 /// The usage line, for a missing or unknown generator.
 const USAGE: &str = "usage: cargo xtask new crate <name> --layer <layer> --purpose <one line> \
-                     [--adr <number>]... [--dry-run]";
+                     [--adr <number>]... [--dry-run] | cargo xtask new adapter --kind \
+                     printer|storage [--dry-run]";
 
 /// What a generator writes: new files, and the line it adds to the workspace `members`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,8 @@ pub struct Plan {
     pub member: String,
     /// The package the plan creates.
     pub package: String,
+    /// What to run once the files are written, one line each.
+    pub next: Vec<String>,
 }
 
 /// Runs a generator: `cargo xtask new <kind> …`.
@@ -47,6 +51,7 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     let root = repo_root();
     let plan = match args.split_first() {
         Some((kind, rest)) if kind.as_str() == "crate" => krate::plan_from_args(&root, rest)?,
+        Some((kind, rest)) if kind.as_str() == "adapter" => adapter::plan_from_args(&root, rest)?,
         _ => return Err(USAGE.into()),
     };
     apply(&root, &plan, !dry_run.is_empty())?;
@@ -148,11 +153,9 @@ pub fn apply(root: &Path, plan: &Plan, dry_run: bool) -> Result<(), Error> {
     }
     std::fs::write(&manifest_path, manifest)?;
     println!("Cargo.toml: members gains \"{}\"", plan.member);
-    println!(
-        "next: `cargo check -p {}` records it in Cargo.lock, and `cargo xtask gen-docs` adds it to \
-         the crate graph",
-        plan.package
-    );
+    for step in &plan.next {
+        println!("next: {step}");
+    }
     Ok(())
 }
 
@@ -230,6 +233,7 @@ mod tests {
             ],
             member: "crates/c".into(),
             package: "c".into(),
+            next: Vec::new(),
         }
     }
 

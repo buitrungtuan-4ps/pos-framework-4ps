@@ -7,3 +7,6 @@ change to a template changes its golden file in the same pull request.
 - `new-crate/`: `cargo xtask new crate pos-example --layer tool --purpose "An example crate the
   generator's golden test renders." --adr 170 --adr 176`, and `members.golden` is the line it adds to
   the workspace, after its last sibling.
+- `new-adapter/printer/` and `new-adapter/storage/`: `cargo xtask new adapter --kind printer` and
+  `--kind storage`. Each generated crate passed its port's contract suite, clippy with
+  `-D warnings` and rustfmt before its files were copied here.
