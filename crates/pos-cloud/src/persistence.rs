@@ -2135,3 +2135,7 @@ impl AnchorLedger for PostgresAnchors {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "persistence/tests/fleet_row.rs"]
+mod fleet_row_tests;

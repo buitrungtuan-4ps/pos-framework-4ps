@@ -331,3 +331,108 @@ fn parses_the_nats_cursor_section_with_defaults() {
     assert_eq!(nats.batch, 256, "the batch default");
     assert_eq!(nats.expires_secs, 5, "the expiry default");
 }
+
+// --- pinned before `CloudConfig::validate` is split (ADR-0170 decision 7) -----------------------
+
+/// An archive key that is not a 32-byte key in hex refuses the boot, naming the field and never
+/// quoting the value; a well-formed one, or none, is accepted.
+#[test]
+fn an_archive_key_must_be_a_hex_key_or_absent() {
+    let mut config = valid();
+    config.archive_key_secret = Some(crate::archive::ArchiveSecret::new("hunter2-secret"));
+    let error = config.validate().expect_err("a passphrase is refused");
+    assert!(
+        error.starts_with("archive_key_secret must be exactly 64 hexadecimal"),
+        "{error}"
+    );
+    assert!(!error.contains("hunter2"), "{error}");
+
+    config.archive_key_secret = Some(crate::archive::ArchiveSecret::new("ab".repeat(32)));
+    assert!(config.validate().is_ok());
+    config.archive_key_secret = None;
+    assert!(config.validate().is_ok());
+}
+
+/// A release source names its repository as `owner/name` and reaches its forge over https.
+#[test]
+fn a_release_source_is_owner_slash_name_over_https() {
+    let with_source = |repository: &str, api_base: &str| {
+        let mut config = valid();
+        config.release_source = Some(super::ReleaseSourceConfig {
+            repository: repository.to_owned(),
+            token: None,
+            api_base: api_base.to_owned(),
+        });
+        config.validate()
+    };
+    assert!(with_source("pizza4ps/pos", "https://api.github.com").is_ok());
+    for repository in ["pizza4ps", "pizza4ps/", "/pos", "a/b/c", ""] {
+        let error = with_source(repository, "https://api.github.com").expect_err(repository);
+        assert!(
+            error.starts_with(&format!(
+                "release_source.repository must be `owner/name` (got `{repository}`)"
+            )),
+            "{error}"
+        );
+    }
+    let error = with_source("pizza4ps/pos", "http://forge.internal").expect_err("plain http");
+    assert!(
+        error.starts_with(
+            "release_source.api_base must be an https:// URL (got `http://forge.internal`)"
+        ),
+        "{error}"
+    );
+}
+
+/// The checks run in a fixed order, so the operator reading a refused boot is told the first
+/// thing to fix: the proxy hops, the internal secret, the archive key, the archive window, the
+/// alert pair, then the release source.
+#[test]
+fn the_first_failing_check_is_the_one_reported() {
+    let mut config = valid();
+    config.trusted_proxy_hops = 0;
+    config.internal_shared_secret = None;
+    config.archive_key_secret = Some(crate::archive::ArchiveSecret::new("short"));
+    config.archive_retention_days = 0;
+    config.release_source = Some(super::ReleaseSourceConfig {
+        repository: "bad".to_owned(),
+        token: None,
+        api_base: "http://x".to_owned(),
+    });
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        let Err(error) = config.validate() else {
+            break;
+        };
+        let field: String = error.chars().take_while(|c| *c != ' ').collect();
+        seen.push(field.clone());
+        match field.as_str() {
+            "trusted_proxy_hops" => config.trusted_proxy_hops = 1,
+            "internal_shared_secret" => {
+                config.internal_shared_secret =
+                    Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
+            }
+            "archive_key_secret" => config.archive_key_secret = None,
+            "archive_retention_days" => config.archive_retention_days = 1,
+            "release_source.repository" => {
+                if let Some(source) = config.release_source.as_mut() {
+                    source.repository = "a/b".to_owned();
+                }
+            }
+            "release_source.api_base" => config.release_source = None,
+            other => panic!("an unexpected refusal: {other}: {error}"),
+        }
+    }
+    assert_eq!(
+        seen,
+        [
+            "trusted_proxy_hops",
+            "internal_shared_secret",
+            "archive_key_secret",
+            "archive_retention_days",
+            "release_source.repository",
+            "release_source.api_base",
+        ]
+    );
+    assert!(config.validate().is_ok());
+}
