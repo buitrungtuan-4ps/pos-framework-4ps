@@ -204,8 +204,12 @@ where
         })
 }
 
-/// `412` for a bump whose `If-Match` does not match the row
-/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+/// `409` (`FAILED_PRECONDITION`) for a bump whose `If-Match` does not match the row.
+///
+/// Not the `412` (`VERSION_MISMATCH`) that
+/// [ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md) gives a stale `If-Match`
+/// elsewhere in the console. Changing this route's status would be a wire change, so it stays
+/// `409`, as the console's OpenAPI document states. The details name the current generation.
 ///
 /// `current` is read *after* the refusal, so it can already be stale by the time it is rendered.
 /// That is fine and deliberate: it is for the message, never for a decision. The decision was the
