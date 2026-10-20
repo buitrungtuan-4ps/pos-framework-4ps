@@ -61,7 +61,6 @@
 "crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 123, params = 1 }
 "crates/pos-core/src/billing.rs::assemble" = { lines = 124, params = 1 }
 "crates/pos-core/src/decision.rs::decide_bill" = { lines = 103, params = 3 }
-"crates/pos-edge-app/src/app/orders/inbound.rs::Edge::open_inbound_order" = { lines = 145, params = 6 }
 "crates/pos-edge-app/src/app/shifts/close.rs::Edge::close_shifts_at" = { lines = 104, params = 6 }
 "crates/pos-edge/src/demo.rs::config_document" = { lines = 105, params = 0 }
 "crates/pos-edge/src/http/mod.rs::domain_router" = { lines = 224, params = 8 }
