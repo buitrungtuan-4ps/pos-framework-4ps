@@ -31,10 +31,11 @@ use pos_cloud::starting_roles::RoleSeeder;
 use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, CloudConfig, NatsIngestConfig, ReleaseToken, alerts, assets, countries, cursor,
-    dashboard, http, orders, relay,
+    Cloud, NatsIngestConfig, ReleaseToken, alerts, assets, countries, cursor, dashboard, http,
+    orders, relay,
 };
-use store_postgres::PostgresStore;
+
+mod startup;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -63,35 +64,8 @@ async fn main() -> ExitCode {
               needs"
 )]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = std::env::var("POS_CLOUD_CONFIG")
-        .map_err(|_| "POS_CLOUD_CONFIG must name a configuration file")?;
-    let config = CloudConfig::from_toml(&std::fs::read_to_string(&config_path)?)?;
-    // Range checks serde cannot express (ADR-0090). Fail the boot rather than run with a value that
-    // silently disables a control — a wrong `trusted_proxy_hops` is a wrong rate-limit key.
-    config.validate()?;
-
-    let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
-    store.migrate().await.map_err(|error| error.to_string())?;
-    // QR ordering's one switch (ADR-0160 decision 5): once, before anything serves, every store's
-    // switch is published from what it did. A store that could not be set is logged by id where it
-    // failed; the run aborts the boot only when the stores cannot be listed or the run recorded.
-    let one_switch = pos_cloud::qr_ordering::run_once(
-        &store.registry(),
-        &store.config_trees(),
-        &store.data_migrations(),
-        &SystemClock,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    if let Some(report) = &one_switch.report {
-        tracing::info!(
-            published = report.published,
-            unchanged = report.unchanged,
-            unconfigured = report.unconfigured,
-            failed = report.failed.len(),
-            "set every store's QR ordering switch from what it did"
-        );
-    }
+    let config = startup::load_config()?;
+    let (store, one_switch) = startup::open_store(&config).await?;
     // One pool, seven views of it: the event-store application layer, the materialised-rollup read
     // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
