@@ -893,9 +893,10 @@ async fn an_employee_update_is_refused_in_the_order_it_reads_its_request() {
     assert!(audit.entries.lock().expect("lock").is_empty());
 }
 
-/// A rename answers `204` and records the id, code and status before and after, never the name.
+/// A rename answers `204` and an archive `200`, each recording the id, code and status before and
+/// after, never the name.
 #[tokio::test]
-async fn an_employee_rename_answers_204_and_records_its_code_and_status_not_its_name() {
+async fn an_employee_update_records_its_code_and_status_before_and_after_not_its_name() {
     let audit = FakeAudit::default();
     let router = people_app_with_audit(
         provisioned_admin(),
@@ -943,6 +944,29 @@ async fn an_employee_rename_answers_204_and_records_its_code_and_status_not_its_
     let side = serde_json::json!({ "id": employee_id, "code": "C01", "status": "active" });
     assert_eq!(entry.before.as_ref(), Some(&side));
     assert_eq!(entry.after.as_ref(), Some(&side));
+
+    // An archive records the status it left and the one it set.
+    let archived = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
+            &owner,
+            &etag_of(&renamed),
+        ))
+        .await
+        .expect("route the archive");
+    assert_eq!(archived.status(), StatusCode::OK);
+    let entries = audit.entries.lock().expect("lock").clone();
+    let archive = entries.last().expect("the archive is recorded");
+    assert_eq!(
+        archive.before.as_ref().map(|side| &side["status"]),
+        Some(&serde_json::json!("active"))
+    );
+    assert_eq!(
+        archive.after.as_ref().map(|side| &side["status"]),
+        Some(&serde_json::json!("archived"))
+    );
 }
 
 /// A role create is refused in the order it reads its request — the name, the permissions, the
