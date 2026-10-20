@@ -88,18 +88,32 @@ struct CatalogState<Cat, A, C> {
 /// reads and deletes, the request body for a create or upsert. A placement is addressed by its
 /// `(menu_id, menu_item_id)` pair: `PUT` upserts it, `DELETE` removes it. The routes live under
 /// `/admin/catalog/`, a fresh prefix that never collides with the registry or device surfaces.
-#[expect(
-    clippy::too_many_lines,
-    reason = "this is one flat route table for the whole catalog authoring surface (items, tax \
-              classes, item/display taxonomy, layout buttons, modifier groups, menus, sections and \
-              placements); splitting it would only scatter one router across helpers"
-)]
 pub fn catalog_router<Cat, A, C>(
     catalog: Cat,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .merge(item_routes::<Cat, A, C>())
+        .merge(taxonomy_routes::<Cat, A, C>())
+        .merge(till_routes::<Cat, A, C>())
+        .merge(menu_routes::<Cat, A, C>())
+        .with_state(CatalogState {
+            catalog,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The items, their spreadsheet export and import, and the tax classes they are taxed at.
+fn item_routes<Cat, A, C>() -> Router<CatalogState<Cat, A, C>>
 where
     Cat: CatalogStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
@@ -134,6 +148,16 @@ where
             "/admin/catalog/tax-classes/{tax_class_id}",
             axum::routing::patch(admin_update_tax_class::<Cat, A, C>),
         )
+}
+
+/// The item and display categories and their subcategories.
+fn taxonomy_routes<Cat, A, C>() -> Router<CatalogState<Cat, A, C>>
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
         .route(
             "/admin/catalog/item-categories",
             get(admin_list_item_categories::<Cat, A, C>)
@@ -170,6 +194,16 @@ where
             "/admin/catalog/display-subcategories/{display_subcategory_id}",
             axum::routing::patch(admin_update_display_subcategory::<Cat, A, C>),
         )
+}
+
+/// What the till lays out: its buttons, courses and modifier groups.
+fn till_routes<Cat, A, C>() -> Router<CatalogState<Cat, A, C>>
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
         .route(
             "/admin/catalog/layout-buttons",
             get(admin_list_layout_buttons::<Cat, A, C>)
@@ -197,6 +231,16 @@ where
             "/admin/catalog/modifier-groups/{modifier_group_id}",
             axum::routing::patch(admin_update_modifier_group::<Cat, A, C>),
         )
+}
+
+/// The menus, their sections, and the placements a menu is compiled from.
+fn menu_routes<Cat, A, C>() -> Router<CatalogState<Cat, A, C>>
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
         .route(
             "/admin/catalog/menus",
             get(admin_list_menus::<Cat, A, C>).post(admin_create_menu::<Cat, A, C>),
@@ -222,12 +266,6 @@ where
             axum::routing::put(admin_update_placement::<Cat, A, C>)
                 .delete(admin_remove_placement::<Cat, A, C>),
         )
-        .with_state(CatalogState {
-            catalog,
-            admin,
-            clock,
-            audit,
-        })
 }
 
 /// Maps a catalog store failure to a retryable `503`, logging the detail rather than leaking it.

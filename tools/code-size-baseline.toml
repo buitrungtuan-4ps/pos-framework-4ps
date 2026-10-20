@@ -53,7 +53,6 @@
 "crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
-"crates/pos-cloud-catalog/src/routes/catalog.rs::catalog_router" = { lines = 135, params = 4 }
 "crates/pos-cloud/src/http/config_publish/config_releases.rs::config_release_router" = { lines = 50, params = 9 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
 "crates/pos-cloud/src/main.rs::run" = { lines = 1168, params = 0 }
