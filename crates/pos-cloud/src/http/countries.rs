@@ -105,6 +105,25 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/countries",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "Every country module this build carries, as an array: \
+                                      `code`, `display_name`, `currency_code` and \
+                                      `currency_exponent`, `default_language`, the number format \
+                                      (`decimal_separator`, `group_separator`, \
+                                      `digits_per_group`), `default_retention_days`, and the till \
+                                      facts a store's settings start from: `prices_include_tax`, \
+                                      `cash_rounding_increment` and `cash_denominations`, in the \
+                                      currency's minor units (ADR-0105). Fixed when the server \
+                                      starts; the same for every tenant"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "countries",
+)]
 /// A super-admin lists the compiled country modules.
 async fn admin_list_countries<A, C>(
     State(state): State<CountryState<A, C>>,
@@ -127,6 +146,19 @@ where
     (StatusCode::OK, Json(state.countries.as_ref().clone())).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/locales",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "The content locales the platform can serve, as an array of \
+                                      language tags: each country module's language, and `en`, the \
+                                      fallback every catalogue has. The translation grid's columns"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "countries",
+)]
 /// A super-admin lists the content locales the platform can serve.
 async fn admin_list_locales<A, C>(
     State(state): State<CountryState<A, C>>,
