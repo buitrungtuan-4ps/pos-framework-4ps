@@ -3769,6 +3769,896 @@
         ]
       }
     },
+    "/admin/catalog/menus": {
+      "get": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin lists a tenant's menus.",
+        "operationId": "admin_list_menus",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose menus to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's menus, as an array, each with its `parent_menu_id` (absent for a menu that inherits from none) and its `etag`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin creates a menu, optionally under a parent it inherits from.",
+        "operationId": "admin_create_menu",
+        "requestBody": {
+          "description": "`tenant_id`, the menu's `name`, and optionally `parent_menu_id`, a menu it inherits its placements from",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or parent_menu_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/menus/{menu_id}": {
+      "patch": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin renames a menu, (re)sets its parent and/or status.",
+        "operationId": "admin_update_menu",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, and the menu's `name`, `parent_menu_id` (absent clears it) and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "menu_id, tenant_id or parent_menu_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no menu with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The menu changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The parent would make the inheritance chain loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/menus/{menu_id}/placements": {
+      "get": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin lists a menu's placements (tenant named on the query).",
+        "description": "Behind [`ConsolePermission::ReadRevenue`], not plain `Read` (production-readiness **S5**): a\n[`MenuPlacement`] carries `prices` — the item's price on every channel of this menu — which is\nexactly the commercially sensitive (**T2**) data `ReadRevenue` was carved out of `Read` to hold\nback. Until this row was verified the console handed a store's full per-channel price book to any\nViewer, while refusing the same figures on a revenue report.\n\nThe consequence is deliberate and worth stating: Ops and Viewer can still list the menus, their\nsections and the item master, and can no longer read what anything costs.",
+        "operationId": "admin_list_placements",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The items on the menu, as an array: each with its section, its price on every sales channel in minor units, whether it is available, and its `etag`. Prices are T2, so this read needs `console.reports.revenue` rather than the catalog's plain read"
+          },
+          "400": {
+            "description": "tenant_id or menu_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin adds an item to a menu, refusing if it is already on it.",
+        "description": "The route this replaced was a single `PUT` upsert. A placement's identity is the caller-supplied\n`(menu, item)` pair, so \"add this item\" silently replaced the prices, section and availability\nof one already on the menu — and because the per-channel prices are the price-change journal\n(ADR-0069, G2), the overwrite was recorded as a `set` with no `before` to compare against.",
+        "operationId": "admin_create_placement",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`menu_id`, `menu_item_id` and `tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` token and a `unit_price` in the currency's minor units, and `available`. An item is on a menu at most once",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Placed. The body is the placement and the ETag carries its version. Audited with its prices, the price-change journal (ADR-0069)"
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item is already on this menu: change it with PUT instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}": {
+      "put": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin changes an item's prices and availability on a menu, only at the version they read.",
+        "operationId": "admin_update_placement",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "menu_item_id",
+            "in": "path",
+            "description": "The item (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` token and a `unit_price` in the currency's minor units, and `available`, as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the placement and the ETag carries its new version. Audited with its prices"
+          },
+          "400": {
+            "description": "An id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The item is not on this menu",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The placement changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin removes an item from a menu (tenant named on the query).",
+        "operationId": "admin_remove_placement",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "menu_item_id",
+            "in": "path",
+            "description": "The item (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed from the menu, and audited"
+          },
+          "400": {
+            "description": "An id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The item is not on this menu",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/menus/{menu_id}/sections": {
+      "get": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin lists a menu's sections (tenant named on the query).",
+        "operationId": "admin_list_menu_sections",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The menu's sections, as an array, each with its `sort` and `etag`"
+          },
+          "400": {
+            "description": "tenant_id or menu_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin creates a section within a menu.",
+        "operationId": "admin_create_menu_section",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, the section's `name`, and `sort`, where it falls on the menu, ascending (absent is 0)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or menu_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}": {
+      "patch": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin renames a menu section, sets its sort and/or status.",
+        "operationId": "admin_update_menu_section",
+        "parameters": [
+          {
+            "name": "menu_id",
+            "in": "path",
+            "description": "The menu (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "menu_section_id",
+            "in": "path",
+            "description": "The section (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, and the section's `name`, `sort` and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "An id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The menu has no section with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The section changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -12588,6 +13478,10 @@
     {
       "name": "printers",
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+    },
+    {
+      "name": "menus",
+      "description": "Where a tenant's items are sold and for how much (ADR-0066): menus, which may inherit from a parent menu; their sections; and placements, an item on a menu with its price on each sales channel and whether it is available. Prices are integers in the currency's minor units, and they are T2, so reading placements needs `console.reports.revenue`. A placement's prices are the price-change journal: every change is audited with them. Nothing reaches a store until its catalog is published."
     },
     {
       "name": "catalog items",

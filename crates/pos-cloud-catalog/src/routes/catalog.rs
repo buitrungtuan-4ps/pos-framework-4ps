@@ -83,6 +83,14 @@ pub use item_files::{
     __path_admin_export_items, __path_admin_import_items_apply, __path_admin_import_items_dry_run,
 };
 pub use items::{__path_admin_create_item, __path_admin_list_items, __path_admin_update_item};
+pub use menus::{
+    __path_admin_create_menu, __path_admin_create_menu_section, __path_admin_list_menu_sections,
+    __path_admin_list_menus, __path_admin_update_menu, __path_admin_update_menu_section,
+};
+pub use placements::{
+    __path_admin_create_placement, __path_admin_list_placements, __path_admin_remove_placement,
+    __path_admin_update_placement,
+};
 
 // --- Catalog authoring (`/admin/catalog/...`, ADR-0066) -----------------------------------------
 
