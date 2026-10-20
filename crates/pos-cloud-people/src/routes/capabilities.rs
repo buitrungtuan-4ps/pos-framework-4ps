@@ -117,6 +117,21 @@ where
         .with_state(CapabilitiesState { admin, clock })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/capabilities",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "The capability catalogue, the same for every tenant: `flags`, \
+                                      each with its `key`, `default_on`, `description` and `offered` \
+                                      (whether the console offers it as a switch); `presets`, each \
+                                      an `id` and the keys it turns on; and `rules`, the inter-flag \
+                                      rules a publish enforces"),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Serves the §10 capability catalogue for the console's form editor. Each flag says whether the
 /// console offers it as a switch ([`offered`]).
 async fn admin_list_capabilities<A, C>(
@@ -273,6 +288,31 @@ pub fn capability_flag_nodes(
         .collect())
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/capabilities",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then `flags`, each capability key from `GET /admin/capabilities` with its value. Only the flags \
+                       named are changed",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `capabilities` node on its \
+                                      Store layer. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, a key is not a capability flag, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the \
+                                      node, naming each inter-flag rule it breaks", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Merges a store's capability flags into its Store config layer and versions it — the same
 /// load→merge→publish→version shape as the catalog publish, onto the top-level flag keys instead of a
 /// node. Rejects an unknown flag key (the form only sends catalogue keys). The §10 inter-flag rules run

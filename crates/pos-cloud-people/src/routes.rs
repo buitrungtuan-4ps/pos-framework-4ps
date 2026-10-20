@@ -60,6 +60,7 @@ pub use assignments::{
     __path_admin_create_assignment, __path_admin_list_assignments, __path_admin_remove_assignment,
 };
 pub use capabilities::capability_flag_nodes;
+pub use capabilities::{__path_admin_list_capabilities, __path_admin_publish_capabilities};
 pub use employees::{
     __path_admin_create_employee, __path_admin_get_employee, __path_admin_list_employees,
     __path_admin_set_employee_pin, __path_admin_update_employee,

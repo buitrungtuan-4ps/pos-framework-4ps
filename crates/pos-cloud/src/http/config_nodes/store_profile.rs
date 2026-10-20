@@ -119,6 +119,33 @@ fn trimmed_lines(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/store-profile",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then who the store legally is (ADR-0106): `legal_name`, and optionally `trading_name`, \
+                       `address_lines`, `tax_registration_number` and its `tax_registration_label`, \
+                       `contact_lines`, `footer_lines`, and `country_code`, whose country module, \
+                       where this cloud carries it, checks the registration number's shape",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `store_profile` node on its \
+                                      Store layer. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, the tax registration number is not the shape the named country issues, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the \
+                                      node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Validates and writes a store's registered identity as its `store_profile` node.
 async fn admin_publish_store_profile<Cfg, A, C>(
     State(state): State<ConfigStoreProfileState<Cfg, A, C>>,

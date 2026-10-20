@@ -49,9 +49,12 @@ pub(crate) use channels::{
     __path_admin_publish_channels, __path_admin_publish_origins, __path_admin_publish_tender,
     __path_admin_read_channels, __path_admin_read_origins, __path_admin_read_tender,
 };
+pub(crate) use locale::__path_admin_publish_locale;
 pub(crate) use qr::{__path_admin_publish_qr, __path_admin_read_qr};
 pub(crate) use retention::{__path_admin_publish_retention, __path_admin_read_retention};
+pub(crate) use store_profile::__path_admin_publish_store_profile;
 pub use store_profile::config_store_profile_router;
+pub(crate) use tax::__path_admin_publish_tax;
 pub use tax::config_tax_router;
 pub(crate) use vendors::{__path_admin_publish_vendors, __path_admin_read_vendors};
 // What the batch fan-out compiles each store's nodes with.

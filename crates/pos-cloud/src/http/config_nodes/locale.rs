@@ -282,6 +282,35 @@ pub(in crate::http) fn checked_locale_node(
     Ok(locale_value)
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/locale",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), \
+                       `cutoff_hour` (0 to 23, where a business day ends), and optionally \
+                       `display_language`, `prices_include_tax`, `cash_rounding_increment` and \
+                       `cash_denominations`, both in the currency's minor units (ADR-0074, \
+                       ADR-0104, ADR-0105, ADR-0114). The node is rebuilt whole",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published as the store's `locale` node on its \
+                                      Store layer. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, country_code is absent or not a country, a currency, timezone or hour does not parse, or a \
+                                      rounding increment or denomination is not positive, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the \
+                                      node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
 /// load→merge→publish→version shape as the other node publishes. Each field is checked with its domain
 /// constructor before anything is written (a real IANA timezone against the tz database, a 3-letter

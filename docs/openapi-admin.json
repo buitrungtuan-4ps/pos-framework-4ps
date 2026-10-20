@@ -2039,6 +2039,45 @@
         ]
       }
     },
+    "/admin/capabilities": {
+      "get": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "Serves the §10 capability catalogue for the console's form editor. Each flag says whether the\nconsole offers it as a switch ([`offered`]).",
+        "operationId": "admin_list_capabilities",
+        "responses": {
+          "200": {
+            "description": "The capability catalogue, the same for every tenant: `flags`, each with its `key`, `default_on`, `description` and `offered` (whether the console offers it as a switch); `presets`, each an `id` and the keys it turns on; and `rules`, the inter-flag rules a publish enforces"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/catalog/courses": {
       "get": {
         "tags": [
@@ -6283,6 +6322,91 @@
         }
       }
     },
+    "/admin/config/capabilities": {
+      "put": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "Merges a store's capability flags into its Store config layer and versions it — the same\nload→merge→publish→version shape as the catalog publish, onto the top-level flag keys instead of a\nnode. Rejects an unknown flag key (the form only sends catalogue keys). The §10 inter-flag rules run\nin the config tree, so an invalid combination returns `422` with the violated rules.",
+        "operationId": "admin_publish_capabilities",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, then `flags`, each capability key from `GET /admin/capabilities` with its value. Only the flags named are changed",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `capabilities` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, a key is not a capability flag, or a value needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node, naming each inter-flag rule it breaks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/config/channels": {
       "get": {
         "tags": [
@@ -6515,6 +6639,91 @@
         }
       }
     },
+    "/admin/config/locale": {
+      "put": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "Validates a store's locale settings and writes them as its `locale` node, versioned — the same\nload→merge→publish→version shape as the other node publishes. Each field is checked with its domain\nconstructor before anything is written (a real IANA timezone against the tz database, a 3-letter\ncurrency, an hour in `0..=23`), so a bad value is a `400` naming it rather than a stored error.",
+        "operationId": "admin_publish_locale",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), `cutoff_hour` (0 to 23, where a business day ends), and optionally `display_language`, `prices_include_tax`, `cash_rounding_increment` and `cash_denominations`, both in the currency's minor units (ADR-0074, ADR-0104, ADR-0105, ADR-0114). The node is rebuilt whole",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `locale` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, country_code is absent or not a country, a currency, timezone or hour does not parse, or a rounding increment or denomination is not positive, or a value needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/config/origins": {
       "get": {
         "tags": [
@@ -6662,6 +6871,82 @@
           },
           "503": {
             "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/preview": {
+      "post": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "`POST /admin/config/preview` — what publishing this node to this store *would* change.",
+        "description": "# Why this exists when `/admin/config/campaigns/preview` already did\n\nIt did, for one node out of sixteen. Every other publish button in the console committed\nblind: the operator pressed **Publish** and found out afterwards, from the store, whether the\ndocument was what they meant (roadmap-v3 **F11**). Writing fifteen more preview routes by hand\nwould have been fifteen more chances for a preview to compile its node differently from the\npublish it previews — a dry run that lies is worse than none.\n\nSo this route compiles through [`BatchNode`], the same registry ADR-0122's batch publish fans\nout, which delegates to the very `*_nodes` function each single-store route calls. A preview\ncannot drift from its publish because it is not a second copy of it. The nodes the registry does\nnot carry have no preview here, and deliberately: `locale` and `store_profile` are per-store by\ndefinition (ADR-0122 §4), so there is no tenant-wide document to compile.\n\n# Whom the diff names\n\nA `permissions` preview carries the store's roster: each member's name, staff code and PIN\nhash. Publishing that node shows nobody any of them, and `PublishConfig` is Ops's permission\ntoo, so the diff gets a config read's treatment ([`staff_redacted_for`]): never a PIN hash, and\na name or code only for a role holding [`ConsolePermission::ReadPeople`]\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every\nnode's preview is redacted, not only that one's: a store with layers and no published version\nhas nothing to diff against, so the diff of any node is the whole document, staff included.\n\nIt is redacted *after* it is computed, never before. Diffing redacted documents would answer\n`unchanged: true` to a PIN reset or a rename, and an operator told that nothing would change\nwould not publish the change the till is waiting for.\n\nMints no version, saves nothing, audits nothing. `422` carries the violations a real publish\nwould refuse the candidate with, verbatim.",
+        "operationId": "admin_preview_config_node",
+        "requestBody": {
+          "description": "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can compile), and `arguments`, that node's own publish body without the tenant and store. Nothing is written",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What publishing the node would change: `node`; `from_version_id`, the version the diff is against, or `null` for a store never published to; `diff`, the merge patch (RFC 7386) the publish would apply; and `unchanged`. The node is compiled by the publish's own code, so the preview cannot differ from it. The diff never shows a staff PIN hash, and shows a name or staff code only to a role holding console.people.read. Not audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, node is not one the batch publish knows, or the node's own publish would refuse the arguments — with that publish's own words",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The publish would be refused, with its violations verbatim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store or a store the node compiles from is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -7066,6 +7351,176 @@
           },
           "503": {
             "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/store-profile": {
+      "put": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "Validates and writes a store's registered identity as its `store_profile` node.",
+        "operationId": "admin_publish_store_profile",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, then who the store legally is (ADR-0106): `legal_name`, and optionally `trading_name`, `address_lines`, `tax_registration_number` and its `tax_registration_label`, `contact_lines`, `footer_lines`, and `country_code`, whose country module, where this cloud carries it, checks the registration number's shape",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `store_profile` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, the tax registration number is not the shape the named country issues, or a value needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/tax": {
+      "put": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "Assembles a tenant's authored rates into a `TaxRateTable`, writes it as the store's `tax` node, and\nversions it — the same load→merge→publish→version shape as the other node publishes.",
+        "operationId": "admin_publish_tax",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is compiled into the node",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the store's `tax` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or a value needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The tax rate store or the configuration store is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -17032,7 +17487,7 @@
     },
     {
       "name": "config nodes",
-      "description": "The per-store configuration a console reads and writes one node at a time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a store takes orders on, the payment methods it accepts, the second origins its edge answers, its QR ordering guardrails, how long it keeps a synced event, and its delivery-marketplace policies. A read gives the node as the store runs it, composed from all four layers; a publish writes it on the store's own layer as a new configuration version, which the store pulls on its next sync."
+      "description": "The per-store configuration a console reads and writes one node at a time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a store takes orders on, the payment methods it accepts, the second origins its edge answers, its QR ordering guardrails, how long it keeps a synced event, its delivery-marketplace policies, its locale, its legal identity, its tax table and its capability flags, and a preview of any node's publish. A read gives the node as the store runs it, composed from all four layers; a publish writes it on the store's own layer as a new configuration version, which the store pulls on its next sync."
     },
     {
       "name": "config",
