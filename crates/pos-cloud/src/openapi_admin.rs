@@ -203,6 +203,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_catalog::routes::catalog::admin_publish_menu,
         pos_cloud_catalog::routes::tax_rates::admin_list_tax_rates,
         pos_cloud_catalog::routes::tax_rates::admin_set_tax_rates,
+        pos_cloud_catalog::routes::media::admin_list_media,
+        pos_cloud_catalog::routes::media::admin_upload_media,
+        pos_cloud_catalog::routes::media::admin_get_media_thumbnail,
+        pos_cloud_catalog::routes::media::admin_get_media_detail,
+        pos_cloud_catalog::routes::media::admin_delete_media,
+        pos_cloud_catalog::routes::translations::get_translations,
+        pos_cloud_catalog::routes::translations::put_translations,
+        pos_cloud_catalog::routes::translations::export_translations,
+        pos_cloud_catalog::routes::translations::import_translations_dry_run,
+        pos_cloud_catalog::routes::translations::import_translations_apply,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -346,6 +356,21 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
+        ),
+        (
+            name = "media",
+            description = "A tenant's image library (ADR-0042, ADR-0075): an upload is re-encoded \
+                           into a bounded thumbnail and detail JPEG, the upload itself is never \
+                           stored, and an item names an image by its id. A rendition never \
+                           changes, so it is served with a long private cache."
+        ),
+        (
+            name = "translations",
+            description = "A tenant's translation grid (ADR-0020, ADR-0043): each content key to its \
+                           strings by locale, every key carrying `en`, the fallback a till shows when \
+                           a locale has none. The grid is one entity, replaced wholesale and \
+                           conditionally from the grid screen, or merged row by row from a CSV after \
+                           a dry run."
         ),
         (
             name = "till layout",
@@ -648,15 +673,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/kitchen/routing/{rule_id}",
     "/admin/kitchen/stations",
     "/admin/kitchen/stations/{station_id}",
-    // --- media library and the translation grid (M5, M4) ---
-    "/admin/media",
-    "/admin/media/{media_id}",
-    "/admin/media/{media_id}/detail",
-    "/admin/media/{media_id}/thumbnail",
-    "/admin/translations",
-    "/admin/translations/export",
-    "/admin/translations/import/apply",
-    "/admin/translations/import/dry-run",
     // --- this document's own route ---
     "/admin/openapi.json",
 ];

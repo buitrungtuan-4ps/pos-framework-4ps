@@ -9421,6 +9421,472 @@
         ]
       }
     },
+    "/admin/media": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "A super-admin lists a tenant's media assets (summaries, without the bytes).",
+        "operationId": "admin_list_media",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many assets to return, 1 to 500. Absent, the whole library as an array rather than a page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "How many assets to skip, 0 to 100000. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Without `limit`, every asset as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each asset has `media_id`, `content_type`, `detail_bytes` and `created_at_ms`, and no image bytes"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, limit or offset is not an integer in range, or offset is sent without limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The media store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "media"
+        ],
+        "summary": "A super-admin uploads an image: it is re-encoded to two bounded JPEG renditions and stored. The raw\nupload is never persisted. `?tenant_id=` names the owner.",
+        "operationId": "admin_upload_media",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The image as the raw request body, at most 8 MB. It is re-encoded into two bounded JPEG renditions, a thumbnail and a detail image (ADR-0042, ADR-0075); the upload itself is never stored",
+          "content": {
+            "application/octet-stream": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored. The body carries `media_id`, what an item's `image_ref` names, and `detail_bytes`. Audited"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or the upload is not a decodable image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.media.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The upload is over 8 MB. Answered by the server's body limit, without the error envelope"
+          },
+          "422": {
+            "description": "The image could not be reduced within the renditions' size budget",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The server is at its rendering limit: send the upload again shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The image could not be encoded or rendered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The media store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/media/{media_id}": {
+      "delete": {
+        "tags": [
+          "media"
+        ],
+        "summary": "A super-admin deletes a media asset.",
+        "operationId": "admin_delete_media",
+        "parameters": [
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "The asset (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, and audited"
+          },
+          "400": {
+            "description": "tenant_id or media_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.media.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no asset with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The media store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/media/{media_id}/detail": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "A super-admin (or any reader) fetches an asset's detail rendition.",
+        "operationId": "admin_get_media_detail",
+        "parameters": [
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "The asset (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The detail rendition as `image/jpeg`. A rendition never changes, since a new image is a new id, so it is cached privately for a year"
+          },
+          "400": {
+            "description": "tenant_id or media_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no asset with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The media store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/media/{media_id}/thumbnail": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "A super-admin (or any reader) fetches an asset's thumbnail rendition.",
+        "operationId": "admin_get_media_thumbnail",
+        "parameters": [
+          {
+            "name": "media_id",
+            "in": "path",
+            "description": "The asset (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thumbnail rendition as `image/jpeg`. A rendition never changes, since a new image is a new id, so it is cached privately for a year"
+          },
+          "400": {
+            "description": "tenant_id or media_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no asset with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The media store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/people/permissions": {
       "get": {
         "tags": [
@@ -14109,6 +14575,437 @@
         ]
       }
     },
+    "/admin/translations": {
+      "get": {
+        "tags": [
+          "translations"
+        ],
+        "summary": "Returns a tenant's translation grid (super-admin only), or an empty grid if it has authored none.",
+        "operationId": "get_translations",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's grid: each content key to its strings by locale, every key carrying `en`, the fallback. The grid is one entity: its version is the response's ETag. A tenant with no grid yet gets an empty one and no ETag"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The translation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "translations"
+        ],
+        "summary": "Replaces a tenant's translation grid (super-admin only). A grid whose every key does not carry a\nnon-empty `en` is a `422` naming the offending keys, and nothing is stored.",
+        "operationId": "put_translations",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the grid was read at, or `*` for a tenant with no grid yet (ADR-0095)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The whole grid, as the read returns it: each content key to its strings by locale. It replaces the stored grid",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Replaced, and audited. The ETag carries the new version"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or If-Match is absent or malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.translations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "If-Match named a version, but the tenant has no grid yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The grid changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A key has no non-empty `en` string, naming each such key. Nothing is stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The translation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/translations/export": {
+      "get": {
+        "tags": [
+          "translations"
+        ],
+        "summary": "A super-admin exports a tenant's translation grid as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),\nTrack M5). Behind [`ConsolePermission::ManageTranslations`] and audited (who exported which domain\nand how many rows, never the row contents). The grid is business copy (menu/UI strings), not\npersonal data.",
+        "operationId": "export_translations",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`translations.csv`, as a `text/csv` attachment: a `key` column, then one column per locale present, sorted, and a row per content key. A cell a spreadsheet would read as a formula is escaped. Audited by row count, never the contents"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.translations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The translation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/translations/import/apply": {
+      "post": {
+        "tags": [
+          "translations"
+        ],
+        "summary": "A super-admin applies a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),\nTrack M5) — the confirm after a dry-run. The valid rows are merged onto the tenant's grid (existing\nkeys not in the file are preserved; rejected rows are skipped) and saved; rejected rows are reported,\nnever written. Behind [`ConsolePermission::ManageTranslations`] and audited (the row counts, never\nthe contents). The merged grid still satisfies the `en`-fallback rule by construction.",
+        "operationId": "import_translations_apply",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The CSV `GET /admin/translations/export` writes, as the raw request body: a `key` column, then one column per locale, at most 4 MB. Rows are merged onto the grid: the keys in the file are set and every other key is kept",
+          "content": {
+            "text/csv": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: the valid rows are merged onto the grid and saved, and the report is `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A merge needs no If-Match: the server re-reads and retries when another writer got there first. The ETag carries the grid's new version. Audited by counts, never the contents"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or the body is not CSV of the export's shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.translations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt lost a race with another writer: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 4 MB. Answered by the server's body limit, without the error envelope"
+          },
+          "503": {
+            "description": "The translation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/translations/import/dry-run": {
+      "post": {
+        "tags": [
+          "translations"
+        ],
+        "summary": "A super-admin dry-runs a translation-grid CSV import ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),\nTrack M5): the server parses and classifies every row (would-create / would-update / rejected) and\nreturns the report, **writing nothing**. Behind [`ConsolePermission::ManageTranslations`]; not\naudited (it changes nothing). The confirm step (`.../apply`) does the write.",
+        "operationId": "import_translations_dry_run",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The CSV `GET /admin/translations/export` writes, as the raw request body: a `key` column, then one column per locale, at most 4 MB. Rows are merged onto the grid: the keys in the file are set and every other key is kept",
+          "content": {
+            "text/csv": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the file would do, writing nothing: `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A row with no `en` string is rejected. Not audited"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or the body is not CSV of the export's shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.translations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is over 4 MB. Answered by the server's body limit, without the error envelope"
+          },
+          "503": {
+            "description": "The translation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/webhooks": {
       "get": {
         "tags": [
@@ -14569,6 +15466,14 @@
     {
       "name": "printers",
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+    },
+    {
+      "name": "media",
+      "description": "A tenant's image library (ADR-0042, ADR-0075): an upload is re-encoded into a bounded thumbnail and detail JPEG, the upload itself is never stored, and an item names an image by its id. A rendition never changes, so it is served with a long private cache."
+    },
+    {
+      "name": "translations",
+      "description": "A tenant's translation grid (ADR-0020, ADR-0043): each content key to its strings by locale, every key carrying `en`, the fallback a till shows when a locale has none. The grid is one entity, replaced wholesale and conditionally from the grid screen, or merged row by row from a CSV after a dry run."
     },
     {
       "name": "till layout",
