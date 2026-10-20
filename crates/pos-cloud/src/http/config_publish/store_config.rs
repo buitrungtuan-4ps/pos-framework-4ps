@@ -14,10 +14,10 @@ use pos_proto::ids::{StoreId, TenantId};
 
 use super::{load_tree_for_write, strip_tree_version};
 use crate::auth::admin::AdminStore;
-use crate::auth::console_rbac::{ConsolePermission, role_grants};
+use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{CapabilityValidator, ConfigLevel, ConfigTree, ConfigTreeStore};
 use crate::http::authored_layer::publish_authored_layer;
-use crate::http::config_publish::{staff_redacted_for, without_prices};
+use crate::http::config_publish::config_redacted_for;
 use crate::http::{
     CloudApp, Json, PublishedConfig, config_store_error_response, enum_refusal,
     no_published_configuration, parse_config_level,
@@ -205,7 +205,6 @@ where
             Ok(context) => context,
             Err(denied) => return denied,
         };
-    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id) =
         match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
@@ -222,14 +221,9 @@ where
             match tree.current_effective() {
                 // Never the staff PIN hashes (S7), never a staff name or code to a role without
                 // `ReadPeople` (ADR-0158), and never a price to a role without `ReadRevenue` (S8)
-                // — see `staff_redacted_for` and `without_prices`.
+                // — see `config_redacted_for`.
                 Some(effective) => {
-                    let document = staff_redacted_for(effective, context.admin.role);
-                    let document = if prices {
-                        document
-                    } else {
-                        without_prices(&document)
-                    };
+                    let document = config_redacted_for(effective, context.admin.role);
                     (StatusCode::OK, Json(document)).into_response()
                 }
                 None => no_published_configuration(),

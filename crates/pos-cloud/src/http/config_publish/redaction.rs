@@ -80,11 +80,11 @@ pub(in crate::http) fn without_staff_identities(document: &serde_json::Value) ->
 /// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 ///
 /// The two rules always travel together, so every console surface that hands back configuration
-/// applies them through this one function: the current and past config reads, and the merge patch
-/// both publish previews answer with. The patch needs nothing of its own. Every value in an
-/// RFC 7386 patch is either the candidate's own or a `null` that deletes a key, and a changed array
-/// is carried whole rather than patched, so wherever a patch reaches `permissions.staff` it holds
-/// complete members, exactly as the document does.
+/// applies them through this one function, by way of [`config_redacted_for`]: the current and past
+/// config reads, and the merge patch both publish previews answer with. The patch needs nothing of
+/// its own. Every value in an RFC 7386 patch is either the candidate's own or a `null` that deletes
+/// a key, and a changed array is carried whole rather than patched, so wherever a patch reaches
+/// `permissions.staff` it holds complete members, exactly as the document does.
 pub(in crate::http) fn staff_redacted_for(
     document: &serde_json::Value,
     role: AdminRole,
@@ -141,4 +141,77 @@ pub(in crate::http) fn without_prices(document: &serde_json::Value) -> serde_jso
         }
     }
     document
+}
+
+/// A config document — or a merge patch of one — as `role` may read it: the two staff rules of
+/// [`staff_redacted_for`], and the priced nodes of [`PRICED_CONFIG_NODES`] only for a role holding
+/// [`ConsolePermission::ReadRevenue`] ([`without_prices`], production-readiness **S8**).
+///
+/// Every console surface that hands back configuration goes through this one function: the current
+/// and past config reads, and the merge patch both publish previews answer with. The previews are
+/// why it exists. They need only [`ConsolePermission::PublishConfig`], which Ops holds and
+/// `ReadRevenue` does not, so a preview that redacted only the staff handed Ops the price book the
+/// config read withholds from them. A patch needs no rule of its own: it carries a priced node
+/// whole, under the same key, exactly as the document does.
+///
+/// A preview is redacted *after* its diff is computed, so `unchanged` stays true to the store: a
+/// candidate that changes only a price reads to Ops as an empty diff that is not unchanged, which
+/// says something is hidden rather than that nothing would happen.
+pub(in crate::http) fn config_redacted_for(
+    document: &serde_json::Value,
+    role: AdminRole,
+) -> serde_json::Value {
+    let document = staff_redacted_for(document, role);
+    if role_grants(role, ConsolePermission::ReadRevenue) {
+        document
+    } else {
+        without_prices(&document)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PRICED_CONFIG_NODES, config_redacted_for};
+    use crate::auth::admin::AdminRole;
+
+    /// A patch touching every priced node and a staff member, as a preview's diff can.
+    fn patch() -> serde_json::Value {
+        serde_json::json!({
+            "menu": { "items": [] },
+            "campaigns": { "campaigns": [] },
+            "fees": { "fees": [] },
+            "layout": { "pages": [] },
+            "permissions": { "staff": [{ "id": "01J", "pin_phc": "hash" }] },
+        })
+    }
+
+    /// Ops publishes but does not read revenue, so no priced node reaches it; Owner and Admin read
+    /// revenue and get every one. The staff credential reaches nobody, and an unpriced node reaches
+    /// everyone.
+    #[test]
+    fn prices_reach_only_a_role_that_reads_revenue() {
+        for (role, reads_revenue) in [
+            (AdminRole::Ops, false),
+            (AdminRole::Viewer, false),
+            (AdminRole::Admin, true),
+            (AdminRole::Owner, true),
+        ] {
+            let redacted = config_redacted_for(&patch(), role);
+            for node in PRICED_CONFIG_NODES {
+                assert_eq!(
+                    redacted.get(*node).is_some(),
+                    reads_revenue,
+                    "{role:?} and `{node}`: {redacted}"
+                );
+            }
+            assert!(
+                redacted.get("layout").is_some(),
+                "{role:?}: layout carries no money"
+            );
+            assert!(
+                !redacted.to_string().contains("pin_phc"),
+                "{role:?}: never the credential (S7)"
+            );
+        }
+    }
 }

@@ -166,10 +166,10 @@ pub(crate) use config_publish::{
 };
 use config_publish::{
     LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
-    admin_config_rollback, admin_config_version_effective, admin_config_versions, if_match_config,
-    load_tree_for_write, preview_config_node, publish_config_nodes, publish_nodes,
-    release_error_response, release_report_response, release_target_stores,
-    release_target_timezones, staff_redacted_for, unresolvable_moment,
+    admin_config_rollback, admin_config_version_effective, admin_config_versions,
+    config_redacted_for, if_match_config, load_tree_for_write, preview_config_node,
+    publish_config_nodes, publish_nodes, release_error_response, release_report_response,
+    release_target_stores, release_target_timezones, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
@@ -2355,9 +2355,9 @@ mod console_config_redaction_tests {
     //! together, as the config reads and the publish previews must, and still as two rules.
 
     use super::config_publish::redaction::{
-        PRICED_CONFIG_NODES, without_prices, without_staff_credentials, without_staff_identities,
+        PRICED_CONFIG_NODES, staff_redacted_for, without_prices, without_staff_credentials,
+        without_staff_identities,
     };
-    use super::staff_redacted_for;
     use crate::auth::admin::AdminRole;
     use crate::config_tree::merge::diff;
     use serde_json::json;
