@@ -79,6 +79,10 @@ pub use item_categories::{
     __path_admin_list_item_categories, __path_admin_list_item_subcategories,
     __path_admin_update_item_category, __path_admin_update_item_subcategory,
 };
+pub use item_files::{
+    __path_admin_export_items, __path_admin_import_items_apply, __path_admin_import_items_dry_run,
+};
+pub use items::{__path_admin_create_item, __path_admin_list_items, __path_admin_update_item};
 
 // --- Catalog authoring (`/admin/catalog/...`, ADR-0066) -----------------------------------------
 

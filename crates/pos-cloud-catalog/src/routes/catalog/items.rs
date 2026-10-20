@@ -38,6 +38,37 @@ pub(super) fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, (
         .collect()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/items",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose items to list (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "How many items to return, 1 to 500. Absent, \
+                                                    every item as an array rather than a page: the \
+                                                    menu compiler and the item pickers need them all"),
+        ("offset" = Option<u32>, Query, description = "How many items to skip, 0 to 100000. Only \
+                                                     with `limit`"),
+        ("q" = Option<String>, Query, description = "A case-insensitive substring the item's name \
+                                                   must contain. Only with `limit`"),
+        ("sort" = Option<String>, Query, description = "`newest` (the default), `name` or `status`. \
+                                                      Only with `limit`"),
+        ("order" = Option<String>, Query, description = "`asc` (the default) or `desc`. Only with \
+                                                       `limit`"),
+    ),
+    responses(
+        (status = 200, description = "Without `limit`, every item as an array; with it, a page: \
+                                      `items`, `total`, `limit` and `offset`. Each item has its \
+                                      `etag`, and no price"),
+        (status = 400, description = "tenant_id is absent or not a ULID; limit or offset is not an \
+                                      integer in range; offset, q, sort or order is sent without \
+                                      limit; or sort or order is not one the route accepts", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 /// A super-admin lists a tenant's items.
 pub(super) async fn admin_list_items<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -168,6 +199,30 @@ pub fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
     )
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/items",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id`, `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
+                       fallback), `tax_class_id`, and optionally `item_category_id`, \
+                       `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id \
+                       (ADR-0075). An item carries no price: a price belongs to its placement on a \
+                       menu",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, active, with the id minted here — the id an order \
+                                      names the item by. The body is the record and the ETag carries \
+                                      its version. Audited"),
+        (status = 400, description = "tenant_id or tax_class_id is absent or not a ULID, or item_category_id, \
+                                      item_subcategory_id, course_id or image_ref is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 pub(super) async fn admin_create_item<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
     headers: HeaderMap,
@@ -250,6 +305,38 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/items/{menu_item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("menu_item_id" = String, Path, description = "The item (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the item was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`, `status` (`active` or `archived`), and `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
+                       fallback), `tax_class_id`, and optionally `item_category_id`, \
+                       `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id \
+                       (ADR-0075). An item carries no price: a price belongs to its placement on a \
+                       menu, as they should \
+                       now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "menu_item_id is not a ULID, tenant_id or tax_class_id is absent or not a ULID, or item_category_id, \
+                                      item_subcategory_id, course_id or image_ref is not a ULID, status is not `active` or \
+                                      `archived`, or If-Match is absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no item with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The item changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 /// A super-admin renames an item, sets its tax class and/or status.
 pub(super) async fn admin_update_item<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
