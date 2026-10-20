@@ -110,13 +110,15 @@ Console permissions are separate: see the cloud route table.
 
 ## Screen
 
-**Till** (`ui/`). *Today: 3 files by hand, before strings and tests; phase 8 makes it one registry.*
+**Till** (`ui/`). One registry: `SCREENS` in `ui/src/state/screens.ts` is the list the router is built
+from, and `COMPONENTS` in `ui/src/App.tsx` maps each screen's id to its component, so one without the
+other does not compile.
 
 | Step | Files | Checked by |
 |---|---|---|
 | Screen | `ui/src/screens/<Screen>.tsx` | `ui build`, `pnpm lint` |
-| Route | `<Route path=… component=…>` in `ui/src/App.tsx` | `ui build` (step budget reads it) |
-| Task budget | `TASKS` in `ui/scripts/step-budget.mjs` | `ui build` |
+| Route | its entry in `SCREENS` (`ui/src/state/screens.ts`) and in `COMPONENTS` (`ui/src/App.tsx`) | `ui build` (the type check, and the step budget reads both); replay (every route opens its screen) |
+| Task budget | `TASKS` in `ui/scripts/step-tasks.mjs` | `ui build` |
 | Strings | `ui/src/i18n/en.json`, `vi.json` | `ui build` (i18n lint and parity) |
 | Flow | `ui/tests/replay.spec.mjs` | replay, which also requires every flow to be replayed or to say why not |
 
