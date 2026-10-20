@@ -13,18 +13,15 @@ use std::sync::Arc;
 use axum::Router;
 use tracing_subscriber::EnvFilter;
 
-use blob_garage::S3Blobs;
 use link_nats::ConsumerConfig;
-use pos_cloud::archive_retention;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::qr::TableTokenSecret;
 use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
-use pos_cloud::release_source::GithubReleases;
 use pos_cloud::starting_roles::RoleSeeder;
 use pos_cloud::wake;
-use pos_cloud::{NatsIngestConfig, ReleaseToken, assets, countries, http, orders, relay};
+use pos_cloud::{NatsIngestConfig, assets, countries, http, orders, relay};
 
 mod startup;
 
@@ -77,104 +74,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
 
-    // The background loops this deployment turned on, for the health endpoint to check against: the
-    // projector and webhook dispatcher always run; the retention cron only when a period is set. A loop
-    // in this set that has never ticked reads as unhealthy rather than being silently absent.
-    let mut expected_tasks = vec![
-        pos_cloud::health::ROLLUP_PROJECTOR.to_owned(),
-        pos_cloud::health::WEBHOOK_DISPATCHER.to_owned(),
-        pos_cloud::health::ALERT_EVALUATOR.to_owned(),
-    ];
-    if config.retention_days.is_some() {
-        expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
-    }
-
-    // The OTA artifact route exists only where an object store is configured (ADR-0088). A cloud that
-    // ships no edge releases needs none, and the alternative — a route answering with an empty
-    // success — would tell a store it is up to date when nothing was ever published. An absent
-    // endpoint is a `404`, which the adapter already reads as "the cloud publishes no such release".
-    let artifacts = match config.artifacts.as_ref() {
-        None => {
-            tracing::info!(
-                "no [artifacts] configured; the OTA artifact route is off and stores cannot fetch releases"
-            );
-            None
-        }
-        Some(artifacts) => match S3Blobs::new(
-            &artifacts.endpoint,
-            &artifacts.bucket,
-            &artifacts.region,
-            &artifacts.access_key_id,
-            &artifacts.secret_access_key,
-        ) {
-            Ok(blobs) => Some(blobs),
-            // Configured but unusable is a boot-time mistake worth being loud about, and not worth
-            // refusing to start over: selling, config delivery and reporting are unaffected, and a
-            // cloud that will not boot because OTA is misconfigured takes the fleet's dashboards
-            // down with it.
-            Err(error) => {
-                tracing::error!(%error, "the [artifacts] endpoint is unusable; the OTA artifact route is off");
-                None
-            }
-        },
-    };
-
-    // Where the console fetches a signed release pair from (ADR-0088 Amendment 4). Absent costs
-    // nothing: the `/admin` upload route is unaffected, and cutting a release stays the `curl` per
-    // target `docs/release-runbook.md` documents. Configured (the deploy writes it for a public
-    // repository), the box needs outbound HTTPS to the forge — an operator's path, never a store's.
-    let release_source = match config.release_source.as_ref() {
-        None => {
-            tracing::info!(
-                "no [release_source] configured; a release artifact reaches the cloud by upload only"
-            );
-            None
-        }
-        Some(source) => {
-            tracing::info!(
-                repository = %source.repository,
-                api_base = %source.api_base,
-                authenticated = source.token.is_some(),
-                "the console can fetch a release artifact from the release source"
-            );
-            Some(GithubReleases::new(
-                &source.api_base,
-                &source.repository,
-                source.token.as_ref().map(ReleaseToken::expose),
-            ))
-        }
-    };
-
-    // The store-archive retention sweep (ADR-0124 slice 3). It needs the same object store the
-    // archives were uploaded to, which is why it is spawned here rather than beside the subject
-    // cron above — and only where archiving is on at all, because a sweep with nothing to sweep is
-    // a daily query for no reason.
-    //
-    // Why it exists is not disk. A store's archive is its whole database, buyer details included
-    // (ADR-0107), taken *before* the masking cron redacted them; capping the archive window below
-    // the subject window is what makes that redaction eventually true in the copies too. The
-    // configuration refuses to start with the two windows the wrong way round, so by the time this
-    // spawns the ordering already holds.
-    let archive_retention_task = match (artifacts.clone(), config.archive_key_secret.as_ref()) {
-        (Some(blobs), Some(_secret)) => {
-            let interval = Duration::from_secs(config.archive_retention_sweep_interval_secs);
-            tracing::info!(
-                archive_retention_days = config.archive_retention_days,
-                interval_secs = config.archive_retention_sweep_interval_secs,
-                "store-archive retention sweep started"
-            );
-            Some(tokio::spawn(archive_retention::run(
-                store.archives(),
-                blobs,
-                archive_retention::ArchiveWindow::days(config.archive_retention_days),
-                SystemClock,
-                store.task_health(),
-                interval,
-                shutdown_signal(),
-            )))
-        }
-        _other => None,
-    };
+    let expected_tasks = startup::expected_tasks(&config);
+    let artifacts = startup::artifact_store(&config);
+    let release_source = startup::release_source(&config);
+    let archive_retention_task =
+        startup::loops::archive_retention_sweep(&config, &store, artifacts.as_ref());
 
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
@@ -196,16 +100,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // them back for the console. One handle, so the screen shows what the ingest actually recorded.
     let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
 
-    // The vendor catalogue (ADR-0153), built once at boot and refused here if two adapters claim
-    // one id, so a malformed catalogue never serves. Shared by the catalogue read and the
-    // connection routes, which check every write against it.
-    let providers = Arc::new(pos_cloud::providers::registry()?);
-    if config.integration_secret.is_none() {
-        tracing::warn!(
-            "cloud.toml has no integration_secret: vendor connections can be configured, but \
-             any write that carries a credential is refused (ADR-0153)"
-        );
-    }
+    let providers = startup::vendor_catalogue(&config)?;
 
     let service = http::router(app)
         .merge(http::chain_router(

@@ -54,7 +54,7 @@
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
 "crates/pos-cloud/src/http/config_publish/config_releases.rs::config_release_router" = { lines = 50, params = 9 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
-"crates/pos-cloud/src/main.rs::run" = { lines = 869, params = 0 }
+"crates/pos-cloud/src/main.rs::run" = { lines = 767, params = 0 }
 "crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 123, params = 1 }
 "crates/pos-edge/src/demo.rs::config_document" = { lines = 105, params = 0 }
 "crates/pos-edge/src/ota_client.rs::OtaClient::new" = { lines = 21, params = 9 }
