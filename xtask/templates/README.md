@@ -6,6 +6,9 @@ substitution; a placeholder the generator does not fill is an error, not an empt
 `.tmpl` suffix keeps Cargo, rustfmt and the link check from reading them as real files.
 
 - `crate/`: `cargo xtask new crate`, the base every other generator builds on.
+- `adapter/<kind>/`: `cargo xtask new adapter --kind <kind>`: the crate root (`lib.rs.tmpl`), a
+  transport seam with a pure core implementing the port, and `contract.rs.tmpl`, the port's shared
+  suite against an in-memory transport. A template is kept as rustfmt formats it.
 
 A change here changes the matching golden file under [`../tests/golden/`](../tests/golden/README.md)
 in the same pull request.

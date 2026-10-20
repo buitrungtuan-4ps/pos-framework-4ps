@@ -50,6 +50,11 @@ cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number
   write a workspace crate that `xtask crates` accepts: manifest and contract card, README, crate
   root, and its `members` line; owners come from CODEOWNERS; never overwrites (ADR-0176)
 
+cargo xtask new adapter --kind printer|storage [--dry-run]
+
+  write crates/adapters/<kind>-sandbox: a port implementation over a transport seam, and the port's
+  contract suite wired in tests/contract.rs; it names no vendor (ADR-0176)
+
 cargo xtask affected --classes [--base <ref>] [--all]
 
   which path classes a change touches (rust, rust_all, ui, dashboard, shared, docs_only,
