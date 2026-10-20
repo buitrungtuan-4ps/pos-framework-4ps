@@ -51,7 +51,6 @@
 "crates/adapters/store-postgres/src/people.rs::PostgresPeople::set_role_template" = { lines = 49, params = 9 }
 "crates/adapters/store-postgres/src/store.rs::PostgresStore::migrate" = { lines = 347, params = 1 }
 "crates/adapters/store-sqlite/src/writer.rs::run" = { lines = 252, params = 2 }
-"crates/adapters/store-sqlite/src/writer.rs::verify_chain_chunk" = { lines = 125, params = 4 }
 "crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
