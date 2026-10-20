@@ -1,0 +1,40 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The `Fiscalization` contract suite, against Example country's module.
+//!
+//! The obligations are the port's: offline issuance, never-reuse across ranges, one number per bill,
+//! a refusal on exhaustion. When a provider replaces the body, this file says at once whether it
+//! fits the port.
+
+use pos_contract_tests::harness::{FiscalizationHarness, Setup};
+use pos_country::offline::OfflineFiscalization;
+use pos_fakes::executor::run_ready;
+use pos_proto::{StoreId, Ulid};
+
+/// Supplies a fresh fiscalization. `disconnect` and `reconnect` are no-ops: nothing here contacts an
+/// authority, so it is always in the disconnected state the suite tests.
+#[derive(Default)]
+struct Harness;
+
+impl FiscalizationHarness for Harness {
+    type Fiscal = OfflineFiscalization;
+
+    async fn fresh(&self) -> Setup<Self::Fiscal> {
+        Ok(pos_country_xa::fiscalization())
+    }
+
+    async fn disconnect(&self, _fiscal: &Self::Fiscal) -> Setup<()> {
+        Ok(())
+    }
+
+    async fn reconnect(&self, _fiscal: &Self::Fiscal) -> Setup<()> {
+        Ok(())
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(1))
+    }
+}
+
+pos_contract_tests::fiscalization_suite!(Harness, run_ready);
