@@ -4,6 +4,8 @@
 //! The steps of the cloud's boot, in the order `run` takes them: the configuration, the store,
 //! then the application over it.
 
+pub(super) mod loops;
+
 use std::sync::Arc;
 
 use pos_cloud::audit::AuditRecorder;
