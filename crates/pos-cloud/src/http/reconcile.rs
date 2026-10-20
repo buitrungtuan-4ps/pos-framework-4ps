@@ -309,6 +309,27 @@ impl ReconcileRunView {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/reconcile",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose runs to list (a 26-character ULID)"),
+        ("store_id" = Option<String>, Query, description = "Only this store's runs (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "The most runs to return (default 100, at most 500)"),
+    ),
+    responses(
+        (status = 200, description = "The runs, newest first, as an array: each with `run_id`, \
+                                      `store_id`, `candidates_offered` (the events the store \
+                                      offered), `missing_found` (how many of them the cloud lacked \
+                                      and asked for again; zero is in sync) and `ran_at_ms`"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The reconciliation store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// Lists a tenant's most recent reconciliation runs, newest first
 /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
 /// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind

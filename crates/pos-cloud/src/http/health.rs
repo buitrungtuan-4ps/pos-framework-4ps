@@ -134,6 +134,24 @@ fn health_error_response(error: &TaskHealthError) -> Response {
     )
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/health/tasks",
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, description = "`healthy`, whether every loop this deployment expects is \
+                                      healthy, and `tasks`: each loop with `task`, `expected`, \
+                                      `healthy` (it ticked within a few of its intervals and its last \
+                                      tick succeeded), `last_tick_at_ms`, `seconds_since` and the \
+                                      loop's own `detail`. An expected loop that never ticked is \
+                                      listed as unhealthy; a loop that ticks but is not expected is \
+                                      listed and does not count"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The task-health store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// Reports every background loop's health: each expected loop (whether or not it has ticked) plus any
 /// extra loop that has. `503` if the store is unreachable.
 async fn admin_task_health<H, A, C>(
