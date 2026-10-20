@@ -251,6 +251,210 @@
         ]
       }
     },
+    "/admin/api-keys": {
+      "get": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Lists a tenant's API keys as metadata only — never a secret (super-admin only).",
+        "operationId": "admin_list_api_keys",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose keys to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's keys, as an array: each with `id`, `store_id` (absent for a tenant-wide key), `scopes`, `revoked` and `expires_at_ms`. Never a token or a secret"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Provisions a new scoped per-tenant API key and returns the one-time token (super-admin only).",
+        "description": "Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and\npersists it (storing only the secret's hash). The token in the `201` body is the only time the\nsecret is visible.",
+        "operationId": "admin_create_api_key",
+        "requestBody": {
+          "description": "`tenant_id`; `store_id` to bind the key to one store, or absent for a tenant-wide key (a store's own sync credential must name its store); `scopes`, the only things the key may do: `read_rollups`, `read_config`, `manage_devices`, `place_orders`, `relay_orders` or `publish_events`; and `expires_at_ms`, or absent for a key that never expires",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Provisioned. The body carries the key's `id` and its `token`, `pos_<id>_<secret>`. The token is returned exactly once — only a hash of the secret is stored. The audit entry records the scopes and the expiry, never the token"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, a scope is unknown, or expires_at_ms is out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.apikeys.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking\nis idempotent, and telling the caller which it was is a needless enumeration signal.",
+        "operationId": "admin_revoke_api_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The key's id, the ULID half of its token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No live key has that id any more. Idempotent: the answer is the same whether a live key was found, so it reveals nothing, and only a revocation that retired one is audited"
+          },
+          "400": {
+            "description": "id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.apikeys.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The key store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/assignments": {
       "get": {
         "tags": [
@@ -6190,6 +6394,309 @@
         ]
       }
     },
+    "/admin/webhooks": {
+      "get": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Lists a tenant's webhook endpoints as metadata only — never a secret (super-admin only).",
+        "operationId": "admin_list_webhooks",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose endpoints to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's endpoints, as an array: each with `id`, `store_id`, `url`, `cursor` (the last event delivered, absent before the first) and `disabled`. Never the signing secret"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Registers a webhook endpoint and returns the one-time signing secret (super-admin only).",
+        "description": "Behind the session guard. The destination is SSRF-vetted before anything is stored: `https` only,\nno credentials, and every resolved address must be public unicast — so a webhook URL can never\nbecome a probe into the cloud's own network ([ADR-0032](../../../docs/adr/0032-webhooks.md)). The\nid and signing secret are minted at the edge; the secret in the `201` body is the only time it is\nvisible, because the cloud stores it to *sign* with rather than to verify a hash of.",
+        "operationId": "admin_register_webhook",
+        "requestBody": {
+          "description": "`tenant_id`, `store_id`, the store whose events the endpoint is sent, and `url`: `https`, carrying no credentials, and resolving only to public addresses (ADR-0032). The URL is checked before anything is stored",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registered. The body carries the endpoint's `id`, the normalised `url` that was stored, and the `signing_secret` every delivery is signed with. The secret is returned exactly once"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or the URL is refused. The refusal names the `url` field and does not say what this server's resolver found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.webhooks.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store, the URL check or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/webhooks/{id}": {
+      "delete": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Deletes a webhook endpoint by id within a tenant (super-admin only). `204` whether or not a live\nendpoint was found — deletion is idempotent, the tenant scope stops one tenant removing another's\nendpoint, and reporting which case it was is a needless enumeration signal.",
+        "operationId": "admin_delete_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The tenant has no endpoint with that id any more. Idempotent: the answer is the same whether one was found, and another tenant's endpoint is never removed"
+          },
+          "400": {
+            "description": "tenant_id or id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.webhooks.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/webhooks/{id}/enable": {
+      "post": {
+        "tags": [
+          "integrator access"
+        ],
+        "summary": "Re-enables a webhook endpoint that a day of continuous failure had auto-disabled (super-admin\nonly). Delivery resumes from the endpoint's stored cursor, so nothing that queued while it was\ndown is skipped ([ADR-0032](../../../docs/adr/0032-webhooks.md)).",
+        "description": "Tenant-scoped like deletion, but enforced differently: [`WebhookEndpointStore::set_disabled`]\naddresses an endpoint by id alone — the delivery task, which also calls it, holds no tenant — so\nthe scope is checked here by confirming the id appears in this tenant's own listing before the\nflag is cleared. An id that is not this tenant's is a `404`, never a cross-tenant write. Idempotent:\nre-enabling an already-active endpoint is a no-op `204`.",
+        "operationId": "admin_enable_webhook",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Enabled. Delivery resumes from the endpoint's stored cursor, so nothing queued while it was disabled is skipped. Enabling an endpoint already enabled changes nothing"
+          },
+          "400": {
+            "description": "tenant_id or id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.webhooks.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no endpoint with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/whoami": {
       "get": {
         "tags": [
@@ -6319,6 +6826,10 @@
     {
       "name": "store groups",
       "description": "The cohorts a tenant publishes to as one, and their membership (ADR-0122). A group holds no configuration: publishing to one calls the same per-store publish once per member, so the config tree's four layers and the store's sync path are untouched. Membership is replaced wholesale under the group's own ETag, because a cohort is a set and a delta API merges two admins' concurrent edits into one neither of them chose."
+    },
+    {
+      "name": "integrator access",
+      "description": "The credentials and destinations of the `/v1` integrator surface: a tenant's scoped API keys (ADR-0037) and the webhook endpoints a store's events are sent to (ADR-0032). A key's token and an endpoint's signing secret are each returned once, when it is made; no read returns either. A webhook URL is checked before it is stored, so it can never point into the cloud's own network. Revoking a key and deleting an endpoint are idempotent and say nothing about whether one existed."
     },
     {
       "name": "integrations",

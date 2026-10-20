@@ -46,6 +46,10 @@ pub(crate) use connections::{
 };
 pub(crate) use providers::__path_admin_list_providers;
 pub(crate) use publish::__path_admin_publish_integrations;
+pub(crate) use webhooks::{
+    __path_admin_delete_webhook, __path_admin_enable_webhook, __path_admin_list_webhooks,
+    __path_admin_register_webhook,
+};
 
 // --- Vendor connections (`/admin/integrations/connections`, ADR-0153) ---------------------------
 
