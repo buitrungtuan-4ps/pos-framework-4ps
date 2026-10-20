@@ -1,6 +1,6 @@
 # Write an adapter
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-20
 
 An adapter connects one external system — a payment terminal, a courier, a marketplace, an ERP — to a
 **port** the core already defines. You never touch `pos-core`; you implement a trait and prove it with
@@ -8,11 +8,32 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
 
 ## The shape (every adapter is the same three parts)
 
-1. **A transport seam** — the one place that touches the socket, plus a TLS sender on the tree's stack.
+1. **A transport seam** — the one place that touches the device, the store or the socket, plus a TLS
+   sender on the tree's stack for a network provider.
 2. **A pure core** — build the request, map the provider's replies to the port's types and its HTTP
    status to a `PortError`. No I/O here, so it is fully unit-testable.
 3. **A stub-driven contract test** — a fake transport that speaks the provider's wire, driving the
    port's shared suite from `pos-contract-tests` with no network.
+
+## Start from a generator, or from the template
+
+**A printer, storage, card terminal or e-invoice adapter** starts from a generated sandbox
+([ADR-0176](../adr/0176-the-adapter-and-country-standard.md)):
+
+```bash
+cargo xtask new adapter --kind printer   # or storage, card, fiscal
+```
+
+It writes `crates/adapters/<kind>-sandbox` and its `members` line. The crate is a pure core over a
+transport seam, and its `tests/contract.rs` already passes the port's suite. A card or fiscal
+sandbox also carries the `card.sandbox` or `einvoice.sandbox` descriptor. The command names no
+vendor: rename the crate and the descriptor's id when you write a real vendor's adapter from it.
+Then do steps 4 to 7 below; the command has done the first three. It prints the README lines to
+paste, which `cargo xtask crates` also shows.
+
+**A courier, ERP or delivery adapter**, a network provider, still starts from
+[`templates/adapter-template`](../../templates/adapter-template/README.md) until a generator covers
+those kinds. Do steps 1 to 7.
 
 ## Steps
 
@@ -38,7 +59,11 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
      Declare only what the adapter reads. A secret is sealed by the cloud on arrival and never
      returned.
    - **The line.** Add the crate to `crates/pos-cloud/Cargo.toml` and to `registry()` in
-     `crates/pos-cloud/src/providers.rs`.
+     `crates/pos-cloud/src/providers.rs`. That registry lists the cloud's providers. A card driver
+     runs on the edge, whose registry waits for
+     [ADR-0154](../adr/0154-a-card-is-taken-through-the-stores-terminal.md). How the cloud submits an
+     e-invoice waits for [ADR-0156](../adr/0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md).
+     So a card or e-invoice sandbox is registered nowhere yet.
    - **The words.** Add `provider.<family>.<vendor>`, and a label for any field that is not shared, to
      the console's `en` and `vi` catalogues.
 

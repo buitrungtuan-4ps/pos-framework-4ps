@@ -2,6 +2,12 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
 
+**For a printer, storage, card-terminal or e-invoice adapter, do not copy this:** run
+`cargo xtask new adapter --kind printer|storage|card|fiscal`, which writes a sandbox that already
+passes the port's suite ([ADR-0176](../../docs/adr/0176-the-adapter-and-country-standard.md)). This
+template stays for network providers (courier, ERP, delivery) until a generator covers them, which
+is when ADR-0176 decision 6 removes it.
+
 This directory is a **scaffold you copy**, not a crate. It is deliberately not a workspace member and
 its source files carry a `.tmpl` suffix, so Cargo, `clippy`, `rustfmt`, and `cargo test` never see it —
 copy it out, drop the suffix, and fill in the placeholders.
