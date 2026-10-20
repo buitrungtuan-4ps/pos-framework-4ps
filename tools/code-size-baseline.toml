@@ -24,7 +24,7 @@
 "crates/pos-edge-app/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445
-"crates/pos-edge/src/server.rs" = 2125
+"crates/pos-edge/src/server.rs" = 1935
 "crates/pos-edge/tests/acceptance.rs" = 2564
 "crates/pos-edge/tests/domain_flow.rs" = 2343
 "crates/pos-edge/tests/drawers.rs" = 1543
@@ -63,11 +63,10 @@
 "crates/pos-core/src/decision.rs::decide_bill" = { lines = 103, params = 3 }
 "crates/pos-edge/src/demo.rs::config_document" = { lines = 105, params = 0 }
 "crates/pos-edge/src/http/mod.rs::domain_router" = { lines = 224, params = 8 }
-"crates/pos-edge/src/main.rs::run" = { lines = 110, params = 2 }
 "crates/pos-edge/src/ota_client.rs::OtaClient::new" = { lines = 21, params = 9 }
 "crates/pos-edge-printing/src/printing/documents.rs::receipt_copy_document" = { lines = 26, params = 10 }
 "crates/pos-edge-printing/src/printing/jobs.rs::Printers::print_receipt" = { lines = 42, params = 9 }
+# Exempt from P8 (a reasoned exemption under ADR-0170 decision 7, decided 2026-10-15): composition reads top to bottom in the order a store comes
+# up, and its parts each need most of its locals, so a split would scatter that order across helpers
+# that take them all. Its `#[expect(clippy::too_many_lines)]` says the same.
 "crates/pos-edge/src/server.rs::compose" = { lines = 252, params = 8 }
-"crates/pos-edge/src/server.rs::compose_cloud_surface" = { lines = 118, params = 14 }
-"crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }
-"crates/pos-edge/src/server.rs::spawn_cloud_loops" = { lines = 125, params = 14 }
