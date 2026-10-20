@@ -26,6 +26,23 @@ use crate::routes::{
 };
 use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/layout-buttons",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every button on every channel's till layout, as an array, each \
+                                      with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "till layout",
+)]
 /// A super-admin lists a tenant's layout buttons across all channels.
 pub(super) async fn admin_list_layout_buttons<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -106,6 +123,29 @@ fn build_layout_button(
     })
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/layout-buttons",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`sales_channel` and `menu_item_id`, the slot the button is for — an item has \
+                       at most one button per channel — then `tenant_id`, the `display_category_id` the button sits under and optionally its \
+                       `display_subcategory_id`, its `label`, and its place: `grid_column` and \
+                       `grid_row` together for a fixed slot, otherwise it flows by `sort`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Placed. The body is the button and the ETag carries its \
+                                      version. Audited"),
+        (status = 400, description = "An id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The item already has a button on this channel: change it with \
+                                      PUT instead", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "till layout",
+)]
 /// A super-admin places an item's button on a channel's layout, refusing if it is already there.
 ///
 /// The route this replaced was a single `PUT` upsert. A button's identity is entirely
@@ -160,6 +200,36 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("sales_channel" = String, Path, description = "The sales channel's wire token"),
+        ("menu_item_id" = String, Path, description = "The item (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`, the `display_category_id` the button sits under and optionally its \
+                       `display_subcategory_id`, its `label`, and its place: `grid_column` and \
+                       `grid_row` together for a fixed slot, otherwise it flows by `sort`, as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Updated. The body is the button and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "An id is not a ULID, or If-Match is absent, malformed, or a \
+                                      wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The item has no button on this channel", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The button changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "till layout",
+)]
 /// A super-admin changes a button's presentation on a channel, only at the version they read.
 pub(super) async fn admin_update_layout_button<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -215,6 +285,25 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("sales_channel" = String, Path, description = "The sales channel's wire token"),
+        ("menu_item_id" = String, Path, description = "The item (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Removed from the channel's layout, and audited"),
+        (status = 400, description = "tenant_id or menu_item_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The item has no button on this channel", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "till layout",
+)]
 /// A super-admin removes an item's button from a channel's layout (tenant named on the query).
 pub(super) async fn admin_remove_layout_button<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,

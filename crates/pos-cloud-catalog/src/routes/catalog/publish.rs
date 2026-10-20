@@ -212,6 +212,34 @@ struct PublishedMenu {
     fees: FeePublishResult,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/publish",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with \
+                       the menus it inherits from",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published: the menu's price book and the till layout are \
+                                      written to the store's `menu` and `layout` nodes in one \
+                                      configuration version, with its `fees` node where that \
+                                      changes (ADR-0159). The body carries `config_version_id` and \
+                                      `fees`, the fee publish's outcome: applied, unchanged, refused \
+                                      with each rule the store cannot apply, or failed. A store that \
+                                      cannot apply a fee still gets its menu. Audited"),
+        (status = 400, description = "tenant_id, store_id or menu_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The menu does not compile, naming why, or the store's \
+                                      configuration would not validate with it", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin publishes a menu to a store: compile the price book and the presentation layout →
 /// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes, with the
 /// store's `fees` node beside them where it changes → version it through the config tree.
