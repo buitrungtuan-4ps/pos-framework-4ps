@@ -222,6 +222,11 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_read_store_group_batch,
         crate::http::admin_list_store_archives,
         crate::http::admin_config_nodes,
+        crate::http::config_publish::admin_config_effective,
+        crate::http::config_publish::admin_config_publish,
+        crate::http::config_publish::admin_config_versions,
+        crate::http::config_publish::admin_config_version_effective,
+        crate::http::config_publish::admin_config_rollback,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -547,12 +552,14 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         ),
         (
             name = "config",
-            description = "A store's published configuration (ADR-0033). The authoring routes are \
-                           still coverage debt; the per-node read here is documented because it is \
-                           what a fork's own console needs to answer the operator's actual \
-                           question — which node is stale — and because it carries no \
-                           configuration values at all, only which nodes exist and when each was \
-                           last published."
+            description = "A store's configuration tree (ADR-0033): four layers — tenant, brand, \
+                           store and device — composed and validated into the document the store \
+                           runs, with an append-only history of versions. A layer is replaced \
+                           whole, conditional on the version it was read at; a rollback restores a \
+                           past version as a new one. The effective document is redacted for its \
+                           reader, and the per-node read carries no values at all, only which \
+                           nodes exist and when each was last published. A store pulls a new \
+                           version on its next sync."
         ),
     )
 )]
@@ -595,12 +602,6 @@ impl Modify for SessionCookie {
     )
 )]
 const UNDOCUMENTED: &[&str] = &[
-    // --- a store's configuration (WS-C) ---
-    "/admin/stores/{store_id}/config",
-    "/admin/stores/{store_id}/config/rollback",
-    "/admin/stores/{store_id}/config/versions",
-    "/admin/stores/{store_id}/config/versions/{version_id}",
-    "/admin/stores/{store_id}/config/{level}",
     // --- the four-level configuration tree and its publishes (ADR-0033) ---
     "/admin/config/campaigns",
     "/admin/config/campaigns/preview",

@@ -12522,12 +12522,101 @@
         }
       }
     },
+    "/admin/stores/{store_id}/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "The current effective (composed, validated) config document for a store (super-admin only), or\n`404` if nothing has been published to it yet.",
+        "operationId": "admin_config_effective",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's current effective configuration: its four layers composed. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This store has never published a configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/stores/{store_id}/config/nodes": {
       "get": {
         "tags": [
           "config"
         ],
-        "summary": "Lists a store's published config versions newest-first (super-admin only). The version history is\nthe config tree's own append-only log; the `at` of each is read from its ULID id, so no separate\ntimestamp column is needed. `404` if the store has no tree yet.\n`GET /admin/stores/{store_id}/config/nodes` — which node was published when (finding **F6**).",
+        "summary": "`GET /admin/stores/{store_id}/config/nodes` — which node was published when (finding **F6**).",
         "description": "Read-only and `console.data.read`, the same as the version history beside it. The effective\ndocument is not returned, only its node **keys**, so this route carries no configuration values\nat all and needs none of [`strip_tree_version`]'s redaction: a caller learns that a store has a\n`permissions` node and when it was published, never what is in it.",
         "operationId": "admin_config_nodes",
         "parameters": [
@@ -12605,6 +12694,431 @@
             }
           }
         }
+      }
+    },
+    "/admin/stores/{store_id}/config/rollback": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's\neffective document is re-published as a *new* current version, so nothing in the history is altered\nor removed and the store pulls the restored config on its next sync. The action is audited as\n`config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). `404` if the store or the\nnamed version is unknown.",
+        "operationId": "admin_config_rollback",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The configuration version the rollback was decided against (ADR-0095). Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`version_id`, the past version to restore",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restored as a new current version: the history is never rewritten. The body carries `config_version_id`, which the store pulls on its next sync. Audited with both versions"
+          },
+          "400": {
+            "description": "An id is absent or not a ULID; If-Match is absent or malformed; or the restored version runs a value that needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The store has never published a configuration, or has no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The store's configuration changed since you read it, or If-Match is `*` but the store has been published to: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/config/versions": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Lists a store's published config versions newest-first (super-admin only). The version history is\nthe config tree's own append-only log; the `at` of each is read from its ULID id, so no separate\ntimestamp column is needed. `404` if the store has no tree yet.",
+        "operationId": "admin_config_versions",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every configuration version the store has had, newest first, as an array: `version_id`, `at_ms` (read from the id) and `current`. The history only grows: a rollback adds a version"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This store has never published a configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/config/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "The effective (composed, validated) document of one past config version (super-admin only), for\nthe console's diff view. `404` if the store or the named version is unknown.",
+        "operationId": "admin_config_version_effective",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "The version (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "That version's effective configuration, for comparing with another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue: a past version is no less sensitive"
+          },
+          "400": {
+            "description": "tenant_id, store_id or version_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The store has never published a configuration, or has no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/stores/{store_id}/config/{level}": {
+      "put": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Authors one level of a store's config tree and publishes the composed version (super-admin only).",
+        "description": "Loads the store's tree for the query's tenant, replaces the named `level`'s document with the\nrequest body, and publishes — composing, validating, and (only if valid) appending a new version,\nwhich is then persisted. A rejected version is a `422` carrying the violations; nothing is stored\nand the last good version stays current ([ADR-0033](../../../docs/adr/0033-config-tree.md)).",
+        "operationId": "admin_config_publish",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "level",
+            "in": "path",
+            "description": "The layer to replace: `tenant`, `brand`, `store` or `device`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The configuration version the write was made against, or `*` for a store never published to (ADR-0095). Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The whole document for that layer, as JSON. It replaces the layer, every key of it, and the four layers are composed and validated into the store's new configuration (ADR-0033)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published. The body carries `config_version_id`, the new version, which the store pulls on its next sync. Audited with the level and the version, never the document"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID; level is not one of the four; If-Match is absent or malformed; or a value needs a recorded confirmation first (ADR-0169)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The store's configuration changed since you read it, or If-Match is `*` but the store has been published to: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The composed configuration does not validate, listing each violation. Nothing is stored and the last good version stays current",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/stores/{store_id}/devices": {
@@ -15545,7 +16059,7 @@
     },
     {
       "name": "config",
-      "description": "A store's published configuration (ADR-0033). The authoring routes are still coverage debt; the per-node read here is documented because it is what a fork's own console needs to answer the operator's actual question — which node is stale — and because it carries no configuration values at all, only which nodes exist and when each was last published."
+      "description": "A store's configuration tree (ADR-0033): four layers — tenant, brand, store and device — composed and validated into the document the store runs, with an append-only history of versions. A layer is replaced whole, conditional on the version it was read at; a rollback restores a past version as a new one. The effective document is redacted for its reader, and the per-node read carries no values at all, only which nodes exist and when each was last published. A store pulls a new version on its next sync."
     }
   ]
 }

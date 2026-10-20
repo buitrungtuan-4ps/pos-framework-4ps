@@ -23,6 +23,44 @@ use crate::http::{
     no_published_configuration, parse_config_level,
 };
 
+#[utoipa::path(
+    put,
+    path = "/admin/stores/{store_id}/config/{level}",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("level" = String, Path, description = "The layer to replace: `tenant`, `brand`, `store` or \
+                                              `device`"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The configuration version the write was \
+                                                     made against, or `*` for a store never \
+                                                     published to (ADR-0095). Required"),
+    ),
+    request_body(
+        description = "The whole document for that layer, as JSON. It replaces the layer, every key \
+                       of it, and the four layers are composed and validated into the store's new \
+                       configuration (ADR-0033)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published. The body carries `config_version_id`, the new \
+                                      version, which the store pulls on its next sync. Audited with \
+                                      the level and the version, never the document"),
+        (status = 400, description = "tenant_id or store_id is not a ULID; level is not one of the \
+                                      four; If-Match is absent or malformed; or a value needs a \
+                                      recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The store's configuration changed since you read it, or \
+                                      If-Match is `*` but the store has been published to: re-read \
+                                      it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The composed configuration does not validate, listing each \
+                                      violation. Nothing is stored and the last good version stays \
+                                      current", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// Authors one level of a store's config tree and publishes the composed version (super-admin only).
 ///
 /// Loads the store's tree for the query's tenant, replaces the named `level`'s document with the
@@ -124,6 +162,27 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's current effective configuration: its four layers \
+                                      composed. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
+                                      holding console.people.read, and prices only for a role \
+                                      holding console.reports.revenue"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "This store has never published a configuration", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// The current effective (composed, validated) config document for a store (super-admin only), or
 /// `404` if nothing has been published to it yet.
 pub(in crate::http) async fn admin_config_effective<S, R, K, C, A, T, W>(
