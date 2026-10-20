@@ -169,7 +169,7 @@ where
         (status = 400, description = "tenant_id is absent or not a ULID, store_id is not a ULID, or \
                                       status is not one of the three", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "device onboarding",

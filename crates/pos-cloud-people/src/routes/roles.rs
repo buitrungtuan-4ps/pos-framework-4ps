@@ -41,7 +41,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
                                       granted with approval) and `description`. The same for every \
                                       tenant"),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "people",
 )]
@@ -86,7 +86,7 @@ where
                                       permissions, never a person"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "people",
@@ -136,7 +136,7 @@ where
                                       read at — the token a PATCH must send back as If-Match"),
         (status = 400, description = "tenant_id or role_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 404, description = "The tenant has no role with that id", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),

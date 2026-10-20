@@ -147,7 +147,7 @@ fn health_error_response(error: &TaskHealthError) -> Response {
                                       listed as unhealthy; a loop that ticks but is not expected is \
                                       listed and does not count"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The task-health store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "operations",

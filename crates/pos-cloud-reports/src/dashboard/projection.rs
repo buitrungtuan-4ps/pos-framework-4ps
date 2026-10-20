@@ -216,7 +216,7 @@ where
 /// pairing expiry is still deferred (ADR-0091), and reclaim is the fix rather than paging.
 ///
 /// **T3.** Device identifiers and instants. Who admitted a device is not here and never reaches the
-/// cloud (ADR-0118 §5), so this read needs no revenue-grade permission — `console.read` is enough,
+/// cloud (ADR-0118 §5), so this read needs no revenue-grade permission — `console.data.read` is enough,
 /// the same standing the fleet detail beside it takes.
 ///
 /// `tenant` is the caller's authenticated tenant, so the read is confined to that tenant's rollups.
