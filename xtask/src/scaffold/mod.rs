@@ -25,7 +25,7 @@ use crate::checks::{Error, repo_root};
 /// The usage line, for a missing or unknown generator.
 const USAGE: &str = "usage: cargo xtask new crate <name> --layer <layer> --purpose <one line> \
                      [--adr <number>]... [--dry-run] | cargo xtask new adapter --kind \
-                     printer|storage|card [--dry-run] | cargo xtask new country <cc> --display-name <name> --currency \
+                     printer|storage|card|fiscal [--dry-run] | cargo xtask new country <cc> --display-name <name> --currency \
                      <code> --exponent <n> --prices-include-tax <true|false> --cash-rounding \
                      <none|minor units> --tax-rate <class[@channel]=basis points>... \
                      --retention-days <n> --language <tag> [--dry-run]";
