@@ -887,6 +887,7 @@ where
     let mut publisher = None;
     let mut farewell = None;
     if let Some(cloud_url) = cloud_url {
+        let vault = open_vault().await;
         let surface = compose_cloud_surface(
             app,
             &cloud_url,
@@ -905,6 +906,7 @@ where
                 shutdown_rx,
                 restart,
                 state_dir,
+                vault,
             },
         )
         .await;
@@ -971,14 +973,28 @@ where
     revocations
 }
 
-/// How the cloud surface is stopped, restarted and told where the store's data is: what
-/// [`compose_cloud_surface`] passes through to the loops and the activation routes.
-struct Lifecycle<'a> {
+/// The vault the device credential (activation) and the scoped sync key are kept in: sealed under
+/// the vault key when the unit's vault drop-in gave the service one (ADR-0151), in the OS keyring
+/// otherwise (ADR-0086). Announced and migrated before anything reads it.
+async fn open_vault() -> Arc<OsVault> {
+    let vault = Arc::new(OsVault::from_env());
+    crate::vault::log_vault(vault.standing());
+    crate::vault::migrate_vault(&vault).await;
+    vault
+}
+
+/// How the cloud surface is stopped, restarted and told where the store's data is, and the vault
+/// its keys are kept in: what [`compose_cloud_surface`] passes through to the loops and the
+/// activation routes.
+struct Lifecycle<'a, V> {
     shutdown_rx: &'a tokio::sync::watch::Receiver<bool>,
     restart: Option<Arc<dyn RestartRequest>>,
     /// The directory the database lives in, whose access the activation standing reports
     /// (ADR-0174).
     state_dir: std::path::PathBuf,
+    /// The device credential and the scoped sync key. [`compose`] passes the box's own vault,
+    /// already announced and migrated; a test passes a fake that holds what it needs.
+    vault: Arc<V>,
 }
 
 /// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
@@ -991,8 +1007,8 @@ struct CloudSurface {
     farewell: Option<FarewellBeat>,
 }
 
-/// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the OS-keyring
-/// vault and a `cloud-sync-http` `CloudSync`, the activation routes (`POST /api/activate`,
+/// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault
+/// [`compose`] opened and a `cloud-sync-http` `CloudSync`, the activation routes (`POST /api/activate`,
 /// `GET /api/activation`) so a fresh box can be set up, and — when the box is already activated — the
 /// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
 /// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
@@ -1004,7 +1020,7 @@ struct CloudSurface {
               print-agent authorities, the optional stream, the held config version, and the \
               shutdown. Every one is passed straight through to a loop that needs exactly it"
 )]
-async fn compose_cloud_surface<S, Q, L, P>(
+async fn compose_cloud_surface<S, Q, L, P, V>(
     app: axum::Router,
     cloud_url: &url::Url,
     store_id: StoreId,
@@ -1018,24 +1034,21 @@ async fn compose_cloud_surface<S, Q, L, P>(
     origins: &Arc<crate::origins::Origins>,
     revocations: &Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    lifecycle: Lifecycle<'_>,
+    lifecycle: Lifecycle<'_, V>,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
+    V: KeyVault + Send + Sync + 'static,
 {
     let Lifecycle {
         shutdown_rx,
         restart,
         state_dir,
+        vault,
     } = lifecycle;
-    // The device credential (activation) and the scoped sync key: sealed under the vault key when the
-    // unit's vault drop-in gave the service one (ADR-0151), in the OS keyring otherwise (ADR-0086).
-    let vault = Arc::new(OsVault::from_env());
-    crate::vault::log_vault(vault.standing());
-    crate::vault::migrate_vault(&vault).await;
     // One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
     // own bearer-carrying client (cloud_http), keyed by a store key when one is set and by the device
     // credential otherwise (ADR-0143).
