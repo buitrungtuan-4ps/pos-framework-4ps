@@ -258,6 +258,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::ota::admin_list_ota_release,
         crate::http::ota::admin_download_installer,
         crate::http::ota::admin_fetch_ota_release,
+        crate::http::campaigns::admin_publish_campaigns,
+        crate::http::campaigns::preview_publish_campaigns,
+        crate::http::campaigns::admin_schedule_campaigns,
+        crate::http::campaigns::admin_list_scheduled,
+        crate::http::campaigns::admin_cancel_scheduled,
+        admin_openapi,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -614,6 +620,18 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            artifacts."
         ),
         (
+            name = "scheduled publishes",
+            description = "Publishes waiting for their time (ADR-0077): a store's pending ones, \
+                           listed, and one cancelled before it is applied. Each names the node it \
+                           will publish and its instant, and the scheduler publishes it then. A \
+                           cancel is audited."
+        ),
+        (
+            name = "openapi",
+            description = "This document (ADR-0019), served without a session: it describes routes \
+                           and carries no tenant data."
+        ),
+        (
             name = "config nodes",
             description = "The per-store configuration a console reads and writes one node at a \
                            time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
@@ -639,6 +657,24 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
     )
 )]
 pub(crate) struct AdminApiDoc;
+
+#[utoipa::path(
+    get,
+    path = "/admin/openapi.json",
+    responses(
+        (status = 200, description = "This document, as JSON. No session is needed"),
+    ),
+    tag = "openapi",
+)]
+/// Serves the generated `/admin` console API document (roadmap v3 B5).
+///
+/// Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and
+/// the console SPA this server already ships publicly names every one of these paths in its own
+/// JavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot
+/// already read, while blocking the fork developer the document exists for.
+pub(crate) async fn admin_openapi() -> axum::Json<utoipa::openapi::OpenApi> {
+    axum::Json(AdminApiDoc::openapi())
+}
 
 /// Declares the host-only session cookie the `/admin` routes authenticate with
 /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)), so the document tells a client how to
@@ -678,12 +714,7 @@ impl Modify for SessionCookie {
 )]
 const UNDOCUMENTED: &[&str] = &[
     // --- the four-level configuration tree and its publishes (ADR-0033) ---
-    "/admin/config/campaigns",
-    "/admin/config/campaigns/preview",
-    "/admin/config/campaigns/schedule",
     "/admin/config/inventory",
-    "/admin/config/scheduled",
-    "/admin/config/scheduled/{id}",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
     "/admin/inventory/ingredients",
     "/admin/inventory/ingredients/{ingredient_id}",
@@ -702,8 +733,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/kitchen/routing/{rule_id}",
     "/admin/kitchen/stations",
     "/admin/kitchen/stations/{station_id}",
-    // --- this document's own route ---
-    "/admin/openapi.json",
 ];
 
 /// Every `/admin` path the router registers, read out of this crate's own router source.

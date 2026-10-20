@@ -112,6 +112,30 @@ where
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/campaigns/schedule",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, and `effective_at_ms`, the instant to publish, \
+                       in Unix milliseconds, which must be in the future. The campaigns are taken \
+                       as authored now: later edits do not reach this publish",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Scheduled: the compiled `campaigns` node is held until its \
+                                      time, when the scheduler publishes it. The body carries `id`, \
+                                      what a cancel names, and `effective_at_ms`. Audited with the \
+                                      number of campaigns and the instant"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or effective_at_ms is not \
+                                      in the future", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the scheduler's store is unreachable, or \
+                                      no id could be minted", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin schedules the tenant's campaigns to publish to a store at a future instant. The node
 /// is snapshotted now (what is authored and reviewed), so later edits do not leak into the publish.
 async fn admin_schedule_campaigns<Sch, Camp, A, C>(
@@ -207,6 +231,26 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/scheduled",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's publishes still waiting for their time, soonest \
+                                      first: for each, `id`, `node_key`, the node it will publish, \
+                                      `effective_at_ms`, `status` and `created_at_ms`. The node's \
+                                      value is not returned"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The scheduler's store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "scheduled publishes",
+)]
 /// A super-admin lists a store's pending scheduled publishes.
 async fn admin_list_scheduled<Sch, Camp, A, C>(
     State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,
@@ -254,6 +298,25 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/config/scheduled/{id}",
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The scheduled publish, as listed"),
+        ("tenant_id" = String, Query, description = "The tenant it belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Cancelled: it will never be applied. Audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no pending scheduled publish with this id: \
+                                      it never existed, or was already applied or cancelled", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The scheduler's store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "scheduled publishes",
+)]
 /// A super-admin cancels a pending scheduled publish.
 async fn admin_cancel_scheduled<Sch, Camp, A, C>(
     State(state): State<ScheduledPublishState<Sch, Camp, A, C>>,

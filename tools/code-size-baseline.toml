@@ -11,7 +11,7 @@
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud-catalog/src/catalog.rs" = 2018
 "crates/pos-cloud-catalog/src/fees.rs" = 1623
-"crates/pos-cloud/src/http.rs" = 2838
+"crates/pos-cloud/src/http.rs" = 2827
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud-people/src/people.rs" = 1069
 "crates/pos-cloud/src/persistence.rs" = 2129

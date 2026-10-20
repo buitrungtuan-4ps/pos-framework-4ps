@@ -88,9 +88,6 @@ where
         })
 }
 
-/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
-/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
-/// publishes.
 /// Compiles a tenant's authored promotions into the store's `campaigns` node, with the count.
 ///
 /// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
@@ -114,6 +111,35 @@ where
     Ok((vec![("campaigns".to_owned(), campaigns_value)], count))
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/campaigns",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+                       authored, never from the body",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Every campaign the tenant has authored is compiled into the \
+                                      store's `campaigns` node and published on the Store layer, the \
+                                      store's other Store-level settings kept. The body carries \
+                                      `config_version_id`. Audited with the number of campaigns, \
+                                      not their terms"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs a \
+                                      recorded confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
+/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
+/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
 async fn admin_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -186,6 +212,30 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/campaigns/preview",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+                       authored, never from the body. Nothing is written",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "What publishing the campaigns would change: \
+                                      `from_version_id`, the version the diff is against, or `null` \
+                                      for a store never published to; `diff`, the merge patch \
+                                      (RFC 7386) the publish would apply; and `unchanged`. The diff \
+                                      never shows a staff PIN hash, and shows a name or staff code \
+                                      only to a role holding console.people.read. Not audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The publish would be refused, with its violations verbatim", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// `POST /admin/config/campaigns/preview` — the dry-run of the campaigns publish. Assembles the
 /// tenant's authored campaigns into the `campaigns` node exactly as the publish route would, then
 /// returns the merge patch it would apply to the store's effective document — without minting a

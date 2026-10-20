@@ -6322,6 +6322,231 @@
         }
       }
     },
+    "/admin/config/campaigns": {
+      "put": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's\n`campaigns` node, and versions it — the same load→merge→publish→version shape as the other node\npublishes.",
+        "operationId": "admin_publish_campaigns",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`. The campaigns come from what the tenant has authored, never from the body",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Every campaign the tenant has authored is compiled into the store's `campaigns` node and published on the Store layer, the store's other Store-level settings kept. The body carries `config_version_id`. Audited with the number of campaigns, not their terms"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or a value needs a recorded confirmation first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to publish lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/campaigns/preview": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "`POST /admin/config/campaigns/preview` — the dry-run of the campaigns publish. Assembles the\ntenant's authored campaigns into the `campaigns` node exactly as the publish route would, then\nreturns the merge patch it would apply to the store's effective document — without minting a\nversion, saving, or auditing (it changes nothing). `422` with the same violations a real publish\nwould reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience\nthat can actually publish. The diff's staff are redacted for the caller's role, as the generic\npreview's are ([`staff_redacted_for`]): it can carry the `permissions` node too.",
+        "operationId": "preview_publish_campaigns",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`. The campaigns come from what the tenant has authored, never from the body. Nothing is written",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What publishing the campaigns would change: `from_version_id`, the version the diff is against, or `null` for a store never published to; `diff`, the merge patch (RFC 7386) the publish would apply; and `unchanged`. The diff never shows a staff PIN hash, and shows a name or staff code only to a role holding console.people.read. Not audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The publish would be refused, with its violations verbatim",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/campaigns/schedule": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "A super-admin schedules the tenant's campaigns to publish to a store at a future instant. The node\nis snapshotted now (what is authored and reviewed), so later edits do not leak into the publish.",
+        "operationId": "admin_schedule_campaigns",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, and `effective_at_ms`, the instant to publish, in Unix milliseconds, which must be in the future. The campaigns are taken as authored now: later edits do not reach this publish",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Scheduled: the compiled `campaigns` node is held until its time, when the scheduler publishes it. The body carries `id`, what a cancel names, and `effective_at_ms`. Audited with the number of campaigns and the instant"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or effective_at_ms is not in the future",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The campaign store or the scheduler's store is unreachable, or no id could be minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/config/capabilities": {
       "put": {
         "tags": [
@@ -8131,6 +8356,174 @@
           },
           "503": {
             "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/scheduled": {
+      "get": {
+        "tags": [
+          "scheduled publishes"
+        ],
+        "summary": "A super-admin lists a store's pending scheduled publishes.",
+        "operationId": "admin_list_scheduled",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's publishes still waiting for their time, soonest first: for each, `id`, `node_key`, the node it will publish, `effective_at_ms`, `status` and `created_at_ms`. The node's value is not returned"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The scheduler's store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/config/scheduled/{id}": {
+      "delete": {
+        "tags": [
+          "scheduled publishes"
+        ],
+        "summary": "A super-admin cancels a pending scheduled publish.",
+        "operationId": "admin_cancel_scheduled",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The scheduled publish, as listed",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant it belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled: it will never be applied. Audited"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no pending scheduled publish with this id: it never existed, or was already applied or cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The scheduler's store is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -12093,6 +12486,21 @@
             "session_cookie": []
           }
         ]
+      }
+    },
+    "/admin/openapi.json": {
+      "get": {
+        "tags": [
+          "openapi"
+        ],
+        "summary": "Serves the generated `/admin` console API document (roadmap v3 B5).",
+        "description": "Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and\nthe console SPA this server already ships publicly names every one of these paths in its own\nJavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot\nalready read, while blocking the fork developer the document exists for.",
+        "operationId": "admin_openapi",
+        "responses": {
+          "200": {
+            "description": "This document, as JSON. No session is needed"
+          }
+        }
       }
     },
     "/admin/ota/releases": {
@@ -18691,6 +19099,14 @@
     {
       "name": "release hosting",
       "description": "The signed releases the cloud hands its stores (ADR-0088, ADR-0141). An operator uploads a release executable with its minisign signature, or has the cloud fetch them from the published release. The cloud stores the bytes and never signs them or checks the signature: each store verifies it itself. A release, once hosted for a target, keeps its bytes. A Windows store's one-file installer is a hosted executable named for that store. Served only where the cloud is configured to host artifacts."
+    },
+    {
+      "name": "scheduled publishes",
+      "description": "Publishes waiting for their time (ADR-0077): a store's pending ones, listed, and one cancelled before it is applied. Each names the node it will publish and its instant, and the scheduler publishes it then. A cancel is audited."
+    },
+    {
+      "name": "openapi",
+      "description": "This document (ADR-0019), served without a session: it describes routes and carries no tenant data."
     },
     {
       "name": "config nodes",
