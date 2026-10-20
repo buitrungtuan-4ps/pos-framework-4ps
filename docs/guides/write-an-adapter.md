@@ -33,9 +33,50 @@ when you write a real vendor's adapter from it.
 Then do steps 4 to 7 below; the command has done the first three. It prints the README lines to
 paste, which `cargo xtask crates` also shows.
 
-**A port no generator covers yet** starts from
-[`templates/adapter-template`](../../templates/adapter-template/README.md) until that template is
-removed (ADR-0176 decision 6). Do steps 1 to 7.
+### Try it with the courier sandbox
+
+Generate a courier, the kind with the most to show: a network transport, a `<family>.sandbox`
+descriptor, and the `ShippingDispatch` contract suite. It names no vendor, no endpoint and no
+credential.
+
+<!-- guide:command -->
+```bash
+cargo xtask new adapter --kind courier
+```
+
+Its descriptor is the sandbox's, serving every country and asking for no settings. This is what the
+generator writes, as its golden file holds it:
+
+<!-- guide:excerpt xtask/tests/golden/new-adapter/courier/lib.rs.golden -->
+```rust
+pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
+    provider_id: "courier.sandbox",
+    family: Family::Courier,
+    name_key: "provider.courier.sandbox",
+    countries: &[],
+    fields: &[],
+    capabilities: &[],
+    sandbox: true,
+};
+```
+
+Then prove it, with the port's own contract suite:
+
+<!-- guide:verify -->
+```bash
+cargo test -p courier-sandbox
+```
+
+`cargo xtask crates` then lists the README lines to paste into the crates it uses, `pos-ports` and
+`pos-proto` among them, which an owner reviews. The example is not meant to be kept: remove it with
+`rm -r crates/adapters/courier-sandbox` and `git checkout -- Cargo.toml Cargo.lock`. `just guides`
+runs these steps in a scratch worktree ([How a guide stays true](README.md#how-a-guide-stays-true)).
+
+### A port no generator covers yet
+
+It starts from [`templates/adapter-template`](../../templates/adapter-template/README.md), which is
+being retired now that every vendor-facing kind has a generator (ADR-0176 decision 6). Until it is
+removed, do steps 1 to 7.
 
 ## Steps
 
