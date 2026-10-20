@@ -97,6 +97,9 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::health::admin_task_health,
         crate::http::reconcile::admin_reconcile_runs,
         crate::http::admin::admin_list_audit,
+        crate::http::subjects::admin_lookup_subject,
+        crate::http::subjects::admin_export_subject,
+        crate::http::subjects::admin_erase_subject,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -269,6 +272,22 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            ADR-0078): the alerts the evaluator keeps, fleet-wide, with their \
                            acknowledgement and resolution; the health of each background loop; \
                            and the reconciliation runs that show no store's events were lost."
+        ),
+        (
+            name = "subject requests",
+            description = "The instrument the Data Protection contact uses to carry out one data \
+                           subject's access, portability or erasure request under Vietnam's PDPD \
+                           (Decree 13/2023) or the GDPR (ADR-0076). It assists that process and \
+                           records it; it does not decide it. Before any of these routes is used, a \
+                           person confirms the lawful basis and the subject's identity, and confirms \
+                           consent, retention and, for customer analytics, a DPIA. A request from an \
+                           EU resident is escalated to the Data Protection contact rather than \
+                           actioned here, and moving an export across a border needs a DTA or \
+                           explicit consent first. Each route acts on one subject of one tenant: \
+                           there is no list, no bulk export and no cross-tenant read, because a bulk \
+                           export is an escalation, not a feature. Only an owner holds \
+                           `console.subjects.manage`, and every call is audited with ids and counts, \
+                           never a personal value."
         ),
         (
             name = "audit",
@@ -519,10 +538,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/translations/import/dry-run",
     "/admin/countries",
     "/admin/locales",
-    // --- PDPD subject-request tooling (ADR-0076) ---
-    "/admin/subjects/{subject_id}",
-    "/admin/subjects/{subject_id}/erase",
-    "/admin/subjects/{subject_id}/export",
     // --- this document's own route ---
     "/admin/openapi.json",
 ];

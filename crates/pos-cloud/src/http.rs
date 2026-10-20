@@ -124,7 +124,7 @@ mod release_schedule;
 mod settings;
 mod settings_confirm;
 mod store_groups;
-mod subjects;
+pub(crate) mod subjects;
 mod sync;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
