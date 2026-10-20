@@ -36,7 +36,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | From zero to a reviewable pull request |
 | [../changes/README.md](../changes/README.md) | Write a pull request's change file |
 | [../deploy/README.md](../deploy/README.md) · [../deploy/edge/README.md](../deploy/edge/README.md) · [../k8s/README.md](../k8s/README.md) | Run a cloud cell on one VPS, run the edge as a service, or use the optional Kubernetes lane |
-| [guides/write-an-adapter.md](guides/write-an-adapter.md) · [guides/add-a-country-module.md](guides/add-a-country-module.md) | Generate an adapter or a country with `cargo xtask new`, or copy [the template](../templates/adapter-template/README.md) for a courier, ERP or delivery adapter |
+| [guides/write-an-adapter.md](guides/write-an-adapter.md) · [guides/add-a-country-module.md](guides/add-a-country-module.md) | Generate an adapter or a country with `cargo xtask new`, or copy [the template](../templates/adapter-template/README.md) for an ERP or delivery adapter |
 
 ## Reference: look something up
 

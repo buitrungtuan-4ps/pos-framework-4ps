@@ -83,7 +83,7 @@ pos-framework/
 ├── k8s/                       The optional Kubernetes lane
 ├── apps/pos-station/          The store's desktop shell (Tauri)
 ├── examples/                  Runnable examples (built by CI)
-├── templates/adapter-template/   For courier, ERP and delivery adapters; the rest: cargo xtask new
+├── templates/adapter-template/   For ERP and delivery adapters; the rest: cargo xtask new
 ├── xtask/                     The repository's own checks (cargo xtask <check>)
 ├── tools/                     Allow-lists and baselines the checks read
 ├── changes/                   One change file per pull request, folded into CHANGELOG.md
