@@ -68,4 +68,3 @@
 "crates/pos-edge-printing/src/printing/documents.rs::receipt_copy_document" = { lines = 26, params = 10 }
 "crates/pos-edge-printing/src/printing/jobs.rs::Printers::print_receipt" = { lines = 42, params = 9 }
 "crates/pos-edge/src/server.rs::compose" = { lines = 252, params = 8 }
-"crates/pos-edge/src/server.rs::serve_until" = { lines = 185, params = 8 }

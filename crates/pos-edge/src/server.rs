@@ -350,52 +350,10 @@ where
     J: crate::print_queue::PrintQueue + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    // Read what binding and the startup banner need before `config` moves into the composition.
-    let bind = config.bind;
-    let advertised_host = config.advertised_host();
-    let public_origin = config.public_origin.clone();
-    let store_id = config.store_id;
-    let drain_status_path = crate::drain_status::path_beside(&config.store_path);
-    // Whether the store's data is closed to other local accounts, said once at start (ADR-0174).
-    crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
-    // The outbox depth is read from the store once the last drain is over, which is after `edge`
-    // has moved into the composition.
-    let drained_edge = Arc::clone(&edge);
-
-    // The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
-    // Settling the boot marker comes *first*, before anything is composed or bound: if a committed
-    // version has now used up its attempts, the seam has already pointed the running binary back at
-    // the previous one, and the only correct next step is to exit so the service manager starts it.
-    let installer = ota_installer(&config);
-    let boot = match settle_boot(installer.as_ref()) {
-        Ok(standing) => standing,
-        // The seam has already pointed `current` back at the version that worked, so the binary on
-        // disk is not this one: the process must end *and be started again*, which is what a
-        // reverted box coming back trading depends on.
-        Err(BootGaveUp) => return Ok(ServeOutcome::RestartWanted),
+    let Ok(mut starting) = Starting::read(&config, &edge).await else {
+        return Ok(ServeOutcome::RestartWanted);
     };
-
-    // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
-    // drains them together. A task translates the OS signal into a watched flag; each consumer waits
-    // on its own clone. It is created here rather than in `compose` because installing an OS signal
-    // handler is a property of *running*, not of composing — a test composes without one.
-    //
-    // Behind an `Arc` because the OTA loop holds it too: an installed binary only becomes the
-    // running one after a restart, and asking for it through this channel means the restart drains
-    // in-flight requests exactly as a `SIGTERM` does rather than dropping a sale.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let shutdown_tx = Arc::new(shutdown_tx);
-    // The OTA loop's handle on that shutdown, which also records *why* the stop happened. The stop
-    // the caller passed is not a restart, so it flips the watch directly and leaves the intent
-    // alone: a store told to stop must stay stopped.
-    let restart = RestartIntent::new(Arc::clone(&shutdown_tx));
-    let signal_tx = Arc::clone(&shutdown_tx);
-    tokio::spawn(async move {
-        stop.await;
-        let _ignored = signal_tx.send(true);
-    });
-
-    let ota_edge = Arc::clone(&edge);
+    let (shutdown_rx, restart) = shutdown_on(stop);
     let composed = compose(
         config,
         edge,
@@ -408,23 +366,184 @@ where
     )
     .await?;
 
-    // The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid out
-    // to install one into. Either missing is an ordinary state, not a fault: a LAN-only store and a
-    // store provisioned before the layout existed both simply do not update over the air.
-    spawn_ota(
-        OtaWiring {
-            client: composed.cloud.clone(),
-            installer,
-            authority: ota_authority,
-            lease: lease_authority,
-            edge: ota_edge,
-            store_id,
-            boot,
-            restart: restart.clone(),
-        },
+    starting.start_ota(
+        composed.cloud.clone(),
+        ota_authority,
+        lease_authority,
+        restart.clone(),
         &shutdown_rx,
     );
 
+    let listener = starting.listen_and_announce(&composed.pairing).await?;
+    let served = axum::serve(listener, composed.app.into_make_service())
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await;
+    starting
+        .finish(served, composed.publisher, composed.farewell, &restart)
+        .await
+}
+
+/// What [`serve_until`] reads before `config` moves into the composition, and the boot it settled.
+struct Starting<S> {
+    bind: std::net::SocketAddr,
+    advertised_host: Option<std::net::IpAddr>,
+    public_origin: Option<url::Url>,
+    store_id: StoreId,
+    drain_status_path: std::path::PathBuf,
+    /// The outbox depth is read from the store once the last drain is over, which is after `edge`
+    /// has moved into the composition; the OTA loop holds the same edge.
+    edge: Arc<Edge<S>>,
+    /// The install seam, when this box is laid out for over-the-air updates; the OTA loop takes it.
+    installer: Option<SystemdInstaller>,
+    boot: BootStanding,
+}
+
+impl<S> Starting<S>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    /// Reads what binding and the startup banner need, says whether the store's data is closed to
+    /// other local accounts (ADR-0174), and settles the boot marker.
+    ///
+    /// The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
+    /// Settling the boot marker comes *first*, before anything is composed or bound: if a committed
+    /// version has now used up its attempts, the seam has already pointed the running binary back at
+    /// the previous one, and the only correct next step is to exit so the service manager starts it.
+    ///
+    /// [`BootGaveUp`] is that exit: the binary on disk is not this one, so the process must end
+    /// *and be started again*, which is what a reverted box coming back trading depends on.
+    async fn read(config: &EdgeConfig, edge: &Arc<Edge<S>>) -> Result<Self, BootGaveUp> {
+        let bind = config.bind;
+        let advertised_host = config.advertised_host();
+        let public_origin = config.public_origin.clone();
+        let store_id = config.store_id;
+        let drain_status_path = crate::drain_status::path_beside(&config.store_path);
+        crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
+        let edge = Arc::clone(edge);
+        let installer = ota_installer(config);
+        let boot = settle_boot(installer.as_ref())?;
+        Ok(Self {
+            bind,
+            advertised_host,
+            public_origin,
+            store_id,
+            drain_status_path,
+            edge,
+            installer,
+            boot,
+        })
+    }
+
+    /// The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid
+    /// out to install one into. Either missing is an ordinary state, not a fault: a LAN-only store
+    /// and a store provisioned before the layout existed both simply do not update over the air.
+    fn start_ota<A, L>(
+        &mut self,
+        client: Option<CloudHttpClient>,
+        authority: A,
+        lease: L,
+        restart: RestartIntent,
+        shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+    ) where
+        A: OtaStateAuthority + 'static,
+        L: LeaseAuthority + 'static,
+    {
+        spawn_ota(
+            OtaWiring {
+                client,
+                installer: self.installer.take(),
+                authority,
+                lease,
+                edge: Arc::clone(&self.edge),
+                store_id: self.store_id,
+                boot: self.boot,
+                restart,
+            },
+            shutdown_rx,
+        );
+    }
+
+    /// Binds, then shows the operator how to pair.
+    ///
+    /// After the bind, not before: the pairing file is what the Windows installer waits for before
+    /// it prints the URL and opens /setup, so it must not exist until the port accepts a connection.
+    /// A box that cannot bind publishes no code at all, and the installer reports the log instead
+    /// of a URL for a server that is exiting.
+    async fn listen_and_announce(&self, pairing: &Pairing) -> Result<TcpListener, EdgeError> {
+        let listener = listen(self.bind).await?;
+        announce_pairing(
+            pairing,
+            self.public_origin.as_ref(),
+            self.advertised_host,
+            self.bind.port(),
+        );
+        // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
+        // raw-IP pairing URL above still works (ADR-0030).
+        NoopAdvertiser.advertise("pos", self.bind.port());
+        Ok(listener)
+    }
+
+    /// The stop, once serving has ended: the publish loop's last drain, the farewell beat, then
+    /// how the process ends.
+    async fn finish(
+        self,
+        served: std::io::Result<()>,
+        publisher: Option<tokio::task::JoinHandle<()>>,
+        farewell: Option<FarewellBeat>,
+        restart: &RestartIntent,
+    ) -> Result<ServeOutcome, EdgeError> {
+        // It is waited for even when serving failed, and especially then: a store whose HTTP
+        // surface fell over still has committed events, and that is exactly when they should be
+        // pushed out before the process goes.
+        let drain = last_drain(publisher, &self.edge, self.store_id, self.drain_status_path).await;
+
+        // Only now is there anything true to say. The drain above is what makes the outbox depth
+        // mean something, and this beat is the only one that carries it: the heartbeat loop stopped
+        // ticking when the shutdown watch flipped, long before the drain ran. Without it a machine
+        // that drained perfectly and a machine that never drained at all look identical from the
+        // console — and the cloud, which releases a handover only on a beat carrying a drained
+        // outbox (ADR-0110), would never release one at all.
+        //
+        // Placed after `served` is awaited and before it is unwrapped, so a store whose HTTP
+        // surface fell over still reports its stop. That is the case where the report matters most.
+        if let Some(farewell) = farewell {
+            farewell.deliver().await;
+        }
+
+        served.map_err(EdgeError::Serve)?;
+        Ok(stop_outcome(restart, drain.as_ref()))
+    }
+}
+
+/// One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
+/// drains them together. A task translates the caller's stop into a watched flag; each consumer
+/// waits on its own clone. It is created by [`serve_until`] rather than in `compose` because
+/// installing an OS signal handler is a property of *running*, not of composing — a test composes
+/// without one.
+///
+/// Behind an `Arc` because the OTA loop holds it too: an installed binary only becomes the
+/// running one after a restart, and asking for it through this channel means the restart drains
+/// in-flight requests exactly as a `SIGTERM` does rather than dropping a sale. The returned
+/// [`RestartIntent`] is the OTA loop's handle on that shutdown, which also records *why* the stop
+/// happened. The stop the caller passed is not a restart, so it flips the watch directly and leaves
+/// the intent alone: a store told to stop must stay stopped.
+fn shutdown_on<F>(stop: F) -> (tokio::sync::watch::Receiver<bool>, RestartIntent)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let restart = RestartIntent::new(Arc::clone(&shutdown_tx));
+    let signal_tx = Arc::clone(&shutdown_tx);
+    tokio::spawn(async move {
+        stop.await;
+        let _ignored = signal_tx.send(true);
+    });
+    (shutdown_rx, restart)
+}
+
+/// Binds the configured address and says so.
+async fn listen(bind: std::net::SocketAddr) -> Result<TcpListener, EdgeError> {
     let listener = TcpListener::bind(bind)
         .await
         .map_err(|source| EdgeError::Bind { addr: bind, source })?;
@@ -433,83 +552,61 @@ where
         protocol_version = pos_proto::PROTOCOL_VERSION,
         "pos_edge listening",
     );
+    Ok(listener)
+}
 
-    // After the bind, not before: the pairing file is what the Windows installer waits for before it
-    // prints the URL and opens /setup, so it must not exist until the port accepts a connection. A
-    // box that cannot bind publishes no code at all, and the installer reports the log instead of a
-    // URL for a server that is exiting.
-    announce_pairing(
-        &composed.pairing,
-        public_origin.as_ref(),
-        advertised_host,
-        bind.port(),
-    );
-
-    // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
-    // raw-IP pairing URL above still works (ADR-0030).
-    NoopAdvertiser.advertise("pos", bind.port());
-
-    let served = axum::serve(listener, composed.app.into_make_service())
-        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
-        .await;
-
-    // The publish loop's last drain (ADR-0110, production-readiness **D8**). It started the moment
-    // the shutdown watch flipped — the same instant `axum` began draining in-flight requests — so by
-    // here it has usually already finished and this waits for nothing. Waiting is nonetheless what
-    // makes the drain real: this function returning is what stops the runtime polling that task, and
-    // an outbox that never drained costs nothing on a box in a shop (the SQLite file survives the
-    // restart) but loses events on a hosted placement, whose container and volume go together.
-    //
-    // It is waited for even when serving failed, and especially then: a store whose HTTP surface
-    // fell over still has committed events, and that is exactly when they should be pushed out
-    // before the process goes.
-    let drain = if let Some(publisher) = composed.publisher {
-        let began = tokio::time::Instant::now();
-        match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(
-                %error,
-                "the event-publish loop ended abnormally; the outbox may not have drained"
-            ),
-            Err(_elapsed) => tracing::error!(
-                grace_secs = crate::event_publish::STOP_GRACE.as_secs(),
-                "the event-publish loop did not finish its last drain in time; exiting with events \
-                 still in the outbox"
-            ),
-        }
-        Some(report_drain(&drained_edge, store_id, began.elapsed(), drain_status_path).await)
-    } else {
-        // Nothing publishes on a LAN-only or unactivated box, so there was no drain to report and
-        // its outbox waiting is its ordinary state, not an unfinished stop.
-        None
-    };
-
-    // Only now is there anything true to say. The drain above is what makes the outbox depth mean
-    // something, and this beat is the only one that carries it: the heartbeat loop stopped ticking
-    // when the shutdown watch flipped, long before the drain ran. Without it a machine that drained
-    // perfectly and a machine that never drained at all look identical from the console — and the
-    // cloud, which releases a handover only on a beat carrying a drained outbox
-    // (ADR-0110), would never release one at all.
-    //
-    // Placed after `served` is awaited and before it is unwrapped, so a store whose HTTP surface
-    // fell over still reports its stop. That is the case where the report matters most.
-    if let Some(farewell) = composed.farewell {
-        farewell.deliver().await;
+/// The publish loop's last drain (ADR-0110, production-readiness **D8**), and what it left.
+///
+/// It started the moment the shutdown watch flipped — the same instant `axum` began draining
+/// in-flight requests — so by here it has usually already finished and this waits for nothing.
+/// Waiting is nonetheless what makes the drain real: [`serve_until`] returning is what stops the
+/// runtime polling that task, and an outbox that never drained costs nothing on a box in a shop
+/// (the SQLite file survives the restart) but loses events on a hosted placement, whose container
+/// and volume go together.
+async fn last_drain<S>(
+    publisher: Option<tokio::task::JoinHandle<()>>,
+    edge: &Edge<S>,
+    store_id: StoreId,
+    path: std::path::PathBuf,
+) -> Option<crate::drain_status::DrainStatus>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    // Nothing publishes on a LAN-only or unactivated box, so there was no drain to report and
+    // its outbox waiting is its ordinary state, not an unfinished stop.
+    let publisher = publisher?;
+    let began = tokio::time::Instant::now();
+    match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::error!(
+            %error,
+            "the event-publish loop ended abnormally; the outbox may not have drained"
+        ),
+        Err(_elapsed) => tracing::error!(
+            grace_secs = crate::event_publish::STOP_GRACE.as_secs(),
+            "the event-publish loop did not finish its last drain in time; exiting with events \
+             still in the outbox"
+        ),
     }
+    Some(report_drain(edge, store_id, began.elapsed(), path).await)
+}
 
-    served.map_err(EdgeError::Serve)?;
-
-    // A restart comes back on the same volume, so its outbox goes out at the next start whatever the
-    // drain managed; only a stop that leaves events behind is worth telling a supervisor about.
+/// How the stop ended, said once. A restart comes back on the same volume, so its outbox goes out
+/// at the next start whatever the drain managed; only a stop that leaves events behind is worth
+/// telling a supervisor about.
+fn stop_outcome(
+    restart: &RestartIntent,
+    drain: Option<&crate::drain_status::DrainStatus>,
+) -> ServeOutcome {
     let outcome = if restart.wanted() {
         ServeOutcome::RestartWanted
-    } else if drain.as_ref().is_some_and(|status| !status.drained()) {
+    } else if drain.is_some_and(|status| !status.drained()) {
         ServeOutcome::DrainIncomplete
     } else {
         ServeOutcome::Stopped
     };
     tracing::info!(?outcome, "pos_edge stopped");
-    Ok(outcome)
+    outcome
 }
 
 /// Reads the outbox once the last drain is over and writes `drain-status.json` beside the store's
