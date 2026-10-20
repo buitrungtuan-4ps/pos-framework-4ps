@@ -157,6 +157,8 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_delete_campaign,
         crate::http::campaigns::admin_list_vouchers,
         crate::http::campaigns::admin_generate_vouchers,
+        crate::http::countries::admin_list_countries,
+        crate::http::countries::admin_list_locales,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -300,6 +302,14 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
+        ),
+        (
+            name = "countries",
+            description = "The read-only master data a console picks a store's country and \
+                           locale from (ADR-0074, ADR-0105): the country modules this build \
+                           carries, with the currency, number format, retention and till facts \
+                           each fixes, and the content locales the platform serves. Fixed when the \
+                           server starts."
         ),
         (
             name = "campaigns",
@@ -578,8 +588,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/translations/export",
     "/admin/translations/import/apply",
     "/admin/translations/import/dry-run",
-    "/admin/countries",
-    "/admin/locales",
     // --- this document's own route ---
     "/admin/openapi.json",
 ];

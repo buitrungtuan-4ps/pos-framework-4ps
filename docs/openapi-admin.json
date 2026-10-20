@@ -2722,6 +2722,45 @@
         }
       }
     },
+    "/admin/countries": {
+      "get": {
+        "tags": [
+          "countries"
+        ],
+        "summary": "A super-admin lists the compiled country modules.",
+        "operationId": "admin_list_countries",
+        "responses": {
+          "200": {
+            "description": "Every country module this build carries, as an array: `code`, `display_name`, `currency_code` and `currency_exponent`, `default_language`, the number format (`decimal_separator`, `group_separator`, `digits_per_group`), `default_retention_days`, and the till facts a store's settings start from: `prices_include_tax`, `cash_rounding_increment` and `cash_denominations`, in the currency's minor units (ADR-0105). Fixed when the server starts; the same for every tenant"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/devices/proposals": {
       "get": {
         "tags": [
@@ -5545,6 +5584,45 @@
           },
           "503": {
             "description": "The admin store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/locales": {
+      "get": {
+        "tags": [
+          "countries"
+        ],
+        "summary": "A super-admin lists the content locales the platform can serve.",
+        "operationId": "admin_list_locales",
+        "responses": {
+          "200": {
+            "description": "The content locales the platform can serve, as an array of language tags: each country module's language, and `en`, the fallback every catalogue has. The translation grid's columns"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
             "content": {
               "application/json": {
                 "schema": {
@@ -10780,6 +10858,10 @@
     {
       "name": "printers",
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+    },
+    {
+      "name": "countries",
+      "description": "The read-only master data a console picks a store's country and locale from (ADR-0074, ADR-0105): the country modules this build carries, with the currency, number format, retention and till facts each fixes, and the content locales the platform serves. Fixed when the server starts."
     },
     {
       "name": "campaigns",
