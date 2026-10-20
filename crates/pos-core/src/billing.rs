@@ -877,40 +877,23 @@ fn sum_nets(lines: &[&BillLine], currency: CurrencyCode) -> Result<Money, Domain
         .try_fold(Money::zero(currency), |sum, line| sum.checked_add(line.net))?)
 }
 
-/// Assembles a bill's totals, charging its fees, computing tax per class and materialising cash
-/// rounding.
-///
-/// # Errors
-///
-/// - [`DomainError::Empty`] if `class_bases` is empty.
-/// - [`DomainError::Money`] on any currency mismatch or overflow.
-/// - [`DomainError::TaxRateNotConfigured`] if a class has no rate on this channel — the domain
-///   refuses rather than silently charging no tax.
-/// - [`DomainError::LinesDoNotMatchBases`] if there are fee rules and the lines do not sum to the
-///   class bases.
-pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
-    let currency = input.currency_code;
-    if input.class_bases.is_empty() {
-        return Err(DomainError::Empty {
-            what: "class_bases",
-        });
-    }
+/// The tax lines of a bill, with each class's base after its reductions and the tax they come to.
+struct ClassTax {
+    tax_lines: Vec<TaxLine>,
+    lines_after_reductions: Vec<Money>,
+    tax_total: Money,
+}
 
-    // Subtotal, checking every base is in the bill's currency.
-    let mut subtotal = Money::zero(currency);
-    for base in input.class_bases {
-        subtotal = subtotal.checked_add(base.amount)?;
-    }
-
-    // Bill-level discount and comps, allocated proportionally across classes.
-    let discount_shares = allocate_across_classes(input.bill_discount, input.class_bases)?;
-    let comp_shares = allocate_across_classes(input.comps, input.class_bases)?;
-
-    // The fees, from the bill before tax: a percentage is taken of lines, never of another fee.
-    let fees = charge_fees(input, subtotal)?;
-
+/// The tax per class, then a line for each charge taxed at a class the bill has no line in.
+fn class_tax(
+    input: &BillInput<'_>,
+    discount_shares: &[Money],
+    comp_shares: &[Money],
+    fee_shares: &[ClassBase],
+) -> Result<ClassTax, DomainError> {
     // Per-class taxable base = base − discount share − comp share, plus the service charge if it
     // is taxable here, plus every fee's part taxed at this class.
+    let currency = input.currency_code;
     let mut tax_lines = Vec::with_capacity(input.class_bases.len());
     let mut lines_after_reductions = Vec::with_capacity(input.class_bases.len());
     let mut tax_total = Money::zero(currency);
@@ -930,40 +913,116 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         {
             taxable = taxable.checked_add(input.service_charge)?;
         }
-        if let Some(share) = fees
-            .class_shares
+        if let Some(share) = fee_shares
             .iter()
             .find(|share| share.tax_class_id == base.tax_class_id)
         {
             taxable = taxable.checked_add(share.amount)?;
         }
 
-        let rate = rate_on_channel(input, base.tax_class_id)?;
-        let (tax, taxable_base, components) = tax_for(
-            taxable,
-            rate,
-            input
-                .rates
-                .components_for(base.tax_class_id, input.sales_channel),
-            input.prices_include_tax,
-            input.tax_rounding,
-        )?;
-        tax_total = tax_total.checked_add(tax)?;
-        tax_lines.push(TaxLine {
-            tax_class_id: base.tax_class_id,
-            taxable_base,
-            rate_basis_points: rate.basis_points(),
-            tax,
-            components,
-        });
+        let line = class_tax_line(input, base.tax_class_id, taxable)?;
+        tax_total = tax_total.checked_add(line.tax)?;
+        tax_lines.push(line);
     }
 
     // A charge taxed at a class the bill has no line in needs a line of its own; see
     // `extra_class_lines`.
-    for line in extra_class_lines(input, &fees.class_shares)? {
+    for line in extra_class_lines(input, fee_shares)? {
         tax_total = tax_total.checked_add(line.tax)?;
         tax_lines.push(line);
     }
+    Ok(ClassTax {
+        tax_lines,
+        lines_after_reductions,
+        tax_total,
+    })
+}
+
+/// One class's tax line: its taxable amount at the class's rate on the bill's channel.
+fn class_tax_line(
+    input: &BillInput<'_>,
+    tax_class_id: TaxClassId,
+    taxable: Money,
+) -> Result<TaxLine, DomainError> {
+    let rate = rate_on_channel(input, tax_class_id)?;
+    let (tax, taxable_base, components) = tax_for(
+        taxable,
+        rate,
+        input
+            .rates
+            .components_for(tax_class_id, input.sales_channel),
+        input.prices_include_tax,
+        input.tax_rounding,
+    )?;
+    Ok(TaxLine {
+        tax_class_id,
+        taxable_base,
+        rate_basis_points: rate.basis_points(),
+        tax,
+        components,
+    })
+}
+
+/// The quoted subtotal: every class base added up, checking each is in the bill's currency.
+fn quoted_subtotal(input: &BillInput<'_>) -> Result<Money, DomainError> {
+    if input.class_bases.is_empty() {
+        return Err(DomainError::Empty {
+            what: "class_bases",
+        });
+    }
+    let mut subtotal = Money::zero(input.currency_code);
+    for base in input.class_bases {
+        subtotal = subtotal.checked_add(base.amount)?;
+    }
+    Ok(subtotal)
+}
+
+/// Cash rounding, materialised as an explicit adjustment so the receipt reconciles. Half-up
+/// whatever the tax rounding: it is about coins, not tax.
+fn cash_rounded(
+    unrounded: Money,
+    increment: Option<i64>,
+    currency: CurrencyCode,
+) -> Result<(Money, Money), DomainError> {
+    Ok(match increment {
+        Some(increment) => match core::num::NonZeroI64::new(increment) {
+            Some(step) => {
+                let rounded = unrounded.round_to_increment(step, CASH_ROUNDING)?;
+                (rounded, rounded.checked_sub(unrounded)?)
+            }
+            None => (unrounded, Money::zero(currency)),
+        },
+        None => (unrounded, Money::zero(currency)),
+    })
+}
+
+/// Assembles a bill's totals, charging its fees, computing tax per class and materialising cash
+/// rounding.
+///
+/// # Errors
+///
+/// - [`DomainError::Empty`] if `class_bases` is empty.
+/// - [`DomainError::Money`] on any currency mismatch or overflow.
+/// - [`DomainError::TaxRateNotConfigured`] if a class has no rate on this channel — the domain
+///   refuses rather than silently charging no tax.
+/// - [`DomainError::LinesDoNotMatchBases`] if there are fee rules and the lines do not sum to the
+///   class bases.
+pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
+    let currency = input.currency_code;
+    let mut subtotal = quoted_subtotal(input)?;
+
+    // Bill-level discount and comps, allocated proportionally across classes.
+    let discount_shares = allocate_across_classes(input.bill_discount, input.class_bases)?;
+    let comp_shares = allocate_across_classes(input.comps, input.class_bases)?;
+
+    // The fees, from the bill before tax: a percentage is taken of lines, never of another fee.
+    let fees = charge_fees(input, subtotal)?;
+
+    let ClassTax {
+        tax_lines,
+        lines_after_reductions,
+        tax_total,
+    } = class_tax(input, &discount_shares, &comp_shares, &fees.class_shares)?;
 
     // Under an inclusive posture the quoted amounts already contain every minor unit of `tax_total`,
     // so the reported subtotal is netted by it. That keeps *one* reconciliation formula true in both
@@ -987,18 +1046,8 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         .checked_add(service_charge)?
         .checked_add(tax_total)?;
 
-    // Cash rounding, materialised as an explicit adjustment so the receipt reconciles. Half-up
-    // whatever the tax rounding: it is about coins, not tax.
-    let (total_due, rounding_adjustment) = match input.cash_rounding_increment {
-        Some(increment) => match core::num::NonZeroI64::new(increment) {
-            Some(step) => {
-                let rounded = unrounded.round_to_increment(step, CASH_ROUNDING)?;
-                (rounded, rounded.checked_sub(unrounded)?)
-            }
-            None => (unrounded, Money::zero(currency)),
-        },
-        None => (unrounded, Money::zero(currency)),
-    };
+    let (total_due, rounding_adjustment) =
+        cash_rounded(unrounded, input.cash_rounding_increment, currency)?;
 
     Ok(BillTotals {
         subtotal,
