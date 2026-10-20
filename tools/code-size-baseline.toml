@@ -66,7 +66,7 @@
 "crates/pos-edge/src/ota_client.rs::OtaClient::new" = { lines = 21, params = 9 }
 "crates/pos-edge-printing/src/printing/documents.rs::receipt_copy_document" = { lines = 26, params = 10 }
 "crates/pos-edge-printing/src/printing/jobs.rs::Printers::print_receipt" = { lines = 42, params = 9 }
-# Exempt from P8 (agreed with the owner): composition reads top to bottom in the order a store comes
+# Exempt from P8 (a reasoned exemption under ADR-0170 decision 7, decided 2026-10-15): composition reads top to bottom in the order a store comes
 # up, and its parts each need most of its locals, so a split would scatter that order across helpers
 # that take them all. Its `#[expect(clippy::too_many_lines)]` says the same.
 "crates/pos-edge/src/server.rs::compose" = { lines = 252, params = 8 }
