@@ -1433,6 +1433,8 @@ mod tests {
 
     // ---- Reductions: in `tests/reductions.rs` ----
     mod reductions;
+    // ---- Tips: in `tests/tips.rs` ----
+    mod tips;
 
     // ---- Shift ----
 
