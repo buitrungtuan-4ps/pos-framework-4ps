@@ -127,8 +127,18 @@ never writes a string nobody gave it.
 
 **Console** (`dashboard/`). Already one registry: `SCREENS` in `dashboard/src/state/screens.ts`
 feeds the router, nav, breadcrumbs and command palette ([ADR-0060](adr/0060-cloud-back-office-dashboard.md)).
-Add the screen file, its `SCREENS` entry, its strings, and a vitest test. Rules for any screen are in
-[`ui-ux.md`](ui-ux.md).
+`cargo xtask new screen --app dashboard <id> --path <path> --title <English> --title-vi <Vietnamese>
+--scope <tenant|store|console> --icon <name> --nav-group <group>` writes every row below. The scope,
+the icon and the nav group are design choices, so each is required: the icon must already be in
+`ICON_NAMES`, and a group that holds six screens, the ceiling, is refused. The titles follow the
+till's rule. Rules for any screen are in [`ui-ux.md`](ui-ux.md).
+
+| Step | Files | Checked by |
+|---|---|---|
+| Screen | `dashboard/src/screens/<Screen>.tsx` | `pnpm build`, `pnpm lint` |
+| Route and nav | its entry in `SCREENS` and its id in its group in `NAV_GROUPS` (`dashboard/src/state/screens.ts`); its `lazy()` block and `COMPONENTS` entry (`dashboard/src/App.tsx`) | `pnpm build` (the type check); the nav-groups, icons and dev-proxy tests |
+| Strings | `dashboard/src/i18n/en.json`, `vi.json`, the key `nav.<id>` | `pnpm build` (i18n lint and parity) |
+| Test | `dashboard/tests/<kebab-id>.test.tsx`, that the screen draws its title | `pnpm test` |
 
 ## New crate
 

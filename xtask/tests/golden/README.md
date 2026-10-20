@@ -20,3 +20,6 @@ change to a template changes its golden file in the same pull request.
 - `new-screen/ui/`: `cargo xtask new screen --app ui stockCount --path /stock --title "Stock count"
   --title-vi "Kiểm kho"`. `StockCount.tsx.golden` is the screen it writes; `edits.golden` is each line
   it adds to an existing file, as `<file>: <line>`.
+- `new-screen/dashboard/`: `cargo xtask new screen --app dashboard stockCount --path /stock --title
+  "Stock count" --title-vi "Kiểm kho" --scope store --icon package --nav-group overview`: the screen,
+  its vitest stub, and in `edits.golden` each line it adds or changes in an existing file.

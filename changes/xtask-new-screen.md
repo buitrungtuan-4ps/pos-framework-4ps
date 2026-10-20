@@ -11,5 +11,4 @@ kind: added
 
   Every catalogue other than English needs its title: `--title-vi` today, and `--title-<locale>` for
   any catalogue added later. The generator refuses to run without one, so it never writes a string
-  nobody gave it. Console screens also need an icon and a nav group, so `--app dashboard` is not
-  generated yet.
+  nobody gave it.

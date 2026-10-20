@@ -13,6 +13,8 @@ substitution; a placeholder the generator does not fill is an error, not an empt
   from a flag, its README with the values table, and `contract.rs.tmpl`, the `Fiscalization` suite.
   The manifest comes from `crate/`.
 - `screen/ui/`: `cargo xtask new screen --app ui`: a till screen with its title, and nothing else.
+- `screen/dashboard/`: `cargo xtask new screen --app dashboard`: a console screen with its title,
+  and a vitest test that it draws it.
 
 A change here changes the matching golden file under [`../tests/golden/`](../tests/golden/README.md)
 in the same pull request.
