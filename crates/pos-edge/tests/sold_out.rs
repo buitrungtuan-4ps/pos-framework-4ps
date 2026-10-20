@@ -330,5 +330,14 @@ fn an_order_from_outside_the_store_naming_a_sold_out_item_is_refused() {
             .await
             .expect("the same order goes through once the item is back");
         assert!(accepted.created, "and it is a new order, not a replay");
+
+        // A retry of an order already taken is answered with it, whatever ran out since: the
+        // repeat is found before the menu is asked.
+        edge.mark_item_sold_out(server(), pizza())
+            .await
+            .expect("marks again");
+        let retried = intake.submit(&order).await.expect("the retry is answered");
+        assert!(!retried.created);
+        assert_eq!(retried.order_id, accepted.order_id);
     });
 }
