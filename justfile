@@ -112,6 +112,11 @@ links:
 guides-check:
     cargo run -q -p xtask -- guides --check
 
+# Does what each guide says, in a scratch worktree of the last commit: its `cargo xtask new` commands,
+# then its verify steps. Slow (it builds what the guides generate), so it is not part of preflight.
+guides:
+    cargo run -q -p xtask -- guides --run
+
 # Every workspace crate has a README and a [package.metadata.pos] contract card, and both agree with
 # cargo metadata and CODEOWNERS (ADR-0170 decisions 1 and 5).
 crates:

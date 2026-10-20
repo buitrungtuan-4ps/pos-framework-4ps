@@ -98,6 +98,8 @@ Documentation rots silently, so three checks run in CI: **link checking** across
 
 A fourth runs in `just preflight`: **guide truth**. `cargo xtask guides --check` reads the blocks a guide in `docs/guides/` marks, and fails when a `cargo xtask new` command it tells the reader to type is one the generator now refuses, when a step it says proves the result is anything but a `cargo test`, `cargo check` or `cargo xtask` command, or when code it quotes is no longer in its file verbatim. The markers are listed in [the guides' index](guides/README.md#how-a-guide-stays-true).
 
+`just guides` (`cargo xtask guides --run`) goes further: for each guide, in a scratch worktree of the last commit, it runs the guide's `cargo xtask new` commands and then its verify steps, and fails where the guide stops working. That catches what the golden files cannot, such as a generated adapter that no longer compiles after its port changed. It builds what the guides generate, so it is not part of preflight; run it after changing a generator, a template, a port or a guide. No CI job runs it yet: until one is wired, preflight's `--check` is the gate.
+
 Two habits carry the rest. Each document names an owner in `CODEOWNERS`, so review lands on someone accountable. And documents are written as **rules with reasons** rather than narrative: a reader should be able to check compliance without reconstructing the discussion that produced the rule.
 
 ## 5. Dependencies, licences, and independence
