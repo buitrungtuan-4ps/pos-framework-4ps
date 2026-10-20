@@ -24,6 +24,40 @@ README lines to paste, which `cargo xtask crates` also shows. Then fill in what 
 under [Fill in the country's obligations](#fill-in-the-countrys-obligations): the number format, the
 tax-code rule, the cash denominations and the invoice number's shape.
 
+## Try it with an illustrative country
+
+Run the generator once on a country that does not exist before you write a real one. Every value
+below is **illustrative**: `XA` is an ISO 3166 user-assigned code and `XTS` is the code ISO 4217
+reserves for testing, so neither names a real market, and the rates, rounding and retention period
+are invented for the example. They are not any country's law. A real country's values come from its
+law, confirmed by its owner ([ADR-0105](../adr/0105-a-country-pack-is-values.md)).
+
+<!-- guide:command -->
+```bash
+cargo xtask new country xa --display-name "Example country" --currency XTS --exponent 2 \
+  --prices-include-tax false --cash-rounding 5 --tax-rate food=1000 --tax-rate alcohol=1000 \
+  --tax-rate exempt=0 --tax-rate food@takeaway=800 --retention-days 365 --language en
+```
+
+Then prove what it wrote: the module passes its own tests and the `Fiscalization` contract suite,
+it is wired so `cargo xtask countries` accepts it, and both binaries build with it selected.
+
+<!-- guide:verify -->
+```bash
+cargo test -p pos-country-xa
+cargo xtask countries
+cargo check -p pos-edge --no-default-features --features country-xa
+cargo check -p pos-cloud --no-default-features --features country-xa
+```
+
+The example is not meant to be kept. Remove it with `rm -r countries/xa` and `git checkout --
+Cargo.toml Cargo.lock crates/pos-edge crates/pos-cloud`, then run the generator again with your
+country's values.
+`just guides` runs these steps for you, in a scratch worktree, and fails if any of them stops
+working ([How a guide stays true](README.md#how-a-guide-stays-true)).
+
+## Read a real module next
+
 The reference module is [`countries/zz`](../../countries/zz). Three real ones are
 written against the same shape and are the better model for a market you actually intend to open:
 [`countries/vn`](../../countries/vn), [`countries/jp`](../../countries/jp) and
