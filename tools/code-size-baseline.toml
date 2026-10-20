@@ -6,7 +6,7 @@
 "crates/adapters/store-postgres/src/catalog.rs" = 1859
 "crates/adapters/store-postgres/src/store.rs" = 1573
 "crates/adapters/store-sqlite/src/store.rs" = 1184
-"crates/adapters/store-sqlite/src/writer.rs" = 2521
+"crates/adapters/store-sqlite/src/writer.rs" = 2389
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud-catalog/src/catalog.rs" = 2018
