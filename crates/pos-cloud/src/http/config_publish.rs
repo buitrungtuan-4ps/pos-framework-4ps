@@ -50,4 +50,8 @@ pub(crate) use release_actions::{
     __path_admin_schedule_release,
 };
 pub(crate) use release_create::__path_admin_create_release;
-pub(crate) use versions::__path_admin_config_nodes;
+pub(crate) use store_config::{__path_admin_config_effective, __path_admin_config_publish};
+pub(crate) use versions::{
+    __path_admin_config_nodes, __path_admin_config_rollback, __path_admin_config_version_effective,
+    __path_admin_config_versions,
+};

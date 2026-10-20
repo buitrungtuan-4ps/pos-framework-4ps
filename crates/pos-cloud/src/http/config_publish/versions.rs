@@ -75,9 +75,6 @@ pub(in crate::http) struct RollbackConfigRequest {
     version_id: String,
 }
 
-/// Lists a store's published config versions newest-first (super-admin only). The version history is
-/// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
-/// timestamp column is needed. `404` if the store has no tree yet.
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config/nodes",
@@ -161,6 +158,29 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config/versions",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every configuration version the store has had, newest first, \
+                                      as an array: `version_id`, `at_ms` (read from the id) and \
+                                      `current`. The history only grows: a rollback adds a version"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "This store has never published a configuration", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
+/// Lists a store's published config versions newest-first (super-admin only). The version history is
+/// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
+/// timestamp column is needed. `404` if the store has no tree yet.
 pub(in crate::http) async fn admin_config_versions<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
@@ -212,6 +232,29 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config/versions/{version_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("version_id" = String, Path, description = "The version (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "That version's effective configuration, for comparing with \
+                                      another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
+                                      holding console.people.read, and prices only for a role \
+                                      holding console.reports.revenue: a past version is no less sensitive"),
+        (status = 400, description = "tenant_id, store_id or version_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never published a configuration, or has no \
+                                      such version", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// The effective (composed, validated) document of one past config version (super-admin only), for
 /// the console's diff view. `404` if the store or the named version is unknown.
 pub(in crate::http) async fn admin_config_version_effective<S, R, K, C, A, T, W>(
@@ -276,6 +319,38 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stores/{store_id}/config/rollback",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The configuration version the rollback was \
+                                                     decided against (ADR-0095). Required"),
+    ),
+    request_body(
+        description = "`version_id`, the past version to restore",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Restored as a new current version: the history is never \
+                                      rewritten. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited with both versions"),
+        (status = 400, description = "An id is absent or not a ULID; If-Match is absent or \
+                                      malformed; or the restored version runs a value that needs a \
+                                      recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never published a configuration, or has no \
+                                      such version", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The store's configuration changed since you read it, or \
+                                      If-Match is `*` but the store has been published to: re-read \
+                                      it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's
 /// effective document is re-published as a *new* current version, so nothing in the history is altered
 /// or removed and the store pulls the restored config on its next sync. The action is audited as
