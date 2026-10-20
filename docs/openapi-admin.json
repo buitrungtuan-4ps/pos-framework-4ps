@@ -10,6 +10,136 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/admin/activation-codes": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A super-admin issues an activation code bound to a device slot.",
+        "operationId": "admin_issue_activation_code",
+        "requestBody": {
+          "description": "The device slot: `tenant_id`, `store_id` and `device_id`, the device registered under `/admin/stores/{store_id}/devices`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, for the setup sheet. It is returned exactly once, since only its hash is stored, and it is spent the first time a box exchanges it for a credential (ADR-0050)"
+          },
+          "400": {
+            "description": "tenant_id, store_id or device_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The activation store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/activation-codes/revoke": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A super-admin cancels a device slot's still-issued codes.",
+        "operationId": "admin_revoke_activation_codes",
+        "requestBody": {
+          "description": "The device slot: `tenant_id`, `store_id` and `device_id`, the device registered under `/admin/stores/{store_id}/devices`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Every code issued for the slot and not yet spent is cancelled, as for a setup sheet that went astray. The body carries `revoked`, how many were"
+          },
+          "400": {
+            "description": "tenant_id, store_id or device_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The activation store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/admins": {
       "get": {
         "tags": [
@@ -1374,6 +1504,91 @@
             }
           }
         }
+      }
+    },
+    "/admin/claims/bind": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "Binds a claim. Needs `console.devices.manage`, and is audited as `device.claim`.",
+        "operationId": "admin_bind_claim",
+        "requestBody": {
+          "description": "The `user_code` a box installed with no store shows on its screen, eight letters and digits, and the device slot to give it: `tenant_id`, `store_id` and `device_id` (ADR-0148). The box collects its credential on its next poll",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Bound, and audited"
+          },
+          "400": {
+            "description": "An id is not a ULID, or user_code is not a claim code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No box is waiting with that code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The code has expired, and the box shows a new one, or it has already been used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The claim store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/config-releases": {
@@ -7530,6 +7745,159 @@
         }
       }
     },
+    "/admin/stores/{store_id}/devices": {
+      "get": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A super-admin lists a store's devices (tenant named on the query).",
+        "operationId": "admin_list_devices",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's device slots, as an array: `device_id`, `tenant_id`, `store_id`, `name`, `kind` and `status`, each with its `etag`. These are the slots a box is activated or claimed into; their ids are not the ids of the devices a store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A super-admin creates a device under a store.",
+        "operationId": "admin_create_device",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, `kds` or `tablet`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/stores/{store_id}/devices/admitted": {
       "get": {
         "tags": [
@@ -7689,6 +8057,120 @@
             }
           }
         }
+      }
+    },
+    "/admin/stores/{store_id}/devices/{device_id}": {
+      "patch": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A super-admin renames a device, sets its kind, and/or sets its status.",
+        "operationId": "admin_update_device",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "device_id",
+            "in": "path",
+            "description": "The device slot (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the slot was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "An id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The store has no device slot with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The slot changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The registry store failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/stores/{store_id}/permissions/readiness": {
@@ -9063,6 +9545,10 @@
     {
       "name": "devices",
       "description": "What a store has actually admitted (ADR-0118). Documented rather than deferred with the rest of the device surface because it is the **only** read that answers it: a store admits tablets locally and offline, and until these events the cloud's picture of a store's tills was zero rows. Note the two identity spaces — the ids here are minted by the edge at pairing, and nothing joins them to the console-minted ids of `/admin/stores/{store_id}/devices`."
+    },
+    {
+      "name": "box activation",
+      "description": "The device slots a store has, and how a box earns the credential for one (ADR-0050, ADR-0065, ADR-0148). An administrator registers a slot, then either issues a one-time activation code for its setup sheet or binds the code a box with no store shows on its screen. Either way the box receives its credential once, and only a hash of it is kept. An activation code is returned exactly once and can be cancelled until it is spent."
     },
     {
       "name": "device onboarding",

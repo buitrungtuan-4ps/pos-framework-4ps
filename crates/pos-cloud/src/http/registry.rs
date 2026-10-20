@@ -35,6 +35,9 @@ mod tenants;
 pub(crate) use brands::{
     __path_admin_create_brand, __path_admin_list_brands, __path_admin_update_brand,
 };
+pub(crate) use devices::{
+    __path_admin_create_device, __path_admin_list_devices, __path_admin_update_device,
+};
 pub(crate) use stores::{
     __path_admin_create_store, __path_admin_list_stores, __path_admin_update_store,
 };

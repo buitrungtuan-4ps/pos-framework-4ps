@@ -136,6 +136,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_devices::routes::set_print_agent,
         pos_cloud_devices::routes::set_drawer_attached,
         pos_cloud_devices::routes::admin_publish_devices,
+        crate::http::registry::admin_list_devices,
+        crate::http::registry::admin_create_device,
+        crate::http::registry::admin_update_device,
+        pos_cloud_devices::routes::admin_issue_activation_code,
+        pos_cloud_devices::routes::admin_revoke_activation_codes,
+        pos_cloud_devices::routes::admin_bind_claim,
         pos_cloud_reports::revenue::admin_export_revenue_fees,
         pos_cloud_reports::revenue::admin_export_revenue_tax,
         crate::http::admin_list_store_groups,
@@ -250,6 +256,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            rows. Note the two identity spaces — the ids here are minted by the \
                            edge at pairing, and nothing joins them to the console-minted ids of \
                            `/admin/stores/{store_id}/devices`."
+        ),
+        (
+            name = "box activation",
+            description = "The device slots a store has, and how a box earns the credential for \
+                           one (ADR-0050, ADR-0065, ADR-0148). An administrator registers a slot, \
+                           then either issues a one-time activation code for its setup sheet or \
+                           binds the code a box with no store shows on its screen. Either way the \
+                           box receives its credential once, and only a hash of it is kept. An \
+                           activation code is returned exactly once and can be cancelled until it \
+                           is spent."
         ),
         (
             name = "device onboarding",
@@ -415,24 +431,18 @@ impl Modify for SessionCookie {
     )
 )]
 const UNDOCUMENTED: &[&str] = &[
-    // --- a store's configuration, devices and reports (WS-C) ---
+    // --- a store's configuration and reports (WS-C) ---
     "/admin/stores/{store_id}/config",
     "/admin/stores/{store_id}/config/rollback",
     "/admin/stores/{store_id}/config/versions",
     "/admin/stores/{store_id}/config/versions/{version_id}",
     "/admin/stores/{store_id}/config/{level}",
-    "/admin/stores/{store_id}/devices",
-    "/admin/stores/{store_id}/devices/{device_id}",
     "/admin/stores/{store_id}/reports/xz",
     "/admin/stores/{store_id}/revenue/daily",
     "/admin/stores/{store_id}/revenue/export",
     "/admin/stores/{store_id}/rollups/daily",
     "/admin/stores/{store_id}/rollups/export",
     "/admin/stores/{store_id}/rollups/reset",
-    // --- activating a box: activation codes and claims ---
-    "/admin/activation-codes",
-    "/admin/activation-codes/revoke",
-    "/admin/claims/bind",
     // --- the four-level configuration tree and its publishes (ADR-0033) ---
     "/admin/config/campaigns",
     "/admin/config/campaigns/preview",

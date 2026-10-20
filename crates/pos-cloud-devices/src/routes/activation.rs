@@ -129,6 +129,27 @@ struct ExchangeResponse {
     credential: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/activation-codes",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
+                       registered under `/admin/stores/{store_id}/devices`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, \
+                                      for the setup sheet. It is returned exactly once, since only \
+                                      its hash is stored, and it is spent the first time a box \
+                                      exchanges it for a credential (ADR-0050)"),
+        (status = 400, description = "tenant_id, store_id or device_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The activation store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A super-admin issues an activation code bound to a device slot.
 async fn admin_issue_activation_code<X, A, C>(
     State(state): State<ActivationState<X, A, C>>,
@@ -182,6 +203,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/activation-codes/revoke",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
+                       registered under `/admin/stores/{store_id}/devices`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Every code issued for the slot and not yet spent is cancelled, \
+                                      as for a setup sheet that went astray. The body carries \
+                                      `revoked`, how many were"),
+        (status = 400, description = "tenant_id, store_id or device_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The activation store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A super-admin cancels a device slot's still-issued codes.
 async fn admin_revoke_activation_codes<X, A, C>(
     State(state): State<ActivationState<X, A, C>>,
