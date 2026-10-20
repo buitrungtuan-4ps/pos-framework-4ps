@@ -14,6 +14,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
 - [ADR-0156](../adr/0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md) A store issues its e-invoice from a range, and the cloud submits it
 - [ADR-0162](../adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md) A bill is taxed at the rates of one stated moment, and the country says which
+- [ADR-0176](../adr/0176-the-adapter-and-country-standard.md) The adapter and country standard
 
 ## Citations of ADRs that do not exist
 
