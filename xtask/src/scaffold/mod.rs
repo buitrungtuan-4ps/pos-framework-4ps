@@ -68,18 +68,34 @@ pub struct Edit {
 /// [`Error`] for an unknown generator or argument, an input the generator refuses, a plan that would
 /// overwrite something, or a file that cannot be read or written.
 pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
-    let (dry_run, args): (Vec<&String>, Vec<&String>) =
-        args.iter().partition(|argument| *argument == "--dry-run");
     let root = repo_root();
-    let plan = match args.split_first() {
-        Some((kind, rest)) if kind.as_str() == "crate" => krate::plan_from_args(&root, rest)?,
-        Some((kind, rest)) if kind.as_str() == "adapter" => adapter::plan_from_args(&root, rest)?,
-        Some((kind, rest)) if kind.as_str() == "country" => country::plan_from_args(&root, rest)?,
-        Some((kind, rest)) if kind.as_str() == "screen" => screen::plan_from_args(&root, rest)?,
-        _ => return Err(USAGE.into()),
-    };
-    apply(&root, &plan, !dry_run.is_empty())?;
+    let plan = plan(&root, args)?;
+    apply(
+        &root,
+        &plan,
+        args.iter().any(|argument| argument == "--dry-run"),
+    )?;
     Ok(Vec::new())
+}
+
+/// What `cargo xtask new <kind> …` would write at `root`, without writing it; `--dry-run` is
+/// ignored. `cargo xtask guides` plans each command a guide shows through this.
+///
+/// # Errors
+///
+/// [`Error`] for an unknown generator or argument, or an input the generator refuses.
+pub fn plan(root: &Path, args: &[String]) -> Result<Plan, Error> {
+    let args: Vec<&String> = args
+        .iter()
+        .filter(|argument| *argument != "--dry-run")
+        .collect();
+    match args.split_first() {
+        Some((kind, rest)) if kind.as_str() == "crate" => krate::plan_from_args(root, rest),
+        Some((kind, rest)) if kind.as_str() == "adapter" => adapter::plan_from_args(root, rest),
+        Some((kind, rest)) if kind.as_str() == "country" => country::plan_from_args(root, rest),
+        Some((kind, rest)) if kind.as_str() == "screen" => screen::plan_from_args(root, rest),
+        _ => Err(USAGE.into()),
+    }
 }
 
 /// Fills each `{{key}}` in `template` with its value.

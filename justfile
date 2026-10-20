@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates gen-docs-check code-size mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links guides-check crates gen-docs-check code-size mirrored-files clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -107,6 +107,10 @@ changelog-check:
 links:
     cargo run -q -p xtask -- links
     cargo run -q -p xtask -- countries
+
+# What a guide in docs/guides/ marks is still true to the tree (docs/guides/README.md).
+guides-check:
+    cargo run -q -p xtask -- guides --check
 
 # Every workspace crate has a README and a [package.metadata.pos] contract card, and both agree with
 # cargo metadata and CODEOWNERS (ADR-0170 decisions 1 and 5).
