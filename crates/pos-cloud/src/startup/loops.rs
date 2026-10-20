@@ -26,6 +26,81 @@ use tokio::task::JoinHandle;
 
 use crate::{consumer_config, shutdown_signal};
 
+/// The background loops the boot spawns before it binds, held so the shutdown can wind them down.
+pub(crate) struct Loops {
+    cursor: Option<JoinHandle<Result<(), PortError>>>,
+    projector: JoinHandle<()>,
+    retention: Option<JoinHandle<()>>,
+    webhook: JoinHandle<()>,
+    alert: JoinHandle<()>,
+    scheduled_publish: JoinHandle<()>,
+    people_republish: JoinHandle<()>,
+    metrics: Option<JoinHandle<()>>,
+}
+
+impl Loops {
+    /// Spawns the loops in boot order: the ingest cursor, the rollup projector, the retention
+    /// cron, the webhook dispatcher, the alert evaluator, the scheduled-publish activator, the
+    /// people republisher and the metrics heartbeat.
+    pub(crate) async fn spawn(
+        config: &CloudConfig,
+        cloud: &Cloud<PostgresStore>,
+        store: &PostgresStore,
+        audit: &Arc<dyn AuditRecorder>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (cursor, stream_probe) = ingest_cursor(config, cloud).await?;
+        let projector = rollup_projector(config, store);
+        let retention = retention_cron(config, store);
+        let webhook = webhook_dispatcher(config, store);
+        let alert = alert_evaluator(config, store, stream_probe).await;
+        let scheduled_publish = scheduled_publish_activator(config, store);
+        let people_republish = people_republisher(store, audit);
+        let metrics = metrics_heartbeat(config);
+        Ok(Self {
+            cursor,
+            projector,
+            retention,
+            webhook,
+            alert,
+            scheduled_publish,
+            people_republish,
+            metrics,
+        })
+    }
+
+    /// Winds the loops down once the server has stopped, with the archive retention sweep spawned
+    /// after the bind in its place after the retention cron. Their own shutdown signals have
+    /// already fired (same SIGINT); this awaits each one's clean exit, or aborts a stuck one.
+    pub(crate) async fn wind_down(self, archive_retention: Option<JoinHandle<()>>) {
+        if let Some(task) = self.cursor {
+            task.abort();
+            let _ = task.await;
+        }
+        self.projector.abort();
+        let _ = self.projector.await;
+        if let Some(task) = self.retention {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = archive_retention {
+            task.abort();
+            let _ = task.await;
+        }
+        self.webhook.abort();
+        let _ = self.webhook.await;
+        self.alert.abort();
+        let _ = self.alert.await;
+        self.scheduled_publish.abort();
+        let _ = self.scheduled_publish.await;
+        self.people_republish.abort();
+        let _ = self.people_republish.await;
+        if let Some(task) = self.metrics {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 /// The production ingest feed, if configured, and the probe the alert evaluator reads the stream
 /// through.
 pub(crate) async fn ingest_cursor(
@@ -358,5 +433,101 @@ pub(crate) fn archive_retention_sweep(
             )))
         }
         _other => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Writes its name to `stopped` when the loop holding it is dropped, which an aborted task
+    /// is when its handle is awaited.
+    struct Stopped(&'static str, Arc<Mutex<Vec<&'static str>>>);
+
+    impl Drop for Stopped {
+        fn drop(&mut self) {
+            if let Ok(mut stopped) = self.1.lock() {
+                stopped.push(self.0);
+            }
+        }
+    }
+
+    /// A loop that never ends on its own, as one stuck past its shutdown signal would be.
+    fn stuck<T: Send + 'static>(
+        name: &'static str,
+        stopped: &Arc<Mutex<Vec<&'static str>>>,
+    ) -> JoinHandle<T> {
+        let stopped = Stopped(name, Arc::clone(stopped));
+        tokio::spawn(async move {
+            let _stopped = stopped;
+            core::future::pending::<T>().await
+        })
+    }
+
+    #[tokio::test]
+    async fn the_wind_down_aborts_every_stuck_loop_in_boot_order() {
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        let loops = Loops {
+            cursor: Some(stuck("cursor", &stopped)),
+            projector: stuck("projector", &stopped),
+            retention: Some(stuck("retention", &stopped)),
+            webhook: stuck("webhook", &stopped),
+            alert: stuck("alert", &stopped),
+            scheduled_publish: stuck("scheduled_publish", &stopped),
+            people_republish: stuck("people_republish", &stopped),
+            metrics: Some(stuck("metrics", &stopped)),
+        };
+        let archive_retention = Some(stuck("archive_retention", &stopped));
+
+        tokio::time::timeout(Duration::from_secs(10), loops.wind_down(archive_retention))
+            .await
+            .expect("the wind-down aborts a stuck loop rather than waiting on it");
+
+        assert_eq!(
+            *stopped.lock().expect("not poisoned"),
+            [
+                "cursor",
+                "projector",
+                "retention",
+                "archive_retention",
+                "webhook",
+                "alert",
+                "scheduled_publish",
+                "people_republish",
+                "metrics",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_wind_down_skips_the_loops_that_are_off() {
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        let loops = Loops {
+            cursor: None,
+            projector: stuck("projector", &stopped),
+            retention: None,
+            webhook: stuck("webhook", &stopped),
+            alert: stuck("alert", &stopped),
+            scheduled_publish: stuck("scheduled_publish", &stopped),
+            people_republish: stuck("people_republish", &stopped),
+            metrics: None,
+        };
+
+        tokio::time::timeout(Duration::from_secs(10), loops.wind_down(None))
+            .await
+            .expect("the wind-down finishes");
+
+        assert_eq!(
+            *stopped.lock().expect("not poisoned"),
+            [
+                "projector",
+                "webhook",
+                "alert",
+                "scheduled_publish",
+                "people_republish",
+            ]
+        );
     }
 }

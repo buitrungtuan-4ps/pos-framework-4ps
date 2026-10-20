@@ -454,6 +454,11 @@ mod full_boot {
         }
     }
 
+    /// How long an interrupted cloud may take to stop. Every background loop hears the same
+    /// interrupt, and once the server has stopped the boot aborts any loop still running rather
+    /// than waiting out its interval, so a clean stop takes seconds, not a loop period.
+    const STOPS_WITHIN: Duration = Duration::from_secs(10);
+
     /// One full boot at a time. Two boots migrating a fresh database at once race on its
     /// `CREATE … IF NOT EXISTS` statements, and the loser refuses to start: true of the binary,
     /// and not what these tests are about.
@@ -498,7 +503,7 @@ mod full_boot {
             .status()
             .expect("send SIGINT");
         assert!(interrupted.success());
-        let status = exited(&mut child, Duration::from_secs(60)).await;
+        let status = exited(&mut child, STOPS_WITHIN).await;
         let text = scratch.said();
         assert_eq!(status.code(), Some(0), "a clean stop; it said:\n{text}");
         assert!(
