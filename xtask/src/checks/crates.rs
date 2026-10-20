@@ -155,7 +155,7 @@ fn crates_from(root: &Path, metadata: &serde_json::Value) -> Vec<Crate> {
 }
 
 /// The numbers of the ADR files under `dir` (`0170-…md` gives 170).
-fn adr_numbers(dir: &Path) -> Result<BTreeSet<u32>, Error> {
+pub(crate) fn adr_numbers(dir: &Path) -> Result<BTreeSet<u32>, Error> {
     let mut numbers = BTreeSet::new();
     for entry in std::fs::read_dir(dir)? {
         let name = entry?.file_name().to_string_lossy().into_owned();
@@ -368,7 +368,7 @@ fn listing(normal: &BTreeSet<String>, dev: &BTreeSet<String>) -> String {
 }
 
 /// `CODEOWNERS` as (pattern, owners) pairs, in file order, ignoring comments and blank lines.
-fn codeowner_lines(text: &str) -> Vec<(String, Vec<&str>)> {
+pub(crate) fn codeowner_lines(text: &str) -> Vec<(String, Vec<&str>)> {
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
@@ -384,7 +384,7 @@ fn codeowner_lines(text: &str) -> Vec<(String, Vec<&str>)> {
 ///
 /// Only the patterns this file uses are understood: `*`, and a rooted directory such as
 /// `/crates/pos-core/`. A file pattern never covers a crate directory.
-fn route_for<'a>(
+pub(crate) fn route_for<'a>(
     routes: &'a [(String, Vec<&'a str>)],
     dir: &str,
 ) -> Option<(&'a str, &'a [&'a str])> {
