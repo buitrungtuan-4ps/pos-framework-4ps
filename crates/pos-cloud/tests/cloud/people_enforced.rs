@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use pos_cloud::audit::{AuditSink, AuditStore, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::people::{
     AssignmentId, AssignmentScope, AssignmentStore, EmployeeId, EmployeeStore, EmployeeUpdate,
     NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplateId, RoleTemplateStore,
@@ -20,9 +21,10 @@ use tower::ServiceExt;
 
 use crate::{
     FakeAudit, FakeConfigTrees, FakePeople, FakeRegistry, admin_cookie, applied, assignment_body,
-    delete_with_cookie, etag_of, get_with_cookie, json_body, patch_with_etag, people_app,
-    people_app_with_audit, post_assignment, post_with_cookie, provisioned_admin, publish_people,
-    publish_report, seed_a_cashier, seed_store, staff_at, store_id, tenant, versions_at,
+    delete_with_cookie, etag_of, get_with_cookie, json_body, patch_with_cookie, patch_with_etag,
+    people_app, people_app_with_audit, post_assignment, post_with_cookie, provisioned_admin,
+    publish_people, publish_report, role_session_cookie, seed_a_cashier, seed_store, staff_at,
+    store_id, tenant, versions_at,
 };
 
 /// Seeds, through the seam, a person and a role that existed and have since been archived.
@@ -765,4 +767,275 @@ async fn an_update_that_leaves_approval_out_keeps_it_less_what_it_now_grants_dir
         .expect("route the read");
     let role = json_body(cleared).await;
     assert_eq!(role["permissions_with_approval"], serde_json::json!([]));
+}
+
+// --- pinned before `admin_update_employee` and `admin_create_role` are split (ADR-0170 decision 7)
+
+/// The status and the fields a refusal names.
+async fn refused_fields(response: axum::response::Response) -> (StatusCode, Vec<String>) {
+    let status = response.status();
+    let body = json_body(response).await;
+    let fields = body["error"]["details"]
+        .as_array()
+        .map(|details| {
+            details
+                .iter()
+                .filter_map(|detail| detail["field"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    (status, fields)
+}
+
+/// An employee update is refused, field by field, in the order the handler reads them: the session,
+/// the ids, the name, the status, then the record (a `404` before the `If-Match` is read), then the
+/// `If-Match`. None of them records anything.
+#[tokio::test]
+async fn an_employee_update_is_refused_in_the_order_it_reads_its_request() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        admin.clone(),
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &owner,
+        ))
+        .await
+        .expect("route create employee");
+    let etag = etag_of(&created);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    audit.entries.lock().expect("lock").clear();
+    let unknown = Ulid::from_u128(0x0BAD).to_string();
+    let body = |name: &str, status: &str| serde_json::json!({ "tenant_id": tenant_ulid, "name": name, "status": status });
+
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/employees/{employee_id}"),
+            &body("Alice", "active"),
+            &ops,
+            &etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    for (id, sent, with_etag, status, fields) in [
+        (
+            "not-a-ulid",
+            body(" ", "retired"),
+            true,
+            StatusCode::BAD_REQUEST,
+            vec!["employee_id"],
+        ),
+        (
+            employee_id.as_str(),
+            body(" ", "retired"),
+            true,
+            StatusCode::BAD_REQUEST,
+            vec!["name"],
+        ),
+        (
+            employee_id.as_str(),
+            body("Alice", "retired"),
+            true,
+            StatusCode::BAD_REQUEST,
+            vec!["status"],
+        ),
+        (
+            unknown.as_str(),
+            body("Alice", "active"),
+            false,
+            StatusCode::NOT_FOUND,
+            vec![],
+        ),
+        (
+            employee_id.as_str(),
+            body("Alice", "active"),
+            false,
+            StatusCode::BAD_REQUEST,
+            vec!["if-match"],
+        ),
+    ] {
+        let url = format!("/admin/employees/{id}");
+        let request = if with_etag {
+            patch_with_etag(&url, &sent, &owner, &etag)
+        } else {
+            patch_with_cookie(&url, &sent, &owner)
+        };
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route the update");
+        assert_eq!(
+            refused_fields(response).await,
+            (
+                status,
+                fields.iter().map(|field| (*field).to_owned()).collect()
+            ),
+            "{id} {sent}"
+        );
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// A rename answers `204` and records the id, code and status before and after, never the name.
+#[tokio::test]
+async fn an_employee_rename_answers_204_and_records_its_code_and_status_not_its_name() {
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &owner,
+        ))
+        .await
+        .expect("route create employee");
+    let etag = etag_of(&created);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    audit.entries.lock().expect("lock").clear();
+
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "active" }),
+            &owner,
+            &etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(renamed.status(), StatusCode::NO_CONTENT);
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "employee.update");
+    assert_eq!(entry.entity_type, "employee");
+    assert_eq!(entry.entity_id, employee_id);
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    let side = serde_json::json!({ "id": employee_id, "code": "C01", "status": "active" });
+    assert_eq!(entry.before.as_ref(), Some(&side));
+    assert_eq!(entry.after.as_ref(), Some(&side));
+}
+
+/// A role create is refused in the order it reads its request — the name, the permissions, the
+/// ceiling — and a valid one answers its id and version and records what it grants.
+#[tokio::test]
+async fn a_role_create_is_refused_in_order_and_records_what_it_grants() {
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        provisioned_admin(),
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let role = |name: &str, permissions: serde_json::Value, ceiling: i64| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": name,
+            "permissions": permissions,
+            "discount_ceiling_minor": ceiling,
+        })
+    };
+    for (sent, fields) in [
+        (
+            serde_json::json!({ "tenant_id": "not-a-ulid", "name": " ", "permissions": [] }),
+            vec!["tenant_id"],
+        ),
+        (
+            role(" ", serde_json::json!(["not.a.permission"]), -1),
+            vec!["name"],
+        ),
+        (
+            role("Cashier", serde_json::json!(["not.a.permission"]), -1),
+            vec!["permissions"],
+        ),
+        (
+            role("Cashier", serde_json::json!([]), -1),
+            vec!["discount_ceiling_minor"],
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/roles", &sent, &owner))
+            .await
+            .expect("route the create");
+        assert_eq!(
+            refused_fields(response).await,
+            (
+                StatusCode::BAD_REQUEST,
+                fields.iter().map(|field| (*field).to_owned()).collect()
+            ),
+            "{sent}"
+        );
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &role(
+                "Cashier",
+                serde_json::json!(["billing.discount.apply"]),
+                50_000,
+            ),
+            &owner,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert!(
+        !etag_of(&created).is_empty(),
+        "the create answers its version"
+    );
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "role.create");
+    assert_eq!(entry.entity_type, "role");
+    assert_eq!(entry.entity_id, id);
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "id": id,
+            "name": "Cashier",
+            "permissions": ["billing.discount.apply"],
+            "permissions_with_approval": [],
+            "discount_ceiling_minor": 50_000,
+        }))
+    );
 }
