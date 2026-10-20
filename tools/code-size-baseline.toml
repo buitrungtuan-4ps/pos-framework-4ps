@@ -10,13 +10,12 @@
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud-catalog/src/catalog.rs" = 2018
-"crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud-catalog/src/fees.rs" = 1623
 "crates/pos-cloud/src/http.rs" = 3004
 "crates/pos-cloud/src/lease.rs" = 1236
 "crates/pos-cloud/src/main.rs" = 1249
 "crates/pos-cloud-people/src/people.rs" = 1069
-"crates/pos-cloud/src/persistence.rs" = 2137
+"crates/pos-cloud/src/persistence.rs" = 2129
 "crates/pos-cloud/src/scheduling.rs" = 1290
 "crates/pos-cloud/tests/cloud.rs" = 11654
 "crates/pos-core/src/billing.rs" = 3800
@@ -56,13 +55,11 @@
 "crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
 "crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
-"crates/pos-cloud/src/config.rs::CloudConfig::validate" = { lines = 118, params = 1 }
 "crates/pos-cloud/src/http.rs::router" = { lines = 186, params = 1 }
 "crates/pos-cloud-catalog/src/routes/catalog.rs::catalog_router" = { lines = 135, params = 4 }
 "crates/pos-cloud/src/http/config_publish/config_releases.rs::config_release_router" = { lines = 50, params = 9 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
 "crates/pos-cloud/src/main.rs::run" = { lines = 1168, params = 0 }
-"crates/pos-cloud/src/persistence.rs::fleet_row" = { lines = 102, params = 1 }
 "crates/pos-cloud/src/webhook/ssrf.rs::classify_v6" = { lines = 123, params = 1 }
 "crates/pos-core/src/billing.rs::assemble" = { lines = 124, params = 1 }
 "crates/pos-core/src/decision.rs::decide_bill" = { lines = 103, params = 3 }
