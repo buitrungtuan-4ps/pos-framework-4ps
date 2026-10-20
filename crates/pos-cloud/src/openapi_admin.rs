@@ -245,6 +245,10 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::config_publish::admin_preview_config_node,
         pos_cloud_people::routes::admin_list_capabilities,
         pos_cloud_people::routes::admin_publish_capabilities,
+        crate::http::ota_rollout::admin_get_lease,
+        crate::http::ota_rollout::admin_bump_lease,
+        crate::http::ota_rollout::admin_settle_handover,
+        crate::http::ota_rollout::admin_retire_handover,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -569,6 +573,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            its list."
         ),
         (
+            name = "lease",
+            description = "Which machine is the store (ADR-0108, ADR-0110, ADR-0114): the store's \
+                           lease generation, issued only by the server and only by a bump, which \
+                           is the act of making a different machine the store and may move where \
+                           it runs and where its data rests. A bump will not abandon a previous \
+                           machine that still holds events unless a person acknowledges it by \
+                           generation. A handover ends when the old machine drains, or when a person \
+                           settles it by attestation; retiring the old machine afterwards is a \
+                           separate decision. Every one of these is audited with who made it."
+        ),
+        (
             name = "config nodes",
             description = "The per-store configuration a console reads and writes one node at a \
                            time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
@@ -637,13 +652,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/campaigns/preview",
     "/admin/config/campaigns/schedule",
     "/admin/config/inventory",
-    // The store's lease (ADR-0108). `GET` reads the authoritative generation; `POST …/bump` issues
-    // the next one, which is the act of making a different machine the store. There is no `PUT`,
-    // deliberately: the node is derived from the counter, never authored.
-    "/admin/config/lease",
-    "/admin/config/lease/bump",
-    "/admin/config/lease/retire",
-    "/admin/config/lease/settle",
     "/admin/config/ota",
     "/admin/config/ota/halt",
     "/admin/config/ota/placement",
