@@ -435,3 +435,99 @@ pub(crate) fn archive_retention_sweep(
         _other => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Writes its name to `stopped` when the loop holding it is dropped, which an aborted task
+    /// is when its handle is awaited.
+    struct Stopped(&'static str, Arc<Mutex<Vec<&'static str>>>);
+
+    impl Drop for Stopped {
+        fn drop(&mut self) {
+            if let Ok(mut stopped) = self.1.lock() {
+                stopped.push(self.0);
+            }
+        }
+    }
+
+    /// A loop that never ends on its own, as one stuck past its shutdown signal would be.
+    fn stuck<T: Send + 'static>(
+        name: &'static str,
+        stopped: &Arc<Mutex<Vec<&'static str>>>,
+    ) -> JoinHandle<T> {
+        let stopped = Stopped(name, Arc::clone(stopped));
+        tokio::spawn(async move {
+            let _stopped = stopped;
+            core::future::pending::<T>().await
+        })
+    }
+
+    #[tokio::test]
+    async fn the_wind_down_aborts_every_stuck_loop_in_boot_order() {
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        let loops = Loops {
+            cursor: Some(stuck("cursor", &stopped)),
+            projector: stuck("projector", &stopped),
+            retention: Some(stuck("retention", &stopped)),
+            webhook: stuck("webhook", &stopped),
+            alert: stuck("alert", &stopped),
+            scheduled_publish: stuck("scheduled_publish", &stopped),
+            people_republish: stuck("people_republish", &stopped),
+            metrics: Some(stuck("metrics", &stopped)),
+        };
+        let archive_retention = Some(stuck("archive_retention", &stopped));
+
+        tokio::time::timeout(Duration::from_secs(10), loops.wind_down(archive_retention))
+            .await
+            .expect("the wind-down aborts a stuck loop rather than waiting on it");
+
+        assert_eq!(
+            *stopped.lock().expect("not poisoned"),
+            [
+                "cursor",
+                "projector",
+                "retention",
+                "archive_retention",
+                "webhook",
+                "alert",
+                "scheduled_publish",
+                "people_republish",
+                "metrics",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_wind_down_skips_the_loops_that_are_off() {
+        let stopped = Arc::new(Mutex::new(Vec::new()));
+        let loops = Loops {
+            cursor: None,
+            projector: stuck("projector", &stopped),
+            retention: None,
+            webhook: stuck("webhook", &stopped),
+            alert: stuck("alert", &stopped),
+            scheduled_publish: stuck("scheduled_publish", &stopped),
+            people_republish: stuck("people_republish", &stopped),
+            metrics: None,
+        };
+
+        tokio::time::timeout(Duration::from_secs(10), loops.wind_down(None))
+            .await
+            .expect("the wind-down finishes");
+
+        assert_eq!(
+            *stopped.lock().expect("not poisoned"),
+            [
+                "projector",
+                "webhook",
+                "alert",
+                "scheduled_publish",
+                "people_republish",
+            ]
+        );
+    }
+}
