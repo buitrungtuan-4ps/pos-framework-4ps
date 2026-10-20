@@ -7,9 +7,10 @@ use pos_core::billing;
 use pos_core::decision::{Actor, TableCommand, decide_table};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
-use pos_proto::BillState;
 use pos_proto::events::BillingBillOpened;
-use pos_proto::ids::{BillId, OrderId, TableId};
+use pos_proto::fees::FrozenFee;
+use pos_proto::ids::{BillId, OrderId, OrderLineId, TableId};
+use pos_proto::{BillState, TableState};
 
 use crate::app::{AppError, BillRecord, BillView, Edge};
 
@@ -75,7 +76,49 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<BillView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::OpenBill)?;
+        let table_id = self.billable_order(order_id)?;
 
+        // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
+        // the tables capability. There is no floor move to prove for a counter order.
+        let table_decision = match table_id {
+            Some(table_id) => Some(decide_table(
+                self.table_state(table_id),
+                TableCommand::RequestBill,
+                &ctx,
+            )?),
+            None => None,
+        };
+
+        let (order_line_ids, fee_rules) = self.bill_contents(order_id);
+        let bill_id = BillId::new(self.next_ulid());
+        let payload = BillingBillOpened {
+            bill_id,
+            order_id,
+            order_line_ids,
+            fee_rules,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        let table_state = table_decision.map(|decision| decision.next_state);
+        self.record_opened_bill(payload, table_id, table_state);
+        Ok(BillView {
+            bill_id,
+            state: BillState::Open,
+            receipt_number: None,
+            total_due: None,
+            totals: None,
+            // Nothing prints on an open bill, so there is nothing to carry out of it.
+            lines: Vec::new(),
+            table_state,
+            print_receipt: false,
+            open_drawer: false,
+            drawer_till: None,
+        })
+    }
+
+    /// The table the order sits on, once the order is one this edge can bill: no bill open on it
+    /// already, known to the edge, and something on it sold.
+    fn billable_order(&self, order_id: OrderId) -> Result<Option<TableId>, AppError> {
         let (existing_bill, table_id, has_lines) = {
             let projection = self.lock_projection();
             (
@@ -101,21 +144,18 @@ impl<S: EventStore> Edge<S> {
         if self.lock_projection().sold_line_ids(order_id).is_empty() {
             return Err(AppError::NothingToBill);
         }
+        Ok(table_id)
+    }
 
-        // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
-        // the tables capability. There is no floor move to prove for a counter order.
-        let table_decision = match table_id {
-            Some(table_id) => Some(decide_table(
-                self.table_state(table_id),
-                TableCommand::RequestBill,
-                &ctx,
-            )?),
-            None => None,
-        };
-
-        // Every unvoided line on the order, named rather than implied (ADR-0128 decision 9). This
-        // is exactly what opening a bill has always meant; writing it down is what lets a split
-        // partition it, and what lets the log say which bill owed what without a live projection.
+    /// What a bill on the order bills: every unvoided line, named rather than implied (ADR-0128
+    /// decision 9), and the fee rules in force for it.
+    ///
+    /// Naming the lines is exactly what opening a bill has always meant; writing it down is what
+    /// lets a split partition it, and what lets the log say which bill owed what without a live
+    /// projection. The fee rules are frozen onto the bill (ADR-0159 decision 3): those for the
+    /// channel it is taxed at, which is the order's, so a publish during the meal does not change
+    /// what it owes. Opening one again after a void freezes what is in force then.
+    fn bill_contents(&self, order_id: OrderId) -> (Vec<OrderLineId>, Vec<FrozenFee>) {
         let (order_line_ids, channel) = {
             let projection = self.lock_projection();
             (
@@ -123,55 +163,37 @@ impl<S: EventStore> Edge<S> {
                 projection.order_channel(order_id),
             )
         };
-        // The fee rules in force for this bill, frozen onto it (ADR-0159 decision 3): those for the
-        // channel it is taxed at, which is the order's, so a publish during the meal does not
-        // change what it owes. Opening one again after a void freezes what is in force then.
         let session = self.session();
         let fee_rules = session
             .fees
             .in_force(channel.unwrap_or(session.sales_channel));
+        (order_line_ids, fee_rules)
+    }
 
-        let bill_id = BillId::new(self.next_ulid());
-        let payload = BillingBillOpened {
-            bill_id,
-            order_id,
-            order_line_ids: order_line_ids.clone(),
-            fee_rules: fee_rules.clone(),
-        };
-        self.commit_and_publish(&ctx, &payload).await?;
-
-        {
-            let mut projection = self.lock_projection();
-            projection.open_bill_record(
-                bill_id,
-                BillRecord {
-                    order_id,
-                    table_id,
-                    state: BillState::Open,
-                    order_line_ids,
-                    discount: None,
-                    comp: None,
-                    fee_wholes: billing::fee_wholes(&fee_rules),
-                    fee_rules,
-                    waived_fee_ids: Vec::new(),
-                },
-            );
-            if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
-                projection.set_table(table_id, decision.next_state);
-            }
+    /// Records the opened bill in the projection and, for a floor order, moves its table.
+    fn record_opened_bill(
+        &self,
+        opened: BillingBillOpened,
+        table_id: Option<TableId>,
+        table_state: Option<TableState>,
+    ) {
+        let mut projection = self.lock_projection();
+        projection.open_bill_record(
+            opened.bill_id,
+            BillRecord {
+                order_id: opened.order_id,
+                table_id,
+                state: BillState::Open,
+                order_line_ids: opened.order_line_ids,
+                discount: None,
+                comp: None,
+                fee_wholes: billing::fee_wholes(&opened.fee_rules),
+                fee_rules: opened.fee_rules,
+                waived_fee_ids: Vec::new(),
+            },
+        );
+        if let (Some(table_id), Some(table_state)) = (table_id, table_state) {
+            projection.set_table(table_id, table_state);
         }
-        Ok(BillView {
-            bill_id,
-            state: BillState::Open,
-            receipt_number: None,
-            total_due: None,
-            totals: None,
-            // Nothing prints on an open bill, so there is nothing to carry out of it.
-            lines: Vec::new(),
-            table_state: table_decision.map(|decision| decision.next_state),
-            print_receipt: false,
-            open_drawer: false,
-            drawer_till: None,
-        })
     }
 }
