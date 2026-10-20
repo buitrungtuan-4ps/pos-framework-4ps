@@ -112,7 +112,7 @@ mod config_publish;
 mod countries;
 mod fleet;
 mod health;
-mod integrations;
+pub(crate) mod integrations;
 mod lease_bump;
 mod locale_node;
 mod ota;
@@ -207,14 +207,6 @@ pub use ota::{
     ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
 };
 pub use ota_rollout::ota_config_router;
-pub(crate) use people::{
-    __path_admin_create_assignment, __path_admin_create_employee, __path_admin_create_role,
-    __path_admin_get_employee, __path_admin_get_role, __path_admin_list_assignments,
-    __path_admin_list_employees, __path_admin_list_permissions, __path_admin_list_roles,
-    __path_admin_permissions_readiness, __path_admin_publish_permissions,
-    __path_admin_remove_assignment, __path_admin_set_employee_pin, __path_admin_update_employee,
-    __path_admin_update_role,
-};
 pub use people::{
     capabilities_router, config_capabilities_router, people_publish_router, people_router,
     permissions_readiness_router,

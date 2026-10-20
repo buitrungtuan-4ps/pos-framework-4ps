@@ -82,6 +82,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin::admin_list_invites,
         crate::http::admin::admin_revoke_invite,
         crate::http::admin::admin_accept_invite,
+        crate::http::admin::admin_create_api_key,
+        crate::http::admin::admin_list_api_keys,
+        crate::http::admin::admin_revoke_api_key,
+        crate::http::integrations::admin_register_webhook,
+        crate::http::integrations::admin_list_webhooks,
+        crate::http::integrations::admin_delete_webhook,
+        crate::http::integrations::admin_enable_webhook,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -120,21 +127,21 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_effective_settings,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
-        crate::http::admin_permissions_readiness,
-        crate::http::admin_list_permissions,
-        crate::http::admin_list_employees,
-        crate::http::admin_create_employee,
-        crate::http::admin_get_employee,
-        crate::http::admin_update_employee,
-        crate::http::admin_set_employee_pin,
-        crate::http::admin_list_roles,
-        crate::http::admin_create_role,
-        crate::http::admin_get_role,
-        crate::http::admin_update_role,
-        crate::http::admin_list_assignments,
-        crate::http::admin_create_assignment,
-        crate::http::admin_remove_assignment,
-        crate::http::admin_publish_permissions,
+        pos_cloud_people::routes::admin_permissions_readiness,
+        pos_cloud_people::routes::admin_list_permissions,
+        pos_cloud_people::routes::admin_list_employees,
+        pos_cloud_people::routes::admin_create_employee,
+        pos_cloud_people::routes::admin_get_employee,
+        pos_cloud_people::routes::admin_update_employee,
+        pos_cloud_people::routes::admin_set_employee_pin,
+        pos_cloud_people::routes::admin_list_roles,
+        pos_cloud_people::routes::admin_create_role,
+        pos_cloud_people::routes::admin_get_role,
+        pos_cloud_people::routes::admin_update_role,
+        pos_cloud_people::routes::admin_list_assignments,
+        pos_cloud_people::routes::admin_create_assignment,
+        pos_cloud_people::routes::admin_remove_assignment,
+        pos_cloud_people::routes::admin_publish_permissions,
         crate::http::admin_list_fees,
         crate::http::admin_create_fee,
         crate::http::admin_put_fee,
@@ -178,6 +185,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            and the store's sync path are untouched. Membership is replaced wholesale \
                            under the group's own ETag, because a cohort is a set and a delta API \
                            merges two admins' concurrent edits into one neither of them chose."
+        ),
+        (
+            name = "integrator access",
+            description = "The credentials and destinations of the `/v1` integrator surface: a \
+                           tenant's scoped API keys (ADR-0037) and the webhook endpoints a store's \
+                           events are sent to (ADR-0032). A key's token and an endpoint's signing \
+                           secret are each returned once, when it is made; no read returns either. \
+                           A webhook URL is checked before it is stored, so it can never point into \
+                           the cloud's own network. Revoking a key and deleting an endpoint are \
+                           idempotent and say nothing about whether one existed."
         ),
         (
             name = "integrations",
@@ -341,12 +358,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/stores/{store_id}/rollups/daily",
     "/admin/stores/{store_id}/rollups/export",
     "/admin/stores/{store_id}/rollups/reset",
-    // --- scoped integrator keys, webhook destinations, device onboarding ---
-    "/admin/api-keys",
-    "/admin/api-keys/{id}",
-    "/admin/webhooks",
-    "/admin/webhooks/{id}",
-    "/admin/webhooks/{id}/enable",
+    // --- device onboarding ---
     "/admin/devices/proposals",
     "/admin/devices/proposals/{id}/approve",
     "/admin/devices/proposals/{id}/reject",
