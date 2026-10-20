@@ -117,6 +117,33 @@ fn parse_subject_target(
     Ok((TenantId::new(tenant), SubjectId::new(subject)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/subjects/{subject_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, description = "The subject exists: `subject_id`, `collected_at_ms`, `masked` \
+                                      (whether it has been erased) and `field_count`, how many \
+                                      personal fields the record holds. No field value is returned. \
+                                      This is the step that confirms the right person before an \
+                                      export or an erasure. Audited"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Looks a subject up — its existence and whether it is masked — without returning the personal fields.
 async fn admin_lookup_subject<Su, A, C>(
     State(state): State<SubjectState<Su, A, C>>,
@@ -174,6 +201,35 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/subjects/{subject_id}/export",
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, description = "The record for an access or portability request: \
+                                      `subject_id`, `collected_at_ms`, `masked` and `fields`, the \
+                                      personal field values by name. The only route on this surface \
+                                      that returns them. An erased record returns its redacted \
+                                      values. Audited with the field count, never the values. \
+                                      Moving the payload across a border is the operator's to clear \
+                                      first"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Exports a subject's record — the portability/access payload, including the field values. Audited as
 /// an export (field count only). A masked record exports its redacted values (nothing personal remains).
 async fn admin_export_subject<Su, A, C>(
@@ -234,6 +290,33 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/subjects/{subject_id}/erase",
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, description = "Erased: every personal field value is masked in place and the \
+                                      erasure time stamped, while the id and `collected_at` remain so \
+                                      the books still reconcile (ADR-0035). Irreversible. Idempotent: \
+                                      erasing a subject already masked changes nothing and still \
+                                      succeeds. The body is `erased` and `already_masked`. Audited"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Erases a subject — masks every personal field value in place ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)),
 /// keeping the id and `collected_at` so the books still reconcile. Irreversible and idempotent: erasing
 /// an already-masked subject is a no-op that still returns `200`. Audited as an erasure.
