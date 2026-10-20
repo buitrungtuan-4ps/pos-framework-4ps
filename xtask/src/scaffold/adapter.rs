@@ -137,7 +137,9 @@ fn parts(kind: &Kind, name: &str) -> Parts {
         entry_points: "- [`src/lib.rs`](src/lib.rs)\n\
                        - [`tests/contract.rs`](tests/contract.rs): the port's shared contract suite"
             .into(),
+        readme: super::krate::README,
         lib: kind.lib,
+        dir: None,
         extra: vec![("tests/contract.rs", kind.contract)],
         values: vec![("crate_ident", name.replace('-', "_"))],
         next: vec![

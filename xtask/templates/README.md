@@ -9,6 +9,9 @@ substitution; a placeholder the generator does not fill is an error, not an empt
 - `adapter/<kind>/`: `cargo xtask new adapter --kind <kind>`: the crate root (`lib.rs.tmpl`), a
   transport seam with a pure core implementing the port, and `contract.rs.tmpl`, the port's shared
   suite against an in-memory transport. A template is kept as rustfmt formats it.
+- `country/`: `cargo xtask new country <cc>`: the module (`lib.rs.tmpl`) with every legal value
+  from a flag, its README with the values table, and `contract.rs.tmpl`, the `Fiscalization` suite.
+  The manifest comes from `crate/`.
 
 A change here changes the matching golden file under [`../tests/golden/`](../tests/golden/README.md)
 in the same pull request.

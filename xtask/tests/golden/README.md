@@ -10,3 +10,10 @@ change to a template changes its golden file in the same pull request.
 - `new-adapter/printer/` and `new-adapter/storage/`: `cargo xtask new adapter --kind printer` and
   `--kind storage`. Each generated crate passed its port's contract suite, clippy with
   `-D warnings` and rustfmt before its files were copied here.
+- `new-country/`: `cargo xtask new country xa --display-name "Example country" --currency XTS
+  --exponent 2 --prices-include-tax false --cash-rounding 5 --tax-rate food=1000 --tax-rate
+  alcohol=1000 --tax-rate exempt=0 --tax-rate food@takeaway=800 --retention-days 365 --language en`.
+  `XA` is an ISO user-assigned code and `XTS` the currency code ISO reserves for testing, so neither
+  names a real market. `wiring.golden` is each line it adds to the binaries, by file. The module
+  passed the fiscalization suite, its own tests, clippy and rustfmt, and both binaries built with
+  `country-xa`, before its files were copied here.
