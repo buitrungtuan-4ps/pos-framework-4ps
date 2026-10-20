@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use pos_cloud::audit::NoopAuditRecorder;
+use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::config_tree::ConfigTreeStore;
 use pos_cloud::tax::TaxRateEntry;
 use pos_cloud::{Cloud, http};
@@ -19,9 +20,9 @@ use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeConfigTrees, FakeKeys, FakeRollups, FakeTaxRates, FakeWebhooks, admin_cookie,
-    app_all, clock, get_with_cookie, json_body, provisioned_admin, put_with_cookie, store_id,
-    tenant,
+    FakeAdmin, FakeAudit, FakeConfigTrees, FakeKeys, FakeRollups, FakeTaxRates, FakeWebhooks,
+    admin_cookie, app_all, clock, get_with_cookie, json_body, provisioned_admin, put_with_cookie,
+    role_session_cookie, store_id, tenant,
 };
 
 fn tax_publish_app(
@@ -100,6 +101,15 @@ fn locale_publish_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::
 }
 
 fn store_profile_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
+    store_profile_app_with(admin, config_trees, Arc::new(NoopAuditRecorder))
+}
+
+/// [`store_profile_app`], recording to `audit`.
+fn store_profile_app_with(
+    admin: FakeAdmin,
+    config_trees: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -112,7 +122,7 @@ fn store_profile_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::R
         config_trees,
         admin,
         clock(),
-        Arc::new(NoopAuditRecorder),
+        audit,
         Arc::new(pos_country::country_registry! { pos_country_jp::Japan }),
     ))
 }
@@ -600,4 +610,161 @@ async fn a_store_publishes_the_origins_its_edge_will_answer() {
             "allowed": ["https://shell.example.com", "http://localhost:1420"]
         })
     );
+}
+
+// --- pinned before `admin_publish_store_profile` is split (ADR-0170 decision 7) ------------------
+
+/// A store profile is trimmed field by field, written, answered with its version and recorded as
+/// published. A blank optional field is absent rather than printed, and a number with no country is
+/// stored unchecked.
+#[tokio::test]
+async fn a_store_profile_is_trimmed_written_answered_and_recorded_as_published() {
+    let config_trees = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let router = store_profile_app_with(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/store-profile",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "legal_name": "  Pizza 4P's K.K.  ",
+                "trading_name": "   ",
+                "address_lines": [" 1-2-3 Ginza ", ""],
+                "tax_registration_number": " anything ",
+                "tax_registration_label": "",
+                "contact_lines": [" 03-0000-0000 ", "  "],
+                "footer_lines": ["", " Thank you "],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the profile publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let profile = state.record.layers[2]["store_profile"].clone();
+    assert_eq!(profile["legal_name"], "Pizza 4P's K.K.");
+    assert!(
+        profile
+            .get("trading_name")
+            .is_none_or(serde_json::Value::is_null)
+    );
+    assert!(
+        profile
+            .get("tax_registration_label")
+            .is_none_or(serde_json::Value::is_null)
+    );
+    assert_eq!(profile["address_lines"], serde_json::json!(["1-2-3 Ginza"]));
+    assert_eq!(profile["tax_registration_number"], "anything");
+    assert_eq!(
+        profile["contact_lines"],
+        serde_json::json!(["03-0000-0000"])
+    );
+    assert_eq!(profile["footer_lines"], serde_json::json!(["Thank you"]));
+    assert!(
+        !version.is_empty(),
+        "the answer names the version it produced"
+    );
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "config.store_profile.publish");
+    assert_eq!(entry.entity_type, "store");
+    assert_eq!(entry.entity_id, store_id().as_ulid().to_string());
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    assert_eq!(
+        entry.after.as_ref(),
+        Some(&profile),
+        "the trail records what was published"
+    );
+}
+
+/// A store profile is refused before anything is written: a role that may not publish, an id that
+/// is not a ULID, and a number that is not the shape the country issues, each naming its field.
+#[tokio::test]
+async fn a_store_profile_is_refused_before_it_is_written_and_records_nothing() {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let router = store_profile_app_with(
+        admin.clone(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let body = |store: &str, number: &str| {
+        serde_json::json!({
+            "tenant_id": tenant().as_ulid().to_string(),
+            "store_id": store,
+            "legal_name": "Pizza 4P's Japan K.K.",
+            "tax_registration_number": number,
+            "country_code": " JP ",
+        })
+    };
+    let store = store_id().as_ulid().to_string();
+
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let by_viewer = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/store-profile",
+            &body(&store, "T1234567890123"),
+            &viewer,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(by_viewer.status(), StatusCode::FORBIDDEN);
+
+    for (sent, field, reason) in [
+        (body("not-a-ulid", "T1"), "store_id", None),
+        (
+            body(&store, " T123456789012 "),
+            "tax_registration_number",
+            Some("INVALID_FORMAT"),
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/config/store-profile",
+                &sent,
+                &cookie,
+            ))
+            .await
+            .expect("route the publish");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{sent}");
+        let refusal = json_body(refused).await;
+        assert_eq!(refusal["error"]["details"][0]["field"], field, "{refusal}");
+        if let Some(reason) = reason {
+            assert_eq!(
+                refusal["error"]["details"][0]["reason"], reason,
+                "{refusal}"
+            );
+        }
+    }
+    assert!(
+        config_trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .is_none()
+    );
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }

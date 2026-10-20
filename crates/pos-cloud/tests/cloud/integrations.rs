@@ -599,6 +599,16 @@ async fn a_scope_has_one_ledger_and_only_a_manager_writes() {
 /// the brand's own ledger, and the store's own card terminal — each with a setting and a sealed
 /// secret, so what the node leaves out is as visible as what it keeps.
 fn seeded_integrations_publish() -> (axum::Router, FakeConfigTrees) {
+    seeded_integrations_publish_with(provisioned_admin(), Arc::new(NoopAuditRecorder), true)
+}
+
+/// [`seeded_integrations_publish`] under `admin`, recording to `audit`, with the store in the brand
+/// when `branded` and in no brand otherwise.
+fn seeded_integrations_publish_with(
+    admin: FakeAdmin,
+    audit: Arc<dyn AuditRecorder>,
+    branded: bool,
+) -> (axum::Router, FakeConfigTrees) {
     use pos_cloud::connections::{Connection, ScopeLevel};
 
     static TERMINAL: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
@@ -622,7 +632,7 @@ fn seeded_integrations_publish() -> (axum::Router, FakeConfigTrees) {
         StoreRecord {
             store_id: store_id(),
             tenant_id: tenant(),
-            brand_id: Some(brand),
+            brand_id: branded.then_some(brand),
             name: "Store".to_owned(),
             status: EntityStatus::Active,
         },
@@ -663,7 +673,6 @@ fn seeded_integrations_publish() -> (axum::Router, FakeConfigTrees) {
             .push((tenant(), Versioned::new(row, Version::new("1"))));
     }
 
-    let admin = provisioned_admin();
     let config_trees = FakeConfigTrees::default();
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -682,7 +691,7 @@ fn seeded_integrations_publish() -> (axum::Router, FakeConfigTrees) {
         config_trees.clone(),
         admin,
         clock(),
-        Arc::new(NoopAuditRecorder),
+        audit,
     ));
     (router, config_trees)
 }
@@ -747,4 +756,136 @@ async fn publishing_integrations_sends_a_store_what_serves_it_and_no_secret() {
         .await
         .expect("route the publish");
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+// --- pinned before `admin_publish_integrations` is split (ADR-0170 decision 7) -------------------
+
+/// The connection ids of a store's published `integrations` node, in order.
+async fn published_connections(config_trees: &FakeConfigTrees) -> Vec<String> {
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    state.record.layers[2]["integrations"]["integrations"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|integration| integration["connection_id"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// A publish answers its version and how many connections the store has, and records which
+/// connections and providers the store was given — ids only.
+#[tokio::test]
+async fn an_integrations_publish_answers_its_version_and_records_what_it_sent() {
+    let audit = FakeAudit::default();
+    let (router, config_trees) = seeded_integrations_publish_with(
+        provisioned_admin(),
+        Arc::new(AuditSink::new(audit.clone())),
+        true,
+    );
+    let cookie = admin_cookie(&router).await;
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let body = json_body(published).await;
+    assert!(body["config_version_id"].is_string(), "{body}");
+    assert_eq!(body["integrations"], 3);
+    assert_eq!(
+        published_connections(&config_trees).await,
+        ["01D", "01B", "01C"]
+    );
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "config.integrations.publish");
+    assert_eq!(entry.entity_type, "store");
+    assert_eq!(entry.entity_id, store_id().as_ulid().to_string());
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "connections": ["01D", "01B", "01C"],
+            "providers": ["card.test_terminal", "erp.test_ledger", "courier.test_courier"],
+        }))
+    );
+}
+
+/// A store in no brand is served the tenant's connection where the brand's would have won.
+#[tokio::test]
+async fn a_store_in_no_brand_is_served_the_tenants_connection() {
+    let (router, config_trees) =
+        seeded_integrations_publish_with(provisioned_admin(), Arc::new(NoopAuditRecorder), false);
+    let cookie = admin_cookie(&router).await;
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(
+        published_connections(&config_trees).await,
+        ["01D", "01A", "01C"]
+    );
+}
+
+/// A publish is refused before anything is read by a role that may not publish and an id that is
+/// not a ULID, and neither records anything.
+#[tokio::test]
+async fn an_integrations_publish_refuses_a_role_and_a_bad_id_and_records_nothing() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let (router, _) = seeded_integrations_publish_with(
+        admin.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+        true,
+    );
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let by_viewer = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &viewer,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(by_viewer.status(), StatusCode::FORBIDDEN);
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({ "tenant_id": tenant().as_ulid().to_string(), "store_id": "not-a-ulid" }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["field"],
+        "store_id"
+    );
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }
