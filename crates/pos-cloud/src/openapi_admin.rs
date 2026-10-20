@@ -190,6 +190,19 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_catalog::routes::catalog::admin_create_placement,
         pos_cloud_catalog::routes::catalog::admin_update_placement,
         pos_cloud_catalog::routes::catalog::admin_remove_placement,
+        pos_cloud_catalog::routes::catalog::admin_list_layout_buttons,
+        pos_cloud_catalog::routes::catalog::admin_create_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_update_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_remove_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_list_modifier_groups,
+        pos_cloud_catalog::routes::catalog::admin_create_modifier_group,
+        pos_cloud_catalog::routes::catalog::admin_update_modifier_group,
+        pos_cloud_catalog::routes::catalog::admin_list_tax_classes,
+        pos_cloud_catalog::routes::catalog::admin_create_tax_class,
+        pos_cloud_catalog::routes::catalog::admin_update_tax_class,
+        pos_cloud_catalog::routes::catalog::admin_publish_menu,
+        pos_cloud_catalog::routes::tax_rates::admin_list_tax_rates,
+        pos_cloud_catalog::routes::tax_rates::admin_set_tax_rates,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -335,6 +348,30 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            published."
         ),
         (
+            name = "till layout",
+            description = "The buttons a till shows on each sales channel (ADR-0066): one per item \
+                           per channel, under a display category, in a fixed grid slot or flowing \
+                           by sort order. A publish compiles them into the store's layout, apart \
+                           from its prices, so moving a button reprices nothing."
+        ),
+        (
+            name = "modifiers",
+            description = "The choices offered with an item (ADR-0066, ADR-0127): a modifier group \
+                           offers some items on others, with how many a guest must and may pick. \
+                           A group is tenant-wide; a publish keeps the groups a menu's channels \
+                           can offer."
+        ),
+        (
+            name = "tax",
+            description = "What tax an item is charged (ADR-0074, ADR-0104): each item names a tax \
+                           class, and the tenant's rate table gives each class a rate on each sales \
+                           channel, in basis points, optionally broken into named components an \
+                           invoice prints. The table is one entity, replaced wholesale and \
+                           conditionally. A class that active items still use cannot be archived, \
+                           and a store refuses to price an item on a channel its class has no rate \
+                           for."
+        ),
+        (
             name = "menus",
             description = "Where a tenant's items are sold and for how much (ADR-0066): menus, \
                            which may inherit from a parent menu; their sections; and placements, \
@@ -342,8 +379,9 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            is available. Prices are integers in the currency's minor units, and \
                            they are T2, so reading placements needs `console.reports.revenue`. A \
                            placement's prices are the price-change journal: every change is \
-                           audited with them. Nothing reaches a store until its catalog is \
-                           published."
+                           audited with them. Nothing reaches a store until a menu is published \
+                           to it, which compiles the menu with the menus it inherits from into the \
+                           store's price book and till layout."
         ),
         (
             name = "catalog items",
@@ -592,15 +630,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/tender",
     "/admin/config/vendors",
     "/admin/capabilities",
-    // --- the catalog: layout, modifiers, tax and its publish (F3, ADR-0066/0082) ---
-    "/admin/catalog/layout-buttons",
-    "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
-    "/admin/catalog/modifier-groups",
-    "/admin/catalog/modifier-groups/{modifier_group_id}",
-    "/admin/catalog/publish",
-    "/admin/catalog/tax-classes",
-    "/admin/catalog/tax-classes/{tax_class_id}",
-    "/admin/catalog/tax-rates",
     // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
     "/admin/inventory/ingredients",
     "/admin/inventory/ingredients/{ingredient_id}",

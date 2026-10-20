@@ -3769,6 +3769,360 @@
         ]
       }
     },
+    "/admin/catalog/layout-buttons": {
+      "get": {
+        "tags": [
+          "till layout"
+        ],
+        "summary": "A super-admin lists a tenant's layout buttons across all channels.",
+        "operationId": "admin_list_layout_buttons",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every button on every channel's till layout, as an array, each with its `etag`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "till layout"
+        ],
+        "summary": "A super-admin places an item's button on a channel's layout, refusing if it is already there.",
+        "description": "The route this replaced was a single `PUT` upsert. A button's identity is entirely\ncaller-supplied — `(tenant, channel, item)` — so \"place this button\" silently replaced the\nlabel, grid slot and sort order of one already on that channel, and the audit trail recorded\nthe overwrite as a `set` with no `before`.",
+        "operationId": "admin_create_layout_button",
+        "requestBody": {
+          "description": "`sales_channel` and `menu_item_id`, the slot the button is for — an item has at most one button per channel — then `tenant_id`, the `display_category_id` the button sits under and optionally its `display_subcategory_id`, its `label`, and its place: `grid_column` and `grid_row` together for a fixed slot, otherwise it flows by `sort`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Placed. The body is the button and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item already has a button on this channel: change it with PUT instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}": {
+      "put": {
+        "tags": [
+          "till layout"
+        ],
+        "summary": "A super-admin changes a button's presentation on a channel, only at the version they read.",
+        "operationId": "admin_update_layout_button",
+        "parameters": [
+          {
+            "name": "sales_channel",
+            "in": "path",
+            "description": "The sales channel's wire token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "menu_item_id",
+            "in": "path",
+            "description": "The item (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, the `display_category_id` the button sits under and optionally its `display_subcategory_id`, its `label`, and its place: `grid_column` and `grid_row` together for a fixed slot, otherwise it flows by `sort`, as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the button and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "An id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The item has no button on this channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The button changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "till layout"
+        ],
+        "summary": "A super-admin removes an item's button from a channel's layout (tenant named on the query).",
+        "operationId": "admin_remove_layout_button",
+        "parameters": [
+          {
+            "name": "sales_channel",
+            "in": "path",
+            "description": "The sales channel's wire token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "menu_item_id",
+            "in": "path",
+            "description": "The item (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed from the channel's layout, and audited"
+          },
+          "400": {
+            "description": "tenant_id or menu_item_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The item has no button on this channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/catalog/menus": {
       "get": {
         "tags": [
@@ -4643,6 +4997,743 @@
           },
           "503": {
             "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/modifier-groups": {
+      "get": {
+        "tags": [
+          "modifiers"
+        ],
+        "summary": "A super-admin lists a tenant's modifier groups.",
+        "operationId": "admin_list_modifier_groups",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's modifier groups, as an array, each with its `etag`. A group is tenant-wide; a publish keeps the ones the menu's channels can offer"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "modifiers"
+        ],
+        "summary": "A super-admin creates a modifier group; the id is minted here and returned once.",
+        "operationId": "admin_create_modifier_group",
+        "requestBody": {
+          "description": "`tenant_id`, then `name`, `min_select` and `max_select` (how many of the group a guest must and may pick), `member_item_ids` (the items it offers) and `attached_item_ids` (the items it is offered on)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or an item id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/modifier-groups/{modifier_group_id}": {
+      "patch": {
+        "tags": [
+          "modifiers"
+        ],
+        "summary": "A super-admin renames a modifier group, sets its rule, members, attachments and/or status.",
+        "operationId": "admin_update_modifier_group",
+        "parameters": [
+          {
+            "name": "modifier_group_id",
+            "in": "path",
+            "description": "The group (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, `status` (`active` or `archived`), and `name`, `min_select` and `max_select` (how many of the group a guest must and may pick), `member_item_ids` (the items it offers) and `attached_item_ids` (the items it is offered on), as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "An id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no modifier group with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The group changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/publish": {
+      "post": {
+        "tags": [
+          "menus"
+        ],
+        "summary": "A super-admin publishes a menu to a store: compile the price book and the presentation layout →\nwrite the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes, with the\nstore's `fees` node beside them where it changes → version it through the config tree.",
+        "description": "The fees are composed inside the write's retry, on the tree each attempt reads, with the menu\nbeing written: what the store is sent is checked against what it will hold. A store that cannot\napply one of its rules still gets its menu; the answer says which rule and why, and the store\nkeeps the fees it has, as a fee publish leaves it.",
+        "operationId": "admin_publish_menu",
+        "requestBody": {
+          "description": "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with the menus it inherits from",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published: the menu's price book and the till layout are written to the store's `menu` and `layout` nodes in one configuration version, with its `fees` node where that changes (ADR-0159). The body carries `config_version_id` and `fees`, the fee publish's outcome: applied, unchanged, refused with each rule the store cannot apply, or failed. A store that cannot apply a fee still gets its menu. Audited"
+          },
+          "400": {
+            "description": "tenant_id, store_id or menu_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The menu does not compile, naming why, or the store's configuration would not validate with it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/tax-classes": {
+      "get": {
+        "tags": [
+          "tax"
+        ],
+        "summary": "A super-admin lists a tenant's tax classes.",
+        "operationId": "admin_list_tax_classes",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's tax classes, as an array, each with its `etag`"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "tax"
+        ],
+        "summary": "A super-admin creates a tax class; the id is minted here and returned once in the created record.",
+        "operationId": "admin_create_tax_class",
+        "requestBody": {
+          "description": "`tenant_id` and the class's `name`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited. A store refuses to price an item in it on a channel with no rate"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/tax-classes/{tax_class_id}": {
+      "patch": {
+        "tags": [
+          "tax"
+        ],
+        "summary": "A super-admin renames a tax class and/or sets its status.",
+        "operationId": "admin_update_tax_class",
+        "parameters": [
+          {
+            "name": "tax_class_id",
+            "in": "path",
+            "description": "The tax class (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the record was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, and the class's `name` and `status` (`active` or `archived`) as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "tax_class_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no tax class with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The class changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Archiving it is refused while active items still use it, naming how many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/tax-rates": {
+      "get": {
+        "tags": [
+          "tax"
+        ],
+        "summary": "A super-admin lists a tenant's authored tax rates.",
+        "operationId": "admin_list_tax_rates",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's whole rate table, as an array: for each tax class and sales channel, `rate_bps` in basis points and its `components`, the named parts an invoice prints, which sum to the rate (ADR-0104). The table is one entity: its version is the response's ETag, absent for a tenant that never saved rates"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The tax rate store or the catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "tax"
+        ],
+        "summary": "A super-admin replaces a tenant's whole tax-rate table.",
+        "description": "Every row is validated before the write: its class must be one the tenant has authored, its channel\na token this build knows, its rate no more than 100%, no `(class, channel)` pair repeated, and\neach component named with a [`TaxComponentName`] — each a `400` naming the fault, so a bad grid\nnever reaches the store as a `500`. A stored row named otherwise is no exception: a save sends\nthe whole grid, so it is refused until that name is changed.",
+        "operationId": "admin_set_tax_rates",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the table was read at, or `*` for a tenant that has never saved rates (ADR-0095)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and `rates`, the whole table: for each row, a `tax_class_id` the tenant has, a `sales_channel` token, `rate_bps` in basis points (at most 100%), and optionally `components`, each a `name` of two to eight upper-case letters and digits starting with a letter and its `rate_bps`, summing to the row's rate. A save replaces the table wholesale",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replaced. The body is the table as stored and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or a tax_class_id is not a ULID; a row names a class the tenant does not have or an unknown channel; a rate is over 100%; a (class, channel) pair repeats; a component is unnamed, badly named, or the components do not sum to the rate; or If-Match is absent or malformed. Nothing is written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "If-Match named a version, but the tenant has no table yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The table changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The tax rate store or the catalog store is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -13480,8 +14571,20 @@
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
     },
     {
+      "name": "till layout",
+      "description": "The buttons a till shows on each sales channel (ADR-0066): one per item per channel, under a display category, in a fixed grid slot or flowing by sort order. A publish compiles them into the store's layout, apart from its prices, so moving a button reprices nothing."
+    },
+    {
+      "name": "modifiers",
+      "description": "The choices offered with an item (ADR-0066, ADR-0127): a modifier group offers some items on others, with how many a guest must and may pick. A group is tenant-wide; a publish keeps the groups a menu's channels can offer."
+    },
+    {
+      "name": "tax",
+      "description": "What tax an item is charged (ADR-0074, ADR-0104): each item names a tax class, and the tenant's rate table gives each class a rate on each sales channel, in basis points, optionally broken into named components an invoice prints. The table is one entity, replaced wholesale and conditionally. A class that active items still use cannot be archived, and a store refuses to price an item on a channel its class has no rate for."
+    },
+    {
       "name": "menus",
-      "description": "Where a tenant's items are sold and for how much (ADR-0066): menus, which may inherit from a parent menu; their sections; and placements, an item on a menu with its price on each sales channel and whether it is available. Prices are integers in the currency's minor units, and they are T2, so reading placements needs `console.reports.revenue`. A placement's prices are the price-change journal: every change is audited with them. Nothing reaches a store until its catalog is published."
+      "description": "Where a tenant's items are sold and for how much (ADR-0066): menus, which may inherit from a parent menu; their sections; and placements, an item on a menu with its price on each sales channel and whether it is available. Prices are integers in the currency's minor units, and they are T2, so reading placements needs `console.reports.revenue`. A placement's prices are the price-change journal: every change is audited with them. Nothing reaches a store until a menu is published to it, which compiles the menu with the menus it inherits from into the store's price book and till layout."
     },
     {
       "name": "catalog items",
