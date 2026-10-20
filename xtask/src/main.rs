@@ -35,6 +35,7 @@ cargo xtask <check>
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
+  guides          every block a guide in docs/guides/ marks is still true to the tree
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
@@ -142,6 +143,7 @@ fn main() -> ExitCode {
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
+        "guides" => checks::guides::run(&rest),
         "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),

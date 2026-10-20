@@ -96,6 +96,8 @@ The two checks that turn architecture into law are the **dependency rule test** 
 
 Documentation rots silently, so three checks run in CI: **link checking** across `docs/` and the root markdown files; the **docs-touched gate** described above; and **generated-document drift** — the OpenAPI file, permission matrix, and event catalogue are regenerated and compared, so a hand-edit or a stale artefact fails the build.
 
+A fourth runs in `just preflight`: **guide truth**. `cargo xtask guides --check` reads the blocks a guide in `docs/guides/` marks, and fails when a `cargo xtask new` command it tells the reader to type is one the generator now refuses, when a step it says proves the result is anything but a `cargo test`, `cargo check` or `cargo xtask` command, or when code it quotes is no longer in its file verbatim. The markers are listed in [the guides' index](guides/README.md#how-a-guide-stays-true).
+
 Two habits carry the rest. Each document names an owner in `CODEOWNERS`, so review lands on someone accountable. And documents are written as **rules with reasons** rather than narrative: a reader should be able to check compliance without reconstructing the discussion that produced the rule.
 
 ## 5. Dependencies, licences, and independence

@@ -43,3 +43,16 @@ This is not one server. It is two programs, and they run in **different places**
 
 So "deploy to the cloud" brings up `pos_cloud` only. To try the selling side, run `pos_edge`
 locally — that is Part 1 of [Start from zero](start-from-zero.md).
+
+## How a guide stays true
+
+A guide marks each block that must keep working with an HTML comment, unseen when rendered, on the
+line before its fence. `cargo xtask guides --check`, part of `just preflight`, reads every one:
+
+| Marker | The block holds | Checked |
+|---|---|---|
+| `<!-- guide:command -->` | What the reader types | Each `cargo xtask new …` line is planned as `--dry-run` plans it, and must be accepted |
+| `<!-- guide:verify -->` | What proves the result works | Each line is a `cargo test`, `cargo check` or `cargo xtask` command |
+| `<!-- guide:excerpt <path> -->` | Code quoted from `<path>` | Its lines are still in that file, contiguous and verbatim, under one shared indent |
+
+Quote code rather than paraphrase it, so a change to that code fails the check.
