@@ -23,6 +23,29 @@ use pos_cloud_api::auth::console_rbac::ConsolePermission;
 use pos_cloud_api::console::require_permission;
 use pos_cloud_api::response::parse_ulid_fields;
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/reports/xz",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("business_date" = Option<String>, Query, description = "The trading day, `YYYY-MM-DD`. \
+                                                               Absent, the store's latest day"),
+    ),
+    responses(
+        (status = 200, description = "The day's report: `kind`, `X` for the current day (interim) \
+                                      or `Z` for a past one (final); `business_date`; `activity`, the \
+                                      day's event counts; `revenue`, its takings and mix; `cash`, its \
+                                      drawers; and `till_names`, each till's name from the store's \
+                                      published devices, which are device names, never a person"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// An **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10). `business_date`
 /// is optional — absent, the current (latest) day is reported as an X; a past day reads back as a Z.
 /// T2 (it bundles revenue and cash), so gated behind `console.reports.revenue`. Each till among the

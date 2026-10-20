@@ -144,6 +144,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_devices::routes::admin_bind_claim,
         pos_cloud_reports::revenue::admin_export_revenue_fees,
         pos_cloud_reports::revenue::admin_export_revenue_tax,
+        pos_cloud_reports::rollups::admin_daily_rollups,
+        pos_cloud_reports::rollups::admin_export_rollups,
+        pos_cloud_reports::rollups::admin_rollups_reset,
+        pos_cloud_reports::revenue::admin_revenue_daily,
+        pos_cloud_reports::revenue::admin_export_revenue,
+        pos_cloud_reports::xz::admin_xz_report,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -290,12 +296,15 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         ),
         (
             name = "reports",
-            description = "A store's takings over a window of its trading days, read from the \
-                           materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route \
-                           here needs `console.reports.revenue`. The daily reads and the revenue \
-                           export are still coverage debt; the exports of fees by code (ADR-0159) \
-                           and of tax by component (ADR-0168) are documented because a route new \
-                           to this surface is."
+            description = "What a store did over a window of its trading days, read from the \
+                           materialised rollup and never from the event log (ADR-0036, ADR-0081): \
+                           its activity counts, its takings, fees by code (ADR-0159) and tax by \
+                           component (ADR-0168), each as a read or a CSV download, and the X or Z \
+                           report for one day. Prices are T2, so every read or export of an amount \
+                           needs `console.reports.revenue`; the activity counts need only \
+                           `console.data.read`. An export is audited by how many rows it held, never \
+                           what they held. Resetting a store's rollup has the projector rebuild it \
+                           from the event log."
         ),
         (
             name = "fleet",
@@ -431,18 +440,12 @@ impl Modify for SessionCookie {
     )
 )]
 const UNDOCUMENTED: &[&str] = &[
-    // --- a store's configuration and reports (WS-C) ---
+    // --- a store's configuration (WS-C) ---
     "/admin/stores/{store_id}/config",
     "/admin/stores/{store_id}/config/rollback",
     "/admin/stores/{store_id}/config/versions",
     "/admin/stores/{store_id}/config/versions/{version_id}",
     "/admin/stores/{store_id}/config/{level}",
-    "/admin/stores/{store_id}/reports/xz",
-    "/admin/stores/{store_id}/revenue/daily",
-    "/admin/stores/{store_id}/revenue/export",
-    "/admin/stores/{store_id}/rollups/daily",
-    "/admin/stores/{store_id}/rollups/export",
-    "/admin/stores/{store_id}/rollups/reset",
     // --- the four-level configuration tree and its publishes (ADR-0033) ---
     "/admin/config/campaigns",
     "/admin/config/campaigns/preview",

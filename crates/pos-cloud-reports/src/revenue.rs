@@ -28,6 +28,36 @@ use pos_cloud_api::console::require_permission;
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_cloud_api::response::{api_error, csv_download_response};
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/daily",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, description = "The store's takings for each trading day in the window, \
+                                      oldest first, as an array: `business_date`, \
+                                      `currency_code`, `bills`, `gross`, `reductions`, \
+                                      `service_charge`, `tax`, `net`, and the day's product mix, \
+                                      fees by code and tax by component. Amounts are integers in \
+                                      the currency's minor units. No customer or employee \
+                                      identifier"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// The materialised **revenue** rollup for one store, windowed exactly as
 /// [`admin_daily_rollups`](crate::rollups::admin_daily_rollups).
 ///
@@ -149,6 +179,35 @@ where
     csv_download_response(file.name, body)
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/export",
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, description = "`revenue.csv`, as a `text/csv` attachment: the header \
+                                      `business_date,currency_code,bills,gross,reductions,\
+                                      service_charge,tax,net`, then one row per trading day, \
+                                      oldest first, in the currency's minor units. The audit entry \
+                                      records how many rows, never what they held"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
 /// Track O4).
 pub async fn admin_export_revenue<R, K, C, A, T>(
