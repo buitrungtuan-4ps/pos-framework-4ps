@@ -180,6 +180,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_catalog::routes::catalog::admin_export_items,
         pos_cloud_catalog::routes::catalog::admin_import_items_dry_run,
         pos_cloud_catalog::routes::catalog::admin_import_items_apply,
+        pos_cloud_catalog::routes::catalog::admin_list_menus,
+        pos_cloud_catalog::routes::catalog::admin_create_menu,
+        pos_cloud_catalog::routes::catalog::admin_update_menu,
+        pos_cloud_catalog::routes::catalog::admin_list_menu_sections,
+        pos_cloud_catalog::routes::catalog::admin_create_menu_section,
+        pos_cloud_catalog::routes::catalog::admin_update_menu_section,
+        pos_cloud_catalog::routes::catalog::admin_list_placements,
+        pos_cloud_catalog::routes::catalog::admin_create_placement,
+        pos_cloud_catalog::routes::catalog::admin_update_placement,
+        pos_cloud_catalog::routes::catalog::admin_remove_placement,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -322,6 +332,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a \
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
+                           published."
+        ),
+        (
+            name = "menus",
+            description = "Where a tenant's items are sold and for how much (ADR-0066): menus, \
+                           which may inherit from a parent menu; their sections; and placements, \
+                           an item on a menu with its price on each sales channel and whether it \
+                           is available. Prices are integers in the currency's minor units, and \
+                           they are T2, so reading placements needs `console.reports.revenue`. A \
+                           placement's prices are the price-change journal: every change is \
+                           audited with them. Nothing reaches a store until its catalog is \
                            published."
         ),
         (
@@ -571,15 +592,9 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/tender",
     "/admin/config/vendors",
     "/admin/capabilities",
-    // --- the catalog: menus, layout, modifiers, tax and its publish (F3, ADR-0066/0082) ---
+    // --- the catalog: layout, modifiers, tax and its publish (F3, ADR-0066/0082) ---
     "/admin/catalog/layout-buttons",
     "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
-    "/admin/catalog/menus",
-    "/admin/catalog/menus/{menu_id}",
-    "/admin/catalog/menus/{menu_id}/placements",
-    "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
-    "/admin/catalog/menus/{menu_id}/sections",
-    "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}",
     "/admin/catalog/modifier-groups",
     "/admin/catalog/modifier-groups/{modifier_group_id}",
     "/admin/catalog/publish",
