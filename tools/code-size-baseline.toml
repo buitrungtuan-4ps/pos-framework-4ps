@@ -65,7 +65,6 @@
 "crates/pos-cloud/src/http/ota/artifacts.rs::serve_ota_artifact" = { lines = 113, params = 4 }
 "crates/pos-cloud/src/http/ota/release_fetch.rs::admin_fetch_ota_release" = { lines = 110, params = 3 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
-"crates/pos-cloud/src/http/store_groups/groups.rs::admin_set_store_group_members" = { lines = 106, params = 4 }
 "crates/pos-cloud/src/http/store_groups/publish.rs::admin_publish_to_store_group" = { lines = 116, params = 4 }
 "crates/pos-cloud/src/main.rs::run" = { lines = 1168, params = 0 }
 "crates/pos-cloud/src/persistence.rs::fleet_row" = { lines = 102, params = 1 }

@@ -19,9 +19,10 @@ use super::{
     CreateStoreGroupRequest, MAX_STORE_GROUP_MEMBERS, SetStoreGroupMembersRequest, StoreGroupState,
     StoreGroupView, UpdateStoreGroupRequest, store_group_error_response,
 };
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
+use crate::http::people::PermissionsPublishResult;
 use crate::http::people::people_error_response;
 use crate::http::{
     FieldRefusal, RegistryTenantQuery, entity_status_refusal, if_match, not_found,
@@ -30,7 +31,7 @@ use crate::http::{
 };
 use crate::registry::{EntityStatus, RegistryStore, StoreRecord};
 use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore};
-use crate::version::{UpdateOutcome, Versioned};
+use crate::version::{UpdateOutcome, Version, Versioned};
 
 #[utoipa::path(
     get,
@@ -330,15 +331,94 @@ where
             Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
             Err(refusal) => return refusal,
         };
-    if request.store_ids.len() > MAX_STORE_GROUP_MEMBERS {
-        return unprocessable_violations(&[format!(
+    let members = match requested_members(&request.store_ids) {
+        Ok(members) => members,
+        Err(refusal) => return refusal,
+    };
+    let known = match tenant_stores_holding(&state, tenant_id, &members).await {
+        Ok(known) => known,
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
+        Ok(moved) => moved,
+        Err(refusal) => return refusal,
+    };
+    let version = match write_members(&state, tenant_id, group_id, &members, &expected).await {
+        Ok(version) => version,
+        Err(refusal) => return refusal,
+    };
+    let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
+    record_membership(&state, &context, tenant_id, group_id, &membership).await;
+    let stores = state
+        .staff
+        .publish_to(&context, tenant_id, group_id, &moved)
+        .await;
+    membership_answer(&version, &membership, &stores)
+}
+
+/// Records the membership a write stored, against its group.
+async fn record_membership<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    membership: &[String],
+) where
+    C: ClockSource,
+{
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        "store_group.members",
+        "store_group",
+        &group_id.to_string(),
+        None,
+        serde_json::to_value(membership).ok(),
+    )
+    .await;
+}
+
+/// The membership as stored, with the group's new version in the header and the body, and how the
+/// `permissions` publish went at each store whose staff it moved.
+fn membership_answer(
+    version: &Version,
+    membership: &[String],
+    stores: &[PermissionsPublishResult],
+) -> Response {
+    (
+        StatusCode::OK,
+        [(ETAG, version.as_str().to_owned())],
+        Json(serde_json::json!({
+            "store_ids": membership,
+            "etag": version.as_str(),
+            "stores": stores,
+        })),
+    )
+        .into_response()
+}
+
+/// The stores a membership write names, at most [`MAX_STORE_GROUP_MEMBERS`], each a ULID, each
+/// once and in the order first named.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn requested_members(store_ids: &[String]) -> Result<Vec<StoreId>, Response> {
+    if store_ids.len() > MAX_STORE_GROUP_MEMBERS {
+        return Err(unprocessable_violations(&[format!(
             "a store group holds at most {MAX_STORE_GROUP_MEMBERS} stores; split this cohort in two"
-        )]);
+        )]));
     }
-    let mut members: Vec<StoreId> = Vec::with_capacity(request.store_ids.len());
-    for id in &request.store_ids {
+    let mut members: Vec<StoreId> = Vec::with_capacity(store_ids.len());
+    for id in store_ids {
         let Ok([parsed]) = parse_ulid_fields([("store_ids", id)]) else {
-            return ulid_refusal(&["store_ids"]);
+            return Err(ulid_refusal(&["store_ids"]));
         };
         let store_id = StoreId::new(parsed);
         // Deduplicated here rather than left to the table's primary key: the operator's list is what
@@ -348,63 +428,54 @@ where
             members.push(store_id);
         }
     }
-    let known = match state.registry.list_stores(tenant_id).await {
-        Ok(rows) => rows,
-        Err(error) => return registry_error_response(&error),
-    };
+    Ok(members)
+}
+
+/// The tenant's stores, once every member is one of them.
+async fn tenant_stores_holding<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    members: &[StoreId],
+) -> Result<Vec<Versioned<StoreRecord>>, Response>
+where
+    Reg: RegistryStore,
+{
+    let known = state
+        .registry
+        .list_stores(tenant_id)
+        .await
+        .map_err(|error| registry_error_response(&error))?;
     if let Some(stranger) = members
         .iter()
         .find(|id| !known.iter().any(|row| row.record.store_id == **id))
     {
-        return unprocessable_violations(&[format!(
+        return Err(unprocessable_violations(&[format!(
             "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
-        )]);
+        )]));
     }
-    let expected = match if_match(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
-    };
-    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
-        Ok(moved) => moved,
-        Err(refusal) => return refusal,
-    };
+    Ok(known)
+}
+
+/// Writes the membership at the version the request's `If-Match` named, and answers the new one.
+async fn write_members<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    members: &[StoreId],
+    expected: &Version,
+) -> Result<Version, Response>
+where
+    Grp: StoreGroupStore,
+{
     match state
         .groups
-        .set_members(tenant_id, group_id, &members, &expected)
+        .set_members(tenant_id, group_id, members, expected)
         .await
     {
-        Ok(UpdateOutcome::Updated(version)) => {
-            let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "store_group.members",
-                "store_group",
-                &group_id.to_string(),
-                None,
-                serde_json::to_value(&membership).ok(),
-            )
-            .await;
-            let stores = state
-                .staff
-                .publish_to(&context, tenant_id, group_id, &moved)
-                .await;
-            (
-                StatusCode::OK,
-                [(ETAG, version.as_str().to_owned())],
-                Json(serde_json::json!({
-                    "store_ids": membership,
-                    "etag": version.as_str(),
-                    "stores": stores,
-                })),
-            )
-                .into_response()
-        }
-        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
-        Ok(UpdateOutcome::NotFound) => not_found("store group"),
-        Err(error) => store_group_error_response(&error),
+        Ok(UpdateOutcome::Updated(version)) => Ok(version),
+        Ok(UpdateOutcome::VersionMismatch) => Err(version_mismatch()),
+        Ok(UpdateOutcome::NotFound) => Err(not_found("store group")),
+        Err(error) => Err(store_group_error_response(&error)),
     }
 }
 
