@@ -42,8 +42,9 @@ cargo xtask <check>
 
 cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 
-  write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
-  ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+  write docs/generated/ (crate graph, CODEOWNERS lines from the cards, ADR index) from the tree;
+  --check fails where it differs, where a crate's own CODEOWNERS line names other owners than its
+  card, or where an ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
 
 cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number>]... [--dry-run]
 

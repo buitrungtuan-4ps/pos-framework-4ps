@@ -7,6 +7,9 @@
 //! - `crate-graph.md`: the workspace crates by layer, as a Mermaid graph of the dependencies outside
 //!   tests, and a table of each crate's dependents. From `cargo metadata` and each crate's contract
 //!   card. It changes only when a dependency or a card does.
+//! - `codeowners-crates.txt`: the line the root `CODEOWNERS` would hold for each crate, from its
+//!   card's owners; `--check` also fails where a crate's own line in `CODEOWNERS` differs
+//!   ([`codeowners`]). Nothing here writes `CODEOWNERS`.
 //! - `adr-index.md`: the ADRs nothing cites, and the citations of ADRs that do not exist. A
 //!   citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under [`CITING_ROOTS`].
 //!   It changes only when an ADR is first cited, stops being cited, or is added.
@@ -19,6 +22,8 @@
 //! The full map of which file cites which ADR changes with almost every pull request, so it is not
 //! committed. `--adr-citations [ADR-NNNN]` prints it, for every ADR or for one, as Markdown on
 //! standard output.
+
+mod codeowners;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -90,6 +95,10 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     }
     let crates = load(&root)?;
     let mut findings = dangling_findings(&adrs, &citations);
+    findings.extend(codeowners::mismatches(
+        &crates,
+        &std::fs::read_to_string(root.join("CODEOWNERS"))?,
+    ));
     for (path, text) in documents(&crates, &adrs, &citations) {
         if matches!(mode, Mode::Check) {
             if !matches_committed(&root, &path, &text) {
@@ -111,9 +120,13 @@ fn documents(
     crates: &[Crate],
     adrs: &BTreeMap<u32, (String, String)>,
     citations: &Citations,
-) -> [(String, String); 2] {
+) -> [(String, String); 3] {
     [
         (format!("{OUT_DIR}/crate-graph.md"), crate_graph(crates)),
+        (
+            format!("{OUT_DIR}/codeowners-crates.txt"),
+            codeowners::render(crates),
+        ),
         (
             format!("{OUT_DIR}/adr-index.md"),
             adr_index(adrs, citations),
