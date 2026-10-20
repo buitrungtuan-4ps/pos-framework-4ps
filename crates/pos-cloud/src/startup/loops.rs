@@ -26,6 +26,81 @@ use tokio::task::JoinHandle;
 
 use crate::{consumer_config, shutdown_signal};
 
+/// The background loops the boot spawns before it binds, held so the shutdown can wind them down.
+pub(crate) struct Loops {
+    cursor: Option<JoinHandle<Result<(), PortError>>>,
+    projector: JoinHandle<()>,
+    retention: Option<JoinHandle<()>>,
+    webhook: JoinHandle<()>,
+    alert: JoinHandle<()>,
+    scheduled_publish: JoinHandle<()>,
+    people_republish: JoinHandle<()>,
+    metrics: Option<JoinHandle<()>>,
+}
+
+impl Loops {
+    /// Spawns the loops in boot order: the ingest cursor, the rollup projector, the retention
+    /// cron, the webhook dispatcher, the alert evaluator, the scheduled-publish activator, the
+    /// people republisher and the metrics heartbeat.
+    pub(crate) async fn spawn(
+        config: &CloudConfig,
+        cloud: &Cloud<PostgresStore>,
+        store: &PostgresStore,
+        audit: &Arc<dyn AuditRecorder>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (cursor, stream_probe) = ingest_cursor(config, cloud).await?;
+        let projector = rollup_projector(config, store);
+        let retention = retention_cron(config, store);
+        let webhook = webhook_dispatcher(config, store);
+        let alert = alert_evaluator(config, store, stream_probe).await;
+        let scheduled_publish = scheduled_publish_activator(config, store);
+        let people_republish = people_republisher(store, audit);
+        let metrics = metrics_heartbeat(config);
+        Ok(Self {
+            cursor,
+            projector,
+            retention,
+            webhook,
+            alert,
+            scheduled_publish,
+            people_republish,
+            metrics,
+        })
+    }
+
+    /// Winds the loops down once the server has stopped, with the archive retention sweep spawned
+    /// after the bind in its place after the retention cron. Their own shutdown signals have
+    /// already fired (same SIGINT); this awaits each one's clean exit, or aborts a stuck one.
+    pub(crate) async fn wind_down(self, archive_retention: Option<JoinHandle<()>>) {
+        if let Some(task) = self.cursor {
+            task.abort();
+            let _ = task.await;
+        }
+        self.projector.abort();
+        let _ = self.projector.await;
+        if let Some(task) = self.retention {
+            task.abort();
+            let _ = task.await;
+        }
+        if let Some(task) = archive_retention {
+            task.abort();
+            let _ = task.await;
+        }
+        self.webhook.abort();
+        let _ = self.webhook.await;
+        self.alert.abort();
+        let _ = self.alert.await;
+        self.scheduled_publish.abort();
+        let _ = self.scheduled_publish.await;
+        self.people_republish.abort();
+        let _ = self.people_republish.await;
+        if let Some(task) = self.metrics {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
 /// The production ingest feed, if configured, and the probe the alert evaluator reads the stream
 /// through.
 pub(crate) async fn ingest_cursor(

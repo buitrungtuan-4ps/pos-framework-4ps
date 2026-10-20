@@ -34,17 +34,28 @@ pub(crate) struct RouteDeps<'a> {
     pub(crate) store: &'a PostgresStore,
     pub(crate) config: &'a CloudConfig,
     pub(crate) audit: &'a Arc<dyn AuditRecorder>,
+    /// The anchor ledger, shared: `Cloud` writes findings into it at ingest and the chain router
+    /// reads them back for the console. One handle, so the screen shows what the ingest actually
+    /// recorded.
     pub(crate) chain_anchors: &'a Arc<dyn AnchorLedger>,
     pub(crate) providers: &'a Arc<Registry>,
     pub(crate) artifacts: Option<&'a S3Blobs>,
     pub(crate) release_source: Option<&'a GithubReleases>,
     pub(crate) expected_tasks: &'a [String],
     pub(crate) orders_limiter: &'a SlidingRateLimiter,
+    /// One wake shared by both halves of the relay: `OrderRelay`'s parked `submit` waits on it and
+    /// the store-facing router raises it, so an order reaches a long-polling store, and the store's
+    /// ack reaches the parked caller, without either side re-reading PostgreSQL on a timer
+    /// ([ADR-0062](../../../../docs/adr/0062-the-relay-wake.md)). It must be ONE instance — two
+    /// would each signal an audience the other is not listening to, and every wait would fall back
+    /// to its timer.
     pub(crate) relay_wake: &'a SharedWake,
 }
 
 /// Every sub-router the cloud serves beside its own, merged onto it in the order the flat chain
-/// merged them.
+/// merged them. The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid
+/// (ADR-0043) and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are
+/// merged in rather than threaded through `CloudApp`.
 pub(crate) fn api_routes(app: App, deps: &RouteDeps<'_>) -> Router {
     http::router(app)
         .merge(store_sync_routes(deps))
