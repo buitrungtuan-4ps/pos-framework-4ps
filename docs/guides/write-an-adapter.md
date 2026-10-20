@@ -17,24 +17,25 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
 
 ## Start from a generator, or from the template
 
-**A printer, storage, card terminal, e-invoice or courier adapter** starts from a generated sandbox
+**A printer, storage, card terminal, e-invoice, courier or ERP adapter** starts from a generated sandbox
 ([ADR-0176](../adr/0176-the-adapter-and-country-standard.md)):
 
 ```bash
-cargo xtask new adapter --kind printer   # or storage, card, fiscal, courier
+cargo xtask new adapter --kind printer   # or storage, card, fiscal, courier, erp
 ```
 
 It writes `crates/adapters/<kind>-sandbox` and its `members` line. The crate is a pure core over a
-transport seam, and its `tests/contract.rs` already passes the port's suite. A card, fiscal
-or courier sandbox also carries its `card.sandbox`, `einvoice.sandbox` or `courier.sandbox`
-descriptor, which the generator registers nowhere (step 4 says where it would go). The command names no
-vendor: rename the crate and the descriptor's id when you write a real vendor's adapter from it.
+transport seam, and its `tests/contract.rs` already passes the port's suite. A card, fiscal,
+courier or ERP sandbox also carries its `<family>.sandbox` descriptor (`card.sandbox`,
+`einvoice.sandbox`, `courier.sandbox`, `erp.sandbox`), which the generator registers nowhere; step
+4 says where it would go. The command names no vendor: rename the crate and the descriptor's id
+when you write a real vendor's adapter from it.
 Then do steps 4 to 7 below; the command has done the first three. It prints the README lines to
 paste, which `cargo xtask crates` also shows.
 
-**An ERP or delivery adapter**, a network provider, still starts from
+**A delivery adapter**, a network provider, still starts from
 [`templates/adapter-template`](../../templates/adapter-template/README.md) until a generator covers
-those kinds. Do steps 1 to 7.
+it. Do steps 1 to 7.
 
 ## Steps
 

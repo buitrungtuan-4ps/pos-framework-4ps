@@ -102,7 +102,7 @@ is renamed, and the system stays two binaries. The owner approved the roadmap on
   | Directory | Proposal | When |
   |---|---|---|
   | `k8s/` | `deploy/k8s/`, beside the Compose stack it is the alternative to. Two Markdown links and a few comments move with it; ADRs that name the old path stay as written | Its own small pull request |
-  | `templates/adapter-template/` | Replaced by `cargo xtask new adapter` kind by kind: printer, storage, card, e-invoice and courier are generated; the template stays for ERP and delivery until a generator covers them, then is removed (ADR-0176 decision 6) | Phase 8 |
+  | `templates/adapter-template/` | Replaced by `cargo xtask new adapter` kind by kind: printer, storage, card, e-invoice, courier and ERP are generated; the template stays for delivery until a generator covers them, then is removed (ADR-0176 decision 6) | Phase 8 |
   | `examples/minimal-edge/` | `crates/testing/`, beside the fakes it boots on | Phase 6 |
   | `apps/pos-station/` | Stays: a Tauri app with its own lockfile, outside the workspace ([ADR-0147](../adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md)). The layout should name `apps/` | An ADR-0170 follow-up |
   | `tools/` | Stays: the allow-lists and baselines the xtask checks read | — |
