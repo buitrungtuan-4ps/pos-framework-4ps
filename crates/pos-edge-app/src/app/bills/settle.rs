@@ -5,7 +5,7 @@
 //! into, committed in one transaction.
 
 use pos_core::billing;
-use pos_core::billing::Payment;
+use pos_core::billing::{BillTotals, Payment};
 use pos_core::decision::{
     Actor, BillCommand, DecisionCtx, Effect, TableCommand, decide_bill, decide_table,
 };
@@ -16,12 +16,14 @@ use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
-use pos_proto::ids::{BillId, PaymentId, ShiftId, SubjectId};
+use pos_proto::ids::{BillId, DeviceId, EmployeeId, PaymentId, ShiftId, SubjectId, TableId};
 use pos_proto::money::Money;
-use pos_proto::{Open, PaymentMethod, PaymentOutcome};
+use pos_proto::{BillState, Open, PaymentMethod, PaymentOutcome, TableState};
 
 use crate::app::records::tax_records;
-use crate::app::{AppError, Approval, BillView, BuyerDetails, Edge, TillScope, fee_records};
+use crate::app::{
+    AppError, Approval, BillView, BuyerDetails, Edge, OrderSnapshot, TillScope, fee_records,
+};
 use crate::fanout::ServerMessage;
 
 impl<S: EventStore> Edge<S> {
@@ -91,12 +93,6 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the
     /// bill is not open, the table is not awaiting payment, the payments do not sum to the total, or
     /// a line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one settle: its refusals, totals, receipt number and events, committed in one \
-                  transaction with the buyer's record (ADR-0107); each step is a call already, and \
-                  the override somebody else's drawer takes is one more event in that transaction"
-    )]
     pub async fn settle_bill_at(
         &self,
         actor: Actor,
@@ -114,6 +110,59 @@ impl<S: EventStore> Edge<S> {
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
         let (drawer, shift, overrider) =
             self.settle_drawer(&mut ctx, scope, &payments, approval)?;
+        let proved = self.prove_settle(&ctx, bill_id, &payments)?;
+
+        // Allocate the gapless receipt number for this bill, then append the events that record it.
+        let receipt_number = self
+            .receipts
+            .allocate_receipt(self.identity.store_id, bill_id)
+            .await?;
+
+        let reduction_total = proved
+            .totals
+            .discount_total
+            .checked_add(proved.totals.comp_total)
+            .map_err(DomainError::from)?;
+
+        // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
+        // transaction so a crash never leaves a receipt without its payments (or the reverse).
+        let (mut envelopes, mut messages) =
+            self.capture_payments(&ctx, bill_id, &payments, shift)?;
+        let settled = self.settled_event(
+            bill_id,
+            receipt_number,
+            &proved.totals,
+            reduction_total,
+            buyer,
+        );
+        self.prepare_settled(
+            &ctx,
+            &settled,
+            shift,
+            overrider,
+            &mut envelopes,
+            &mut messages,
+        )?;
+        let buyer = settled.buyer_subject_id.zip(buyer);
+        self.commit_settle(&ctx, &envelopes, &messages, buyer)
+            .await?;
+
+        let table_state =
+            self.fold_settled(&settled, shift, &ctx, proved.cash_taken, proved.table_id)?;
+        // The last part of a split settles the order off the boards, and its notes go with it.
+        self.forget_notes_off_screen();
+        Ok(Self::settled_view(&proved, &settled, table_state, drawer))
+    }
+
+    /// Everything a settle proves before it allocates a receipt number, so a refused settle
+    /// consumes none: the bill is known, its table may cycle, and the payments sum exactly to the
+    /// total assembled from the order's captured line totals.
+    fn prove_settle(
+        &self,
+        ctx: &DecisionCtx,
+        bill_id: BillId,
+        payments: &[Payment],
+    ) -> Result<ProvedSettle, AppError> {
         let bill = self
             .lock_projection()
             .bill(bill_id)
@@ -131,25 +180,10 @@ impl<S: EventStore> Edge<S> {
             bill.reductions(session.currency),
         ))?;
 
-        // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
-        // order has no table, so there is no floor move to prove and no tables capability to
-        // require (ADR-0093) — settling is ordinary cashier work either way. The answer is
-        // discarded: whether the table actually moves depends on whether this is the order's last
-        // open bill, which only the projection can say once the settle has committed.
         if let Some(table_id) = bill.table_id {
-            let _legal = decide_table(self.table_state(table_id), TableCommand::Settle, &ctx)?;
+            self.prove_table_settles(table_id, ctx)?;
         }
-
-        // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
-        // open shift's blind-close roll-up. Summed before the payments move into the command.
-        let mut cash_taken = Money::zero(self.session().currency);
-        for payment in &payments {
-            if payment.method == PaymentMethod::Cash {
-                cash_taken = cash_taken
-                    .checked_add(payment.applied_to_bill)
-                    .map_err(DomainError::from)?;
-            }
-        }
+        let cash_taken = self.cash_tendered(payments)?;
 
         // Prove the settlement invariant against the assembled total, and that the bill can settle.
         // Done before allocating a number, so a refused settle consumes none. The payments are cloned
@@ -158,32 +192,35 @@ impl<S: EventStore> Edge<S> {
             bill.state,
             BillCommand::Settle {
                 total_due: totals.total_due,
-                payments: payments.clone(),
+                payments: payments.to_vec(),
             },
-            &ctx,
+            ctx,
         )?;
+        Ok(ProvedSettle {
+            table_id: bill.table_id,
+            next_state: bill_decision.next_state,
+            // The domain asks for a receipt on every settle; the store may print none (ADR-0160).
+            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt)
+                && session.printing.receipt_printed_on_settle(),
+            order,
+            totals,
+            cash_taken,
+        })
+    }
 
-        // Allocate the gapless receipt number for this bill, then append the events that record it.
-        let receipt_number = self
-            .receipts
-            .allocate_receipt(self.identity.store_id, bill_id)
-            .await?;
-
-        let reduction_total = totals
-            .discount_total
-            .checked_add(totals.comp_total)
-            .map_err(DomainError::from)?;
-
-        // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
-        // transaction so a crash never leaves a receipt without its payments (or the reverse).
-        let (mut envelopes, mut messages) =
-            self.capture_payments(&ctx, bill_id, &payments, shift)?;
-
-        // The buyer's id is minted here and the details go to the subject store below. The event
-        // gets the identifier and nothing else (ADR-0107).
+    /// The settled event, from the same totals the settle proved. A B2B sale's buyer gets an id
+    /// minted here, and the details go to the subject store when the settle commits; the event
+    /// gets the identifier and nothing else (ADR-0107).
+    fn settled_event(
+        &self,
+        bill_id: BillId,
+        receipt_number: u64,
+        totals: &BillTotals,
+        reduction_total: Money,
+        buyer: Option<&BuyerDetails>,
+    ) -> BillingBillSettled {
         let buyer_subject_id = buyer.map(|_ignored| SubjectId::new(self.next_ulid()));
-
-        let settled = BillingBillSettled {
+        BillingBillSettled {
             bill_id,
             receipt_number,
             subtotal: totals.subtotal,
@@ -195,25 +232,97 @@ impl<S: EventStore> Edge<S> {
             buyer_subject_id,
             // Each fee charged and the tax per class (ADR-0159 decision 4), from the same totals
             // as every figure above, so the lines add up to `service_charge` and `tax_total`.
-            fee_lines: fee_records(&totals),
-            tax_lines: tax_records(&totals),
-        };
-        let (settled_envelope, settled_message) = self.prepare_on(&ctx, &settled, shift)?;
+            fee_lines: fee_records(totals),
+            tax_lines: tax_records(totals),
+        }
+    }
+
+    /// What the till is answered once the settle has committed and folded.
+    fn settled_view(
+        proved: &ProvedSettle,
+        settled: &BillingBillSettled,
+        table_state: Option<TableState>,
+        drawer: Option<DeviceId>,
+    ) -> BillView {
+        BillView {
+            bill_id: settled.bill_id,
+            state: proved.next_state,
+            receipt_number: Some(settled.receipt_number),
+            total_due: Some(proved.totals.total_due),
+            totals: Some(proved.totals.clone()),
+            table_state,
+            print_receipt: proved.print_receipt,
+            open_drawer: proved.cash_taken.amount_minor > 0,
+            drawer_till: drawer,
+            lines: Self::receipt_lines(&proved.order.lines),
+        }
+    }
+
+    /// Proves the table may cycle `AwaitingPayment -> NeedsCleaning`.
+    ///
+    /// A counter order has no table, so there is no floor move to prove and no tables capability to
+    /// require (ADR-0093) — settling is ordinary cashier work either way. The answer is discarded:
+    /// whether the table actually moves depends on whether this is the order's last open bill,
+    /// which only the projection can say once the settle has committed.
+    fn prove_table_settles(&self, table_id: TableId, ctx: &DecisionCtx) -> Result<(), AppError> {
+        let _legal = decide_table(self.table_state(table_id), TableCommand::Settle, ctx)?;
+        Ok(())
+    }
+
+    /// The cash tenders (not card, not tips, not rounding): what lands in the drawer for the open
+    /// shift's blind-close roll-up. Summed before the payments move into the command.
+    fn cash_tendered(&self, payments: &[Payment]) -> Result<Money, AppError> {
+        let mut cash_taken = Money::zero(self.session().currency);
+        for payment in payments {
+            if payment.method == PaymentMethod::Cash {
+                cash_taken = cash_taken
+                    .checked_add(payment.applied_to_bill)
+                    .map_err(DomainError::from)?;
+            }
+        }
+        Ok(cash_taken)
+    }
+
+    /// Prepares the settled event, then the override somebody else's drawer took when it did, onto
+    /// the payments already prepared for the settle's transaction.
+    fn prepare_settled(
+        &self,
+        ctx: &DecisionCtx,
+        settled: &BillingBillSettled,
+        shift: Option<ShiftId>,
+        overrider: Option<EmployeeId>,
+        envelopes: &mut Vec<EventEnvelope<RawPayload>>,
+        messages: &mut Vec<ServerMessage>,
+    ) -> Result<(), AppError> {
+        let (settled_envelope, settled_message) = self.prepare_on(ctx, settled, shift)?;
         envelopes.push(settled_envelope);
         messages.push(settled_message);
         if let Some(approver) = overrider {
             let overridden =
                 Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
-            let (envelope, message) = self.prepare_on(&ctx, &overridden, shift)?;
+            let (envelope, message) = self.prepare_on(ctx, &overridden, shift)?;
             envelopes.push(envelope);
             messages.push(message);
         }
+        Ok(())
+    }
 
-        // The events AND the buyer's record commit in ONE transaction (ADR-0107), which is why this
-        // settle drives the transaction itself instead of calling `append_and_publish`.
+    /// Commits the settle's events AND the buyer's record in ONE transaction (ADR-0107), which is
+    /// why a settle drives the transaction itself instead of calling `append_and_publish`, then
+    /// publishes the events once they are committed.
+    async fn commit_settle(
+        &self,
+        ctx: &DecisionCtx,
+        envelopes: &[EventEnvelope<RawPayload>],
+        messages: &[ServerMessage],
+        buyer: Option<(SubjectId, &BuyerDetails)>,
+    ) -> Result<(), AppError>
+    where
+        S: SubjectStore,
+    {
         let mut tx = self.store.begin().await?;
-        self.store.append(&mut tx, &envelopes).await?;
-        if let (Some(subject_id), Some(buyer)) = (buyer_subject_id, buyer) {
+        self.store.append(&mut tx, envelopes).await?;
+        if let Some((subject_id, buyer)) = buyer {
             // `ctx.now` rather than a second clock read: the retention period counts from the moment
             // the sale is stamped with, so the record and the event it belongs to age together.
             let record = SubjectRecord::new(ctx.now, buyer.fields());
@@ -222,34 +331,27 @@ impl<S: EventStore> Edge<S> {
                 .await?;
         }
         tx.commit().await?;
-        for message in &messages {
+        for message in messages {
             self.fanout.publish(message);
         }
+        Ok(())
+    }
 
-        let table_state = {
-            let mut projection = self.lock_projection();
-            // What the envelope carries, so a box that replays the log keeps the same record.
-            projection.fold_settle(&settled, shift, ctx.business_date, ctx.now)?;
-            projection.collect_cash(shift, cash_taken)?;
-            bill.table_id
-                .map(|table_id| projection.table_state(table_id))
-        };
-        // The last part of a split settles the order off the boards, and its notes go with it.
-        self.forget_notes_off_screen();
-        Ok(BillView {
-            bill_id,
-            state: bill_decision.next_state,
-            receipt_number: Some(receipt_number),
-            total_due: Some(totals.total_due),
-            totals: Some(totals.clone()),
-            table_state,
-            // The domain asks for a receipt on every settle; the store may print none (ADR-0160).
-            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt)
-                && session.printing.receipt_printed_on_settle(),
-            open_drawer: cash_taken.amount_minor > 0,
-            drawer_till: drawer,
-            lines: Self::receipt_lines(&order.lines),
-        })
+    /// Folds the committed settle into the projection — what the envelope carries, so a box that
+    /// replays the log keeps the same record — and collects its cash into the drawer; answers the
+    /// table's state after it.
+    fn fold_settled(
+        &self,
+        settled: &BillingBillSettled,
+        shift: Option<ShiftId>,
+        ctx: &DecisionCtx,
+        cash_taken: Money,
+        table_id: Option<TableId>,
+    ) -> Result<Option<TableState>, AppError> {
+        let mut projection = self.lock_projection();
+        projection.fold_settle(settled, shift, ctx.business_date, ctx.now)?;
+        projection.collect_cash(shift, cash_taken)?;
+        Ok(table_id.map(|table_id| projection.table_state(table_id)))
     }
 
     /// One `billing.payment.captured` per tender, prepared for the settle's transaction.
@@ -291,4 +393,20 @@ impl<S: EventStore> Edge<S> {
         }
         Ok((envelopes, messages))
     }
+}
+
+/// What [`Edge::prove_settle`] proved, carried to the settle's record and its answer.
+struct ProvedSettle {
+    /// The bill's table, or `None` for a counter order.
+    table_id: Option<TableId>,
+    /// The bill's state once settled.
+    next_state: BillState,
+    /// Whether the domain asked for a receipt and the store prints one on settle.
+    print_receipt: bool,
+    /// The order the bill was assembled from, whose sold lines the receipt lists.
+    order: OrderSnapshot,
+    /// What was owed.
+    totals: BillTotals,
+    /// The cash tenders, which go into the drawer.
+    cash_taken: Money,
 }
