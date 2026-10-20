@@ -145,7 +145,7 @@ README and the crate root. Add `--dry-run` to print them instead. It never overw
 | Step | Files | Checked by |
 |---|---|---|
 | A new port, if one is needed | `crates/pos-ports/src/<port>.rs`, with an ADR first | `xtask deps-rule`, review |
-| The adapter | `crates/adapters/<name>/`. For a printer, storage or card terminal, `cargo xtask new adapter --kind printer\|storage\|card` writes a sandbox that passes the port's suite, with its card, README and `members` line (a card sandbox carries the `card.sandbox` descriptor, registered nowhere until ADR-0154); otherwise copy [`templates/adapter-template`](../templates/adapter-template/README.md) | its own tests |
+| The adapter | `crates/adapters/<name>/`. For a printer, storage, card terminal or e-invoice, `cargo xtask new adapter --kind printer\|storage\|card\|fiscal` writes a sandbox that passes the port's suite, with its card, README and `members` line (a card or fiscal sandbox carries the `card.sandbox` or `einvoice.sandbox` descriptor, registered nowhere until ADR-0154 or ADR-0156); otherwise copy [`templates/adapter-template`](../templates/adapter-template/README.md) | its own tests |
 | Workspace, card and README | `members` in the root `Cargo.toml`, then the [new crate](#new-crate) rows. After `xtask new adapter`, only the Used by lines of the crates it depends on remain; `xtask crates` prints each | build, `xtask crates` |
 | Contract suite | the port's suite in `crates/pos-contract-tests/src/<port>.rs`, run from the adapter's tests. In-memory fakes are in `crates/pos-fakes` | `test`; the `contract` job in `main.yml` |
 | Dependencies | `deny.toml`. A new dependency needs an ADR | `deny` job |
