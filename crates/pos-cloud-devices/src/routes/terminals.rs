@@ -46,6 +46,28 @@ struct CreateTerminalResponse {
     status: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/devices/terminals",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an \
+                       operator recognises it by. A terminal is never discovered, so there is no \
+                       proposal to approve: creating it is the decision (ADR-0112). It has no \
+                       address, because nothing dials a terminal",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, approved. The body carries the terminal's `id`, what a \
+                                      printer names to make it its print agent, and `status`. \
+                                      Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "device onboarding",
+)]
 /// A super-admin creates an approved `terminal` device
 /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
 ///

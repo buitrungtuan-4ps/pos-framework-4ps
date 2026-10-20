@@ -1900,6 +1900,403 @@
         }
       }
     },
+    "/admin/devices/proposals": {
+      "get": {
+        "tags": [
+          "device onboarding"
+        ],
+        "summary": "A super-admin lists a tenant's pending device proposals — the approval queue.",
+        "operationId": "list_pending_devices",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose devices to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "Only this store's devices (a 26-character ULID). Absent, the tenant's whole fleet",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`pending` (the default: the approval queue), `approved` or `rejected`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The devices, as an array: each with `id`, `store_id`, `kind`, `name`, `address`, `status` and `version`, and once approved its `connection`, `station_id`, print agent, drawer mark, paper, and a till's receipt printer, receipt languages and opening float, where set"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, store_id is not a ULID, or status is not one of the three",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/devices/proposals/{id}/agent": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin picks (or clears) the print agent for an approved device\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).",
+        "description": "Behind `ManageDevices` with an `If-Match`\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)) and an audit entry: two\nmanagers picking different agents for one printer is the ordinary race, and last-write-wins would\nleave the loser believing a decision that is not in the database.\n\nIt deliberately does **not** check that the id names a terminal. Resolvability is a property of\nthe set being published — the terminal may be created after this pick — so the check lives in\n[`admin_publish_devices`], which sees the whole node at once and is the last gate before a store\nhears about any of it.",
+        "operationId": "set_print_agent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The approved printer's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the device was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and `agent_device_id`, the terminal whose print agent writes this printer's bytes (ADR-0112), or `null` for the store's edge to open the printer's address itself. Whether the id names a terminal is checked when the devices are published, since the terminal may be created after the pick",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Saved, and audited. It reaches the store on the next devices publish"
+          },
+          "400": {
+            "description": "An id is not a ULID, the device names itself as its agent, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The device changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/devices/proposals/{id}/approve": {
+      "post": {
+        "tags": [
+          "device onboarding"
+        ],
+        "summary": "A super-admin approves a pending proposal.",
+        "operationId": "approve_device",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The proposal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connection",
+            "in": "query",
+            "description": "How the device is attached: `usb`, `network` or `serial` (ADR-0100). Required: discovery cannot find it out, and it decides whether a cash drawer may be opened",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "station_id",
+            "in": "query",
+            "description": "The kitchen station the device serves (a 26-character ULID). Absent, it is the counter's receipt printer",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No proposal with that id is pending any more. Idempotent: the answer is the same whether one was, and only an approval that acted is audited. The device reaches the store on the next `POST /admin/devices/publish`"
+          },
+          "400": {
+            "description": "tenant_id, id or station_id is not a ULID, or connection is absent or not one of the three",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/devices/proposals/{id}/drawer": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin ticks (or clears) **Cash drawer attached** on an approved printer\n([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)\ndecision 4).",
+        "description": "The agent pick's guards, for the agent pick's reasons: `ManageDevices`, an `If-Match`, and an\naudit entry. The mark decides whether a drawer full of cash can be sprung from the till, so who\nset it, and when, is worth a row. It reaches a store on the next devices publish, as every other\nfact about a device does.",
+        "operationId": "set_drawer_attached",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The approved printer's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the device was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id` and `drawer_attached`, whether a cash drawer is wired to the printer's kick port (ADR-0165 decision 4). It decides whether the till can open a drawer of cash",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Saved, and audited. It reaches the store on the next devices publish"
+          },
+          "400": {
+            "description": "An id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The device changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/devices/proposals/{id}/float": {
       "post": {
         "tags": [
@@ -2201,6 +2598,237 @@
             }
           }
         }
+      }
+    },
+    "/admin/devices/proposals/{id}/reject": {
+      "post": {
+        "tags": [
+          "device onboarding"
+        ],
+        "summary": "A super-admin rejects a pending proposal.",
+        "operationId": "reject_device",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The proposal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No proposal with that id is pending any more. Idempotent: the answer is the same whether one was, and only a rejection that acted is audited"
+          },
+          "400": {
+            "description": "tenant_id or id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/devices/publish": {
+      "post": {
+        "tags": [
+          "device onboarding"
+        ],
+        "summary": "Compiles a store's **approved** devices into its `devices` config node and versions it\n([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).",
+        "description": "The same load→compile→write→version shape as the floor publish beside it, onto the `devices` key.\nA device whose stored `kind` or `connection` this build does not know keeps its token through\n`Open` rather than failing the publish — the store on the other end applies the same rule, and a\nnode that refused to compile over one unfamiliar device would take a shop's receipt printer with\nit.\n\nA proposal with **no** connection is skipped, not published as a guess. That state is only\nreachable for a row approved before ADR-0100 (the route now requires it), and publishing it as\n`network` would silently disable the cash drawer on a USB printer. Skipping is visible: the\nresponse says how many were published and how many were held back.",
+        "operationId": "admin_publish_devices",
+        "requestBody": {
+          "description": "`tenant_id` and the `store_id` whose approved devices to compile into its `devices` node (ADR-0100)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published. The body carries `config_version_id`, the version the store syncs, `device_count`, and `skipped_count`: approved devices held back because no connection was ever recorded for them, which are not published as a guess. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A printer names a print agent that is not a terminal among the store's approved devices, naming both, or the store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/devices/terminals": {
+      "post": {
+        "tags": [
+          "device onboarding"
+        ],
+        "summary": "A super-admin creates an approved `terminal` device\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).",
+        "description": "Behind `ManageDevices` rather than `PublishConfig`, and audited, because this is the human gate:\nnothing on a LAN announces itself as a till, so there is no proposal for an operator to approve\nand the named admin creating the entry is the decision ADR-0041 protects. It carries no\n`connection` and no address — the agent connects outbound to the edge, and nothing dials a\nterminal.",
+        "operationId": "create_terminal",
+        "requestBody": {
+          "description": "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an operator recognises it by. A terminal is never discovered, so there is no proposal to approve: creating it is the decision (ADR-0112). It has no address, because nothing dials a terminal",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, approved. The body carries the terminal's `id`, what a printer names to make it its print agent, and `status`. Audited"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or name is blank",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
       }
     },
     "/admin/employees": {
@@ -8437,8 +9065,12 @@
       "description": "What a store has actually admitted (ADR-0118). Documented rather than deferred with the rest of the device surface because it is the **only** read that answers it: a store admits tablets locally and offline, and until these events the cloud's picture of a store's tills was zero rows. Note the two identity spaces — the ids here are minted by the edge at pairing, and nothing joins them to the console-minted ids of `/admin/stores/{store_id}/devices`."
     },
     {
+      "name": "device onboarding",
+      "description": "How a store's printers, kitchen displays and tills come into service (ADR-0041, ADR-0100, ADR-0112). A store proposes each device it discovers; an administrator approves it, stating how it is attached and which station it serves, or rejects it. A till is never discovered, so an administrator creates it directly. Nothing reaches a store until its approved devices are published as its `devices` node."
+    },
+    {
       "name": "printers",
-      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4). The rest of the device-onboarding surface is still coverage debt; these writes are documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
     },
     {
       "name": "reports",
