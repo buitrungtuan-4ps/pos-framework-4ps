@@ -136,20 +136,6 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
         ))
     );
     assert_eq!(
-        classify_ip(ip("fec0::1")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("fec0::1"),
-            ForbiddenReason::Private
-        ))
-    );
-    assert_eq!(
-        classify_ip(ip("fec0:0:0:1::1")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("fec0:0:0:1::1"),
-            ForbiddenReason::Private
-        ))
-    );
-    assert_eq!(
         classify_ip(ip("fe80::1")),
         Err(SsrfRejection::ForbiddenAddress(
             ip("fe80::1"),
@@ -300,6 +286,25 @@ fn an_unassigned_nat64_subnet_is_refused_and_the_assigned_ones_still_decode() {
     // prefix exists to carry, and fails closed so quietly that no existing test notices.
     assert_eq!(classify_ip(ip("64:ff9b::8.8.8.8")), Ok(()));
     assert_eq!(classify_ip(ip("64:ff9b::93.184.216.34")), Ok(()));
+}
+
+#[test]
+fn v6_site_local_addresses_are_refused() {
+    // Deprecated site-local IPv6 addresses (fec0::/10, RFC 3879).
+    assert_eq!(
+        classify_ip(ip("fec0::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fec0::1"),
+            ForbiddenReason::Private
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("fec0:0:0:1::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fec0:0:0:1::1"),
+            ForbiddenReason::Private
+        ))
+    );
 }
 
 #[test]
