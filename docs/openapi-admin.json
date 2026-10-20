@@ -2753,6 +2753,240 @@
         ]
       }
     },
+    "/admin/catalog/export/items": {
+      "get": {
+        "tags": [
+          "catalog items"
+        ],
+        "summary": "A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),\nTrack M5). Behind [`ConsolePermission::ManageCatalog`] and audited — the entry records who exported\nwhich domain and how many rows, never the row contents. No price is exported (prices are per-channel\nplacements, a deferred T2 export); this is the item master only.",
+        "operationId": "admin_export_items",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`items.csv`, as a `text/csv` attachment: the header `menu_item_id,name,status,tax_class_id,item_category_id,item_subcategory_id,image_ref`, then one row per item. No price, no translation and no course. A name a spreadsheet would read as a formula is escaped. Audited by row count, never the contents"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The CSV could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/import/items/apply": {
+      "post": {
+        "tags": [
+          "catalog items"
+        ],
+        "summary": "`POST /admin/catalog/import/items` — the confirm after a dry run: the valid rows are written and\nthe rejected ones are reported, never written.",
+        "description": "# Why a row can be applied and reported as applied, and the next one still fail\n\nThe rows are separate records and are written one at a time, so this is not a transaction and\ndoes not pretend to be. What it does instead is report per row: a row whose write was refused\ncomes back as a rejection naming what happened, so re-importing the same file after fixing it is\nsafe — the rows that already landed are updates at their new version, and the rest are retried.\nWrapping the whole file in one transaction would mean one bad row discarding an operator's whole\nafternoon, which is the behaviour the dry run exists to make unnecessary.\n\nAn update is conditional on the version read when the import began, so a row somebody else\nchanged in between is refused rather than silently overwritten\n([ADR-0094](../../../docs/adr/0094-optimistic-concurrency-on-admin.md)).\n\nBehind [`ConsolePermission::ManageCatalog`] and audited — the row counts, never the contents.",
+        "operationId": "admin_import_items_apply",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The CSV `GET /admin/catalog/export/items` writes, with the same header, as the raw request body. A row with a `menu_item_id` this tenant has updates that item; a row with none creates one; any other id is rejected, so a file cannot mint an item id. The format carries no price, translation or course, and an update keeps what it does not carry",
+          "content": {
+            "text/csv": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: the valid rows are written one at a time and the report is the dry run's, with any row whose write failed turned into a rejection naming why — `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. Not one transaction: re-importing the same file after a fix is safe. An update is conditional on the version read when the import began, so a row changed meanwhile is rejected rather than overwritten. Audited by counts, never the contents"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or the body is not CSV or its header is not the export's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/import/items/dry-run": {
+      "post": {
+        "tags": [
+          "catalog items"
+        ],
+        "summary": "`POST /admin/catalog/import/items/dry-run` — what an item-master CSV **would** do, row by row,\nwriting nothing (roadmap-v3 **F15**, [ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)).",
+        "description": "The file is the one `GET /admin/catalog/export/items` writes, which is what makes the pair a\nround-trip: export the master, edit it in a spreadsheet, bring it back. It carries no price —\na price is a per-channel placement — so neither the upload nor the report an operator reads can\ncarry one in clear text.\n\nBehind [`ConsolePermission::ManageCatalog`] and not audited, because it changes nothing.",
+        "operationId": "admin_import_items_dry_run",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The CSV `GET /admin/catalog/export/items` writes, with the same header, as the raw request body. A row with a `menu_item_id` this tenant has updates that item; a row with none creates one; any other id is rejected, so a file cannot mint an item id. The format carries no price, translation or course, and an update keeps what it does not carry",
+          "content": {
+            "text/csv": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the file would do, writing nothing: `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. A row naming a tax class, category, sub-category or image the tenant does not have is rejected here, by row. Not audited"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or the body is not CSV or its header is not the export's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
     "/admin/catalog/item-categories": {
       "get": {
         "tags": [
@@ -3223,6 +3457,292 @@
           },
           "422": {
             "description": "Archiving it is refused while active items still use it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/items": {
+      "get": {
+        "tags": [
+          "catalog items"
+        ],
+        "summary": "A super-admin lists a tenant's items.",
+        "operationId": "admin_list_items",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose items to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many items to return, 1 to 500. Absent, every item as an array rather than a page: the menu compiler and the item pickers need them all",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "How many items to skip, 0 to 100000. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "A case-insensitive substring the item's name must contain. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`newest` (the default), `name` or `status`. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "`asc` (the default) or `desc`. Only with `limit`",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Without `limit`, every item as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each item has its `etag`, and no price"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID; limit or offset is not an integer in range; offset, q, sort or order is sent without limit; or sort or order is not one the route accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "catalog items"
+        ],
+        "operationId": "admin_create_item",
+        "requestBody": {
+          "description": "`tenant_id`, `name`, `name_translations` (per-locale names by locale code, optional; `name` is the fallback), `tax_class_id`, and optionally `item_category_id`, `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id (ADR-0075). An item carries no price: a price belongs to its placement on a menu",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created, active, with the id minted here — the id an order names the item by. The body is the record and the ETag carries its version. Audited"
+          },
+          "400": {
+            "description": "tenant_id or tax_class_id is absent or not a ULID, or item_category_id, item_subcategory_id, course_id or image_ref is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The catalog store or the entropy source is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ]
+      }
+    },
+    "/admin/catalog/items/{menu_item_id}": {
+      "patch": {
+        "tags": [
+          "catalog items"
+        ],
+        "summary": "A super-admin renames an item, sets its tax class and/or status.",
+        "operationId": "admin_update_item",
+        "parameters": [
+          {
+            "name": "menu_item_id",
+            "in": "path",
+            "description": "The item (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the item was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`, `status` (`active` or `archived`), and `name`, `name_translations` (per-locale names by locale code, optional; `name` is the fallback), `tax_class_id`, and optionally `item_category_id`, `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id (ADR-0075). An item carries no price: a price belongs to its placement on a menu, as they should now stand",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+          },
+          "400": {
+            "description": "menu_item_id is not a ULID, tenant_id or tax_class_id is absent or not a ULID, or item_category_id, item_subcategory_id, course_id or image_ref is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.catalog.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no item with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The item changed since you read it: re-read it and try again",
             "content": {
               "application/json": {
                 "schema": {
@@ -12068,6 +12588,10 @@
     {
       "name": "printers",
       "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2), which printer a till's receipts go to and the languages they print in (decision 4), and the float a till's drawer opens with (ADR-0167 decision 4), the terminal whose print agent drives a printer (ADR-0112), and whether a cash drawer is wired to it (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, that a till nobody has set prints and opens its drawer as the store does, and that nothing reaches a store until its devices are published."
+    },
+    {
+      "name": "catalog items",
+      "description": "A tenant's item master (ADR-0066, ADR-0075): each item's name and per-locale names, tax class, categories, course and photo. An item carries no price; a price belongs to its placement on a menu. Item ids are minted by the server and are what an order names an item by. The master round-trips as a CSV: export it, edit it in a spreadsheet, check the file with a dry run, then apply it. A file can update or create items but never mint an id. Nothing reaches a store until its catalog is published."
     },
     {
       "name": "catalog taxonomy",

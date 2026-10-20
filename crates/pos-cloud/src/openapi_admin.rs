@@ -174,6 +174,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_catalog::routes::catalog::admin_list_courses,
         pos_cloud_catalog::routes::catalog::admin_create_course,
         pos_cloud_catalog::routes::catalog::admin_update_course,
+        pos_cloud_catalog::routes::catalog::admin_list_items,
+        pos_cloud_catalog::routes::catalog::admin_create_item,
+        pos_cloud_catalog::routes::catalog::admin_update_item,
+        pos_cloud_catalog::routes::catalog::admin_export_items,
+        pos_cloud_catalog::routes::catalog::admin_import_items_dry_run,
+        pos_cloud_catalog::routes::catalog::admin_import_items_apply,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -316,6 +322,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a \
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
+                           published."
+        ),
+        (
+            name = "catalog items",
+            description = "A tenant's item master (ADR-0066, ADR-0075): each item's name and \
+                           per-locale names, tax class, categories, course and photo. An item \
+                           carries no price; a price belongs to its placement on a menu. Item ids \
+                           are minted by the server and are what an order names an item by. The \
+                           master round-trips as a CSV: export it, edit it in a spreadsheet, check \
+                           the file with a dry run, then apply it. A file can update or create \
+                           items but never mint an id. Nothing reaches a store until its catalog is \
                            published."
         ),
         (
@@ -554,15 +571,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/config/tender",
     "/admin/config/vendors",
     "/admin/capabilities",
-    // --- the catalog: item master, menus, taxonomies, layout (F3, ADR-0066/0082) ---
-    "/admin/catalog/export/items",
-    // The item-master CSV import (F15), beside the export it round-trips with. Enumerated rather
-    // than annotated, at B5's chosen fidelity; the body is a CSV upload whose columns are the
-    // export's, which `docs/guides` describes better than a schema stub would.
-    "/admin/catalog/import/items/apply",
-    "/admin/catalog/import/items/dry-run",
-    "/admin/catalog/items",
-    "/admin/catalog/items/{menu_item_id}",
+    // --- the catalog: menus, layout, modifiers, tax and its publish (F3, ADR-0066/0082) ---
     "/admin/catalog/layout-buttons",
     "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
     "/admin/catalog/menus",
