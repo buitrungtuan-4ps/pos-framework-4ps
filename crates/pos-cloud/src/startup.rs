@@ -5,6 +5,7 @@
 //! then the application over it.
 
 pub(super) mod loops;
+pub(super) mod routes;
 
 use std::sync::Arc;
 
