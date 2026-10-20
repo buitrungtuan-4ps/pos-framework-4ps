@@ -10,7 +10,6 @@
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
 "crates/pos-cloud-catalog/src/catalog.rs" = 2018
-"crates/pos-cloud/src/config.rs" = 1104
 "crates/pos-cloud-catalog/src/fees.rs" = 1623
 "crates/pos-cloud/src/http.rs" = 3004
 "crates/pos-cloud/src/lease.rs" = 1236
