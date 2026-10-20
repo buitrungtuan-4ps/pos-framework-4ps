@@ -1,4 +1,4 @@
-import { Show, onCleanup, onMount, type ParentProps } from "solid-js";
+import { Show, onCleanup, onMount, type Component, type ParentProps } from "solid-js";
 import { Route, Router } from "@solidjs/router";
 
 import { ApiError, api, deviceToken } from "./api/client";
@@ -26,6 +26,7 @@ import { locked } from "./state/session";
 import { StoreGate, StoreDataBanner } from "./components/StoreData";
 import { prime, readAgain } from "./state/engine";
 import { loadConfiguration, loadStore } from "./state/registry";
+import { SCREENS, SCREEN_IDS, type ScreenId } from "./state/screens";
 import { fold, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
@@ -112,6 +113,25 @@ function Shell(props: ParentProps) {
     </>
   );
 }
+
+// Every routed screen, by id. A `Record<ScreenId, …>` rather than a list, so a screen added to
+// `SCREENS` without a component here does not compile: the router cannot fall behind the table.
+const COMPONENTS: Record<ScreenId, Component> = {
+  floor: Floor,
+  tableOrder: Order,
+  tablePay: Pay,
+  kds: Kds,
+  expo: Expo,
+  counter: Takeaway,
+  counterOrder: Order,
+  guests: Confirm,
+  today: Today,
+  shift: Shift,
+  pair: Pairing,
+  devices: Devices,
+  setup: Setup,
+  signIn: SignIn,
+};
 
 // Send the browser somewhere without stacking a history entry, and without looping when it is already
 // there — the boot gate's one way of moving the operator on.
@@ -207,21 +227,9 @@ export function App() {
 
   return (
     <Router root={Shell}>
-      <Route path="/" component={Floor} />
-      <Route path="/table/:id" component={Order} />
-      <Route path="/table/:id/pay" component={Pay} />
-      <Route path="/kds" component={Kds} />
-      <Route path="/expo" component={Expo} />
-      <Route path="/counter" component={Takeaway} />
-      <Route path="/order/:id" component={Order} />
-      {/* The staff-confirmation queue (ADR-0116) — the screen the QR hold had no way to reach. */}
-      <Route path="/guests" component={Confirm} />
-      <Route path="/today" component={Today} />
-      <Route path="/shift" component={Shift} />
-      <Route path="/pair" component={Pairing} />
-      <Route path="/devices" component={Devices} />
-      <Route path="/setup" component={Setup} />
-      <Route path="/signin" component={SignIn} />
+      {SCREEN_IDS.map((id) => (
+        <Route path={SCREENS[id].path} component={COMPONENTS[id]} />
+      ))}
     </Router>
   );
 }
