@@ -106,6 +106,7 @@ mod archives;
 mod authored_layer;
 mod campaigns;
 mod chain;
+mod cloud_routes;
 mod config_nodes;
 mod config_publish;
 mod countries;
@@ -677,12 +678,8 @@ where
     }
 }
 
-/// Builds the cloud router over `app`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "a flat registration of every cloud route in one place; splitting it would scatter the \
-              route table across helpers and obscure the surface, which is the opposite of clear"
-)]
+/// Builds the cloud router over `app`: every area's routes ([`cloud_routes`]), then the state, then
+/// the security headers.
 pub fn router<S, R, K, C, A, T, W>(app: CloudApp<S, R, K, C, A, T, W>) -> Router
 where
     S: EventStore + Clone + Send + Sync + 'static,
@@ -694,172 +691,7 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    Router::new()
-        .route("/health", get(health))
-        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
-        .route(
-            "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route("/v1/openapi.json", get(openapi))
-        .route("/admin/openapi.json", get(admin_openapi))
-        .route(
-            "/sync/stores/{store_id}/config",
-            get(edge_config_sync::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/sync/stores/{store_id}/heartbeat",
-            post(edge_heartbeat::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/sync/stores/{store_id}/events",
-            post(edge_publish_events::<S, R, K, C, A, T, W>).layer(
-                axum::extract::DefaultBodyLimit::max(MAX_PUBLISHED_EVENTS_BYTES),
-            ),
-        )
-        .route(
-            "/sync/stores/{store_id}/events/hello",
-            post(edge_events_hello::<S, R, K, C, A, T, W>),
-        )
-        .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
-        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
-        .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
-        .route("/admin/whoami", get(admin_whoami::<S, R, K, C, A, T, W>))
-        .route(
-            "/admin/sessions",
-            get(admin_list_sessions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/sessions/revoke-others",
-            post(admin_revoke_other_sessions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/sessions/{id}",
-            delete(admin_revoke_session::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/totp",
-            post(admin_reenrol_totp::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/recovery-codes",
-            post(admin_generate_recovery_codes::<S, R, K, C, A, T, W>)
-                .get(admin_recovery_codes_status::<S, R, K, C, A, T, W>),
-        )
-        .route("/admin/setup", post(admin_setup::<S, R, K, C, A, T, W>))
-        .route(
-            "/admin/api-keys",
-            post(admin_create_api_key::<S, R, K, C, A, T, W>)
-                .get(admin_list_api_keys::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/api-keys/{id}",
-            delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins",
-            get(admin_list_admins::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins/{id}/role",
-            axum::routing::patch(admin_set_admin_role::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins/{id}/status",
-            axum::routing::patch(admin_set_admin_status::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites",
-            post(admin_invite_admin::<S, R, K, C, A, T, W>)
-                .get(admin_list_invites::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites/accept",
-            post(admin_accept_invite::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites/{id}",
-            delete(admin_revoke_invite::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config",
-            get(admin_config_effective::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/nodes",
-            get(admin_config_nodes::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/versions",
-            get(admin_config_versions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/versions/{version_id}",
-            get(admin_config_version_effective::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/rollback",
-            post(admin_config_rollback::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/{level}",
-            axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/reset",
-            post(admin_rollups_reset::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/daily",
-            get(admin_daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        // Beside the other rollup reads, and on **this** router, because the roster is folded into
-        // the same materialised blob the reads above answer from — the state that answers it lives
-        // here. It is under `/admin/stores/…/devices/` rather than `/admin/devices/` because it is a
-        // fact about one store, and `admitted` distinguishes it from the sibling
-        // `/admin/stores/{store_id}/devices`, which lists the console's **named** devices: a
-        // different identity space that nothing joins to this one (ADR-0118 §4).
-        .route(
-            "/admin/stores/{store_id}/devices/admitted",
-            get(admin_admitted_devices::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/daily",
-            get(admin_revenue_daily::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/reports/xz",
-            get(admin_xz_report::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/export",
-            get(admin_export_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/export",
-            get(admin_export_revenue::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/fees/export",
-            get(admin_export_revenue_fees::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/tax/export",
-            get(admin_export_revenue_tax::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/webhooks",
-            post(admin_register_webhook::<S, R, K, C, A, T, W>)
-                .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/webhooks/{id}",
-            delete(admin_delete_webhook::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/webhooks/{id}/enable",
-            post(admin_enable_webhook::<S, R, K, C, A, T, W>),
-        )
+    cloud_routes::all_routes::<S, R, K, C, A, T, W>()
         .with_state(app)
         // The admin-console security headers ([ADR-0067] slice 5) on every response this router
         // serves — which is *only* this router. `main.rs` applies the same layer to the
