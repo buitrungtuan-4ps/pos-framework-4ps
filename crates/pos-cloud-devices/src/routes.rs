@@ -46,9 +46,15 @@ pub use publish::device_publish_router;
 pub use revoke::device_revoke_router;
 
 // The handlers the console's OpenAPI document names.
-pub use printers::__path_admin_set_printer_paper;
+pub use printers::{
+    __path_admin_set_printer_paper, __path_set_drawer_attached, __path_set_print_agent,
+};
+pub use proposals::{__path_approve_device, __path_list_pending_devices, __path_reject_device};
+pub use publish::__path_admin_publish_devices;
 pub use revoke::__path_admin_revoke_device;
-pub use terminals::{__path_admin_set_terminal_float, __path_admin_set_terminal_receipt};
+pub use terminals::{
+    __path_admin_set_terminal_float, __path_admin_set_terminal_receipt, __path_create_terminal,
+};
 
 // --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) ------------------------
 

@@ -83,6 +83,32 @@ where
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/devices/publish",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
+                       `devices` node (ADR-0100)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Published. The body carries `config_version_id`, the version \
+                                      the store syncs, `device_count`, and `skipped_count`: approved \
+                                      devices held back because no connection was ever recorded for \
+                                      them, which are not published as a guess. Audited"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "A printer names a print agent that is not a terminal among the \
+                                      store's approved devices, naming both, or the store's \
+                                      configuration would not validate with the node", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "device onboarding",
+)]
 /// Compiles a store's **approved** devices into its `devices` config node and versions it
 /// ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 ///

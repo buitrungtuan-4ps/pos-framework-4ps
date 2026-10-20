@@ -129,6 +129,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_set_printer_paper,
         crate::http::admin_set_terminal_receipt,
         crate::http::admin_set_terminal_float,
+        pos_cloud_devices::routes::list_pending_devices,
+        pos_cloud_devices::routes::approve_device,
+        pos_cloud_devices::routes::reject_device,
+        pos_cloud_devices::routes::create_terminal,
+        pos_cloud_devices::routes::set_print_agent,
+        pos_cloud_devices::routes::set_drawer_attached,
+        pos_cloud_devices::routes::admin_publish_devices,
         pos_cloud_reports::revenue::admin_export_revenue_fees,
         pos_cloud_reports::revenue::admin_export_revenue_tax,
         crate::http::admin_list_store_groups,
@@ -245,14 +252,22 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            `/admin/stores/{store_id}/devices`."
         ),
         (
+            name = "device onboarding",
+            description = "How a store's printers, kitchen displays and tills come into service \
+                           (ADR-0041, ADR-0100, ADR-0112). A store proposes each device it \
+                           discovers; an administrator approves it, stating how it is attached and \
+                           which station it serves, or rejects it. A till is never discovered, so \
+                           an administrator creates it directly. Nothing reaches a store until its \
+                           approved devices are published as its `devices` node."
+        ),
+        (
             name = "printers",
             description = "What paper each approved printer takes and whether it cuts it \
                            (ADR-0160 decision 2), which printer a till's receipts go to and the \
                            languages they print in (decision 4), and the float a till's drawer \
-                           opens with (ADR-0167 decision 4). The rest of the device-onboarding \
-                           surface is still coverage debt; these writes are documented because a \
-                           route new to this surface is, and because a fork's own console needs \
-                           to know that a printer nobody has set prints as 80 mm paper with a \
+                           opens with (ADR-0167 decision 4), the terminal whose print agent \
+                           drives a printer (ADR-0112), and whether a cash drawer is wired to it \
+                           (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a \
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
@@ -414,18 +429,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/stores/{store_id}/rollups/daily",
     "/admin/stores/{store_id}/rollups/export",
     "/admin/stores/{store_id}/rollups/reset",
-    // --- device onboarding ---
-    "/admin/devices/proposals",
-    "/admin/devices/proposals/{id}/approve",
-    "/admin/devices/proposals/{id}/reject",
-    // The print-agent pair (ADR-0112). Undocumented for the same reason as the three above and
-    // `/admin/devices/publish` below, not a new decision: this whole device surface is deferred
-    // together, and documenting two routes in the middle of it would leave a fork's client reading
-    // half a story. They join the debt when the device surface does.
-    "/admin/devices/proposals/{id}/agent",
-    // The drawer mark (ADR-0165) joins the same deferred device surface, for the same reason.
-    "/admin/devices/proposals/{id}/drawer",
-    "/admin/devices/terminals",
+    // --- activating a box: activation codes and claims ---
     "/admin/activation-codes",
     "/admin/activation-codes/revoke",
     "/admin/claims/bind",
@@ -523,8 +527,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/inventory/recipes/{item_id}",
     "/admin/inventory/suppliers",
     "/admin/inventory/suppliers/{supplier_id}",
-    // --- approved printers and kitchen displays (C2, ADR-0100) ---
-    "/admin/devices/publish",
     // --- floor plan and kitchen stations (M2, ADR-0072) ---
     "/admin/floor/areas",
     "/admin/floor/areas/{area_id}",
