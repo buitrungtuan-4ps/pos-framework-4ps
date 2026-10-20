@@ -43,7 +43,6 @@
 "crates/adapters/store-postgres/src/catalog.rs::PostgresCatalog::set_item" = { lines = 54, params = 12 }
 "crates/adapters/store-postgres/src/catalog.rs::PostgresCatalog::set_modifier_group" = { lines = 50, params = 10 }
 "crates/adapters/store-postgres/src/catalog.rs::PostgresCatalog::update_layout_button_at" = { lines = 53, params = 11 }
-"crates/adapters/store-postgres/src/config_trees.rs::PostgresConfigTrees::bump_store_lease" = { lines = 153, params = 8 }
 "crates/adapters/store-postgres/src/floor.rs::PostgresFloor::insert_station" = { lines = 34, params = 9 }
 "crates/adapters/store-postgres/src/floor.rs::PostgresFloor::insert_table" = { lines = 33, params = 9 }
 "crates/adapters/store-postgres/src/floor.rs::PostgresFloor::set_station" = { lines = 50, params = 10 }
