@@ -116,8 +116,26 @@ pub(crate) struct BillCheckResponse {
     totals: CheckResponse,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/tables/{id}/check",
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "What the table owes, in the shape `GET /api/orders/{id}/check` answers \
+                                      with, read through its open bills where it has any. Zero for a free \
+                                      table"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The figures cannot be assembled, for instance a line whose tax class \
+                                      the store has published no rate for. `pos-error-reason` names why"),
+    ),
+    tag = "floor",
+))]
 /// `GET /api/tables/{id}/check` — the running check, assembled by the edge.
-pub(crate) async fn read<S>(
+pub(crate) async fn table_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(table_id): Path<String>,
 ) -> Response
@@ -139,6 +157,24 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/{id}/check",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "What the order owes: subtotal, discount and comp totals, tax, \
+                                      `total_due`, and each fee charged. Zero for an order with nothing on \
+                                      it"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The figures cannot be assembled, for instance a line whose tax class \
+                                      the store has published no rate for. `pos-error-reason` names why"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/{id}/check` — the running check for one order, table or no table.
 ///
 /// The counter's read. A takeaway order sits on no table
@@ -146,7 +182,7 @@ where
 /// cannot answer for it, and the cashier needs the figure before taking money as much on a counter
 /// order as on a floor one. Same [`Edge::order_totals`](crate::app::Edge::order_totals) the settle
 /// path assembles from.
-pub(crate) async fn read_for_order<S>(
+pub(crate) async fn order_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(order_id): Path<String>,
 ) -> Response

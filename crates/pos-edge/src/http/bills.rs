@@ -191,6 +191,27 @@ where
     respond(edge.open_bill(actor, table_id).await)
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/bill",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
+                                      its table moved to where the order has a table"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/bill` — open a bill on an order, table or no table.
 ///
 /// The counter's route, and the one that makes takeaway revenue collectable: a relayed or QR-counter

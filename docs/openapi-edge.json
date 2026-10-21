@@ -10,6 +10,29 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/api/bills/settled": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/bills/settled` — the bills this store settled today, newest first, at most\n[`crate::MAX_SETTLED_LISTED`] (ADR-0164). Here rather than beside the other bill routes because a\ncounter order is listed by the queue number staff shouted, which only this router's authority\nholds.",
+        "operationId": "settled_bills",
+        "responses": {
+          "200": {
+            "description": "Today's settled bills, newest first and capped: each with its order, table or queue number, receipt number, total, settle time and the shop's clock at it, and how many copies were printed"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "500": {
+            "description": "The business date could not be derived from the clock"
+          }
+        }
+      }
+    },
     "/api/floor": {
       "get": {
         "tags": [
@@ -186,6 +209,356 @@
           },
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/orders": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders` — the counter opens a tableless order and gives it the day's next queue\nnumber, as a relayed takeaway order gets one (ADR-0146).",
+        "description": "The channel the till names wins. A till that names none gets the store's walk-in channel, which\nis takeaway under `WALK_IN_CHANNEL_ASK` too: there the till names the guest's answer, so only a\ntill from before the setting names none, and it gets the takeaway order it always opened.",
+        "operationId": "open_order",
+        "requestBody": {
+          "description": "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the store's walk-in channel. The body may be left out",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Opened: the `order_id`, the day's `queue_number` it is called by, and its `business_date`"
+          },
+          "400": {
+            "description": "The channel is not a sales channel this edge knows"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/awaiting-confirmation": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/orders/awaiting-confirmation` — the guest orders waiting, and the refusal reasons.",
+        "operationId": "awaiting_confirmation",
+        "responses": {
+          "200": {
+            "description": "The guest orders waiting for staff, each with its table, lines and total, and `reject_reasons`: the reasons a refusal may cite, in the store's display language"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/orders/kitchen": {
+      "get": {
+        "tags": [
+          "kitchen"
+        ],
+        "summary": "`GET /api/orders/kitchen` — what the kitchen still has to make, in the same shape.",
+        "description": "A read, like the live one; it also ends the day for a paid order fired on an earlier business\nday, which then leaves the board and has its notes forgotten.",
+        "operationId": "kitchen_orders",
+        "responses": {
+          "200": {
+            "description": "Every open order, and each paid order without a table that the kitchen has not finished, fired on the current business day, in the shape `GET /api/orders/live` answers with"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/orders/live": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/orders/live` — every open order with its lines.",
+        "description": "A pure read of the projection: no decision, no write, and nothing that can fail. An order the\nstore has settled is gone from it, which is what keeps the answer the size of the store's live\ntrading rather than of its history.",
+        "operationId": "live_orders",
+        "responses": {
+          "200": {
+            "description": "Every open order, floor and counter, with its table, open bills and channel where it has them, and every line with the id a fire, a void or a bump is addressed to"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/orders/open": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/orders/open` — every counter order still owing money.",
+        "operationId": "open_orders",
+        "responses": {
+          "200": {
+            "description": "Every counter order still owing money, with its queue number where it was given one, its lines, `total_due`, and any bill open on it"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          },
+          "503": {
+            "description": "The queue numbers could not be read"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/bill": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/bill` — open a bill on an order, table or no table.",
+        "description": "The counter's route, and the one that makes takeaway revenue collectable: a relayed or QR-counter\norder is tableless by design (ADR-0064), so `/api/tables/{id}/bill` can never reach it\n([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)). A floor order billed through here\nstill makes its table's `Occupied → AwaitingPayment` move, because the domain decides that from\nthe order, not from which route was called.",
+        "operationId": "open_for_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state its table moved to where the order has a table"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/check": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/orders/{id}/check` — the running check for one order, table or no table.",
+        "description": "The counter's read. A takeaway order sits on no table\n([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above\ncannot answer for it, and the cashier needs the figure before taking money as much on a counter\norder as on a floor one. Same [`Edge::order_totals`](crate::app::Edge::order_totals) the settle\npath assembles from.",
+        "operationId": "order_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the order owes: subtotal, discount and comp totals, tax, `total_due`, and each fee charged. Zero for an order with nothing on it"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/confirm": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/confirm` — release a guest's order to the kitchen.",
+        "operationId": "confirm_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Confirmed: the guest's order may now be fired"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/lines": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/lines` — add a line to an order by its id, priced by the edge.",
+        "operationId": "add_order_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "What the guest chose: `menu_item_id` and `quantity` (in thousandths), with optional `modifier_menu_item_ids`, `seat`, `course_id` and `note`. No price: the edge prices the line at the order's channel",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+          },
+          "400": {
+            "description": "The id is not a ULID, or a note longer than 200 characters or with a control character"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/reject": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it.",
+        "operationId": "reject_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, a reason the managed list offers for refusing an order",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Refused, with the reason recorded, and the order closed"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
           }
         }
       }
@@ -416,6 +789,77 @@
         }
       }
     },
+    "/api/tables/{id}": {
+      "get": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`GET /api/tables/{id}` — the table's current projected state.",
+        "operationId": "table_state",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The table's id and its projected `state`, a `TABLE_STATE_*` token"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/check": {
+      "get": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`GET /api/tables/{id}/check` — the running check, assembled by the edge.",
+        "operationId": "table_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the table owes, in the shape `GET /api/orders/{id}/check` answers with, read through its open bills where it has any. Zero for a free table"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -501,6 +945,18 @@
     {
       "name": "status",
       "description": "The box's own state: liveness, the outbox and the cloud link, today's takings, and the live fan-out."
+    },
+    {
+      "name": "orders",
+      "description": "An order and its lines: opening one at the counter, adding, changing and voiding lines, the staff-confirmation queue for guest orders (ADR-0116), the checks, and opening its bill."
+    },
+    {
+      "name": "kitchen",
+      "description": "What the kitchen has to make, sending food to it by line, course or order, and a station bumping what it made."
+    },
+    {
+      "name": "floor",
+      "description": "A table's state, and what it owes."
     }
   ]
 }

@@ -126,7 +126,7 @@ impl From<LineView> for LineResponse {
 }
 
 /// `POST /api/tables/{id}/lines` — add a line to the order the table holds.
-pub(crate) async fn add<S>(
+pub(crate) async fn add_table_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -149,7 +149,7 @@ where
 }
 
 /// `POST /api/lines/{id}/fire` — fire a line to its station.
-pub(crate) async fn fire<S>(
+pub(crate) async fn fire_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -385,7 +385,7 @@ impl VoidLineRequest {
 /// A fired line needs [`pos_core::permission::Permission::VoidFiredLine`] and a manager's PIN with
 /// it; an unfired one is an ordinary cancel. The edge decides which, so the till sends the same
 /// request either way.
-pub(crate) async fn void<S>(
+pub(crate) async fn void_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
