@@ -39,6 +39,8 @@ cargo xtask <check>
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
   guides          every block a guide in docs/guides/ marks is still true to the tree; --run also
                   does each guide's `cargo xtask new` commands and verify steps in a scratch worktree
+  i18n            every supported UI language is complete in ui/ and dashboard/, settings included;
+                  a country's language not yet supported is reported (packages/shared/i18n/languages.json)
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   repo-map        every path docs/repository-map.md names in backticks exists
@@ -149,6 +151,7 @@ fn main() -> ExitCode {
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
         "guides" => checks::guides::run(&rest),
+        "i18n" => checks::i18n::run(&rest),
         "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),

@@ -47,6 +47,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [pos-spec.md](pos-spec.md) | What the product does: business behaviour, and the event catalogue (§18) |
 | [naming-and-api.md](naming-and-api.md) | How to name anything: JSON, URLs, database, events, permissions, code and files |
 | [ui-ux.md](ui-ux.md) | How every screen must behave |
+| [languages.md](languages.md) | The UI languages the till and the console support, the register and its check, the languages country modules declare, and the fallback to `en` |
 | [glossary.md](glossary.md) | Restaurant and framework vocabulary |
 | [configuration.md](configuration.md) | Every setting a store may run differently (generated) |
 | [permissions.md](permissions.md) | The permission matrix and its default roles (generated) |
