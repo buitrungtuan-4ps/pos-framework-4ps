@@ -10,7 +10,11 @@
 //! permission it needs (`x-permission`), and the file the handler is in. That file is found by the
 //! name: the one free `async fn` of that name in the crates that serve the document. A name that
 //! matches no function, or more than one, stops the render, because the line would point nowhere.
+//!
+//! Each set of source roots is read once, into an index of the free `async fn` names each file
+//! declares, so finding a handler is a lookup rather than another pass over every file.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -51,6 +55,7 @@ const METHODS: [&str; 7] = ["get", "put", "post", "delete", "patch", "head", "op
 /// than one.
 pub fn render(root: &Path, generated: &str) -> Result<String, Error> {
     let mut out = String::new();
+    let mut indexes: BTreeMap<&[&str], Handlers> = BTreeMap::new();
     let _ = writeln!(out, "# Route map\n\n{generated}\n");
     let _ = writeln!(
         out,
@@ -63,7 +68,12 @@ pub fn render(root: &Path, generated: &str) -> Result<String, Error> {
     for (document, surface, roots) in DOCUMENTS {
         let text = std::fs::read_to_string(root.join(document))?;
         let json: serde_json::Value = serde_json::from_str(&text)?;
-        let sources = sources_under(root, roots)?;
+        let handlers = match indexes.entry(roots) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(handlers_under(root, roots)?)
+            }
+        };
         let _ = writeln!(
             out,
             "## {surface}\n\nFrom [`{document}`](../{}).\n",
@@ -77,7 +87,7 @@ pub fn render(root: &Path, generated: &str) -> Result<String, Error> {
                     continue;
                 };
                 let handler = operation["operationId"].as_str().unwrap_or_default();
-                let file = handler_file(root, &sources, handler)
+                let file = handler_file(root, handlers, handler)
                     .map_err(|why| format!("{document}: {method} {path}: {why}"))?;
                 let _ = writeln!(
                     out,
@@ -184,18 +194,34 @@ fn sources_under(root: &Path, roots: &[&str]) -> Result<Vec<PathBuf>, Error> {
     Ok(files)
 }
 
-/// The repository-relative file of the one free `async fn handler` at the left margin of `sources`.
-fn handler_file(root: &Path, sources: &[PathBuf], handler: &str) -> Result<String, String> {
-    let mut found = Vec::new();
-    for file in sources {
-        let Ok(text) = std::fs::read_to_string(file) else {
+/// The files that declare each free `async fn`, by name, in the order [`sources_under`] lists them.
+type Handlers = BTreeMap<String, Vec<PathBuf>>;
+
+/// Reads every source file under `roots` once and indexes the free `async fn` names it declares.
+/// A file that cannot be read is skipped, and a name a file declares twice lists that file once.
+fn handlers_under(root: &Path, roots: &[&str]) -> Result<Handlers, Error> {
+    let mut handlers = Handlers::new();
+    for file in sources_under(root, roots)? {
+        let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        if text.lines().any(|line| declares(line, handler)) {
-            found.push(file);
+        let mut names: Vec<&str> = text.lines().filter_map(declared_name).collect();
+        names.sort_unstable();
+        names.dedup();
+        for name in names {
+            handlers
+                .entry(name.to_owned())
+                .or_default()
+                .push(file.clone());
         }
     }
-    match found.as_slice() {
+    Ok(handlers)
+}
+
+/// The repository-relative file of the one free `async fn handler` at the left margin of the
+/// indexed sources.
+fn handler_file(root: &Path, handlers: &Handlers, handler: &str) -> Result<String, String> {
+    match handlers.get(handler).map_or(&[][..], Vec::as_slice) {
         [file] => Ok(file
             .strip_prefix(root)
             .unwrap_or(file)
@@ -210,24 +236,31 @@ fn handler_file(root: &Path, sources: &[PathBuf], handler: &str) -> Result<Strin
     }
 }
 
-/// Whether `line` declares the free async function `name`: `async fn name`, after nothing or a
-/// visibility, followed by its generics or its parameters.
-fn declares(line: &str, name: &str) -> bool {
-    let Some((prefix, rest)) = line.split_once("async fn ") else {
-        return false;
-    };
+/// The free async function `line` declares: the name after `async fn `, when what comes before is
+/// nothing or a visibility, up to its generics or its parameters.
+fn declared_name(line: &str) -> Option<&str> {
+    let (prefix, rest) = line.split_once("async fn ")?;
     let visibility_only = prefix.is_empty()
         || prefix == "pub "
         || (prefix.starts_with("pub(") && prefix.ends_with(") "));
-    visibility_only
-        && rest
-            .strip_prefix(name)
-            .is_some_and(|after| after.starts_with('<') || after.starts_with('('))
+    if !visibility_only {
+        return None;
+    }
+    let end = rest.find(['<', '('])?;
+    rest.get(..end)
+}
+
+/// Whether `line` declares the free async function `name`.
+#[cfg(test)]
+fn declares(line: &str, name: &str) -> bool {
+    declared_name(line) == Some(name)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{declares, permission, who};
+    use std::path::{Path, PathBuf};
+
+    use super::{Handlers, declared_name, declares, handler_file, permission, who};
 
     #[test]
     fn finds_a_free_handler_and_nothing_else() {
@@ -249,6 +282,43 @@ mod tests {
             "settle_bill"
         ));
         assert!(!declares("// async fn settle_bill(", "settle_bill"));
+    }
+
+    #[test]
+    fn a_line_names_the_handler_it_declares() {
+        assert_eq!(
+            declared_name("pub(crate) async fn settle_bill<S>("),
+            Some("settle_bill")
+        );
+        assert_eq!(
+            declared_name("async fn healthz() -> Response {"),
+            Some("healthz")
+        );
+        assert_eq!(declared_name("    async fn settle_bill(&self) {"), None);
+        assert_eq!(declared_name("let x = 1;"), None);
+    }
+
+    #[test]
+    fn a_handler_is_found_once_or_the_render_stops() {
+        let root = Path::new("/repo");
+        let mut handlers = Handlers::new();
+        handlers.insert(
+            "settle_bill".to_owned(),
+            vec![PathBuf::from("/repo/crates/pos-edge/src/http/bills.rs")],
+        );
+        handlers.insert(
+            "twice".to_owned(),
+            vec![PathBuf::from("/repo/a.rs"), PathBuf::from("/repo/b.rs")],
+        );
+        assert_eq!(
+            handler_file(root, &handlers, "settle_bill"),
+            Ok("crates/pos-edge/src/http/bills.rs".to_owned())
+        );
+        assert!(handler_file(root, &handlers, "missing").is_err());
+        assert_eq!(
+            handler_file(root, &handlers, "twice"),
+            Err("`async fn twice` is declared 2 times".to_owned())
+        );
     }
 
     #[test]
