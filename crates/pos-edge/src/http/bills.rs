@@ -31,7 +31,7 @@ use pos_proto::ids::{DeviceId, EventId};
 
 use crate::app::{Approval, BillView, BuyerDetails, Edge, TillScope};
 use crate::http::check::{CheckFeeLine, CheckResponse, check_fee_lines};
-use crate::http::{bad_request, error_response, parse_ulid, shifts};
+use crate::http::{bad_request, cash_movements, error_response, parse_ulid, shifts};
 use crate::printing::{PrintOutcome, Printers};
 
 /// One payment a device applies to a bill: how it was paid, what the guest handed over, what was put
@@ -370,7 +370,7 @@ where
     // The drawer before the paper: the cashier needs the change before the guest needs the receipt.
     if view.open_drawer {
         let opened =
-            shifts::open_drawer_through(printers.as_deref(), &edge, view.drawer_till).await;
+            cash_movements::open_drawer_through(printers.as_deref(), &edge, view.drawer_till).await;
         response.drawer_open = Some(opened.as_wire().to_owned());
     }
     if view.print_receipt {

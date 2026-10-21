@@ -17,6 +17,7 @@
 pub mod assets;
 pub mod auth;
 pub mod bills;
+mod cash_movements;
 pub mod check;
 mod counter;
 pub mod floor;
