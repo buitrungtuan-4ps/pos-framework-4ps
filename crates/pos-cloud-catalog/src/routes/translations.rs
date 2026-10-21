@@ -94,6 +94,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/translations",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -150,6 +151,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/translations",
+    extensions(("x-permission" = json!("console.translations.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -267,6 +269,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/translations/export",
+    extensions(("x-permission" = json!("console.translations.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -342,6 +345,7 @@ const MAX_CSV_IMPORT_BYTES: usize = 4 * 1024 * 1024;
 #[utoipa::path(
     post,
     path = "/admin/translations/import/dry-run",
+    extensions(("x-permission" = json!("console.translations.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -410,6 +414,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/translations/import/apply",
+    extensions(("x-permission" = json!("console.translations.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),

@@ -91,6 +91,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/archives",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose archives to list (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),

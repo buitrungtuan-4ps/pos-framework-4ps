@@ -35,6 +35,8 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 #[utoipa::path(
     get,
     path = "/admin/people/permissions",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     responses(
         (status = 200, description = "Every permission a role may grant, as an array: each with \
                                       `id`, `group`, `risk`, `pin_required` (whether it may be \
@@ -78,6 +80,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/roles",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose roles to list (a 26-character ULID)"),
     ),
@@ -127,6 +131,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/roles/{role_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("role_id" = String, Path, description = "The role template's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
@@ -239,6 +245,8 @@ pub(super) fn granted_with_approval(
 #[utoipa::path(
     post,
     path = "/admin/roles",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
         description = "`tenant_id`, `name`, `permissions` (granted directly), \
                        `permissions_with_approval` (granted only with a direct holder's approval, \
@@ -393,6 +401,8 @@ async fn record_role_create<P, R, Cfg, A, C>(
 #[utoipa::path(
     patch,
     path = "/admin/roles/{role_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     params(
         ("role_id" = String, Path, description = "The role template's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the role was read at (ADR-0094). \

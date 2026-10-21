@@ -36,6 +36,8 @@ use crate::store_groups::{
 #[utoipa::path(
     post,
     path = "/admin/store-groups/{group_id}/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(("group_id" = String, Path, description = "The cohort to publish to (a 26-character ULID)")),
     responses(
         (status = 200, description = "The batch ran and every member has an outcome — `applied`, \

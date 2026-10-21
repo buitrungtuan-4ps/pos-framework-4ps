@@ -32,6 +32,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 #[utoipa::path(
     get,
     path = "/admin/floor/tables",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -81,6 +82,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/floor/tables/{table_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("table_id" = String, Path, description = "The table (a 26-character ULID)"),
@@ -137,6 +139,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/floor/tables",
+    extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `store_id` and `area_id`; the table's `name`, the label a host reads, which may \
@@ -248,6 +251,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/floor/tables/{table_id}",
+    extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     params(
         ("table_id" = String, Path, description = "The table (a 26-character ULID)"),

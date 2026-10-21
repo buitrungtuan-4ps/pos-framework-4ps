@@ -30,6 +30,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/display-categories",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose display categories to list (a 26-character ULID)"),
@@ -77,6 +78,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/display-categories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and the category's `name`, as the till's layout shows it",
@@ -152,6 +154,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/display-categories/{display_category_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("display_category_id" = String, Path, description = "The display category (a 26-character ULID)"),
@@ -251,6 +254,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/catalog/display-subcategories",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose display sub-categories to list (a 26-character ULID)"),
@@ -298,6 +302,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/display-subcategories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the parent `display_category_id`, and the sub-category's `name`",
@@ -380,6 +385,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/display-subcategories/{display_subcategory_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("display_subcategory_id" = String, Path, description = "The display sub-category (a 26-character ULID)"),

@@ -215,6 +215,7 @@ struct PublishedMenu {
 #[utoipa::path(
     post,
     path = "/admin/catalog/publish",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with \

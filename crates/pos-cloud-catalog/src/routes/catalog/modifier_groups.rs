@@ -28,6 +28,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/modifier-groups",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -77,6 +78,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/modifier-groups",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, then `name`, `min_select` and `max_select` (how many of the group a guest must and may pick), \
@@ -164,6 +166,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/modifier-groups/{modifier_group_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("modifier_group_id" = String, Path, description = "The group (a 26-character ULID)"),

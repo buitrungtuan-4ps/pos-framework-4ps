@@ -24,6 +24,7 @@ use crate::http::{Json, read_store_node_as_run};
 #[utoipa::path(
     get,
     path = "/admin/config/channels",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -76,6 +77,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/channels",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
@@ -144,6 +146,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config/tender",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -196,6 +199,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/tender",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
@@ -264,6 +268,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config/origins",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -316,6 +321,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/origins",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",

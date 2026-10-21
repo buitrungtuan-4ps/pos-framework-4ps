@@ -20,6 +20,8 @@ use crate::http::{CloudApp, Json};
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/devices/admitted",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose roster to read (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),

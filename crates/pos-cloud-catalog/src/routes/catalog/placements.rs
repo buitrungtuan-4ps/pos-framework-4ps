@@ -26,6 +26,7 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 #[utoipa::path(
     get,
     path = "/admin/catalog/menus/{menu_id}/placements",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -127,6 +128,7 @@ fn build_placement(
 #[utoipa::path(
     post,
     path = "/admin/catalog/menus/{menu_id}/placements",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -206,6 +208,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -291,6 +294,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),

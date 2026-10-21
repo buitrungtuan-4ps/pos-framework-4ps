@@ -29,6 +29,7 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 #[utoipa::path(
     get,
     path = "/admin/catalog/layout-buttons",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -126,6 +127,7 @@ fn build_layout_button(
 #[utoipa::path(
     post,
     path = "/admin/catalog/layout-buttons",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`sales_channel` and `menu_item_id`, the slot the button is for — an item has \
@@ -203,6 +205,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("sales_channel" = String, Path, description = "The sales channel's wire token"),
@@ -288,6 +291,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("sales_channel" = String, Path, description = "The sales channel's wire token"),

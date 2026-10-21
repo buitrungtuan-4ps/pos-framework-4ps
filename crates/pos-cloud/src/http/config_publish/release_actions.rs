@@ -29,6 +29,8 @@ use crate::store_groups::StoreGroupStore;
 #[utoipa::path(
     post,
     path = "/admin/config-releases/{release_id}/schedule",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The draft to schedule")),
     responses(
         (status = 200, description = "The release is scheduled, and the body is its node × store \
@@ -130,6 +132,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/config-releases/{release_id}/cancel",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The release to withdraw")),
     responses(
         (status = 200, description = "The still-pending pairs are cancelled and the body is the \
@@ -246,6 +250,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config-releases",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)")),
     responses(
         (status = 200, description = "The tenant's releases, newest first, each with its stored \
@@ -298,6 +304,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config-releases/{release_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("release_id" = String, Path, description = "The release to report on"),
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),

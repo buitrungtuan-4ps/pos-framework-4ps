@@ -96,6 +96,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/campaigns/{campaign_id}/vouchers",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     params(
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
@@ -217,6 +218,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/campaigns/{campaign_id}/vouchers",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     params(
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),

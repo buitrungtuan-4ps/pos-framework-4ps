@@ -58,6 +58,7 @@ pub(in crate::http) struct ListApiKeysQuery {
 #[utoipa::path(
     post,
     path = "/admin/api-keys",
+    extensions(("x-permission" = json!("console.apikeys.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`; `store_id` to bind the key to one store, or absent for a \
@@ -187,6 +188,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/api-keys",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose keys to list (a 26-character ULID)"),
@@ -238,6 +240,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/api-keys/{id}",
+    extensions(("x-permission" = json!("console.apikeys.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The key's id, the ULID half of its token"),

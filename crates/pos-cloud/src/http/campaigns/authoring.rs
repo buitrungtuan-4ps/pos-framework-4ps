@@ -28,6 +28,7 @@ use crate::version::{CreateOutcome, UpdateOutcome};
 #[utoipa::path(
     get,
     path = "/admin/campaigns",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose campaigns to list (a 26-character ULID)"),
@@ -77,6 +78,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
@@ -132,6 +134,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/campaigns",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
@@ -217,6 +220,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     params(
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
@@ -320,6 +324,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     params(
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),

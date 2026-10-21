@@ -100,6 +100,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/media",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -183,6 +184,7 @@ fn media_views(rows: Vec<crate::media::MediaSummary>) -> Vec<MediaSummaryView> {
 #[utoipa::path(
     post,
     path = "/admin/media",
+    extensions(("x-permission" = json!("console.media.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -386,6 +388,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/media/{media_id}/thumbnail",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),
@@ -428,6 +431,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/media/{media_id}/detail",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),
@@ -470,6 +474,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/media/{media_id}",
+    extensions(("x-permission" = json!("console.media.manage"))),
     security(("session_cookie" = [])),
     params(
         ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),

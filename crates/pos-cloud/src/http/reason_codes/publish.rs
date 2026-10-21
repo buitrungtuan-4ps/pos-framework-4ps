@@ -208,6 +208,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant and the store to publish to. The entries come from what the \
                        tenant has authored, never from this body",

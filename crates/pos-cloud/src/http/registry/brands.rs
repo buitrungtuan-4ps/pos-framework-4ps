@@ -27,6 +27,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/brands",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose brands to list (a 26-character ULID)"),
@@ -75,6 +76,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/brands",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The `tenant_id` the brand belongs to and its `name`",
@@ -151,6 +153,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/brands/{brand_id}",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
     security(("session_cookie" = [])),
     params(
         ("brand_id" = String, Path, description = "The brand (a 26-character ULID)"),

@@ -27,6 +27,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/tax-classes",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -74,6 +75,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/tax-classes",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and the class's `name`",
@@ -194,6 +196,7 @@ pub(super) fn still_referenced(kind: &str, count: usize) -> Response {
 #[utoipa::path(
     patch,
     path = "/admin/catalog/tax-classes/{tax_class_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tax_class_id" = String, Path, description = "The tax class (a 26-character ULID)"),

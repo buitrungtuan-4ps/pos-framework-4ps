@@ -29,6 +29,7 @@ use pos_cloud_config::route::RegistryTenantQuery;
 #[utoipa::path(
     get,
     path = "/admin/inventory/suppliers",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -76,6 +77,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/inventory/suppliers/{supplier_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("supplier_id" = String, Path, description = "The supplier (a 26-character ULID)"),
@@ -130,6 +132,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/inventory/suppliers",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, and the supplier's `name`, which may not be blank",
@@ -207,6 +210,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/inventory/suppliers/{supplier_id}",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     params(
         ("supplier_id" = String, Path, description = "The supplier (a 26-character ULID)"),
@@ -303,6 +307,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/inventory/suppliers/{supplier_id}",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     params(
         ("supplier_id" = String, Path, description = "The supplier (a 26-character ULID)"),

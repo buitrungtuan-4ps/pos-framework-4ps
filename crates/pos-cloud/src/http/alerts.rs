@@ -118,6 +118,7 @@ fn alert_error_response(error: &AlertStoreError) -> Response {
 #[utoipa::path(
     get,
     path = "/admin/alerts",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("recent" = Option<bool>, Query, description = "`true` for recent history, active and \
@@ -177,6 +178,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/alerts/{id}/ack",
+    extensions(("x-permission" = json!("console.alerts.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The alert's id"),
@@ -234,6 +236,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/alerts/{id}/resolve",
+    extensions(("x-permission" = json!("console.alerts.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The alert's id"),

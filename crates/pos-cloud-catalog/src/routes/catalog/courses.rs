@@ -27,6 +27,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/courses",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose courses to list (a 26-character ULID)"),
@@ -75,6 +76,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/courses",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the course's `name`, and `sort`, where it falls in the service sequence, ascending (absent is 0)",
@@ -158,6 +160,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/courses/{course_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("course_id" = String, Path, description = "The course (a 26-character ULID)"),

@@ -34,6 +34,8 @@ use crate::http::{
 #[utoipa::path(
     post,
     path = "/admin/login",
+    security(),
+    extensions(("x-public-reason" = json!("an email, password and TOTP code (ADR-0034)"))),
     request_body(
         description = "Email, password, and the six-digit TOTP code",
         content_type = "application/json",
@@ -115,6 +117,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/setup",
+    security(),
+    extensions(("x-public-reason" = json!("the enrolment token from the server's environment, used once"))),
     request_body(
         description = "The enrolment token from the server's environment, and the first \
                        administrator's chosen email and password",

@@ -120,6 +120,7 @@ fn parse_subject_target(
 #[utoipa::path(
     get,
     path = "/admin/subjects/{subject_id}",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
     security(("session_cookie" = [])),
     params(
         ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
@@ -204,6 +205,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/subjects/{subject_id}/export",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
     security(("session_cookie" = [])),
     params(
         ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
@@ -293,6 +295,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/subjects/{subject_id}/erase",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
     security(("session_cookie" = [])),
     params(
         ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \

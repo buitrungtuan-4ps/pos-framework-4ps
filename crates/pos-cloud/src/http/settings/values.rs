@@ -52,6 +52,8 @@ pub(super) struct PutSettingRequest {
 #[utoipa::path(
     put,
     path = "/admin/settings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
                        _STORE_GROUP or _STORE), the id it is for, the value, and \
@@ -181,6 +183,8 @@ pub(super) struct ClearSettingQuery {
 #[utoipa::path(
     delete,
     path = "/admin/settings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("setting_key" = String, Query, description = "The setting's key, node.field"),

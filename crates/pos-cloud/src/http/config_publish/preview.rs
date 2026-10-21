@@ -161,6 +161,7 @@ struct NodePreview {
 #[utoipa::path(
     post,
     path = "/admin/config/preview",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \

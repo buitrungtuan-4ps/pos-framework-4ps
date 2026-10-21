@@ -37,6 +37,7 @@ pub(super) struct SetPrintAgentRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/agent",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The approved printer's 26-character ULID"),
@@ -149,6 +150,7 @@ pub(super) struct SetDrawerRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/drawer",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The approved printer's 26-character ULID"),
@@ -244,6 +246,8 @@ pub(super) struct SetPaperRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/paper",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.devices.manage"))),
     params(
         ("id" = String, Path, description = "The approved printer's 26-character ULID"),
         ("If-Match" = String, Header, description = "The version the printer was read at \

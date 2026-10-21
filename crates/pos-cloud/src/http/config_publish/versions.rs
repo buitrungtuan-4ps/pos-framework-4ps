@@ -78,6 +78,8 @@ pub(in crate::http) struct RollbackConfigRequest {
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config/nodes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose published nodes to list (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
@@ -161,6 +163,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config/versions",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -235,6 +238,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config/versions/{version_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -316,6 +320,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/config/rollback",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),

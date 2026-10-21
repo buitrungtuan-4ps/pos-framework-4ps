@@ -41,6 +41,7 @@ pub(super) fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, (
 #[utoipa::path(
     get,
     path = "/admin/catalog/items",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose items to list (a 26-character ULID)"),
@@ -202,6 +203,7 @@ pub fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
 #[utoipa::path(
     post,
     path = "/admin/catalog/items",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
@@ -308,6 +310,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/items/{menu_item_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_item_id" = String, Path, description = "The item (a 26-character ULID)"),

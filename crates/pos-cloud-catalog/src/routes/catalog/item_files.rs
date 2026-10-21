@@ -25,6 +25,7 @@ use crate::{export, import};
 #[utoipa::path(
     get,
     path = "/admin/catalog/export/items",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -213,6 +214,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/import/items/dry-run",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -292,6 +294,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/import/items/apply",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),

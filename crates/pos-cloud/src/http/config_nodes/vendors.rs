@@ -32,6 +32,7 @@ pub(super) struct PublishVendorsRequest {
 #[utoipa::path(
     get,
     path = "/admin/config/vendors",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -84,6 +85,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/vendors",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `policies`, one per delivery marketplace: its name, whether the store takes its orders, the store's availability to it, and the preparation time it quotes while the store is busy",

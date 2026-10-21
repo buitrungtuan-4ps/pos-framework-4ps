@@ -58,6 +58,7 @@ pub(in crate::http) struct WebhookTenantQuery {
 #[utoipa::path(
     post,
     path = "/admin/webhooks",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `store_id`, the store whose events the endpoint is sent, and \
@@ -185,6 +186,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/webhooks",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose endpoints to list (a 26-character ULID)"),
@@ -236,6 +238,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/webhooks/{id}",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The endpoint's 26-character ULID"),
@@ -296,6 +299,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/webhooks/{id}/enable",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The endpoint's 26-character ULID"),

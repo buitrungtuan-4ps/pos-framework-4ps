@@ -36,6 +36,8 @@ use pos_cloud_api::refusal::{enum_refusal, not_found};
 #[utoipa::path(
     get,
     path = "/admin/assignments",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose assignments to list (a 26-character ULID)"),
         ("store_id" = Option<String>, Query, description = "Everyone who works at this store: every \
@@ -165,6 +167,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/assignments",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
         description = "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: \
                        a `store_id` for one store, a `store_group_id` for every store the group holds, \
@@ -311,6 +315,8 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/assignments/{assignment_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     params(
         ("assignment_id" = String, Path, description = "The assignment's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),

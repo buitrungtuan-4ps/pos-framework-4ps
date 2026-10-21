@@ -114,6 +114,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/campaigns",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
@@ -215,6 +216,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/config/campaigns/preview",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \

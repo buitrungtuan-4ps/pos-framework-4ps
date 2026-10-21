@@ -31,6 +31,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/menus",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose menus to list (a 26-character ULID)"),
@@ -80,6 +81,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/menus",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the menu's `name`, and optionally `parent_menu_id`, a menu it \
@@ -160,6 +162,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/menus/{menu_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -274,6 +277,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/catalog/menus/{menu_id}/sections",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -325,6 +329,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/menus/{menu_id}/sections",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
@@ -408,6 +413,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),

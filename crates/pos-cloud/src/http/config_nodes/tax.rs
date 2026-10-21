@@ -105,6 +105,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/tax",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is \

@@ -28,6 +28,7 @@ use crate::ota::ArtifactStore;
 #[utoipa::path(
     post,
     path = "/admin/config/lease/bump",
+    extensions(("x-permission" = json!("console.stores.manage"))),
     security(("session_cookie" = [])),
     params(
         ("If-Match" = String, Header, description = "The lease generation the decision was made \
@@ -230,6 +231,7 @@ async fn receipt_floor<Cfg: LeaseStore>(
 #[utoipa::path(
     get,
     path = "/admin/config/lease",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),

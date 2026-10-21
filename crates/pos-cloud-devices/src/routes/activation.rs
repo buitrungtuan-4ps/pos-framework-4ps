@@ -132,6 +132,7 @@ struct ExchangeResponse {
 #[utoipa::path(
     post,
     path = "/admin/activation-codes",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
@@ -206,6 +207,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/activation-codes/revoke",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \

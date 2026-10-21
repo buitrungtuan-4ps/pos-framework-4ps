@@ -93,6 +93,8 @@ fn build_reason_code(
 #[utoipa::path(
     get,
     path = "/admin/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose list to read (a 26-character ULID)")),
     responses(
         (status = 200, description = "The tenant's entries in id order, each with the version it \
@@ -140,6 +142,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
@@ -196,6 +200,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     request_body(
         description = "The tenant, the report handle, the name staff read, its per-locale names, \
                        and the actions it may be cited for. The id is server-minted and must not \
@@ -277,6 +283,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the entry was read at \
@@ -379,6 +387,8 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),

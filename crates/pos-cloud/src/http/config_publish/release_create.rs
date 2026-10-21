@@ -32,6 +32,8 @@ use crate::store_groups::{StoreGroupId, StoreGroupStore};
 #[utoipa::path(
     post,
     path = "/admin/config-releases",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     responses(
         (status = 201, description = "The release exists as a draft. It carries no nodes and no \
                                       pairs yet; `/schedule` adds both"),

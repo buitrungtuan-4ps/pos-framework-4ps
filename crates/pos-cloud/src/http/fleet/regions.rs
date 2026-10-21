@@ -129,6 +129,8 @@ struct RegionDifference {
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/region-acknowledgement",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(("store_id" = String, Path, description = "The store's 26-character ULID")),
     request_body(
         description = "The tenant, the two country codes the console showed, and one sentence \

@@ -100,6 +100,7 @@ fn parse_installer_request(
 #[utoipa::path(
     get,
     path = "/admin/ota/releases/{release}/installer",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("release" = String, Path, description = "The release, spelled bare, without a leading `v`"),

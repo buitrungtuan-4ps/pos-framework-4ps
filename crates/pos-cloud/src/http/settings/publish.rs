@@ -28,6 +28,8 @@ pub(in crate::http) use pos_cloud_config::route::TenantLayout;
 #[utoipa::path(
     post,
     path = "/admin/settings/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant, and optionally one store. Without a store, every store of the \
                        tenant is republished",

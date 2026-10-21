@@ -351,6 +351,7 @@ fn already_hosted_refusal(error: ArtifactStoreError) -> Response {
 #[utoipa::path(
     post,
     path = "/admin/ota/releases",
+    extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     params(
         ("release" = String, Query, description = "The release the bytes are, spelled bare as a \
@@ -473,6 +474,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/ota/releases/{release}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("release" = String, Path, description = "The release, spelled bare, without a leading `v`"),
