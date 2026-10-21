@@ -54,6 +54,11 @@ consequences, deliberately not bundled into the packs.
    own number below the threshold, which is what `fiscalization()` writes.
 3. **A state VAT rate for alcohol**, if the store sells any. See above.
 
+## Conformance
+
+[`CONFORMANCE.md`](CONFORMANCE.md) lists the legal requirements a person must confirm, and the golden
+bills in [`tests/conformance.rs`](tests/conformance.rs) that exercise them.
+
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.

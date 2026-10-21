@@ -14,6 +14,7 @@ pub mod countries;
 pub mod crates;
 pub mod deps_rule;
 pub mod guides;
+pub mod i18n;
 pub mod links;
 pub mod lint_config;
 pub mod migrations;
