@@ -202,13 +202,30 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/bills/{id}/check",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "What one bill owes, in the shape `GET /api/orders/{id}/check` answers \
+                                      with, plus its `state` and the `order_line_ids` it covers"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The edge knows no such bill (`UNKNOWN_BILL`), or its figures cannot be \
+                                      assembled. `pos-error-reason` names why"),
+    ),
+    tag = "bills",
+))]
 /// `GET /api/bills/{id}/check` — what one bill owes, where it has got to, and the lines it covers.
 ///
 /// The read a split needs ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
 /// table's bill is split, the table read answers for every part still open, and the guest at the
 /// till is asking about **theirs** — so the till reads the part it is about to settle, by its id.
 /// Same [`Edge::bill_totals`](crate::app::Edge::bill_totals) the settle path assembles from.
-pub(crate) async fn read_for_bill<S>(
+pub(crate) async fn bill_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(bill_id): Path<String>,
 ) -> Response
@@ -250,7 +267,7 @@ pub(crate) struct PrintResponse {
 ///
 /// Printing a pre-bill is presenting the bill, so it needs `billing.bill.open`, as opening one does
 /// (ADR-0158), on all three print routes.
-pub(crate) async fn print_for_table<S>(
+pub(crate) async fn print_table_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -281,7 +298,7 @@ where
 
 /// `POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order
 /// the guest wants to see priced before paying.
-pub(crate) async fn print_for_order<S>(
+pub(crate) async fn print_order_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -307,9 +324,26 @@ where
     .await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/check/print",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "`prints`: what came of printing the bill's pre-bill, one outcome"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, the edge \
+                                      knows no such bill, or there is nothing to print (`NOTHING_TO_PRINT`). \
+                                      `pos-error-reason` names which"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/check/print` — one open bill's pre-bill, for the guest paying that part of
 /// a split table.
-pub(crate) async fn print_for_bill<S>(
+pub(crate) async fn print_bill_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,

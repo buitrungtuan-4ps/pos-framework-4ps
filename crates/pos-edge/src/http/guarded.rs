@@ -50,8 +50,8 @@ where
         .route("/api/menu", revalidated(get(menu::menu_catalog::<S>)))
         // Staff mark an item sold out, and bring it back (86). The events have been in the schema
         // since it was written; this is the first thing to emit them.
-        .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
-        .route("/api/menu/{id}/restore", post(menu::restore::<S>))
+        .route("/api/menu/{id}/sold-out", post(menu::mark_sold_out::<S>))
+        .route("/api/menu/{id}/restore", post(menu::restore_item::<S>))
         // How the till groups and orders those items, from the `layout` node the same publish writes
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
@@ -78,10 +78,13 @@ where
 {
     Router::new()
         // The floor: seat, clean, move the guests to another table, read.
-        .route("/api/tables/{id}/seat", post(tables::seat::<S>))
-        .route("/api/tables/{id}/clean", post(tables::clean::<S>))
-        .route("/api/tables/{id}/release", post(tables::release::<S>))
-        .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
+        .route("/api/tables/{id}/seat", post(tables::seat_table::<S>))
+        .route("/api/tables/{id}/clean", post(tables::clean_table::<S>))
+        .route("/api/tables/{id}/release", post(tables::release_table::<S>))
+        .route(
+            "/api/tables/{id}/transfer",
+            post(tables::transfer_table::<S>),
+        )
         .route("/api/tables/{id}", get(tables::table_state::<S>))
         // What the table owes right now, assembled by the edge — the till displays the figure it is
         // going to settle against rather than computing one of its own (roadmap-v3 E5).
@@ -90,13 +93,13 @@ where
         // split, and unnumbered because nothing has been settled (roadmap-v3 B2.1).
         .route(
             "/api/tables/{id}/check/print",
-            post(check::print_for_table::<S>),
+            post(check::print_table_check::<S>),
         )
         // The same read keyed on the order, for a counter order that sits on no table (ADR-0093).
         .route("/api/orders/{id}/check", get(check::order_check::<S>))
         .route(
             "/api/orders/{id}/check/print",
-            post(check::print_for_order::<S>),
+            post(check::print_order_check::<S>),
         )
         // What is open right now, with the line ids to act on it. A device learns lines from the
         // fan-out, which carries what happens next — so without this read a till that reloads and a
@@ -146,23 +149,26 @@ where
     Router::new()
         // The bill: open on a table, open on an order, settle. The order-keyed route is what makes
         // a takeaway order chargeable — it has no table to open a bill against (ADR-0093).
-        .route("/api/tables/{id}/bill", post(bills::open::<S>))
+        .route("/api/tables/{id}/bill", post(bills::open_table_bill::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
-        .route("/api/bills/{id}/settle", post(bills::settle::<S>))
-        .route("/api/bills/{id}/receipt/reprint", post(bills::reprint::<S>))
+        .route("/api/bills/{id}/settle", post(bills::settle_bill::<S>))
+        .route(
+            "/api/bills/{id}/receipt/reprint",
+            post(bills::reprint_receipt::<S>),
+        )
         // What one bill owes and the lines it covers — the read a split needs, because once a
         // table's bill is split each guest at the till is asking about their own part (ADR-0128).
-        .route("/api/bills/{id}/check", get(check::read_for_bill::<S>))
+        .route("/api/bills/{id}/check", get(check::bill_check::<S>))
         .route(
             "/api/bills/{id}/check/print",
-            post(check::print_for_bill::<S>),
+            post(check::print_bill_check::<S>),
         )
         // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
         // PIN with the request, which is the first thing in the tree to read the permission
         // registry's `pin: true`.
         .route("/api/lines/{id}/void", post(lines::void_line::<S>))
-        .route("/api/bills/{id}/void", post(bills::void::<S>))
-        .route("/api/bills/{id}/discount", post(bills::discount::<S>))
+        .route("/api/bills/{id}/void", post(bills::void_bill::<S>))
+        .route("/api/bills/{id}/discount", post(bills::discount_bill::<S>))
         // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
         // so the approver rides with the request as it does for a void.
         .route(
@@ -172,8 +178,8 @@ where
         // Split and merge (ADR-0128). Both need `billing.bill.split` (ADR-0158) and neither asks
         // for a PIN: both move amounts that are already captured, and a prompt here would be paid
         // for on every table.
-        .route("/api/bills/{id}/split", post(bills::split::<S>))
-        .route("/api/bills/{id}/merge", post(bills::merge::<S>))
+        .route("/api/bills/{id}/split", post(bills::split_bill::<S>))
+        .route("/api/bills/{id}/merge", post(bills::merge_bills::<S>))
 }
 
 /// The cash shifts and their drawers.

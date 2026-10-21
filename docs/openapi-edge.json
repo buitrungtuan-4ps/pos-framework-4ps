@@ -33,6 +33,432 @@
         }
       }
     },
+    "/api/bills/{id}/check": {
+      "get": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`GET /api/bills/{id}/check` — what one bill owes, where it has got to, and the lines it covers.",
+        "description": "The read a split needs ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a\ntable's bill is split, the table read answers for every part still open, and the guest at the\ntill is asking about **theirs** — so the till reads the part it is about to settle, by its id.\nSame [`Edge::bill_totals`](crate::app::Edge::bill_totals) the settle path assembles from.",
+        "operationId": "bill_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What one bill owes, in the shape `GET /api/orders/{id}/check` answers with, plus its `state` and the `order_line_ids` it covers"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "The edge knows no such bill (`UNKNOWN_BILL`), or its figures cannot be assembled. `pos-error-reason` names why"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/check/print": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/check/print` — one open bill's pre-bill, for the guest paying that part of\na split table.",
+        "operationId": "print_bill_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`prints`: what came of printing the bill's pre-bill, one outcome"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission to open a bill, the edge knows no such bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/discount": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).",
+        "operationId": "discount_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`amount`, in minor units and greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` where the discount needs a manager. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic"
+          },
+          "400": {
+            "description": "The id is not a ULID, or the amount is not greater than zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the discount needs a manager's approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/fees/{fee_id}/waive": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/fees/{fee_id}/waive` — waive one of an open bill's fees, citing a reason\n(ADR-0159 decision 5).",
+        "description": "Answers with the bill as it now stands, in the shape of its check, so the till redraws it from\nthe edge's arithmetic and never subtracts the fee itself: the fee's tax goes with it. A fee\nthat is not waivable answers `409 FEE_NOT_WAIVABLE`, one the bill does not charge\n`409 FEE_NOT_ON_BILL`, and a bill that is not open `409 TRANSITION_REFUSED`.",
+        "operationId": "waive_fee",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fee_id",
+            "in": "path",
+            "description": "The fee's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, with `approver_code` and `approver_pin` of somebody who may waive the fee where the person acting may not. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic"
+          },
+          "400": {
+            "description": "An id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the waive needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the fee is not waivable (`FEE_NOT_WAIVABLE`), the bill does not charge it (`FEE_NOT_ON_BILL`), the bill is not open, or the person lacks the permission. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/merge": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/merge` — fold other bills into this one, which survives\n([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).",
+        "description": "The path names the **target**: it is the bill the cashier is standing in front of, and it keeps\nits identity. Every absorbed bill must be open and on the same table, which is a floor\nrestriction rather than a model one — settling moves a table, and a bill over two tables makes\n\"which table moved?\" a question with two answers — and of the same order, which two counter\nbills, sharing no table, need too: a settle charges a bill's lines from its own order, so\nanother order's would be charged nothing. Each is refused `409` before anything is written.",
+        "operationId": "merge_bills",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`absorbed_bill_ids`: at least one open bill, on the same table and order, to fold into this one",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Merged: the `bill_id` of the bill that survives, the one the path names"
+          },
+          "400": {
+            "description": "The id is not a ULID, or no bill is named to fold in"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/receipt/reprint": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/receipt/reprint` — print a settled bill's receipt again, as a copy marked\nCOPY under the same number, and count it\n([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).",
+        "description": "The copy is counted when it is asked for (`billing.receipt.reprinted`), then printed, so a\nprinter that is down still leaves the copy on the record, and the answer says what came out.",
+        "operationId": "reprint_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The copy, counted: the bill, its receipt number, which copy this was, and what came of printing it (`receipt_print`)"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/settle": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/settle` — settle a bill with the applied payments.",
+        "operationId": "settle_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`payments`, each with its `method`, `tendered`, `applied_to_bill` and optional `tip`; an optional `buyer` for a corporate invoice, which is personal data and is never logged; and `approver_code` and `approver_pin` where cash goes into a drawer assigned to somebody else. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settled: the bill with its receipt number and `total_due`, the state its table moved to, and what came of the receipt print (`receipt_print`) and of opening the drawer (`drawer_open`) where those were asked for"
+          },
+          "400": {
+            "description": "The id is not a ULID, a payment method is unknown or not accepted as tender here, or the buyer's tax code is not well formed for this country"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; cash into somebody else's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/split": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/split` — partition a bill's lines into two or more bills\n([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)).",
+        "description": "No manager and no PIN, unlike the void beside it: a split partitions amounts that are already\ncaptured and creates, forgives and moves nothing (decision 6). Everything that can refuse it is\nthe domain's — the bill must be open, and the parts must be a partition of what it covers.",
+        "operationId": "split_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`parts`: two or more lists of the order line ids, each the lines one new bill covers",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Split: the new `bill_ids`, in the order the parts were given"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the bill is not open, the parts are not a partition of its lines (`SPLIT_NOT_A_PARTITION`), or the person lacks the permission. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/bills/{id}/void": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's\nmanaged list (ADR-0115, roadmap B2.2).",
+        "description": "Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a\nline there is no unfired shape to let through. A settled bill is refused by the bill machine —\nreversing one is a refund, with its own permission and its own reason.",
+        "operationId": "void_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, a void reason from the managed list, with `approver_code` and `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voided: the `state` the bill came to rest in"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the void needs a manager's approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/floor": {
       "get": {
         "tags": [
@@ -1119,6 +1545,49 @@
         }
       }
     },
+    "/api/tables/{id}/bill": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/tables/{id}/bill` — open a bill on the order the table holds.",
+        "operationId": "open_table_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state the table moved to"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/tables/{id}/check": {
       "get": {
         "tags": [
@@ -1302,6 +1771,10 @@
     {
       "name": "floor",
       "description": "A table's state, and what it owes."
+    },
+    {
+      "name": "bills",
+      "description": "A bill: opening it on a table, what it owes, discounts and fee waives, splitting and merging it, voiding or settling it, and its pre-bill and receipt copies."
     }
   ]
 }

@@ -72,6 +72,16 @@ use utoipa::OpenApi;
         super::lines::fire_course,
         super::lines::fire_line,
         super::kds::bump_ticket,
+        super::bills::open_table_bill,
+        super::check::bill_check,
+        super::check::print_bill_check,
+        super::bills::discount_bill,
+        super::bills::waive_fee,
+        super::bills::merge_bills,
+        super::bills::reprint_receipt,
+        super::bills::settle_bill,
+        super::bills::split_bill,
+        super::bills::void_bill,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
@@ -89,6 +99,9 @@ use utoipa::OpenApi;
         (name = "kitchen", description = "What the kitchen has to make, sending food to it by line, \
                                           course or order, and a station bumping what it made."),
         (name = "floor", description = "A table's state, and what it owes."),
+        (name = "bills", description = "A bill: opening it on a table, what it owes, discounts and fee \
+                                        waives, splitting and merging it, voiding or settling it, and \
+                                        its pre-bill and receipt copies."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
@@ -104,21 +117,12 @@ pub(crate) struct EdgeApiDoc;
 )]
 const UNDOCUMENTED: &[&str] = &[
     "GET /api/activation",
-    "GET /api/bills/{id}/check",
     "GET /api/claim",
     "GET /api/print/agent",
     "GET /api/print/jobs",
     "GET /api/shifts",
     "GET /api/shifts/current",
     "POST /api/activate",
-    "POST /api/bills/{id}/check/print",
-    "POST /api/bills/{id}/discount",
-    "POST /api/bills/{id}/fees/{fee_id}/waive",
-    "POST /api/bills/{id}/merge",
-    "POST /api/bills/{id}/receipt/reprint",
-    "POST /api/bills/{id}/settle",
-    "POST /api/bills/{id}/split",
-    "POST /api/bills/{id}/void",
     "POST /api/drawer/open",
     "POST /api/menu/{id}/restore",
     "POST /api/menu/{id}/sold-out",
@@ -135,7 +139,6 @@ const UNDOCUMENTED: &[&str] = &[
     "POST /api/shifts/{id}/paid-in",
     "POST /api/shifts/{id}/paid-out",
     "POST /api/shifts:batch_close",
-    "POST /api/tables/{id}/bill",
     "POST /api/tables/{id}/check/print",
     "POST /api/tables/{id}/clean",
     "POST /api/tables/{id}/release",

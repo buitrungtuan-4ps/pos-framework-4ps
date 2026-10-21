@@ -62,7 +62,7 @@ pub(crate) struct SeatRequest {
 ///
 /// No screen prompts for the count yet — whether tap-to-seat should grow a step is roadmap **Q7**'s
 /// call, not this slice's; the route carries it so that decision does not also need a wire change.
-pub(crate) async fn seat<S>(
+pub(crate) async fn seat_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -88,7 +88,7 @@ where
 }
 
 /// `POST /api/tables/{id}/clean` — clean the table down and release it.
-pub(crate) async fn clean<S>(
+pub(crate) async fn clean_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -105,7 +105,7 @@ where
 /// `POST /api/tables/{id}/release` — give a table seated by mistake straight back to the floor,
 /// while nothing is sold on it
 /// ([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
-pub(crate) async fn release<S>(
+pub(crate) async fn release_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -139,7 +139,7 @@ pub(crate) struct TransferResponse {
 
 /// `POST /api/tables/{id}/transfer` — move the guests at this table, and their order, to a free
 /// one (`sales.table.transferred`). The body is `{"to_table_id": "<ulid>"}`.
-pub(crate) async fn transfer<S>(
+pub(crate) async fn transfer_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,

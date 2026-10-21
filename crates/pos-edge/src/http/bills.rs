@@ -176,8 +176,29 @@ impl From<BillView> for BillResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/bill",
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
+                                      the table moved to"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/tables/{id}/bill` — open a bill on the order the table holds.
-pub(crate) async fn open<S>(
+pub(crate) async fn open_table_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -233,8 +254,41 @@ where
     respond(edge.open_bill_for_order(actor, order_id).await)
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/settle",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        description = "`payments`, each with its `method`, `tendered`, `applied_to_bill` and optional `tip`; \
+                       an optional `buyer` for a corporate invoice, which is personal data and is never \
+                       logged; and `approver_code` and `approver_pin` where cash goes into a drawer assigned \
+                       to somebody else. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Settled: the bill with its receipt number and `total_due`, the state \
+                                      its table moved to, and what came of the receipt print \
+                                      (`receipt_print`) and of opening the drawer (`drawer_open`) where \
+                                      those were asked for"),
+        (status = 400, description = "The id is not a ULID, a payment method is unknown or not accepted as \
+                                      tender here, or the buyer's tax code is not well formed for this \
+                                      country"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; cash into \
+                                      somebody else's drawer needs an approval that was missing or refused, \
+                                      or the approver is locked out; or this box was superseded by a \
+                                      replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/settle` — settle a bill with the applied payments.
-pub(crate) async fn settle<S>(
+pub(crate) async fn settle_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -344,13 +398,34 @@ struct ReprintResponse {
     receipt_print: &'static str,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/receipt/reprint",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "The copy, counted: the bill, its receipt number, which copy this was, \
+                                      and what came of printing it (`receipt_print`)"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/receipt/reprint` — print a settled bill's receipt again, as a copy marked
 /// COPY under the same number, and count it
 /// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 ///
 /// The copy is counted when it is asked for (`billing.receipt.reprinted`), then printed, so a
 /// printer that is down still leaves the copy on the record, and the answer says what came out.
-pub(crate) async fn reprint<S>(
+pub(crate) async fn reprint_receipt<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -490,6 +565,34 @@ impl WaiveFeeRequest {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/fees/{fee_id}/waive",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+        ("fee_id" = String, Path, description = "The fee's id, a ULID"),
+    ),
+    request_body(
+        description = "`reason_code_id`, with `approver_code` and `approver_pin` of somebody who may waive \
+                       the fee where the person acting may not. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
+                                      answers with, from the edge's own arithmetic"),
+        (status = 400, description = "An id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the waive \
+                                      needs an approval that was missing or refused, or the approver is \
+                                      locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the fee is not waivable (`FEE_NOT_WAIVABLE`), the bill does \
+                                      not charge it (`FEE_NOT_ON_BILL`), the bill is not open, or the person \
+                                      lacks the permission. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/fees/{fee_id}/waive` — waive one of an open bill's fees, citing a reason
 /// (ADR-0159 decision 5).
 ///
@@ -576,8 +679,36 @@ pub(crate) struct DiscountResponse {
     fee_lines: Vec<CheckFeeLine>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/discount",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        description = "`amount`, in minor units and greater than zero, and `reason_code_id`, with \
+                       `approver_code` and `approver_pin` where the discount needs a manager. Both are \
+                       secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
+                                      answers with, from the edge's own arithmetic"),
+        (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the \
+                                      discount needs a manager's approval that was missing or refused, or \
+                                      the approver is locked out; or this box was superseded by a \
+                                      replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).
-pub(crate) async fn discount<S>(
+pub(crate) async fn discount_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -634,13 +765,38 @@ pub(crate) struct SplitResponse {
     bill_ids: Vec<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/split",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        description = "`parts`: two or more lists of the order line ids, each the lines one new bill covers",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Split: the new `bill_ids`, in the order the parts were given"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the bill is not open, the parts are not a partition of its \
+                                      lines (`SPLIT_NOT_A_PARTITION`), or the person lacks the permission. \
+                                      `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/split` — partition a bill's lines into two or more bills
 /// ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)).
 ///
 /// No manager and no PIN, unlike the void beside it: a split partitions amounts that are already
 /// captured and creates, forgives and moves nothing (decision 6). Everything that can refuse it is
 /// the domain's — the bill must be open, and the parts must be a partition of what it covers.
-pub(crate) async fn split<S>(
+pub(crate) async fn split_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -673,6 +829,32 @@ pub(crate) struct MergeResponse {
     bill_id: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/merge",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        description = "`absorbed_bill_ids`: at least one open bill, on the same table and order, to fold \
+                       into this one",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Merged: the `bill_id` of the bill that survives, the one the path \
+                                      names"),
+        (status = 400, description = "The id is not a ULID, or no bill is named to fold in"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/merge` — fold other bills into this one, which survives
 /// ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
 ///
@@ -682,7 +864,7 @@ pub(crate) struct MergeResponse {
 /// "which table moved?" a question with two answers — and of the same order, which two counter
 /// bills, sharing no table, need too: a settle charges a bill's lines from its own order, so
 /// another order's would be charged nothing. Each is refused `409` before anything is written.
-pub(crate) async fn merge<S>(
+pub(crate) async fn merge_bills<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -711,13 +893,38 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/void",
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        description = "`reason_code_id`, a void reason from the managed list, with `approver_code` and \
+                       `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Voided: the `state` the bill came to rest in"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the void \
+                                      needs a manager's approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's
 /// managed list (ADR-0115, roadmap B2.2).
 ///
 /// Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a
 /// line there is no unfired shape to let through. A settled bill is refused by the bill machine —
 /// reversing one is a refund, with its own permission and its own reason.
-pub(crate) async fn void<S>(
+pub(crate) async fn void_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
