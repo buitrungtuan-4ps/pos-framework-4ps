@@ -278,6 +278,7 @@ struct BindClaimRequest {
 #[utoipa::path(
     post,
     path = "/admin/claims/bind",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The `user_code` a box installed with no store shows on its screen, eight \

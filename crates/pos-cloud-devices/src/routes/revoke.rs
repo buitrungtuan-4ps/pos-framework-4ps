@@ -80,6 +80,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/devices/revoke",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("store_id" = String, Path, description = "The store the till belongs to (a 26-character ULID)"),
     ),

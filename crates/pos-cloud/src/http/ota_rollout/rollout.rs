@@ -72,6 +72,7 @@ async fn require_hosted_release<L: ArtifactStore>(
 #[utoipa::path(
     put,
     path = "/admin/config/ota",
+    extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`; `target_version`, the release to install as \
@@ -171,6 +172,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/config/ota/halt",
+    extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
@@ -399,6 +401,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config/ota",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),

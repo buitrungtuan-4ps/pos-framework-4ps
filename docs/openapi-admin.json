@@ -72,7 +72,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/activation-codes/revoke": {
@@ -137,7 +138,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/admins": {
@@ -186,7 +188,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.invite"
       }
     },
     "/admin/admins/{id}/role": {
@@ -282,7 +285,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.manage"
       }
     },
     "/admin/admins/{id}/status": {
@@ -378,7 +382,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.manage"
       }
     },
     "/admin/alerts": {
@@ -449,7 +454,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/alerts/{id}/ack": {
@@ -509,7 +515,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.alerts.manage"
       }
     },
     "/admin/alerts/{id}/resolve": {
@@ -569,7 +576,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.alerts.manage"
       }
     },
     "/admin/api-keys": {
@@ -639,7 +647,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -703,7 +712,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.apikeys.manage"
       }
     },
     "/admin/api-keys/{id}": {
@@ -773,7 +783,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.apikeys.manage"
       }
     },
     "/admin/assignments": {
@@ -874,7 +885,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.read"
       },
       "post": {
         "tags": [
@@ -953,7 +970,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/assignments/{assignment_id}": {
@@ -1038,7 +1061,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/audit": {
@@ -1191,7 +1220,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/brands": {
@@ -1261,7 +1291,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -1324,7 +1355,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.orgs.manage"
       }
     },
     "/admin/brands/{brand_id}": {
@@ -1429,7 +1461,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.orgs.manage"
       }
     },
     "/admin/campaigns": {
@@ -1499,7 +1532,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -1572,7 +1606,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.campaigns.manage"
       }
     },
     "/admin/campaigns/{campaign_id}": {
@@ -1661,7 +1696,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -1764,7 +1800,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.campaigns.manage"
       },
       "delete": {
         "tags": [
@@ -1851,7 +1888,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.campaigns.manage"
       }
     },
     "/admin/campaigns/{campaign_id}/vouchers": {
@@ -1952,7 +1990,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.campaigns.manage"
       },
       "post": {
         "tags": [
@@ -2036,7 +2075,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.campaigns.manage"
       }
     },
     "/admin/capabilities": {
@@ -2075,7 +2115,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/catalog/courses": {
@@ -2145,7 +2186,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -2208,7 +2250,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/courses/{course_id}": {
@@ -2313,7 +2356,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/display-categories": {
@@ -2383,7 +2427,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -2446,7 +2491,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/display-categories/{display_category_id}": {
@@ -2551,7 +2597,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/display-subcategories": {
@@ -2621,7 +2668,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -2684,7 +2732,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/display-subcategories/{display_subcategory_id}": {
@@ -2789,7 +2838,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/export/items": {
@@ -2869,7 +2919,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/import/items/apply": {
@@ -2946,7 +2997,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/import/items/dry-run": {
@@ -3023,7 +3075,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/item-categories": {
@@ -3093,7 +3146,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -3156,7 +3210,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/item-categories/{item_category_id}": {
@@ -3271,7 +3326,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/item-subcategories": {
@@ -3341,7 +3397,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -3404,7 +3461,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/item-subcategories/{item_subcategory_id}": {
@@ -3519,7 +3577,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/items": {
@@ -3638,7 +3697,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -3700,7 +3760,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/items/{menu_item_id}": {
@@ -3805,7 +3866,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/layout-buttons": {
@@ -3875,7 +3937,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -3949,7 +4012,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}": {
@@ -4063,7 +4127,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       },
       "delete": {
         "tags": [
@@ -4159,7 +4224,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus": {
@@ -4229,7 +4295,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -4292,7 +4359,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus/{menu_id}": {
@@ -4407,7 +4475,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus/{menu_id}/placements": {
@@ -4487,7 +4556,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.reports.revenue"
       },
       "post": {
         "tags": [
@@ -4572,7 +4642,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}": {
@@ -4686,7 +4757,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       },
       "delete": {
         "tags": [
@@ -4782,7 +4854,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus/{menu_id}/sections": {
@@ -4861,7 +4934,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -4935,7 +5009,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}": {
@@ -5049,7 +5124,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/modifier-groups": {
@@ -5119,7 +5195,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -5182,7 +5259,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/modifier-groups/{modifier_group_id}": {
@@ -5287,7 +5365,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/publish": {
@@ -5373,7 +5452,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/catalog/tax-classes": {
@@ -5443,7 +5523,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -5506,7 +5587,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/tax-classes/{tax_class_id}": {
@@ -5621,7 +5703,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/catalog/tax-rates": {
@@ -5691,7 +5774,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -5786,7 +5870,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.catalog.manage"
       }
     },
     "/admin/chain-findings": {
@@ -5860,7 +5945,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/claims/bind": {
@@ -5945,7 +6036,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/config-releases": {
@@ -6010,7 +6102,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -6063,7 +6161,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config-releases/{release_id}": {
@@ -6147,7 +6251,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/config-releases/{release_id}/cancel": {
@@ -6233,7 +6343,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config-releases/{release_id}/schedule": {
@@ -6319,7 +6435,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/campaigns": {
@@ -6404,7 +6526,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/campaigns/preview": {
@@ -6479,7 +6602,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/campaigns/schedule": {
@@ -6544,7 +6668,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/capabilities": {
@@ -6629,7 +6754,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/channels": {
@@ -6708,7 +6834,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -6791,7 +6918,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/integrations": {
@@ -6861,7 +6989,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/inventory": {
@@ -6946,7 +7080,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/lease": {
@@ -7026,7 +7161,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/config/lease/bump": {
@@ -7133,7 +7269,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/config/lease/retire": {
@@ -7229,7 +7366,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/config/lease/settle": {
@@ -7315,7 +7453,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/config/locale": {
@@ -7400,7 +7539,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/origins": {
@@ -7479,7 +7619,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -7563,7 +7704,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/ota": {
@@ -7642,7 +7784,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -7725,7 +7868,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.ota.publish"
       }
     },
     "/admin/config/ota/halt": {
@@ -7811,7 +7955,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.ota.publish"
       }
     },
     "/admin/config/ota/placement": {
@@ -7890,7 +8035,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -7974,7 +8120,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.ota.publish"
       }
     },
     "/admin/config/preview": {
@@ -8050,7 +8197,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/qr": {
@@ -8129,7 +8277,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -8212,7 +8361,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/reason-codes": {
@@ -8292,7 +8442,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/retention": {
@@ -8371,7 +8527,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -8454,7 +8611,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/scheduled": {
@@ -8533,7 +8691,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/config/scheduled/{id}": {
@@ -8622,7 +8781,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/store-profile": {
@@ -8707,7 +8867,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/tax": {
@@ -8792,7 +8953,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/tender": {
@@ -8871,7 +9033,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -8954,7 +9117,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/config/vendors": {
@@ -9033,7 +9197,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -9116,7 +9281,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/countries": {
@@ -9155,7 +9321,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/devices/proposals": {
@@ -9243,7 +9410,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/devices/proposals/{id}/agent": {
@@ -9349,7 +9517,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/approve": {
@@ -9446,7 +9615,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/drawer": {
@@ -9552,7 +9722,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/float": {
@@ -9653,7 +9824,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/paper": {
@@ -9754,7 +9931,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/receipt": {
@@ -9855,7 +10038,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/proposals/{id}/reject": {
@@ -9934,7 +10123,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/devices/publish": {
@@ -10020,7 +10210,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/devices/terminals": {
@@ -10086,7 +10277,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/employees": {
@@ -10200,7 +10392,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.read"
       },
       "post": {
         "tags": [
@@ -10268,7 +10466,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/employees/{employee_id}": {
@@ -10352,7 +10556,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.read"
       },
       "patch": {
         "tags": [
@@ -10454,7 +10664,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/employees/{employee_id}/pin": {
@@ -10536,7 +10752,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/fees": {
@@ -10601,7 +10823,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
       },
       "put": {
         "tags": [
@@ -10679,7 +10907,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       },
       "post": {
         "tags": [
@@ -10757,7 +10991,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       },
       "delete": {
         "tags": [
@@ -10867,7 +11107,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/fees/effective": {
@@ -10951,7 +11197,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/fees/preview": {
@@ -11032,7 +11284,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/fees/publish": {
@@ -11103,7 +11361,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/fleet": {
@@ -11173,7 +11437,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/fleet/{store_id}": {
@@ -11262,7 +11527,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/floor/areas": {
@@ -11341,7 +11607,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -11404,7 +11671,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/floor/areas/{area_id}": {
@@ -11493,7 +11761,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "patch": {
         "tags": [
@@ -11596,7 +11865,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/floor/publish": {
@@ -11681,7 +11951,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/floor/qr": {
@@ -11760,7 +12031,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/floor/tables": {
@@ -11839,7 +12111,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -11902,7 +12175,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/floor/tables/{table_id}": {
@@ -11991,7 +12265,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "patch": {
         "tags": [
@@ -12094,7 +12369,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/health/tasks": {
@@ -12143,7 +12419,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/integrations/connections": {
@@ -12208,7 +12485,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -12276,7 +12559,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
       }
     },
     "/admin/integrations/connections/{connection_id}": {
@@ -12360,7 +12649,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -12468,7 +12763,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
       },
       "delete": {
         "tags": [
@@ -12550,7 +12851,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
       }
     },
     "/admin/integrations/providers": {
@@ -12584,7 +12891,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/inventory/ingredients": {
@@ -12654,7 +12967,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -12727,7 +13041,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/inventory/ingredients/{ingredient_id}": {
@@ -12816,7 +13131,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -12919,7 +13235,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       },
       "delete": {
         "tags": [
@@ -13006,7 +13323,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/inventory/recipes": {
@@ -13076,7 +13394,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -13150,7 +13469,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/inventory/recipes/{item_id}": {
@@ -13239,7 +13559,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -13342,7 +13663,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       },
       "delete": {
         "tags": [
@@ -13429,7 +13751,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/inventory/suppliers": {
@@ -13499,7 +13822,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -13572,7 +13896,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/inventory/suppliers/{supplier_id}": {
@@ -13661,7 +13986,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -13764,7 +14090,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       },
       "delete": {
         "tags": [
@@ -13851,7 +14178,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.inventory.manage"
       }
     },
     "/admin/invites": {
@@ -13900,7 +14228,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.invite"
       },
       "post": {
         "tags": [
@@ -13973,7 +14302,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.invite"
       }
     },
     "/admin/invites/accept": {
@@ -14033,7 +14363,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "the single-use token from the invitation link"
       }
     },
     "/admin/invites/{id}": {
@@ -14093,7 +14425,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.admins.invite"
       }
     },
     "/admin/kitchen/routing": {
@@ -14172,7 +14505,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -14235,7 +14569,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/kitchen/routing/{rule_id}": {
@@ -14324,7 +14659,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/kitchen/stations": {
@@ -14403,7 +14739,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -14466,7 +14803,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/kitchen/stations/{station_id}": {
@@ -14555,7 +14893,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "patch": {
         "tags": [
@@ -14658,7 +14997,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.floor.manage"
       }
     },
     "/admin/locales": {
@@ -14697,7 +15037,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/login": {
@@ -14748,7 +15089,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "an email, password and TOTP code (ADR-0034)"
       }
     },
     "/admin/logout": {
@@ -14860,7 +15203,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -14967,7 +15311,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.media.manage"
       }
     },
     "/admin/media/{media_id}": {
@@ -15056,7 +15401,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.media.manage"
       }
     },
     "/admin/media/{media_id}/detail": {
@@ -15145,7 +15491,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/media/{media_id}/thumbnail": {
@@ -15234,7 +15581,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/openapi.json": {
@@ -15249,7 +15597,9 @@
           "200": {
             "description": "This document, as JSON. No session is needed"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "nothing: it describes routes and carries no tenant data"
       }
     },
     "/admin/ota/releases": {
@@ -15370,7 +15720,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.ota.publish"
       }
     },
     "/admin/ota/releases/fetch": {
@@ -15476,7 +15827,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.ota.publish"
       }
     },
     "/admin/ota/releases/{release}": {
@@ -15546,7 +15898,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/ota/releases/{release}/installer": {
@@ -15664,7 +16017,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/people/permissions": {
@@ -15698,7 +16052,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/people/publish": {
@@ -15778,7 +16138,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/reason-codes": {
@@ -15843,7 +16209,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -15911,7 +16283,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reason_codes.manage"
       }
     },
     "/admin/reason-codes/{reason_code_id}": {
@@ -15995,7 +16373,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -16093,7 +16477,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reason_codes.manage"
       },
       "delete": {
         "tags": [
@@ -16176,7 +16566,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reason_codes.manage"
       }
     },
     "/admin/reconcile": {
@@ -16266,7 +16662,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/recovery-codes": {
@@ -16409,7 +16806,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -16467,7 +16870,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/roles/{role_id}": {
@@ -16551,7 +16960,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "patch": {
         "tags": [
@@ -16653,7 +17068,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.manage"
       }
     },
     "/admin/session": {
@@ -16906,7 +17327,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -16984,7 +17411,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       },
       "delete": {
         "tags": [
@@ -17084,7 +17517,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/settings/catalogue": {
@@ -17118,7 +17557,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/settings/effective": {
@@ -17202,7 +17647,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/settings/presets": {
@@ -17273,7 +17724,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/settings/publish": {
@@ -17344,7 +17801,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/setup": {
@@ -17405,7 +17868,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "the enrolment token from the server's environment, used once"
       }
     },
     "/admin/store-groups": {
@@ -17470,7 +17935,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -17523,7 +17994,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/store-groups/{group_id}": {
@@ -17617,7 +18094,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/store-groups/{group_id}/batches": {
@@ -17702,7 +18185,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/store-groups/{group_id}/batches/{batch_id}": {
@@ -17795,7 +18284,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/store-groups/{group_id}/members": {
@@ -17900,7 +18395,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/store-groups/{group_id}/publish": {
@@ -17986,7 +18487,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/stores": {
@@ -18056,7 +18563,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -18119,7 +18627,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/stores/{store_id}": {
@@ -18224,7 +18733,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/stores/{store_id}/archives": {
@@ -18299,7 +18809,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/config": {
@@ -18388,7 +18904,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/config/nodes": {
@@ -18473,7 +18990,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/config/rollback": {
@@ -18587,7 +19110,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/stores/{store_id}/config/versions": {
@@ -18676,7 +19200,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/config/versions/{version_id}": {
@@ -18774,7 +19299,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/config/{level}": {
@@ -18898,7 +19424,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/stores/{store_id}/devices": {
@@ -18977,7 +19504,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -19051,7 +19579,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/stores/{store_id}/devices/admitted": {
@@ -19126,7 +19655,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/devices/revoke": {
@@ -19212,7 +19747,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/stores/{store_id}/devices/{device_id}": {
@@ -19326,7 +19867,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.devices.manage"
       }
     },
     "/admin/stores/{store_id}/permissions/readiness": {
@@ -19411,7 +19953,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.people.read"
       }
     },
     "/admin/stores/{store_id}/region-acknowledgement": {
@@ -19503,7 +20051,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
       }
     },
     "/admin/stores/{store_id}/reports/xz": {
@@ -19591,7 +20145,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/stores/{store_id}/revenue/daily": {
@@ -19699,7 +20254,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/stores/{store_id}/revenue/export": {
@@ -19816,7 +20372,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/stores/{store_id}/revenue/fees/export": {
@@ -19929,7 +20486,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/stores/{store_id}/revenue/tax/export": {
@@ -20042,7 +20605,13 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
       }
     },
     "/admin/stores/{store_id}/rollups/daily": {
@@ -20149,7 +20718,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/rollups/export": {
@@ -20266,7 +20836,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       }
     },
     "/admin/stores/{store_id}/rollups/reset": {
@@ -20345,7 +20916,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/subjects/{subject_id}": {
@@ -20434,7 +21006,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.subjects.manage"
       }
     },
     "/admin/subjects/{subject_id}/erase": {
@@ -20523,7 +21096,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.subjects.manage"
       }
     },
     "/admin/subjects/{subject_id}/export": {
@@ -20612,7 +21186,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.subjects.manage"
       }
     },
     "/admin/tenants": {
@@ -20661,7 +21236,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -20715,7 +21291,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.orgs.manage"
       }
     },
     "/admin/tenants/{tenant_id}": {
@@ -20820,7 +21397,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.orgs.manage"
       }
     },
     "/admin/totp": {
@@ -20936,7 +21514,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "put": {
         "tags": [
@@ -21049,7 +21628,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.translations.manage"
       }
     },
     "/admin/translations/export": {
@@ -21129,7 +21709,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.translations.manage"
       }
     },
     "/admin/translations/import/apply": {
@@ -21218,7 +21799,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.translations.manage"
       }
     },
     "/admin/translations/import/dry-run": {
@@ -21297,7 +21879,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.translations.manage"
       }
     },
     "/admin/webhooks": {
@@ -21367,7 +21950,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.data.read"
       },
       "post": {
         "tags": [
@@ -21431,7 +22015,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.webhooks.manage"
       }
     },
     "/admin/webhooks/{id}": {
@@ -21510,7 +22095,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.webhooks.manage"
       }
     },
     "/admin/webhooks/{id}/enable": {
@@ -21600,7 +22186,8 @@
           {
             "session_cookie": []
           }
-        ]
+        ],
+        "x-permission": "console.webhooks.manage"
       }
     },
     "/admin/whoami": {

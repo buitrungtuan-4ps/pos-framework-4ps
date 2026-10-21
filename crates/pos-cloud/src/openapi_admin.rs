@@ -44,6 +44,9 @@
 //! requires each to be in the document. The coverage debt list it once also accepted reached empty
 //! with the inventory routes and was deleted (ADR-0177), so a route added tomorrow without an
 //! annotation fails the build.
+//!
+//! Who may call each operation, `security` and `x-permission`, is held to the handlers by
+//! [`crate::openapi_security`] (ADR-0177 decision 5).
 
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -722,6 +725,8 @@ pub(crate) struct AdminApiDoc;
 #[utoipa::path(
     get,
     path = "/admin/openapi.json",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: it describes routes and carries no tenant data"))),
     responses(
         (status = 200, description = "This document, as JSON. No session is needed"),
     ),

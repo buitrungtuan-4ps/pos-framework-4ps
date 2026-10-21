@@ -29,6 +29,8 @@ use crate::routes::not_found;
 #[utoipa::path(
     get,
     path = "/admin/fees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose rules to list (a 26-character ULID)"),
     ),
@@ -106,6 +108,8 @@ struct EffectiveFee {
 #[utoipa::path(
     get,
     path = "/admin/fees/effective",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),

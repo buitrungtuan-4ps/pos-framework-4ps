@@ -35,6 +35,8 @@ pub(super) struct SettingsStoreRequest {
 #[utoipa::path(
     post,
     path = "/admin/settings/presets",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant and the store to give the new-store values",
         content_type = "application/json",

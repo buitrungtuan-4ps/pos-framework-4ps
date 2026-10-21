@@ -53,7 +53,7 @@ anywhere except the two bootstrap exchanges, which are single-use by constructio
 | `/v1/*` (integrator API) | Bearer API key → tenant + scopes | `auth/apikey.rs`, `auth/bearer.rs` |
 | `/sync/*` (store rails) | The same bearer, additionally **bound to one store**; or the box's own device credential, bound to its store with exactly `read_config`, `relay_orders` and `publish_events`, and dead once the device is archived ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)) | `require_store`, production-readiness **S1** |
 | `POST /claim`, `POST /claim/{claim_id}/collect` | None: a box with no store opens a claim and collects it with a secret only it holds ([ADR-0148](adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)); binding it needs `console.devices.manage` on `/admin/claims/bind` | `claim.rs` |
-| `/admin/*` (console) | Session cookie → admin identity → **per-route permission** | `auth/session.rs`, `auth/console_rbac.rs` — 180 `require_permission` call sites |
+| `/admin/*` (console) | Session cookie → admin identity → **per-route permission**, named on each operation of `docs/openapi-admin.json` as `x-permission` and held to the handler's `require_permission` call by a test ([ADR-0177](adr/0177-openapi-is-the-route-map.md)) | `auth/session.rs`, `auth/console_rbac.rs` — 180 `require_permission` call sites |
 | `/internal/*` (ingest) | A shared secret in a header, ≥32 chars, refused at boot if short | [ADR-0097](adr/0097-internal-route-authentication.md), `config.rs` |
 | `/health` | None, by design — a liveness probe with no data in it | `health.rs` |
 | `POST /admin/login`, `/admin/setup` | Credential exchange (see below) | `auth/admin.rs` |

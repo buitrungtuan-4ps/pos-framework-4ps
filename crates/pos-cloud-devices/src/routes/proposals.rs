@@ -199,6 +199,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/devices/proposals",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose devices to list (a 26-character ULID)"),
@@ -279,6 +280,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/approve",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The proposal's 26-character ULID"),
@@ -323,6 +325,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/reject",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The proposal's 26-character ULID"),

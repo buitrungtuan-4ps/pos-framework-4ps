@@ -33,6 +33,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/catalog/item-categories",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose item categories to list (a 26-character ULID)"),
@@ -80,6 +81,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/item-categories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and the category's `name`",
@@ -155,6 +157,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/item-categories/{item_category_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("item_category_id" = String, Path, description = "The item category (a 26-character ULID)"),
@@ -263,6 +266,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/catalog/item-subcategories",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose item sub-categories to list (a 26-character ULID)"),
@@ -310,6 +314,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/catalog/item-subcategories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the parent `item_category_id`, and the sub-category's `name`",
@@ -392,6 +397,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/catalog/item-subcategories/{item_subcategory_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("item_subcategory_id" = String, Path, description = "The item sub-category (a 26-character ULID)"),

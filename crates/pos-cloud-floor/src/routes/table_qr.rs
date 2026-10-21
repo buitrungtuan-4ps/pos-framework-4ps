@@ -75,6 +75,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/floor/qr",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),

@@ -29,6 +29,7 @@ use pos_cloud_config::route::RegistryTenantQuery;
 #[utoipa::path(
     get,
     path = "/admin/inventory/recipes",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -76,6 +77,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/inventory/recipes/{item_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),
@@ -128,6 +130,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/inventory/recipes",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and \
@@ -211,6 +214,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/inventory/recipes/{item_id}",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     params(
         ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),
@@ -309,6 +313,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/inventory/recipes/{item_id}",
+    extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     params(
         ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),

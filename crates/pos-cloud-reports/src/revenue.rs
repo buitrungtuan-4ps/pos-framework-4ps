@@ -31,6 +31,7 @@ use pos_cloud_api::response::{api_error, csv_download_response};
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/daily",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -182,6 +183,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/export",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -236,6 +238,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/fees/export",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
@@ -300,6 +304,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/tax/export",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("store_id" = String, Path, description = "The store whose tax to export (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),

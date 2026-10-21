@@ -141,6 +141,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/audit",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = Option<String>, Query, description = "One tenant's entries (a 26-character \

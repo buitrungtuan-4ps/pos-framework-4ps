@@ -26,6 +26,7 @@ use pos_cloud_catalog::routes::catalog::catalog_error_response;
 #[utoipa::path(
     get,
     path = "/admin/kitchen/routing",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -76,6 +77,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/kitchen/routing",
+    extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
@@ -274,6 +276,7 @@ async fn record_routing_create<F, A, C, Cat>(
 #[utoipa::path(
     delete,
     path = "/admin/kitchen/routing/{rule_id}",
+    extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     params(
         ("rule_id" = String, Path, description = "The routing rule (a 26-character ULID)"),

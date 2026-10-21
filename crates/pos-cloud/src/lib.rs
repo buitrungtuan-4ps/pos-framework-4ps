@@ -93,6 +93,8 @@ pub mod metrics;
 mod openapi;
 mod openapi_admin;
 mod openapi_device;
+#[cfg(test)]
+mod openapi_security;
 pub mod orders;
 pub mod ota;
 mod persistence;

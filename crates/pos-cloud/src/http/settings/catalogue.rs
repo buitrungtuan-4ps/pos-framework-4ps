@@ -82,6 +82,8 @@ impl SettingCatalogueEntry {
 #[utoipa::path(
     get,
     path = "/admin/settings/catalogue",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     responses(
         (status = 200, description = "Every setting in the register: its key, node and field, its \
                                       kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it \
@@ -132,6 +134,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/settings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose values to list (a 26-character ULID)"),
     ),

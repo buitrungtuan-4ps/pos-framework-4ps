@@ -167,6 +167,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/floor/publish",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`. What is published is the store's authored floor and \

@@ -45,6 +45,8 @@ struct EffectiveSetting {
 #[utoipa::path(
     get,
     path = "/admin/settings/effective",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),

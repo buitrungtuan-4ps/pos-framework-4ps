@@ -49,6 +49,7 @@ struct InviteAdminResponse {
 #[utoipa::path(
     post,
     path = "/admin/invites",
+    extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The invitee's `email`, the address they will sign in with; their `name`; and \
@@ -258,6 +259,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/invites",
+    extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "The invitations not yet accepted and not expired, as an array: \
@@ -305,6 +307,7 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/invites/{id}",
+    extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The invitation's id"),
@@ -395,6 +398,8 @@ impl fmt::Debug for AcceptInviteRequest {
 #[utoipa::path(
     post,
     path = "/admin/invites/accept",
+    security(),
+    extensions(("x-public-reason" = json!("the single-use token from the invitation link"))),
     request_body(
         description = "The single-use `token` from the invite link and the `password` the invitee \
                        chooses, at least 12 characters. No session: the token is the authorisation",

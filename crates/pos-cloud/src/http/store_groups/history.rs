@@ -40,6 +40,8 @@ pub(super) struct BatchHistoryQuery {
 #[utoipa::path(
     get,
     path = "/admin/store-groups/{group_id}/batches",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("group_id" = String, Path, description = "The cohort whose history to read (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
@@ -112,6 +114,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/store-groups/{group_id}/batches/{batch_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("group_id" = String, Path, description = "The cohort the batch ran against (a 26-character ULID)"),
         ("batch_id" = String, Path, description = "The batch (a 26-character ULID)"),

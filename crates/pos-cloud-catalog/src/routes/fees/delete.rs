@@ -38,6 +38,8 @@ pub(super) struct DeleteFeeQuery {
 #[utoipa::path(
     delete,
     path = "/admin/fees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("scope" = String, Query, description = "FEE_SCOPE_TENANT, _BRAND or _STORE"),

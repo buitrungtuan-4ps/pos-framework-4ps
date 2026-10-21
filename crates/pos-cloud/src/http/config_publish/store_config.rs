@@ -26,6 +26,7 @@ use crate::http::{
 #[utoipa::path(
     put,
     path = "/admin/stores/{store_id}/config/{level}",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -165,6 +166,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),

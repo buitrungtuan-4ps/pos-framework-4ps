@@ -36,6 +36,8 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 #[utoipa::path(
     get,
     path = "/admin/store-groups",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
     responses(
         (status = 200, description = "The tenant's store groups, creation order, each with its \
@@ -104,6 +106,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/store-groups",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     responses(
         (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
                                       holds no stores yet — membership is a second call, so naming \
@@ -184,6 +188,8 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/store-groups/{group_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
@@ -271,6 +277,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/store-groups/{group_id}/members",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),

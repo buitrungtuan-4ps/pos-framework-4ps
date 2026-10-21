@@ -133,6 +133,8 @@ fn enforced_at(
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/permissions/readiness",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.read"))),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),

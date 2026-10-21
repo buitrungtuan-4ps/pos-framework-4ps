@@ -27,6 +27,8 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 #[utoipa::path(
     get,
     path = "/admin/integrations/connections",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose connections to read (a 26-character ULID)")),
     responses(
         (status = 200, description = "The tenant's connections in id order, each with the version \
@@ -85,6 +87,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
@@ -141,6 +145,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/integrations/connections",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     request_body(
         description = "The tenant, the provider id, the scope (`scope_level` and, for a brand or \
                        a store, `scope_id`), a display name, `enabled`, the provider's `settings`, \
@@ -235,6 +241,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the connection was read at \
@@ -350,6 +358,8 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),

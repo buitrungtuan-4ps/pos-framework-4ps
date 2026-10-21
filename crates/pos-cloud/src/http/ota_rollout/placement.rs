@@ -24,6 +24,7 @@ use crate::ota::ArtifactStore;
 #[utoipa::path(
     put,
     path = "/admin/config/ota/placement",
+    extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` \
@@ -113,6 +114,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/config/ota/placement",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),

@@ -101,6 +101,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/integrations",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant and the store to publish to. The node's content is resolved from \
                        the tenant's connections: the store's own, then its brand's, then the \

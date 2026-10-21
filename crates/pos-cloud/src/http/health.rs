@@ -137,6 +137,7 @@ fn health_error_response(error: &TaskHealthError) -> Response {
 #[utoipa::path(
     get,
     path = "/admin/health/tasks",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "`healthy`, whether every loop this deployment expects is \

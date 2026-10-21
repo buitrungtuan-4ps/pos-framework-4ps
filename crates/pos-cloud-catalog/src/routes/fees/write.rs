@@ -31,6 +31,8 @@ use crate::routes::{FieldRefusal, load_tree_for_write};
 #[utoipa::path(
     post,
     path = "/admin/fees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
                        for, and the rule without a fee_id: code, display_name and its \
@@ -112,6 +114,8 @@ where
 #[utoipa::path(
     put,
     path = "/admin/fees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
                        where it is, the rule replaces it; written at a narrower scope, it \

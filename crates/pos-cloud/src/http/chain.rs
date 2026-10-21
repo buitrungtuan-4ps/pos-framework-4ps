@@ -118,6 +118,8 @@ impl ChainFindingView {
 #[utoipa::path(
     get,
     path = "/admin/chain-findings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose findings to read (a 26-character ULID)"),
         ("store_id" = Option<String>, Query, description = "Narrow to one store (a ULID); absent reads across the tenant's stores"),

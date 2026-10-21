@@ -51,6 +51,7 @@ pub(super) struct RetireHandoverRequest {
 #[utoipa::path(
     post,
     path = "/admin/config/lease/settle",
+    extensions(("x-permission" = json!("console.stores.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, `store_id`, and `superseded_generation`, the machine the caller \
@@ -156,6 +157,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/config/lease/retire",
+    extensions(("x-permission" = json!("console.stores.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`: the store whose settled handover's outgoing \

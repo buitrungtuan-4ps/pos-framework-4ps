@@ -298,6 +298,7 @@ fn checked_entries(
 #[utoipa::path(
     get,
     path = "/admin/catalog/tax-rates",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
@@ -362,6 +363,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/catalog/tax-rates",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     params(
         ("If-Match" = String, Header, description = "The ETag the table was read at, or `*` for a \

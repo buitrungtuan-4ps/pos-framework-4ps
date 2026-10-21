@@ -120,6 +120,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/capabilities",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "The capability catalogue, the same for every tenant: `flags`, \
@@ -291,6 +292,7 @@ pub fn capability_flag_nodes(
 #[utoipa::path(
     put,
     path = "/admin/config/capabilities",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `flags`, each capability key from `GET /admin/capabilities` with its value. Only the flags \

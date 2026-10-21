@@ -26,6 +26,7 @@ use pos_cloud_api::response::parse_ulid_fields;
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/reports/xz",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),

@@ -108,6 +108,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/countries",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "Every country module this build carries, as an array: \
@@ -149,6 +150,7 @@ where
 #[utoipa::path(
     get,
     path = "/admin/locales",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "The content locales the platform can serve, as an array of \

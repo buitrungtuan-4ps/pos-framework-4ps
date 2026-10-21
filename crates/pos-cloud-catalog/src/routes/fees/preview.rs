@@ -198,6 +198,8 @@ impl SampleBillView {
 #[utoipa::path(
     post,
     path = "/admin/fees/preview",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     request_body(
         description = "The tenant, a store, the sales channel (dine-in when absent), the rules as \
                        they would be written — each with its scope and scope_id and the rule as a \

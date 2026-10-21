@@ -49,6 +49,7 @@ struct CreateTerminalResponse {
 #[utoipa::path(
     post,
     path = "/admin/devices/terminals",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an \
@@ -181,6 +182,8 @@ pub(super) struct SetReceiptRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/receipt",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.devices.manage"))),
     params(
         ("id" = String, Path, description = "The terminal's 26-character ULID"),
         ("If-Match" = String, Header, description = "The version the terminal was read at \
@@ -382,6 +385,8 @@ pub(super) struct SetFloatRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/float",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.devices.manage"))),
     params(
         ("id" = String, Path, description = "The terminal's 26-character ULID"),
         ("If-Match" = String, Header, description = "The version the terminal was read at \

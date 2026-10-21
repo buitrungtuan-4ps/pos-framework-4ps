@@ -285,6 +285,7 @@ pub(in crate::http) fn checked_locale_node(
 #[utoipa::path(
     put,
     path = "/admin/config/locale",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), \

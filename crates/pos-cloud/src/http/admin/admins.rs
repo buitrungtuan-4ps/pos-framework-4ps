@@ -18,6 +18,7 @@ use crate::http::{CloudApp, Json, enum_refusal, not_found};
 #[utoipa::path(
     get,
     path = "/admin/admins",
+    extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "Every console administrator, as an array: `id`, `email`, \
@@ -73,6 +74,7 @@ pub(in crate::http) struct UpdateAdminRoleRequest {
 #[utoipa::path(
     patch,
     path = "/admin/admins/{id}/role",
+    extensions(("x-permission" = json!("console.admins.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The administrator's id"),
@@ -161,6 +163,7 @@ pub(in crate::http) struct UpdateAdminStatusRequest {
 #[utoipa::path(
     patch,
     path = "/admin/admins/{id}/status",
+    extensions(("x-permission" = json!("console.admins.manage"))),
     security(("session_cookie" = [])),
     params(
         ("id" = String, Path, description = "The administrator's id"),

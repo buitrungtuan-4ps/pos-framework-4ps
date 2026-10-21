@@ -27,6 +27,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/devices",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -81,6 +82,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/devices",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -165,6 +167,7 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/stores/{store_id}/devices/{device_id}",
+    extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),

@@ -152,6 +152,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/people/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
                        compile into its `permissions` node",

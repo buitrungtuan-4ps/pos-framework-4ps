@@ -27,6 +27,7 @@ use crate::version::UpdateOutcome;
 #[utoipa::path(
     get,
     path = "/admin/tenants",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
         (status = 200, description = "Every tenant, as an array: `tenant_id`, `name` and `status`, \
@@ -66,6 +67,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/tenants",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
     security(("session_cookie" = [])),
     request_body(
         description = "The tenant's `name`, and optionally `language`, a language tag such as `vi` \
@@ -189,6 +191,7 @@ async fn seed_tenant_roles<Rg, A, C>(
 #[utoipa::path(
     patch,
     path = "/admin/tenants/{tenant_id}",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Path, description = "The tenant (a 26-character ULID)"),

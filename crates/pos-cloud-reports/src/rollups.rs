@@ -112,6 +112,7 @@ impl RollupWindowQuery {
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/rollups/daily",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -198,6 +199,7 @@ pub struct AdminRollupWindowQuery {
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/rollups/export",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
@@ -278,6 +280,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/rollups/reset",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     params(
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),

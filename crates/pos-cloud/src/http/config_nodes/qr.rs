@@ -49,6 +49,7 @@ pub(super) struct PublishQrRequest {
 #[utoipa::path(
     get,
     path = "/admin/config/qr",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
@@ -101,6 +102,7 @@ where
 #[utoipa::path(
     put,
     path = "/admin/config/qr",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and `store_id`, then the QR guardrails (ADR-0057): optionally `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`, and optionally `business_hours`, an opening and closing hour",

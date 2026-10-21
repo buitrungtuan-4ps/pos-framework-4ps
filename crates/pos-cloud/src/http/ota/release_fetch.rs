@@ -147,6 +147,7 @@ fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
 #[utoipa::path(
     post,
     path = "/admin/ota/releases/fetch",
+    extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`release`: the version to fetch, spelled bare, without a leading `v`. The \

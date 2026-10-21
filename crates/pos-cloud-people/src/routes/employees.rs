@@ -39,6 +39,8 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 #[utoipa::path(
     get,
     path = "/admin/employees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose employees to list (a 26-character ULID)"),
         ("limit" = Option<u32>, Query, description = "How many employees to return, 1 to 500. \
@@ -178,6 +180,8 @@ fn employee_list_filter(
 #[utoipa::path(
     get,
     path = "/admin/employees/{employee_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.read"))),
     params(
         ("employee_id" = String, Path, description = "The employee's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that employs them (a 26-character ULID)"),
@@ -235,6 +239,8 @@ where
 #[utoipa::path(
     post,
     path = "/admin/employees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
         description = "`tenant_id`, the staff `code` the person types to sign in, unique within the \
                        tenant, and their `name`. No PIN: it is set with `PUT …/pin`",
@@ -361,6 +367,8 @@ fn code_in_use() -> Response {
 #[utoipa::path(
     patch,
     path = "/admin/employees/{employee_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     params(
         ("employee_id" = String, Path, description = "The employee's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the employee was read at \
@@ -569,6 +577,8 @@ async fn record_employee_update<P, R, Cfg, A, C>(
 #[utoipa::path(
     put,
     path = "/admin/employees/{employee_id}/pin",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
     params(
         ("employee_id" = String, Path, description = "The employee's 26-character ULID"),
     ),

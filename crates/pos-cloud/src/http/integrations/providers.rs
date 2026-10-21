@@ -58,6 +58,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/integrations/providers",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     responses(
         (status = 200, description = "Every provider compiled into this cloud, grouped by family: \
                                       its id, where its adapter runs, the countries it serves, \

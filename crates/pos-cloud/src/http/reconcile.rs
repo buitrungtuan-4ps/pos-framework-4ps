@@ -337,6 +337,7 @@ impl ReconcileRunView {
 #[utoipa::path(
     get,
     path = "/admin/reconcile",
+    extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose runs to list (a 26-character ULID)"),

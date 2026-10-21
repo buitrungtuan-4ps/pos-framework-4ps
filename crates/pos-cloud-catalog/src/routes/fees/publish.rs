@@ -37,6 +37,8 @@ pub(super) struct PublishFeesRequest {
 #[utoipa::path(
     post,
     path = "/admin/fees/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
         description = "The tenant, and optionally one store. Without a store, every store of the \
                        tenant is republished",

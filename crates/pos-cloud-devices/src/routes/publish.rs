@@ -86,6 +86,7 @@ where
 #[utoipa::path(
     post,
     path = "/admin/devices/publish",
+    extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
         description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
