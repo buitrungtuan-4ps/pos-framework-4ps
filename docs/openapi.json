@@ -75,7 +75,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "place_orders"
+            ]
           }
         ]
       },
@@ -137,7 +139,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "place_orders"
+            ]
           }
         ]
       }
@@ -190,7 +194,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "read_rollups"
+            ]
           }
         ]
       }

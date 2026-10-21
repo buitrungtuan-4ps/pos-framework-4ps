@@ -269,6 +269,8 @@ where
 #[utoipa::path(
     post,
     path = "/activate",
+    security(),
+    extensions(("x-public-reason" = json!("a single-use activation code from the store's setup sheet"))),
     request_body(
         description = "`code`, the activation code from the store's setup sheet, and optionally the \
                        `store_id` the box expects to belong to",

@@ -78,6 +78,7 @@ pub(super) async fn read_one_artifact_blob<B: BlobStore>(
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/artifact",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),

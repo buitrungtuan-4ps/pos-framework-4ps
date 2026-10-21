@@ -15,8 +15,14 @@
 //! committed file must be what the annotations generate, every `/sync`, `/activate` and `/claim`
 //! path a router registers must be documented, no documented path may be one nobody serves, and no
 //! `operationId` may be used twice.
+//!
+//! Each operation says who may call it (ADR-0177 decision 5). A `/sync` route requires
+//! `device_credential`, with the scope it checks as the requirement's role; `/activate` and
+//! `/claim` are public, `security: []`, each with an `x-public-reason` naming what gates it
+//! instead.
 
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
 
@@ -58,6 +64,7 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         pos_cloud_devices::routes::collect_claim,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
+    modifiers(&DeviceCredential),
     tags(
         (name = "configuration", description = "The store's published configuration, pulled as \
                                                 a snapshot or a delta, and its liveness heartbeat \
@@ -82,6 +89,37 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
     )
 )]
 pub(crate) struct DeviceApiDoc;
+
+/// Declares `device_credential`, what a box presents on `/sync`: the device credential it was
+/// issued at activation or claim (ADR-0143), or its store's scoped API key. A requirement's role
+/// is the scope the route checks.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the document's tests build it")
+)]
+struct DeviceCredential;
+
+impl Modify for DeviceCredential {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi
+            .components
+            .get_or_insert_with(|| utoipa::openapi::ComponentsBuilder::new().build());
+        components.add_security_scheme(
+            "device_credential",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .description(Some(
+                        "A box's device credential, issued once by `/activate` or a collected \
+                         claim, or its store's scoped API key, presented as a bearer token. Each \
+                         requirement's role is the scope the route checks, and the credential \
+                         answers only for its own store.",
+                    ))
+                    .build(),
+            ),
+        );
+    }
+}
 
 /// Whether `path` is on the surface this document covers.
 #[cfg(test)]
@@ -210,6 +248,47 @@ mod tests {
             phantom.is_empty(),
             "these paths are documented but not registered:\n{phantom:#?}",
         );
+    }
+
+    /// Every operation says who may call it: `device_credential` with one scope the cloud knows as
+    /// its role, or `security: []` with an `x-public-reason` (ADR-0177 decision 5).
+    #[test]
+    fn every_device_operation_says_who_may_call_it() {
+        let json = serde_json::to_value(DeviceApiDoc::openapi()).expect("serialize the document");
+        for (path, item) in json["paths"].as_object().into_iter().flatten() {
+            for (method, operation) in item.as_object().into_iter().flatten() {
+                let route = format!("{} {path}", method.to_uppercase());
+                let security = operation["security"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{route} declares no security"));
+                let reason = operation["x-public-reason"].as_str().unwrap_or_default();
+                if security.is_empty() {
+                    assert!(
+                        !reason.trim().is_empty(),
+                        "{route} is public, so it needs an x-public-reason"
+                    );
+                    continue;
+                }
+                assert!(
+                    reason.is_empty(),
+                    "{route} requires a credential, yet gives a public reason"
+                );
+                let [requirement] = security.as_slice() else {
+                    panic!("{route} should name one requirement");
+                };
+                let roles = requirement["device_credential"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{route} should require device_credential"));
+                let [role] = roles.as_slice() else {
+                    panic!("{route} should name the one scope it checks");
+                };
+                let scope = role.as_str().unwrap_or_default();
+                assert!(
+                    crate::auth::apikey::Scope::from_wire(scope).is_some(),
+                    "{route} names {scope}, which is not a scope"
+                );
+            }
+        }
     }
 
     /// Each `operationId` is its handler's name, so two handlers may not share one (ADR-0177
