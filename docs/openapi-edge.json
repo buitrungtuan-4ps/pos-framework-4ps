@@ -459,6 +459,41 @@
         }
       }
     },
+    "/api/drawer/open": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/drawer/open` — open the drawer outside a sale, with a manager's PIN and a reason\n(ADR-0165 decision 3). The opening is recorded first, and the drawer opens after.",
+        "operationId": "open_drawer",
+        "requestBody": {
+          "description": "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the opening. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`)"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; a no-sale opening needs a manager's approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/floor": {
       "get": {
         "tags": [
@@ -1615,6 +1650,321 @@
         }
       }
     },
+    "/api/shifts": {
+      "get": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`GET /api/shifts` — every drawer the store keeps: its till, its default float, and its shift\nwhile one is open, as blind as the shift's own read; and the model, with the one the store has\npublished while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8). Another\ntill's expectation shows only to a person whose own role grants `cash.shift.manage_other_till`.",
+        "operationId": "list_drawers",
+        "responses": {
+          "200": {
+            "description": "Every drawer the store keeps, each with its till, default float and open shift; the drawer model the edge runs and any the store has published while shifts are open; and the till this device is"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "503": {
+            "description": "The till this device is could not be read"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or\nthe one the request names.",
+        "operationId": "open_shift",
+        "requestBody": {
+          "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Opened: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; another till's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/shifts/current": {
+      "get": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`GET /api/shifts/current` — the shift trading now, or `null` when none is open.",
+        "description": "Until this read existed a shift lived in the browser that opened it: a reload, a second till or a\ntablet that restarted mid-shift offered to *open* one, the edge refused because one was open, and\nnothing could count or close it. `null` rather than `404` because no open shift is the ordinary\nstate before the first open of the day, not a missing resource.\n\nBlind like the count: the expectation and the variance are never in this answer, only in the\nclose's — except the expectation, where the store has turned the blind close off.\n\nWhere the store keeps a drawer per till, the drawer is the device's own till's, and a device that\nis no till has none.",
+        "operationId": "current_shift",
+        "responses": {
+          "200": {
+            "description": "The shift trading now on this device's drawer, or `null` when none is open. Blind: no expectation or variance, unless the store turned the blind count off"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "503": {
+            "description": "The till this device is could not be read"
+          }
+        }
+      }
+    },
+    "/api/shifts/{id}/close": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/close` — close a counted shift, revealing the variance, and print the\nshift report when the domain asks for one.",
+        "description": "The report prints after the commit, never before, for the reason a receipt does: a printer that\nis down must not reopen a shift, and a close that failed must never have printed.",
+        "operationId": "close_shift",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional: `approver_code` and `approver_pin` for another till's drawer, and `reason_code_id` for an over or short the store asks a reason for. The body may be empty",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Closed: the shift with its expectation, count and variance, and `shift_report_print` where a report was printed"
+          },
+          "400": {
+            "description": "The id is not a ULID, or the body is not an approver and a reason"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; another till's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused, with the reason in `pos-error-reason`. For `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the `shifts` still owed a reason"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/shifts/{id}/count": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/count` — enter the blind count.",
+        "operationId": "count_shift",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`counted_minor`, the cash counted in minor units, with `approver_code` and `approver_pin` for another till's drawer. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Counted: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; another till's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/shifts/{id}/paid-in": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/paid-in` — cash put into the drawer outside a sale (ADR-0165).",
+        "operationId": "record_paid_in",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash"
+          },
+          "400": {
+            "description": "The id is not a ULID, or the amount is not greater than zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; a drawer assigned to somebody else needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/shifts/{id}/paid-out": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/paid-out` — cash taken out of the drawer outside a sale (ADR-0165).",
+        "operationId": "record_paid_out",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash"
+          },
+          "400": {
+            "description": "The id is not a ULID, or the amount is not greater than zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; a drawer assigned to somebody else needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/shifts:batch_close": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts:batch_close` — close several counted drawers in one act, every one or none,\nand print what the store's `shift.close_report` asks for: one slip for them all, each drawer's\nreport, or nothing (ADR-0167 decision 10). One approver covers every other till's drawer named.",
+        "operationId": "batch_close_shifts",
+        "requestBody": {
+          "description": "`shift_ids` to close, every one or none, with optional `variance_reasons` (each a `shift_id` and `reason_code_id`) and one `approver_code` and `approver_pin` for the other tills' drawers. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Closed: each shift as its own close answers, and `shift_report_print` where the store prints one slip for them all"
+          },
+          "400": {
+            "description": "No shift is named"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; other tills' drawers need an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused, with the reason in `pos-error-reason`. For `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the `shifts` still owed a reason"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/sync": {
       "get": {
         "tags": [
@@ -2126,6 +2476,10 @@
     {
       "name": "menu",
       "description": "Marking an item sold out at this store, and bringing it back."
+    },
+    {
+      "name": "shifts",
+      "description": "The cash drawer: opening, counting and closing a shift, cash paid in and out, and opening the drawer outside a sale (ADR-0165, ADR-0167)."
     }
   ]
 }

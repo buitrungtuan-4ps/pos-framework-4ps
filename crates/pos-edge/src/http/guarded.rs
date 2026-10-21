@@ -190,23 +190,26 @@ where
     Router::new()
         // The cash shift: open, blind count, close — and the one that is open, so a device that
         // reloads mid-shift can still count and close it rather than offering to open another.
-        .route("/api/shifts/current", get(shifts::current::<S>))
+        .route("/api/shifts/current", get(shifts::current_shift::<S>))
         // Every drawer the store keeps, one per till where it keeps one per till (ADR-0167).
         .route(
             "/api/shifts",
-            get(shifts::drawers::<S>).post(shifts::open::<S>),
+            get(shifts::list_drawers::<S>).post(shifts::open_shift::<S>),
         )
-        .route("/api/shifts/{id}/count", post(shifts::count::<S>))
-        .route("/api/shifts/{id}/close", post(shifts::close::<S>))
+        .route("/api/shifts/{id}/count", post(shifts::count_shift::<S>))
+        .route("/api/shifts/{id}/close", post(shifts::close_shift::<S>))
         // Several counted drawers closed at once, a custom method on the collection (ADR-0167).
-        .route("/api/shifts:batch_close", post(shifts::batch_close::<S>))
+        .route(
+            "/api/shifts:batch_close",
+            post(shifts::batch_close_shifts::<S>),
+        )
         .route(
             "/api/shifts/{id}/paid-in",
-            post(cash_movements::paid_in::<S>),
+            post(cash_movements::record_paid_in::<S>),
         )
         .route(
             "/api/shifts/{id}/paid-out",
-            post(cash_movements::paid_out::<S>),
+            post(cash_movements::record_paid_out::<S>),
         )
         .route("/api/drawer/open", post(cash_movements::open_drawer::<S>))
 }
