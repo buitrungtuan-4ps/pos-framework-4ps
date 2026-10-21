@@ -426,7 +426,7 @@ pub(crate) struct SoldOutResponse {
 ///
 /// [`Edge::mark_item_sold_out`] carries the rules: `sales.item.mark_unavailable`, no PIN, and a
 /// second tap on an item already sold out writes nothing.
-pub(crate) async fn sold_out<S>(
+pub(crate) async fn mark_sold_out<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -438,7 +438,7 @@ where
 }
 
 /// `POST /api/menu/{id}/restore` — staff bring an item they marked sold out back.
-pub(crate) async fn restore<S>(
+pub(crate) async fn restore_item<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
