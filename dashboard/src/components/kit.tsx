@@ -182,6 +182,12 @@ function createIsWide() {
 }
 
 /**
+ * Reusable module-level Intl.Collator instance for DataTable sorting.
+ * Avoids instantiating a new Intl.Collator on every sort call.
+ */
+const DEFAULT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/**
  * `rows` ordered by `value`, the way a reader expects.
  *
  * Each row's value is read once rather than on every comparison, and text compares the way it is
@@ -194,7 +200,6 @@ function sortRows<T>(
   ascending: boolean,
 ): readonly T[] {
   const direction = ascending ? 1 : -1;
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   const decorated = rows.map((row) => ({ row, val: value(row) }));
   decorated.sort((a, b) => {
     const av = a.val;
@@ -202,7 +207,7 @@ function sortRows<T>(
     if (typeof av === "number" && typeof bv === "number") {
       return (av - bv) * direction;
     }
-    return collator.compare(String(av), String(bv)) * direction;
+    return DEFAULT_COLLATOR.compare(String(av), String(bv)) * direction;
   });
   return decorated.map((entry) => entry.row);
 }
