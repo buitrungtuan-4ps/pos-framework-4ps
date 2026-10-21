@@ -75,6 +75,36 @@ pub(super) async fn read_one_artifact_blob<B: BlobStore>(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/artifact",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        description = "`release`, the release tag, and `arch`, the target the store runs",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "The release's binary as `application/octet-stream`, its detached \
+                                      signature in the `X-Pos-Artifact-Signature` header as lowercase hex \
+                                      (ADR-0092). The edge verifies both before it installs anything"),
+        (status = 400, description = "store_id is not a ULID, or release or arch is not well formed", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The cloud hosts no artifact for that release on that target", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the release registry or artifact store, is \
+                                      unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The release is recorded but its binary or signature is missing, the \
+                                      stored binary does not match its recorded digest, or the signature \
+                                      could not be sent", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "updates",
+)]
 /// `POST /sync/stores/{store_id}/artifact` — hands a store the signed release bytes it decided to
 /// install ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
 ///

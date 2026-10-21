@@ -91,6 +91,19 @@ struct OpenedClaim {
     poll_interval_secs: u64,
 }
 
+#[utoipa::path(
+    post,
+    path = "/claim",
+    responses(
+        (status = 201, description = "A claim: its `claim_id`, the `user_code` the box shows, the `secret` \
+                                      it keeps to collect with, when it expires, and how often to poll \
+                                      (ADR-0148)"),
+        (status = 429, description = "Too many activation attempts from this client: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store, or the OS entropy source, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A box opens a claim. Unauthenticated: the box has nothing to authenticate with yet.
 async fn open_claim<Cl, A, C>(State(state): State<ClaimState<Cl, A, C>>) -> Response
 where
@@ -154,6 +167,31 @@ struct CollectedClaim {
     credential: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/claim/{claim_id}/collect",
+    params(
+        ("claim_id" = String, Path, description = "The claim the box opened, a ULID"),
+    ),
+    request_body(
+        description = "`secret`, the one the claim was opened with",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its \
+                                      device `credential`, returned this once"),
+        (status = 202, description = "Nobody has bound the code yet: `status` is `PENDING`, and the box asks \
+                                      again"),
+        (status = 400, description = "claim_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "This claim cannot be collected. Every such refusal answers the same, \
+                                      so it reveals nothing", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The claim has expired (`EXPIRED`): open a new one", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many collection polls from this client: `Retry-After` says when to \
+                                      try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store, or the OS entropy source, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A box polls for its credential. `202` while nobody has bound the code, the credential once it
 /// has, `409` with reason `EXPIRED` when the hour is over, and one `403` for everything else.
 async fn collect_claim<Cl, A, C>(

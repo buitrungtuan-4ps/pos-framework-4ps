@@ -695,6 +695,28 @@ struct PendingOrderDto {
     order: QueuedOrderPayload,
 }
 
+#[utoipa::path(
+    get,
+    path = "/sync/stores/{store_id}/orders",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    responses(
+        (status = 200, description = "The store's pending relayed orders, each with its `queued_id` and the \
+                                      `order`. Held open for a bounded wait while there are none, and empty \
+                                      if none arrives"),
+        (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `relay_orders` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the order queue, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The order queue failed", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "order relay",
+)]
 /// `GET /sync/stores/{store_id}/orders` — the store pulls its pending batch (bounded long-poll).
 async fn pull_orders<Q, K, C, W>(
     State(state): State<SyncState<Q, K, C, W>>,
@@ -761,6 +783,33 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/orders/{queued_id}/ack",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+        ("queued_id" = String, Path, description = "The queued order, a ULID"),
+    ),
+    request_body(
+        description = "The store's `outcome`: `accepted`, with the store's order id, its total and its queue \
+                       number where the channel issues one; or `rejected`, with the refusal's `status` and \
+                       `message`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Recorded. A repeated acknowledgement also answers 204"),
+        (status = 400, description = "store_id or queued_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `relay_orders` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the order queue, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The order queue failed", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "order relay",
+)]
 /// `POST /sync/stores/{store_id}/orders/{queued_id}/ack` — the store reports an outcome.
 async fn ack_order<Q, K, C, W>(
     State(state): State<SyncState<Q, K, C, W>>,

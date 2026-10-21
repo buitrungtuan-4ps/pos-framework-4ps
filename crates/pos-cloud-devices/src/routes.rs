@@ -53,6 +53,10 @@ pub use printers::{
 };
 pub use proposals::{__path_approve_device, __path_list_pending_devices, __path_reject_device};
 pub use publish::__path_admin_publish_devices;
+// And the ones the device document names (ADR-0177).
+pub use activation::__path_exchange_activation_code;
+pub use claims::{__path_collect_claim, __path_open_claim};
+pub use proposals::{__path_list_store_devices, __path_propose_device};
 pub use revoke::__path_admin_revoke_device;
 pub use terminals::{
     __path_admin_set_terminal_float, __path_admin_set_terminal_receipt, __path_create_terminal,

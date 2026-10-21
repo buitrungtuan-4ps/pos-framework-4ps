@@ -266,6 +266,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/activate",
+    request_body(
+        description = "`code`, the activation code from the store's setup sheet, and optionally the \
+                       `store_id` the box expects to belong to",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Activated: the `device_id`, and the device `credential`, returned this \
+                                      once; the cloud keeps only its hash (ADR-0050)"),
+        (status = 400, description = "The code or the store id is malformed", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "Refused: a spent, revoked, unknown or raced code, or one issued for \
+                                      another store, all answer the same", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many activation attempts from this client: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The activation service, or the OS entropy source, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A device exchanges its activation code for a credential (unauthenticated — the code is the
 /// credential). Single-use and deny-by-default, per [`pos_core::activation::redeem`].
 async fn exchange_activation_code<X, A, C>(

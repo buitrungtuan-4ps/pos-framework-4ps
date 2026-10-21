@@ -149,6 +149,7 @@ pub(crate) use admitted_devices::__path_admin_admitted_devices;
 use admitted_devices::admin_admitted_devices;
 pub use alerts::alerts_router;
 pub(crate) use archives::__path_admin_list_store_archives;
+pub(crate) use archives::{__path_receive_store_archive, __path_serve_store_archive_key};
 pub use archives::{store_archive_admin_router, store_archive_router};
 use campaigns::scheduled_error_response;
 pub use campaigns::{
@@ -220,6 +221,10 @@ pub use reason_codes::{config_reason_codes_router, reason_code_router};
 pub use reconcile::reconcile_router;
 pub use registry::registry_router;
 use setting_refusal::save_if_confirmed;
+pub(crate) use sync::{
+    __path_edge_config_sync, __path_edge_events_hello, __path_edge_heartbeat,
+    __path_edge_publish_events,
+};
 pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
 use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.

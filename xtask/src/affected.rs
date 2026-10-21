@@ -77,7 +77,7 @@ const DOCS: [&str; 10] = [
 /// to one is a change to the crate: it sets `rust` beside its own class, and puts the crate in the
 /// affected set. A test in this module scans the crates for such reads and fails on one missing
 /// here.
-pub const READ_BY: [(&str, &str); 14] = [
+pub const READ_BY: [(&str, &str); 15] = [
     ("docs/snapshots/events.txt", "pos-proto"),
     ("docs/snapshots/settings.txt", "pos-proto"),
     ("docs/configuration.md", "pos-proto"),
@@ -91,6 +91,7 @@ pub const READ_BY: [(&str, &str); 14] = [
     ("deploy/edge/install-pos-edge.ps1", "pos-edge"),
     ("docs/openapi.json", "pos-cloud"),
     ("docs/openapi-admin.json", "pos-cloud"),
+    ("docs/openapi-device.json", "pos-cloud"),
     ("dashboard/src/i18n/", "pos-cloud"),
 ];
 

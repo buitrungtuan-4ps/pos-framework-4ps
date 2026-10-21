@@ -158,6 +158,30 @@ where
     run_reconcile(&state, tenant_id, store_id, &request.event_ids).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/reconcile",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        description = "`event_ids`: the ids of events the store holds, each a ULID",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "`missing`: the ids the cloud does not hold, for the store to publish \
+                                      again"),
+        (status = 400, description = "store_id is not a ULID, or an event id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the reconciliation store, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "events",
+)]
 /// `POST /sync/stores/{store_id}/reconcile` — the **store's** door onto the same diff.
 ///
 /// Identity comes from the scoped key the box presents, not from a body it writes: the tenant is the

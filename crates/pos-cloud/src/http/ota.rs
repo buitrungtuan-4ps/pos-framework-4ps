@@ -32,6 +32,9 @@ pub use release_upload::ota_release_admin_router;
 pub(crate) use installer::__path_admin_download_installer;
 pub(crate) use release_fetch::__path_admin_fetch_ota_release;
 pub(crate) use release_upload::{__path_admin_list_ota_release, __path_admin_upload_ota_release};
+// And the ones the device document names (ADR-0177).
+pub(crate) use artifacts::__path_serve_ota_artifact;
+pub(crate) use report::__path_receive_store_report;
 
 /// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
 /// report's arrival instant.
