@@ -45,8 +45,9 @@ country-jp = ["dep:pos-country-jp"]
 country-in = ["dep:pos-country-in"]
 # The till's OpenAPI document, `docs/openapi-edge.json` (ADR-0177 decision 2). Off by default, so a
 # store's binary compiles none of it: only this crate's own dev-dependency on itself turns it on,
-# and `cargo test` builds the document and checks it.
-openapi = ["dep:utoipa"]
+# and `cargo test` builds the document and checks it. It also gives the wire types their schemas
+# (`pos-proto/openapi`, decision 3).
+openapi = ["dep:utoipa", "pos-proto/openapi"]
 
 [dependencies]
 # The backbone this binary composes. Paths, not versions: resolved by the workspace.

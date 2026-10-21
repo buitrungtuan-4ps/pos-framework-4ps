@@ -2177,10 +2177,12 @@ name = "pos-proto"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "pos-proto",
  "proptest",
  "serde",
  "serde_json",
  "thiserror",
+ "utoipa",
 ]
 
 [[package]]
