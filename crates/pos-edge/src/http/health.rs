@@ -29,6 +29,15 @@ pub(crate) struct Health {
     store_id: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/healthz",
+    responses(
+        (status = 200, description = "`status` `ok`, the binary's name and version, the protocol version it speaks, \
+                                      and the store it serves. No credential is needed"),
+    ),
+    tag = "status",
+))]
 /// Answers `GET /healthz`.
 pub(crate) async fn healthz(State(state): State<AppState>) -> Json<Health> {
     Json(Health {

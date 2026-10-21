@@ -13,13 +13,13 @@
 //! # Two different gates, on purpose
 //!
 //! `POST /api/pair` is **ungated** — it has to be, because the device presenting a code holds no
-//! credential yet. [`this_device`] and [`devices`] sit behind the paired-device gate alone.
-//! [`this_device`] is POS Station's "is my token still accepted" probe, asked with nobody signed in,
-//! which the signed-in gate would answer `403`. [`devices`] stays there because a Station older than
-//! that probe reads the list as its probe instead, until none is left in the fleet. [`mint`] and
-//! [`revoke`] sit behind **both** gates: a paired device *and* a signed-in person whose role grants
-//! `admin.device.manage`, because admitting a device and retiring one are the same managerial act and
-//! the store has a published roster to check that against
+//! credential yet. [`this_device`] and [`paired_devices`] sit behind the paired-device gate alone.
+//! [`this_device`] is POS Station's "is my token still accepted" probe, asked with nobody signed
+//! in, which the signed-in gate would answer `403`. [`paired_devices`] stays there because a
+//! Station older than that probe reads the list as its probe instead, until none is left in the
+//! fleet. [`mint`] and [`revoke`] sit behind **both** gates: a paired device *and* a signed-in
+//! person whose role grants `admin.device.manage`, because admitting a device and retiring one are
+//! the same managerial act and the store has a published roster to check that against
 //! ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 //! decision 8). See [`manager_routes`].
 
@@ -59,6 +59,23 @@ pub(crate) struct PairAccepted {
     device_token: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/pair",
+    request_body(
+        description = "`code`, the six-digit pairing code a manager minted",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Paired: the body carries `device_token`, the bearer token the device presents \
+                                      from now on"),
+        (status = 400, description = "The code is not six digits"),
+        (status = 403, description = "The code is unknown or has expired"),
+        (status = 429, description = "Too many attempts: wait and try again"),
+        (status = 503, description = "The pairing could not be recorded"),
+    ),
+    tag = "pairing",
+))]
 /// Redeems a pairing code.
 pub(crate) async fn pair(
     State(state): State<AppState>,
@@ -135,6 +152,16 @@ pub(crate) struct PairedDeviceView {
     this_device: bool,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/pair/devices",
+    responses(
+        (status = 200, description = "How many devices are paired, whether pairings survive a restart, and each \
+                                      device's id, when it paired and whether it is the caller. No token digest"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "pairing",
+))]
 /// `GET /api/pair/devices` — which devices are paired, when each paired, and whether that survives a
 /// restart.
 ///
@@ -147,7 +174,7 @@ pub(crate) struct PairedDeviceView {
 ///
 /// The token digest is never returned: it correlates a device across restarts and buys the console
 /// nothing the id does not.
-pub(crate) async fn devices(
+pub(crate) async fn paired_devices(
     State(state): State<AppState>,
     caller: Option<Extension<DeviceId>>,
 ) -> Response {
@@ -185,15 +212,24 @@ pub(crate) struct ThisDevice {
     pair_time: Timestamp,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/pair/this_device",
+    responses(
+        (status = 200, description = "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "pairing",
+))]
 /// `GET /api/pair/this_device` — whether the calling token is still accepted, and which device it
 /// belongs to.
 ///
 /// POS Station's token probe
 /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 8, step 1). It answers for the calling token **alone**: its device id and when it
-/// paired, and nothing about any other device. [`devices`] answered the same question by handing
-/// every paired device the id of every other, which a probe has no use for and which decision 8
-/// stops once no Station that reads the list is left.
+/// paired, and nothing about any other device. [`paired_devices`] answered the same question by
+/// handing every paired device the id of every other, which a probe has no use for and which
+/// decision 8 stops once no Station that reads the list is left.
 ///
 /// Behind the paired-device gate alone, for the reason the list is: Station asks with nobody signed
 /// in. The route never reaches the signed-in gate, which is the only code that reads or touches a

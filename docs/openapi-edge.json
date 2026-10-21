@@ -1,0 +1,160 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pizza 4P's POS Till API",
+    "description": "The `/api` surface the till, the kitchen display and POS Station call on a store's edge, generated from the handlers (ADR-0177). A device presents its pairing token as a bearer token, and most routes also need a person signed in on it. A refusal is plain text, with its AIP-193 reason in the `pos-error-reason` header where the edge names one.",
+    "license": {
+      "name": "LicenseRef-Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/pair": {
+      "post": {
+        "tags": [
+          "pairing"
+        ],
+        "summary": "Redeems a pairing code.",
+        "operationId": "pair",
+        "requestBody": {
+          "description": "`code`, the six-digit pairing code a manager minted",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Paired: the body carries `device_token`, the bearer token the device presents from now on"
+          },
+          "400": {
+            "description": "The code is not six digits"
+          },
+          "403": {
+            "description": "The code is unknown or has expired"
+          },
+          "429": {
+            "description": "Too many attempts: wait and try again"
+          },
+          "503": {
+            "description": "The pairing could not be recorded"
+          }
+        }
+      }
+    },
+    "/api/pair/devices": {
+      "get": {
+        "tags": [
+          "pairing"
+        ],
+        "summary": "`GET /api/pair/devices` — which devices are paired, when each paired, and whether that survives a\nrestart.",
+        "description": "The list used to be a bare count, which left an operator with a lost tablet nothing to act on:\n`POST /api/pair/revoke` takes a device id, and no surface anywhere handed one out\n(production-readiness **O1**). The pairing instant is the only handle the edge has on *which*\ntablet a row is — the device's name lives in the cloud's approved-device registry, and a store\nthat has never synced has none — so the console shows when each paired and marks the caller's own\nrow, which together are enough to recognise the odd one out.\n\nThe token digest is never returned: it correlates a device across restarts and buys the console\nnothing the id does not.",
+        "operationId": "paired_devices",
+        "responses": {
+          "200": {
+            "description": "How many devices are paired, whether pairings survive a restart, and each device's id, when it paired and whether it is the caller. No token digest"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/api/pair/this_device": {
+      "get": {
+        "tags": [
+          "pairing"
+        ],
+        "summary": "`GET /api/pair/this_device` — whether the calling token is still accepted, and which device it\nbelongs to.",
+        "description": "POS Station's token probe\n([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 8, step 1). It answers for the calling token **alone**: its device id and when it\npaired, and nothing about any other device. [`paired_devices`] answered the same question by\nhanding every paired device the id of every other, which a probe has no use for and which\ndecision 8 stops once no Station that reads the list is left.\n\nBehind the paired-device gate alone, for the reason the list is: Station asks with nobody signed\nin. The route never reaches the signed-in gate, which is the only code that reads or touches a\nsession, so asking it signs nobody in and resets nobody's idle window.\n\nAn unknown or retired token is refused `401` by the gate, before this runs. A token retired in\nthe moment between the gate and the lookup below is refused the same way, because by the time the\nanswer is written it is no longer accepted. The device comes from the gate and never from the\nrequest, so a router that lost the gate fails the request `500` rather than answer for nobody.",
+        "operationId": "this_device",
+        "responses": {
+          "200": {
+            "description": "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Answers `GET /healthz`.",
+        "operationId": "healthz",
+        "responses": {
+          "200": {
+            "description": "`status` `ok`, the binary's name and version, the protocol version it speaks, and the store it serves. No credential is needed"
+          }
+        }
+      }
+    },
+    "/ws": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Upgrades `GET /ws` to a WebSocket and pumps the fan-out into it.",
+        "description": "Reached only through the paired-device gate: an unpaired host on the store LAN is refused `401`\nbefore this runs. Until S0c that gate was absent and this endpoint served the whole\ncommitted-event stream — orders, bills, settlements — to anyone who could route to the box.",
+        "operationId": "fan_out",
+        "parameters": [
+          {
+            "name": "stream_id",
+            "in": "query",
+            "description": "The stream the device's last applied frame is on, to resume after it",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after_sequence",
+            "in": "query",
+            "description": "The sequence of that frame. Sent with stream_id or not at all",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "description": "`pos-edge.v1` and, from a browser, the device token, which cannot travel in Authorization on an upgrade",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Upgraded: the device receives the store's live frames, resumed after the named position where the fan-out can"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "The request comes from an origin the edge does not permit"
+          }
+        }
+      }
+    }
+  },
+  "components": {},
+  "tags": [
+    {
+      "name": "pairing",
+      "description": "How a device comes to hold a token, and whether it still does (ADR-0030, ADR-0091)."
+    },
+    {
+      "name": "status",
+      "description": "The box's own state: its liveness, and the live fan-out."
+    }
+  ]
+}
