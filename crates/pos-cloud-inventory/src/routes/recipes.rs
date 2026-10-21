@@ -26,6 +26,22 @@ use pos_cloud_api::conditional::{
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::RegistryTenantQuery;
 
+#[utoipa::path(
+    get,
+    path = "/admin/inventory/recipes",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The tenant's recipes, as an array, each with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
 /// A super-admin lists a tenant's authored recipes.
 pub(super) async fn admin_list_recipes<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
@@ -57,6 +73,24 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/inventory/recipes/{item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The recipe. The ETag carries the version it was read at"),
+        (status = 400, description = "item_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no recipe for that item", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
 /// A super-admin reads one recipe by the item it makes.
 pub(super) async fn admin_get_recipe<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
@@ -91,6 +125,28 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/inventory/recipes",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and \
+                       `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the \
+                       amount one unit consumes in thousandths of the ingredient's unit, which must \
+                       be positive; and `auto_86_threshold`, which may not be negative",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created. The body is the recipe and the ETag carries its version. Audited \
+                                      with the item, its line count and its threshold, never the amounts"),
+        (status = 400, description = "tenant_id or item_id is absent or not a ULID, auto_86_threshold is negative, or a line consumes nothing", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.inventory.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The item already has a recipe: edit that one instead", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
 /// A super-admin creates the recipe for an item, refusing if that item already has one.
 ///
 /// The route this replaced was a single `PUT` upsert that re-derived create-versus-update at
@@ -152,6 +208,34 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/inventory/recipes/{item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the \
+                       amount one unit consumes in thousandths of the ingredient's unit, which must \
+                       be positive; and `auto_86_threshold`, which may not be negative, as the recipe should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Updated. The body is the recipe and the ETag carries its new version. Audited \
+                                      without the amounts"),
+        (status = 400, description = "item_id or tenant_id is not a ULID, auto_86_threshold is negative, or a line consumes nothing, or If-Match is absent, \
+                                      malformed or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.inventory.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no recipe for that item", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The recipe changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
 /// A super-admin replaces the recipe for the path item, only at the version they read.
 pub(super) async fn admin_update_recipe<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,
@@ -222,6 +306,24 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/inventory/recipes/{item_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("item_id" = String, Path, description = "The menu item or modifier the recipe makes (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Deleted. Audited"),
+        (status = 400, description = "item_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.inventory.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no recipe for that item", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
 /// A super-admin deletes a recipe by the item it makes.
 pub(super) async fn admin_delete_recipe<Inv, A, C>(
     State(state): State<InventoryState<Inv, A, C>>,

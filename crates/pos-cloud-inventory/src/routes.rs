@@ -41,9 +41,23 @@ use ingredients::{
 };
 pub use publish::config_inventory_router;
 pub use publish::inventory_nodes;
+// The handlers the console's OpenAPI document names.
+pub use ingredients::{
+    __path_admin_create_ingredient, __path_admin_delete_ingredient, __path_admin_get_ingredient,
+    __path_admin_list_ingredients, __path_admin_update_ingredient,
+};
+pub use publish::__path_admin_publish_inventory;
+pub use recipes::{
+    __path_admin_create_recipe, __path_admin_delete_recipe, __path_admin_get_recipe,
+    __path_admin_list_recipes, __path_admin_update_recipe,
+};
 use recipes::{
     admin_create_recipe, admin_delete_recipe, admin_get_recipe, admin_list_recipes,
     admin_update_recipe,
+};
+pub use suppliers::{
+    __path_admin_create_supplier, __path_admin_delete_supplier, __path_admin_get_supplier,
+    __path_admin_list_suppliers, __path_admin_update_supplier,
 };
 use suppliers::{
     admin_create_supplier, admin_delete_supplier, admin_get_supplier, admin_list_suppliers,
