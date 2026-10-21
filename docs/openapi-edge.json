@@ -90,6 +90,44 @@
         }
       }
     },
+    "/api/kds/bump": {
+      "post": {
+        "tags": [
+          "kitchen"
+        ],
+        "summary": "`POST /api/kds/bump` — a station marks a ticket's lines prepared.",
+        "operationId": "bump_ticket",
+        "requestBody": {
+          "description": "`order_id`, `station_id`, and the `order_line_ids` the station made",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bumped: the order, the station, and the lines now marked prepared"
+          },
+          "400": {
+            "description": "An id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/layout": {
       "get": {
         "tags": [
@@ -123,6 +161,155 @@
           },
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/lines/{id}/fire": {
+      "post": {
+        "tags": [
+          "kitchen"
+        ],
+        "summary": "`POST /api/lines/{id}/fire` — fire a line to its station.",
+        "operationId": "fire_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order line's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The line, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/lines/{id}/quantity": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/lines/{id}/quantity` — change how many, while the line is still editable.",
+        "description": "A non-positive quantity is refused here rather than by the domain, and the distinction is\ndeliberate: zero is not a business rule anybody argued about, it is a malformed request, in the\nsame class as a path segment that is not a ULID. \"Take this off the order\" is a **void** — a\ndifferent act, with its own event, its own reason code and its own permission once the kitchen\nhas seen it — and a quantity of zero must not become a quiet way to perform one.",
+        "operationId": "set_quantity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order line's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`quantity`, in thousandths, greater than zero",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+          },
+          "400": {
+            "description": "The id is not a ULID, or the quantity is not greater than zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/lines/{id}/void": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/lines/{id}/void` — void a line, citing a reason from the store's managed list\n(ADR-0115, roadmap B2.2).",
+        "description": "A fired line needs [`pos_core::permission::Permission::VoidFiredLine`] and a manager's PIN with\nit; an unfired one is an ordinary cancel. The edge decides which, so the till sends the same\nrequest either way.",
+        "operationId": "void_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order line's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, a void reason from the managed list, and, where the void needs a manager, `approver_code` and `approver_pin`. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the void needs a manager's approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
           }
         }
       }
@@ -446,6 +633,115 @@
           },
           "400": {
             "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/fire": {
+      "post": {
+        "tags": [
+          "kitchen"
+        ],
+        "summary": "`POST /api/orders/{id}/fire` — send every unsent line on an order, in one transaction.",
+        "description": "The operator's act is \"send this order\". Firing line by line made it one tap and one round trip\neach, and a failure halfway left half the order with the kitchen. The commit is all or nothing;\nthe tickets print afterwards, one per line, exactly as the single-line route does — a printer\nthat is down must not un-fire food the kitchen is already making.\n\nAn order with nothing unsent answers `200` with an empty list rather than a refusal: two devices\ntapping send on the same table is an ordinary race, and the second one finding the work done is\nthe right outcome.",
+        "operationId": "fire_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/fire/{course_id}": {
+      "post": {
+        "tags": [
+          "kitchen"
+        ],
+        "summary": "`POST /api/orders/{id}/fire/{course_id}` — send every unsent line on one course (ADR-0130).",
+        "description": "[`fire_order`] narrowed to one course: \"starters away\" rather than \"send the order\". A separate\nroute rather than a field on the fire body, because they are two different operator acts and one\nof them is gated — burying that in an optional field would make whether the store needs\n`courses_enabled` depend on what happened to be in the JSON.\n\nA store with courses off is refused here rather than answered with an empty list, so an operator\nwho taps a course control that should not exist learns why. A course with nothing unsent on it\nanswers `200` with an empty list, for the reason [`fire_order`] does: two devices sending the\nstarters is an ordinary race.\n\nTickets print afterwards, one per line, exactly as the other two fire routes do.",
+        "operationId": "fire_course",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "course_id",
+            "in": "path",
+            "description": "The course's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+          },
+          "400": {
+            "description": "An id is not a ULID"
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -856,6 +1152,55 @@
           },
           "409": {
             "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/lines": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/tables/{id}/lines` — add a line to the order the table holds.",
+        "operationId": "add_table_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The line as the till captured it from the menu it holds: `menu_item_id`, `display_name`, `quantity` (in thousandths), `unit_price`, `line_total`, `tax_class_id` and `tax_rate`, with optional `seat`, `course_id`, `modifier_menu_item_ids` and `note`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+          },
+          "400": {
+            "description": "The id is not a ULID, or a note longer than 200 characters or with a control character"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
           }
         }
       }
