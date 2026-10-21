@@ -149,7 +149,7 @@ export function Button(props: ButtonProps) {
   return (
     <button
       {...rest}
-      class={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-token font-medium transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${metrics()} ${palette()} ${local.class ?? ""}`}
+      class={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-token font-medium transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50 ${metrics()} ${palette()} ${local.class ?? ""}`}
     >
       {local.children}
     </button>
