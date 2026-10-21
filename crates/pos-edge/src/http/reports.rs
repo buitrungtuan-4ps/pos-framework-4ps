@@ -46,6 +46,8 @@ pub(crate) struct TakingsResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/reports/takings",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("reports.takings.view"))),
     responses(
         (status = 200, description = "The current business day, what its settled bills came to, and how many \
                                       there were. The store's figure only: no person, till or shift"),

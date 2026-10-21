@@ -139,6 +139,7 @@ fn respond_with(plan: &DisplayPlan) -> LayoutResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/layout",
+    security(("till_session" = [])),
     params(
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),

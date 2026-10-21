@@ -71,6 +71,7 @@ pub(crate) struct LocaleResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/locale",
+    security(("till_session" = [])),
     params(
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),

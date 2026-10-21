@@ -127,6 +127,8 @@ fn needs_manage_devices() -> Response {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/print/agent",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     responses(
         (status = 200, description = "The store's published terminals, each held by this device, another \
                                       device or nobody, never naming which other device; and the terminal \
@@ -209,6 +211,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/print/agent",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
         description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
         content_type = "application/json",
@@ -276,6 +280,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/print/agent/revoke",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
         description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
         content_type = "application/json",

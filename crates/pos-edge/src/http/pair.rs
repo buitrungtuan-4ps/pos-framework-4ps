@@ -63,6 +63,8 @@ pub(crate) struct PairAccepted {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/pair",
+    security(),
+    extensions(("x-public-reason" = json!("a pairing code a manager minted, spent once (ADR-0030)"))),
     request_body(
         description = "`code`, the six-digit pairing code a manager minted",
         content_type = "application/json",
@@ -156,6 +158,7 @@ pub(crate) struct PairedDeviceView {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/pair/devices",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "How many devices are paired, whether pairings survive a restart, and each \
                                       device's id, when it paired and whether it is the caller. No token digest"),
@@ -216,6 +219,7 @@ pub(crate) struct ThisDevice {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/pair/this_device",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -258,6 +262,8 @@ pub(crate) async fn this_device(
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/pair/revoke",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
         description = "Optional `device_id`, the device to retire. Absent retires every paired device",
         content_type = "application/json",
@@ -395,6 +401,8 @@ pub(crate) struct MintedCode {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/pair/codes",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     responses(
         (status = 200, description = "The six-digit `code` the next device presents, replacing any live one, \
                                       and `expires_at_ms`. This reply is the only place the code exists: it \

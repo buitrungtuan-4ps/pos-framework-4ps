@@ -347,6 +347,8 @@ fn page_router(status: tokio::sync::watch::Receiver<ClaimStatus>) -> Router {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/claim",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: only a box that belongs to no store yet serves it"))),
     responses(
         (status = 200, description = "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; \
                                       `WAITING` with the `user_code` a person binds at the console, its \

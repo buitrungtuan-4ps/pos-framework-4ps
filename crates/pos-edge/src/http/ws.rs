@@ -93,6 +93,7 @@ impl Start {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/ws",
+    security(("till_session" = [])),
     params(
         ("stream_id" = Option<String>, Query, description = "The stream the device's last applied frame is on, to resume after it"),
         ("after_sequence" = Option<String>, Query, description = "The sequence of that frame. Sent with stream_id or not at all"),

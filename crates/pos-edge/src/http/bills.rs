@@ -179,6 +179,8 @@ impl From<BillView> for BillResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/bill",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -215,6 +217,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/bill",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
@@ -257,6 +261,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/settle",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["billing.payment.take", "cash.drawer.override_assignment"]))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -401,6 +407,8 @@ struct ReprintResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/receipt/reprint",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.receipt.reprint"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -568,6 +576,8 @@ impl WaiveFeeRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/fees/{fee_id}/waive",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.fee.waive"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
         ("fee_id" = String, Path, description = "The fee's id, a ULID"),
@@ -682,6 +692,8 @@ pub(crate) struct DiscountResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/discount",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["billing.discount.apply", "billing.discount.override_ceiling"]))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -768,6 +780,8 @@ pub(crate) struct SplitResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/split",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.split"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -832,6 +846,8 @@ pub(crate) struct MergeResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/merge",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.split"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -896,6 +912,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/void",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.void"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),

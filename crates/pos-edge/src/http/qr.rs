@@ -80,6 +80,7 @@ pub(crate) struct RejectRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/orders/awaiting-confirmation",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The guest orders waiting for staff, each with its table, lines and \
                                       total, and `reject_reasons`: the reasons a refusal may cite, in the \
@@ -143,6 +144,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/confirm",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.order.confirm_qr"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
@@ -181,6 +184,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/reject",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.order.confirm_qr"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),

@@ -61,6 +61,7 @@ pub(crate) struct FloorResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/floor",
+    security(("till_session" = [])),
     params(
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),

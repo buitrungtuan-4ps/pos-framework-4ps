@@ -48,7 +48,9 @@
           "503": {
             "description": "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`)"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "an activation code from the store's setup sheet (ADR-0050)"
       }
     },
     "/api/activation": {
@@ -65,7 +67,9 @@
           "503": {
             "description": "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "nothing: it says only whether this box is activated yet"
       }
     },
     "/api/bills/settled": {
@@ -88,7 +92,12 @@
           "500": {
             "description": "The business date could not be derived from the clock"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/bills/{id}/check": {
@@ -126,7 +135,12 @@
           "409": {
             "description": "The edge knows no such bill (`UNKNOWN_BILL`), or its figures cannot be assembled. `pos-error-reason` names why"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/bills/{id}/check/print": {
@@ -163,7 +177,13 @@
           "409": {
             "description": "Refused: the person lacks the permission to open a bill, the edge knows no such bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.open"
       }
     },
     "/api/bills/{id}/discount": {
@@ -212,7 +232,16 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "billing.discount.apply",
+          "billing.discount.override_ceiling"
+        ]
       }
     },
     "/api/bills/{id}/fees/{fee_id}/waive": {
@@ -271,7 +300,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.fee.waive"
       }
     },
     "/api/bills/{id}/merge": {
@@ -321,7 +356,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.split"
       }
     },
     "/api/bills/{id}/receipt/reprint": {
@@ -365,7 +406,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.receipt.reprint"
       }
     },
     "/api/bills/{id}/settle": {
@@ -414,7 +461,16 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "billing.payment.take",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/bills/{id}/split": {
@@ -464,7 +520,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.split"
       }
     },
     "/api/bills/{id}/void": {
@@ -514,7 +576,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.void"
       }
     },
     "/api/claim": {
@@ -527,7 +595,9 @@
           "200": {
             "description": "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; `WAITING` with the `user_code` a person binds at the console, its `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the claim page of a box that belongs to no store yet"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "nothing: only a box that belongs to no store yet serves it"
       }
     },
     "/api/drawer/open": {
@@ -562,7 +632,16 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.drawer.open_no_sale",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/floor": {
@@ -599,7 +678,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/integrations": {
@@ -619,7 +703,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/kds/bump": {
@@ -657,7 +746,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.ticket.bump"
       }
     },
     "/api/layout": {
@@ -694,7 +789,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/lines/{id}/fire": {
@@ -743,7 +843,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.fire"
       }
     },
     "/api/lines/{id}/quantity": {
@@ -793,7 +899,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
       }
     },
     "/api/lines/{id}/void": {
@@ -843,7 +955,16 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "sales.line.add",
+          "sales.line.void_fired"
+        ]
       }
     },
     "/api/locale": {
@@ -880,7 +1001,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/menu": {
@@ -929,7 +1055,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/menu/{id}/restore": {
@@ -972,7 +1103,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.item.mark_unavailable"
       }
     },
     "/api/menu/{id}/sold-out": {
@@ -1016,7 +1153,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.item.mark_unavailable"
       }
     },
     "/api/orders": {
@@ -1055,7 +1198,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
       }
     },
     "/api/orders/awaiting-confirmation": {
@@ -1075,7 +1224,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/orders/kitchen": {
@@ -1096,7 +1250,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/orders/live": {
@@ -1117,7 +1276,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/orders/open": {
@@ -1143,7 +1307,12 @@
           "503": {
             "description": "The queue numbers could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/orders/{id}/bill": {
@@ -1187,7 +1356,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.open"
       }
     },
     "/api/orders/{id}/check": {
@@ -1225,7 +1400,12 @@
           "409": {
             "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/orders/{id}/check/print": {
@@ -1262,7 +1442,13 @@
           "409": {
             "description": "Refused: the person lacks the permission to open a bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.open"
       }
     },
     "/api/orders/{id}/confirm": {
@@ -1305,7 +1491,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.order.confirm_qr"
       }
     },
     "/api/orders/{id}/fire": {
@@ -1355,7 +1547,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.fire"
       }
     },
     "/api/orders/{id}/fire/{course_id}": {
@@ -1414,7 +1612,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.fire"
       }
     },
     "/api/orders/{id}/lines": {
@@ -1463,7 +1667,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
       }
     },
     "/api/orders/{id}/reject": {
@@ -1512,7 +1722,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.order.confirm_qr"
       }
     },
     "/api/pair": {
@@ -1544,7 +1760,9 @@
           "503": {
             "description": "The pairing could not be recorded"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "a pairing code a manager minted, spent once (ADR-0030)"
       }
     },
     "/api/pair/codes": {
@@ -1568,7 +1786,13 @@
           "503": {
             "description": "The OS entropy source is unavailable, so no code was minted"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       }
     },
     "/api/pair/devices": {
@@ -1586,7 +1810,12 @@
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/pair/revoke": {
@@ -1619,7 +1848,13 @@
           "503": {
             "description": "The device registry could not be written, so the device may still be paired"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       }
     },
     "/api/pair/this_device": {
@@ -1637,7 +1872,12 @@
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/print/agent": {
@@ -1661,7 +1901,13 @@
           "503": {
             "description": "The binding record could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       },
       "post": {
         "tags": [
@@ -1691,7 +1937,13 @@
           "503": {
             "description": "The binding could not be recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       }
     },
     "/api/print/agent/revoke": {
@@ -1723,7 +1975,13 @@
           "503": {
             "description": "The binding could not be released"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       }
     },
     "/api/print/jobs": {
@@ -1757,7 +2015,12 @@
           "503": {
             "description": "The binding or the print queue could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/print/jobs/{job_id}/ack": {
@@ -1794,7 +2057,12 @@
           "503": {
             "description": "The binding or the print queue could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/printers": {
@@ -1814,7 +2082,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/printers/{id}/test": {
@@ -1848,7 +2121,13 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices (`PERMISSION_DENIED`)"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "admin.device.manage"
       }
     },
     "/api/reason-codes": {
@@ -1885,7 +2164,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/reports/takings": {
@@ -1906,7 +2190,13 @@
           "403": {
             "description": "Nobody is signed in, or the person's own role lacks reports.takings.view (`pos-error-reason: PERMISSION_DENIED`)"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "reports.takings.view"
       }
     },
     "/api/session": {
@@ -1923,7 +2213,12 @@
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/session/sign-in": {
@@ -1949,7 +2244,12 @@
           "503": {
             "description": "The sign-in could not be recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/session/sign-out": {
@@ -1966,7 +2266,12 @@
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/shifts": {
@@ -1989,7 +2294,12 @@
           "503": {
             "description": "The till this device is could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2022,7 +2332,16 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.shift.open",
+          "cash.shift.manage_other_till"
+        ]
       }
     },
     "/api/shifts/current": {
@@ -2046,7 +2365,12 @@
           "503": {
             "description": "The till this device is could not be read"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/shifts/{id}/close": {
@@ -2096,7 +2420,17 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.shift.close",
+          "cash.shift.manage_other_till",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/shifts/{id}/count": {
@@ -2145,7 +2479,17 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.shift.close",
+          "cash.shift.manage_other_till",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/shifts/{id}/paid-in": {
@@ -2194,7 +2538,16 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.movement.record",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/shifts/{id}/paid-out": {
@@ -2243,7 +2596,16 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.movement.record",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/shifts:batch_close": {
@@ -2281,7 +2643,17 @@
           "503": {
             "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.shift.close",
+          "cash.shift.manage_other_till",
+          "cash.drawer.override_assignment"
+        ]
       }
     },
     "/api/sync": {
@@ -2301,7 +2673,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/tables/{id}": {
@@ -2335,7 +2712,12 @@
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/tables/{id}/bill": {
@@ -2378,7 +2760,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.open"
       }
     },
     "/api/tables/{id}/check": {
@@ -2415,7 +2803,12 @@
           "409": {
             "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/tables/{id}/check/print": {
@@ -2453,7 +2846,13 @@
           "409": {
             "description": "Refused: the person lacks the permission to open a bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.open"
       }
     },
     "/api/tables/{id}/clean": {
@@ -2496,7 +2895,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.table.manage"
       }
     },
     "/api/tables/{id}/lines": {
@@ -2545,7 +2950,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
       }
     },
     "/api/tables/{id}/release": {
@@ -2588,7 +2999,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.table.manage"
       }
     },
     "/api/tables/{id}/seat": {
@@ -2638,7 +3055,13 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.table.manage"
       }
     },
     "/api/tables/{id}/transfer": {
@@ -2687,7 +3110,16 @@
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "sales.order.transfer",
+          "sales.table.manage"
+        ]
       }
     },
     "/healthz": {
@@ -2701,7 +3133,9 @@
           "200": {
             "description": "`status` `ok`, the binary's name and version, the protocol version it speaks, and the store it serves. No credential is needed"
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "nothing: a liveness probe"
       }
     },
     "/ws": {
@@ -2754,11 +3188,24 @@
           "403": {
             "description": "The request comes from an origin the edge does not permit"
           }
-        }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     }
   },
-  "components": {},
+  "components": {
+    "securitySchemes": {
+      "till_session": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The token a device is issued when it is paired, presented as a bearer token. On `/ws` a browser offers it as the second WebSocket subprotocol instead, because an upgrade cannot carry an Authorization header."
+      }
+    }
+  },
   "tags": [
     {
       "name": "pairing",

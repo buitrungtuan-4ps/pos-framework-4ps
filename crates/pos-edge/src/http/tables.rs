@@ -54,6 +54,8 @@ pub(crate) struct SeatRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/seat",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -115,6 +117,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/clean",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -150,6 +154,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/release",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -206,6 +212,8 @@ pub(crate) struct TransferResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/transfer",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["sales.order.transfer", "sales.table.manage"]))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -267,6 +275,7 @@ impl From<TransferView> for TransferResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/tables/{id}",
+    security(("till_session" = [])),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),

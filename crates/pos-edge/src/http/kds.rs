@@ -55,6 +55,8 @@ impl From<BumpView> for BumpResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/kds/bump",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.ticket.bump"))),
     request_body(
         description = "`order_id`, `station_id`, and the `order_line_ids` the station made",
         content_type = "application/json",

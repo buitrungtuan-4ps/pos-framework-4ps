@@ -77,6 +77,7 @@ struct CounterOrderResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/orders/open",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Every counter order still owing money, with its queue number where it \
                                       was given one, its lines, `total_due`, and any bill open on it"),
@@ -154,6 +155,7 @@ pub(super) fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<Str
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/bills/settled",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Today's settled bills, newest first and capped: each with its order, \
                                       table or queue number, receipt number, total, settle time and the \
@@ -226,6 +228,8 @@ struct OpenedOrderResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
     request_body(
         description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
                        store's walk-in channel. The body may be left out",
@@ -317,6 +321,8 @@ pub(super) struct OrderLineRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/lines",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),

@@ -35,6 +35,7 @@ pub(crate) struct IntegrationResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/integrations",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The vendor connections that serve this store, most specific first: each \
                                       one's family, provider and name. No setting is returned"),

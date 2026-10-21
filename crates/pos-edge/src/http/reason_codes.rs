@@ -63,6 +63,7 @@ pub(crate) struct ReasonCodesResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/reason-codes",
+    security(("till_session" = [])),
     params(
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),
