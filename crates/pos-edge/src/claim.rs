@@ -338,13 +338,25 @@ fn write_config(path: &Path, text: &str) -> Result<(), EdgeError> {
 /// itself for everything else.
 fn page_router(status: tokio::sync::watch::Receiver<ClaimStatus>) -> Router {
     Router::new()
-        .route("/api/claim", get(current_status))
+        .route("/api/claim", get(claim_status))
         .route("/", get(|| async { Redirect::temporary("/claim") }))
         .fallback(crate::http::assets::serve)
         .with_state(status)
 }
 
-async fn current_status(
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/claim",
+    responses(
+        (status = 200, description = "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; \
+                                      `WAITING` with the `user_code` a person binds at the console, its \
+                                      `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or \
+                                      `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the \
+                                      claim page of a box that belongs to no store yet"),
+    ),
+    tag = "activation",
+))]
+pub(crate) async fn claim_status(
     State(status): State<tokio::sync::watch::Receiver<ClaimStatus>>,
 ) -> Json<ClaimStatus> {
     Json(status.borrow().clone())

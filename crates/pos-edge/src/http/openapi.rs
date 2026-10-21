@@ -9,9 +9,8 @@
 //! (decision 2). The edge does not serve the document: it is committed, not a route.
 //!
 //! The registered routes are the ones `docs/snapshots/routes.txt` publishes, plus `/healthz` and
-//! `/ws`. Each is either documented here or named in [`UNDOCUMENTED`], the coverage debt, which
-//! only shrinks: a route added without either fails [`tests`], and so does a documented path no
-//! router serves, an entry in the list that is documented or gone, and an `operationId` used twice.
+//! `/ws`, and every one is documented here: a route added without an annotation fails [`tests`],
+//! and so does a documented path no router serves and an `operationId` used twice.
 
 use utoipa::OpenApi;
 
@@ -99,6 +98,17 @@ use utoipa::OpenApi;
         super::shifts::close_shift,
         super::shifts::batch_close_shifts,
         super::cash_movements::open_drawer,
+        crate::activation::activation_standing,
+        crate::activation::activate_device,
+        crate::claim::claim_status,
+        super::pair::mint_pairing_code,
+        super::pair::revoke_paired_device,
+        super::print_agent::list_terminals,
+        super::print_agent::claim_print_agent,
+        super::print_agent::release_print_agent,
+        super::print_jobs::claim_print_jobs,
+        super::print_jobs::acknowledge_print_job,
+        super::printers::test_printer,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
@@ -124,39 +134,22 @@ use utoipa::OpenApi;
         (name = "shifts", description = "The cash drawer: opening, counting and closing a shift, cash \
                                          paid in and out, and opening the drawer outside a sale \
                                          (ADR-0165, ADR-0167)."),
+        (name = "activation", description = "How a box comes to hold its device credential: the \
+                                             activation code exchange and its standing, and the claim \
+                                             page of a box that belongs to no store yet (ADR-0050, \
+                                             ADR-0148)."),
+        (name = "printing", description = "Binding a terminal's print agent, the agent's own job queue, \
+                                           and a printer's test page (ADR-0112)."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
-
-/// The routes this document does not yet describe, as `routes.txt` writes them: the coverage debt,
-/// which only shrinks.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the coverage debt is documentation that ships with the crate; the tests read it"
-    )
-)]
-const UNDOCUMENTED: &[&str] = &[
-    "GET /api/activation",
-    "GET /api/claim",
-    "GET /api/print/agent",
-    "GET /api/print/jobs",
-    "POST /api/activate",
-    "POST /api/pair/codes",
-    "POST /api/pair/revoke",
-    "POST /api/print/agent",
-    "POST /api/print/agent/revoke",
-    "POST /api/print/jobs/{job_id}/ack",
-    "POST /api/printers/{id}/test",
-];
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
 
-    use super::{EdgeApiDoc, UNDOCUMENTED};
+    use super::EdgeApiDoc;
     use utoipa::OpenApi as _;
 
     /// Where the generated document is committed, relative to the repository root.
@@ -214,22 +207,18 @@ mod tests {
         );
     }
 
-    /// Every registered route is documented or named as coverage debt.
+    /// Every registered route is documented.
     #[test]
-    fn every_edge_route_is_documented_or_listed() {
+    fn every_edge_route_is_documented() {
         let documented: BTreeSet<String> =
             documented().into_iter().map(|(route, _)| route).collect();
-        let listed: BTreeSet<String> = UNDOCUMENTED
-            .iter()
-            .map(|route| (*route).to_owned())
-            .collect();
         let missing: Vec<String> = registered()
             .into_iter()
-            .filter(|route| !documented.contains(route) && !listed.contains(route))
+            .filter(|route| !documented.contains(route))
             .collect();
         assert!(
             missing.is_empty(),
-            "annotate these routes' handlers, or list them in UNDOCUMENTED:\n{missing:#?}"
+            "annotate these routes' handlers and add them to EdgeApiDoc:\n{missing:#?}"
         );
     }
 
@@ -245,30 +234,6 @@ mod tests {
         assert!(
             phantom.is_empty(),
             "documented but not registered:\n{phantom:#?}"
-        );
-    }
-
-    /// `UNDOCUMENTED` holds only routes that are registered and not documented, each once.
-    #[test]
-    fn the_coverage_debt_list_holds_only_real_undocumented_routes() {
-        let registered = registered();
-        let documented: BTreeSet<String> =
-            documented().into_iter().map(|(route, _)| route).collect();
-        for route in UNDOCUMENTED {
-            assert!(
-                !documented.contains(*route),
-                "{route} is documented: remove it from UNDOCUMENTED"
-            );
-            assert!(
-                registered.contains(*route),
-                "{route} is not registered: remove it from UNDOCUMENTED"
-            );
-        }
-        let unique: BTreeSet<&&str> = UNDOCUMENTED.iter().collect();
-        assert_eq!(
-            unique.len(),
-            UNDOCUMENTED.len(),
-            "UNDOCUMENTED lists a route twice"
         );
     }
 

@@ -77,8 +77,23 @@ where
     Json(printers).into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/printers/{id}/test",
+    params(
+        ("id" = String, Path, description = "The printer's device id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "`print`: what came of printing a page that names the printer"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices (`PERMISSION_DENIED`)"),
+    ),
+    tag = "printing",
+))]
 /// `POST /api/printers/{device_id}/test` — print a page that names the printer.
-pub(crate) async fn test<S>(
+pub(crate) async fn test_printer<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,

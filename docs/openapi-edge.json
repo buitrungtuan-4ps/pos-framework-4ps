@@ -10,6 +10,64 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/api/activate": {
+      "post": {
+        "tags": [
+          "activation"
+        ],
+        "summary": "`POST /api/activate` — exchange the code, store the credential, record the completion.",
+        "operationId": "activate_device",
+        "requestBody": {
+          "description": "`code`, the activation code printed on the store's setup sheet, in any casing or spacing",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Activated: the `device_id` the stored credential authenticates as. The edge restarts a moment later so its cloud loops start with the credential"
+          },
+          "400": {
+            "description": "The code is malformed (`ACTIVATION_CODE_MALFORMED`)"
+          },
+          "401": {
+            "description": "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether the code was spent, revoked or never real"
+          },
+          "403": {
+            "description": "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether the code was spent, revoked or never real"
+          },
+          "404": {
+            "description": "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether the code was spent, revoked or never real"
+          },
+          "409": {
+            "description": "This box already holds a credential (`ALREADY_ACTIVATED`), or the cloud says the device is in the wrong state (`ACTIVATION_WRONG_STATE`)"
+          },
+          "500": {
+            "description": "Activation failed"
+          },
+          "503": {
+            "description": "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`)"
+          }
+        }
+      }
+    },
+    "/api/activation": {
+      "get": {
+        "tags": [
+          "activation"
+        ],
+        "summary": "`GET /api/activation` — report whether this box holds a device credential yet.",
+        "operationId": "activation_standing",
+        "responses": {
+          "200": {
+            "description": "`activated`: whether this box holds a device credential yet; and `state_access`, whether the store's state is closed to other local accounts, where the edge reports it"
+          },
+          "503": {
+            "description": "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"
+          }
+        }
+      }
+    },
     "/api/bills/settled": {
       "get": {
         "tags": [
@@ -455,6 +513,19 @@
           },
           "503": {
             "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/claim": {
+      "get": {
+        "tags": [
+          "activation"
+        ],
+        "operationId": "claim_status",
+        "responses": {
+          "200": {
+            "description": "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; `WAITING` with the `user_code` a person binds at the console, its `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the claim page of a box that belongs to no store yet"
           }
         }
       }
@@ -1476,6 +1547,30 @@
         }
       }
     },
+    "/api/pair/codes": {
+      "post": {
+        "tags": [
+          "pairing"
+        ],
+        "summary": "Mints the code for the next device, replacing whatever code was live.",
+        "description": "# Why this route exists\n\nA code is minted once per process start and nothing else minted another, so adding a second till\nto a trading store meant restarting the service — which drops every till's and kitchen display's\n`/ws` session and forces the outbox to drain\n([ADR-0117](../../../../docs/adr/0117-a-headless-store-keeps-a-log.md) §70). This removes all but\nthe first of those restarts: the first device on a virgin box still uses the boot code, because\nit has nothing to authenticate with, and every device after it is minted for from inside the\nstore.\n\n# What it deliberately does not do\n\nIt writes **no file** and logs **no code**. `POS_EDGE_PAIRING_FILE` is the headless *boot* path\nand this caller is neither headless nor booting — it is a manager holding a tablet that just\nreceived the reply. Minting does unlink that file, because the code it named is now dead\n([`Pairing::mint`]).\n\nThe log line carries no employee id either. A durable log records identifiers and counts, and a\nper-employee managerial-activity stream on a shop-floor box is the thing ADR-0117 §6 kept off\ndisk; who admitted a device is answered by the durable pairing record, not by this line\n([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §5).\n\n# What it records for later\n\nThe [`Minter`] rides on the code, and the redemption splits it: the **device** this request came\nfrom is named on the cloud-bound `device.admission.granted` event, and the **employee** signed in\non it is written to the store's own `paired_devices` row and goes no further. Both facts are\nknown only here, at mint time — the tablet that redeems presents six digits and nothing else.",
+        "operationId": "mint_pairing_code",
+        "responses": {
+          "200": {
+            "description": "The six-digit `code` the next device presents, replacing any live one, and `expires_at_ms`. This reply is the only place the code exists: it is neither written to a file nor logged"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices"
+          },
+          "503": {
+            "description": "The OS entropy source is unavailable, so no code was minted"
+          }
+        }
+      }
+    },
     "/api/pair/devices": {
       "get": {
         "tags": [
@@ -1490,6 +1585,39 @@
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/api/pair/revoke": {
+      "post": {
+        "tags": [
+          "pairing"
+        ],
+        "summary": "`POST /api/pair/revoke` — retire one device, or every device.",
+        "description": "Behind both gates, as [`mint_pairing_code`] is: a paired device **and** a signed-in person whose\nown role grants `admin.device.manage`\n([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 8). It used to need a paired device alone, on the reasoning that the edge had no\noperator identity offline; it has one now — the staff roster the cloud publishes, checked here\nwith no network — and retiring every till in the store is too strong an act to leave to any\ntablet in the shop. Every retirement is still recorded in the log.",
+        "operationId": "revoke_paired_device",
+        "requestBody": {
+          "description": "Optional `device_id`, the device to retire. Absent retires every paired device",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Retired"
+          },
+          "400": {
+            "description": "`device_id` is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices"
+          },
+          "503": {
+            "description": "The device registry could not be written, so the device may still be paired"
           }
         }
       }
@@ -1512,6 +1640,163 @@
         }
       }
     },
+    "/api/print/agent": {
+      "get": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "`GET /api/print/agent`: the store's published terminals, each held by this device, another\ndevice or nobody, and the terminal this device holds if the node does not list it.",
+        "description": "What the till's **This device** card is drawn from. It answers *another device* and never which\none, and nothing about when an agent last asked for work: a paired device's id would enumerate\nthe store's pairings, and the card needs neither. It tells the manager no more than a refused\nclaim (`HELD_BY_ANOTHER_DEVICE`) already would.\n\nRead from the published node and the binding record as they stand, so a terminal the console\nhas not published is not listed, whatever the record holds: this device's own binding to one is\nnamed apart, so the card can release it.",
+        "operationId": "list_terminals",
+        "responses": {
+          "200": {
+            "description": "The store's published terminals, each held by this device, another device or nobody, never naming which other device; and the terminal this device holds that the `devices` node does not list, if any"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices"
+          },
+          "503": {
+            "description": "The binding record could not be read"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "A paired device claims a terminal's agent identity, exclusively.",
+        "operationId": "claim_print_agent",
+        "requestBody": {
+          "description": "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`"
+          },
+          "400": {
+            "description": "`agent_device_id` is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices"
+          },
+          "503": {
+            "description": "The binding could not be recorded"
+          }
+        }
+      }
+    },
+    "/api/print/agent/revoke": {
+      "post": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "A paired device releases the identity it holds — how a dead terminal is replaced.",
+        "operationId": "release_print_agent",
+        "requestBody": {
+          "description": "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Released, or this device did not hold it: the answer does not say which"
+          },
+          "400": {
+            "description": "`agent_device_id` is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices"
+          },
+          "503": {
+            "description": "The binding could not be released"
+          }
+        }
+      }
+    },
+    "/api/print/jobs": {
+      "get": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "An agent asks for work, parking for up to [`AGENT_PARK`] if there is none.",
+        "operationId": "claim_print_jobs",
+        "parameters": [
+          {
+            "name": "kicks_drawer",
+            "in": "query",
+            "description": "`true` when the agent carries a drawer kick. Anything else reads as no",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`jobs`: at most one per printer the agent owns, each with the printer's address, connection and capabilities, when its lease lapses, and the document. Empty when nothing arrived while the request was parked"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "409": {
+            "description": "This device answers for no print agent; a manager binds one at the till"
+          },
+          "503": {
+            "description": "The binding or the print queue could not be read"
+          }
+        }
+      }
+    },
+    "/api/print/jobs/{job_id}/ack": {
+      "post": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "An agent reports a job written.",
+        "operationId": "acknowledge_print_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "description": "The print job's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Acknowledged: the job is written"
+          },
+          "400": {
+            "description": "`job_id` is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "409": {
+            "description": "This device answers for no print agent; a manager binds one at the till"
+          },
+          "503": {
+            "description": "The binding or the print queue could not be read"
+          }
+        }
+      }
+    },
     "/api/printers": {
       "get": {
         "tags": [
@@ -1528,6 +1813,40 @@
           },
           "403": {
             "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/printers/{id}/test": {
+      "post": {
+        "tags": [
+          "printing"
+        ],
+        "summary": "`POST /api/printers/{device_id}/test` — print a page that names the printer.",
+        "operationId": "test_printer",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The printer's device id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`print`: what came of printing a page that names the printer"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or the person's role does not grant managing devices (`PERMISSION_DENIED`)"
           }
         }
       }
@@ -2480,6 +2799,14 @@
     {
       "name": "shifts",
       "description": "The cash drawer: opening, counting and closing a shift, cash paid in and out, and opening the drawer outside a sale (ADR-0165, ADR-0167)."
+    },
+    {
+      "name": "activation",
+      "description": "How a box comes to hold its device credential: the activation code exchange and its standing, and the claim page of a box that belongs to no store yet (ADR-0050, ADR-0148)."
+    },
+    {
+      "name": "printing",
+      "description": "Binding a terminal's print agent, the agent's own job queue, and a printer's test page (ADR-0112)."
     }
   ]
 }

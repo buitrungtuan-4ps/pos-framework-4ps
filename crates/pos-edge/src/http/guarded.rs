@@ -235,5 +235,5 @@ where
             get(integrations::list_integrations::<S>),
         )
         .route("/api/printers", get(printers::list_printers::<S>))
-        .route("/api/printers/{id}/test", post(printers::test::<S>))
+        .route("/api/printers/{id}/test", post(printers::test_printer::<S>))
 }
