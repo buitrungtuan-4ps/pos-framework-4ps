@@ -23,6 +23,8 @@ tracing    = "0.1"
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
+# The routes are documented in the console's OpenAPI document (ADR-0019, ADR-0177).
+utoipa     = "6"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

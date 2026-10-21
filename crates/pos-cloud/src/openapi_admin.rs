@@ -39,11 +39,11 @@
 //!
 //! Two things can rot. The document can drift from the code, which
 //! [`the_committed_admin_openapi_matches_the_code`] catches the way `/v1`'s snapshot does. And a
-//! route can be added without being documented, which [`every_admin_route_is_documented_or_listed`]
+//! route can be added without being documented, which [`every_admin_route_is_documented`]
 //! catches: it reads this crate's own router source, extracts every registered `/admin` path, and
-//! requires each to be either in the document or named in [`UNDOCUMENTED`]. That list is the
-//! coverage debt, in the repository, shrinking — and a route added tomorrow lands in neither and
-//! fails the build.
+//! requires each to be in the document. The coverage debt list it once also accepted reached empty
+//! with the inventory routes and was deleted (ADR-0177), so a route added tomorrow without an
+//! annotation fails the build.
 
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -281,6 +281,22 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_floor::routes::admin_list_routing,
         pos_cloud_floor::routes::admin_create_routing,
         pos_cloud_floor::routes::admin_remove_routing,
+        pos_cloud_inventory::routes::admin_list_ingredients,
+        pos_cloud_inventory::routes::admin_create_ingredient,
+        pos_cloud_inventory::routes::admin_get_ingredient,
+        pos_cloud_inventory::routes::admin_update_ingredient,
+        pos_cloud_inventory::routes::admin_delete_ingredient,
+        pos_cloud_inventory::routes::admin_list_recipes,
+        pos_cloud_inventory::routes::admin_create_recipe,
+        pos_cloud_inventory::routes::admin_get_recipe,
+        pos_cloud_inventory::routes::admin_update_recipe,
+        pos_cloud_inventory::routes::admin_delete_recipe,
+        pos_cloud_inventory::routes::admin_list_suppliers,
+        pos_cloud_inventory::routes::admin_create_supplier,
+        pos_cloud_inventory::routes::admin_get_supplier,
+        pos_cloud_inventory::routes::admin_update_supplier,
+        pos_cloud_inventory::routes::admin_delete_supplier,
+        pos_cloud_inventory::routes::admin_publish_inventory,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -662,6 +678,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            reaches the store until its floor and kitchen are published together."
         ),
         (
+            name = "inventory",
+            description = "A tenant's inventory (ADR-0079): its ingredients, each in a unit of \
+                           measure; its suppliers; and a recipe for each menu item or modifier \
+                           that consumes them, with an auto-86 threshold. Ingredients and \
+                           suppliers get ids minted here; a recipe is keyed by the item it makes. \
+                           Every edit is conditional on the version it was read at. A recipe's \
+                           amounts are proprietary, so no audit entry records them. Nothing \
+                           reaches a store until its inventory is published."
+        ),
+        (
             name = "openapi",
             description = "This document (ADR-0019), served without a session: it describes routes \
                            and carries no tenant data."
@@ -731,33 +757,6 @@ impl Modify for SessionCookie {
         }
     }
 }
-
-/// The `/admin` routes this document does not yet describe — the coverage debt, and the reason
-/// [`every_admin_route_is_documented_or_listed`] can pass while coverage is partial.
-///
-/// Every entry is a path a fork's client can call and will find no documentation for. The list only
-/// shrinks: a route added without an entry and without an annotation fails that test, so new
-/// surface cannot join the debt silently. When it reaches empty, delete it and the test becomes
-/// "every route is documented" with nothing further to do.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the coverage debt is documentation that ships with the crate — the tests are what \
-                  read it, but deleting it from a release build would delete the record"
-    )
-)]
-const UNDOCUMENTED: &[&str] = &[
-    // --- the four-level configuration tree and its publishes (ADR-0033) ---
-    "/admin/config/inventory",
-    // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
-    "/admin/inventory/ingredients",
-    "/admin/inventory/ingredients/{ingredient_id}",
-    "/admin/inventory/recipes",
-    "/admin/inventory/recipes/{item_id}",
-    "/admin/inventory/suppliers",
-    "/admin/inventory/suppliers/{supplier_id}",
-];
 
 /// Every `/admin` path the router registers, read out of this crate's own router source.
 ///
@@ -839,7 +838,7 @@ pub(crate) fn router_sources() -> Vec<String> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{AdminApiDoc, UNDOCUMENTED, registered_admin_paths};
+    use super::{AdminApiDoc, registered_admin_paths};
     use utoipa::OpenApi as _;
 
     /// Where the generated document is committed, relative to the repository root.
@@ -921,14 +920,13 @@ mod tests {
         }
     }
 
-    /// Every registered `/admin` route is either documented or named as coverage debt.
+    /// Every registered `/admin` route is documented.
     ///
     /// This is the half a snapshot cannot see: the snapshot proves the document matches the
-    /// annotations, not that the annotations cover the router. Adding a route without either an
-    /// annotation or an `UNDOCUMENTED` entry fails here, so the surface cannot grow undocumented
-    /// without someone writing it down.
+    /// annotations, not that the annotations cover the router. Adding a route without an
+    /// annotation fails here, so the surface cannot grow undocumented.
     #[test]
-    fn every_admin_route_is_documented_or_listed() {
+    fn every_admin_route_is_documented() {
         let registered = registered_admin_paths();
         assert!(
             registered.len() > 100,
@@ -937,17 +935,14 @@ mod tests {
             registered.len(),
         );
         let documented = documented_paths();
-        let listed: BTreeSet<String> = UNDOCUMENTED.iter().map(|path| (*path).to_owned()).collect();
-
         let missing: Vec<&String> = registered
             .iter()
-            .filter(|path| !documented.contains(*path) && !listed.contains(*path))
+            .filter(|path| !documented.contains(*path))
             .collect();
         assert!(
             missing.is_empty(),
-            "these registered /admin routes are neither documented nor listed as coverage debt in \
-             UNDOCUMENTED — annotate the handler with #[utoipa::path] or add the path to that \
-             list:\n{missing:#?}",
+            "these registered /admin routes are not documented — annotate the handler with \
+             #[utoipa::path] and name it in AdminApiDoc's paths:\n{missing:#?}",
         );
     }
 
@@ -967,33 +962,6 @@ mod tests {
             phantom.is_empty(),
             "these paths are documented but not registered in the router — the annotation's \
              `path = ` disagrees with its `.route(` :\n{phantom:#?}",
-        );
-    }
-
-    /// `UNDOCUMENTED` holds nothing that is documented, and nothing the router does not serve.
-    ///
-    /// Without this the list would rot in both directions: an entry for a route since annotated
-    /// would hide it from the coverage count, and an entry for a route since deleted would sit
-    /// there forever looking like debt.
-    #[test]
-    fn the_coverage_debt_list_holds_only_real_undocumented_routes() {
-        let documented = documented_paths();
-        let registered = registered_admin_paths();
-        for path in UNDOCUMENTED {
-            assert!(
-                !documented.contains(*path),
-                "{path} is documented — remove it from UNDOCUMENTED",
-            );
-            assert!(
-                registered.contains(*path),
-                "{path} is in UNDOCUMENTED but the router does not serve it — remove the entry",
-            );
-        }
-        let unique: BTreeSet<&&str> = UNDOCUMENTED.iter().collect();
-        assert_eq!(
-            unique.len(),
-            UNDOCUMENTED.len(),
-            "UNDOCUMENTED lists a path twice",
         );
     }
 }
