@@ -52,6 +52,27 @@ impl From<BumpView> for BumpResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/kds/bump",
+    request_body(
+        description = "`order_id`, `station_id`, and the `order_line_ids` the station made",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Bumped: the order, the station, and the lines now marked prepared"),
+        (status = 400, description = "An id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "kitchen",
+))]
 /// `POST /api/kds/bump` — a station marks a ticket's lines prepared.
 pub(crate) async fn bump_ticket<S>(
     State(edge): State<Arc<Edge<S>>>,
