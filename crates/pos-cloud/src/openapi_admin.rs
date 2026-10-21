@@ -274,6 +274,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         pos_cloud_floor::routes::admin_update_table,
         pos_cloud_floor::routes::admin_publish_floor,
         pos_cloud_floor::routes::admin_list_table_qr,
+        pos_cloud_floor::routes::admin_list_stations,
+        pos_cloud_floor::routes::admin_create_station,
+        pos_cloud_floor::routes::admin_get_station,
+        pos_cloud_floor::routes::admin_update_station,
+        pos_cloud_floor::routes::admin_list_routing,
+        pos_cloud_floor::routes::admin_create_routing,
+        pos_cloud_floor::routes::admin_remove_routing,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -646,6 +653,15 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            token, which carries no personal data."
         ),
         (
+            name = "kitchen",
+            description = "A store's kitchen (ADR-0072): its stations, each with a backup, a late \
+                           threshold and the language its tickets print in, and the rules that \
+                           route a menu item or a course to a station. A rule matches exactly one \
+                           of the two, and only a course the tenant carries. Stations are archived \
+                           rather than deleted and edited conditionally; a rule is removed. Nothing \
+                           reaches the store until its floor and kitchen are published together."
+        ),
+        (
             name = "openapi",
             description = "This document (ADR-0019), served without a session: it describes routes \
                            and carries no tenant data."
@@ -741,11 +757,6 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/inventory/recipes/{item_id}",
     "/admin/inventory/suppliers",
     "/admin/inventory/suppliers/{supplier_id}",
-    // --- kitchen stations and routing (M2, ADR-0072) ---
-    "/admin/kitchen/routing",
-    "/admin/kitchen/routing/{rule_id}",
-    "/admin/kitchen/stations",
-    "/admin/kitchen/stations/{station_id}",
 ];
 
 /// Every `/admin` path the router registers, read out of this crate's own router source.

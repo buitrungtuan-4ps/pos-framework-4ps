@@ -31,6 +31,24 @@ use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_
 use pos_cloud_api::refusal::{not_found, parse_optional_ulid};
 use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
+#[utoipa::path(
+    get,
+    path = "/admin/kitchen/stations",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's kitchen stations, active and archived, as an array, each with its `etag`"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin lists a store's kitchen stations.
 pub(super) async fn admin_list_stations<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -62,6 +80,25 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/kitchen/stations/{station_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("station_id" = String, Path, description = "The station (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The station. The ETag carries the version it was read at"),
+        (status = 400, description = "station_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no station with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin reads one kitchen station, with the version it was read at.
 pub(super) async fn admin_get_station<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -99,6 +136,33 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/kitchen/stations",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id` and `store_id`, and the station's `name`, which may not be blank; optionally \
+                       `backup_station_id`, the station its tickets go to when its printer is down; \
+                       `is_default`, whether it is the store's catch-all for a fired line no rule \
+                       routes; `late_after_seconds`, from 60 to 3600, when the kitchen display marks \
+                       its tickets late, absent for the default; and \
+                       `ticket_language`, a `RECEIPT_LANGUAGE_…` token, absent for the store's \
+                       display language",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+                                      its version. Audited"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID; name is blank; backup_station_id is \
+                                      not a ULID; late_after_seconds is outside 60 to 3600; or ticket_language is not \
+                                      a language token", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin creates a kitchen station; its id is minted here and returned once.
 pub(super) async fn admin_create_station<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -198,6 +262,41 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/kitchen/stations/{station_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("station_id" = String, Path, description = "The station (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`, `status` (`active` or `archived`), and the station's `name`, which may not be blank; optionally \
+                       `backup_station_id`, the station its tickets go to when its printer is down; \
+                       `is_default`, whether it is the store's catch-all for a fired line no rule \
+                       routes; `late_after_seconds`, from 60 to 3600, when the kitchen display marks \
+                       its tickets late, absent for the default; and \
+                       `ticket_language`, a `RECEIPT_LANGUAGE_…` token, absent for the store's \
+                       display language. The body is the \
+                       station's whole new state, so an absent threshold or language is the default again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Updated. The body is empty and the ETag carries the new version. Audited"),
+        (status = 400, description = "station_id or tenant_id is not a ULID; name is blank; backup_station_id is not a \
+                                      ULID; late_after_seconds is outside 60 to 3600; ticket_language is not a \
+                                      language token; status is not `active` or `archived`; or If-Match is absent, \
+                                      malformed or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no station with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The station changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin sets a kitchen station's whole new state, conditional on the version it was read at.
 pub(super) async fn admin_update_station<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,

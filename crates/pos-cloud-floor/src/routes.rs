@@ -46,6 +46,13 @@ pub use areas::{
     __path_admin_update_area,
 };
 pub use publish::__path_admin_publish_floor;
+pub use routing::{
+    __path_admin_create_routing, __path_admin_list_routing, __path_admin_remove_routing,
+};
+pub use stations::{
+    __path_admin_create_station, __path_admin_get_station, __path_admin_list_stations,
+    __path_admin_update_station,
+};
 pub use table_qr::__path_admin_list_table_qr;
 pub use tables::{
     __path_admin_create_table, __path_admin_get_table, __path_admin_list_tables,
