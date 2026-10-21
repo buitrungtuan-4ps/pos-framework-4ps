@@ -128,6 +128,8 @@ impl From<LineView> for LineResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/lines",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -180,6 +182,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/lines/{id}/fire",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
     params(
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),
@@ -248,6 +252,8 @@ pub(crate) struct QuantityRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/lines/{id}/quantity",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
     params(
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),
@@ -301,6 +307,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/fire",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
@@ -382,6 +390,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/fire/{course_id}",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
         ("course_id" = String, Path, description = "The course's id, a ULID"),
@@ -515,6 +525,8 @@ impl VoidLineRequest {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/lines/{id}/void",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["sales.line.add", "sales.line.void_fired"]))),
     params(
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),

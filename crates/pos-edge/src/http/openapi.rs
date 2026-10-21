@@ -11,8 +11,15 @@
 //! The registered routes are the ones `docs/snapshots/routes.txt` publishes, plus `/healthz` and
 //! `/ws`, and every one is documented here: a route added without an annotation fails [`tests`],
 //! and so does a documented path no router serves and an `operationId` used twice.
+//!
+//! Each operation says who may call it (decision 5): `till_session`, the token a device holds once
+//! it is paired, or `security: []` with an `x-public-reason` naming what gates it instead. A route
+//! a signed-in person must hold a permission for carries it as `x-permission`, exactly as
+//! [`ROUTE_PERMISSIONS`](super::route_permissions::ROUTE_PERMISSIONS) lists it, which stays the
+//! record: [`tests`] fails on any difference.
 
-use utoipa::OpenApi;
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::{Modify, OpenApi};
 
 /// The till's API document. Only its tests read it, since the edge does not serve it.
 #[cfg_attr(
@@ -110,6 +117,7 @@ use utoipa::OpenApi;
         super::print_jobs::acknowledge_print_job,
         super::printers::test_printer,
     ),
+    modifiers(&TillSession),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
                                           does (ADR-0030, ADR-0091)."),
@@ -143,6 +151,36 @@ use utoipa::OpenApi;
     )
 )]
 pub(crate) struct EdgeApiDoc;
+
+/// Declares `till_session`, the token a device is issued when it is paired (ADR-0030), so the
+/// document says how a device authenticates. A modifier rather than an attribute, as the cloud's
+/// schemes are, because utoipa builds a scheme through its own builder.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the document's tests build it")
+)]
+struct TillSession;
+
+impl Modify for TillSession {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi
+            .components
+            .get_or_insert_with(|| utoipa::openapi::ComponentsBuilder::new().build());
+        components.add_security_scheme(
+            "till_session",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .description(Some(
+                        "The token a device is issued when it is paired, presented as a bearer \
+                         token. On `/ws` a browser offers it as the second WebSocket subprotocol \
+                         instead, because an upgrade cannot carry an Authorization header.",
+                    ))
+                    .build(),
+            ),
+        );
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -235,6 +273,80 @@ mod tests {
             phantom.is_empty(),
             "documented but not registered:\n{phantom:#?}"
         );
+    }
+
+    /// Every operation as the document renders it, keyed `METHOD /path`.
+    fn operations() -> Vec<(String, serde_json::Value)> {
+        let json = serde_json::to_value(EdgeApiDoc::openapi()).expect("serialize the document");
+        let mut operations = Vec::new();
+        for (path, item) in json["paths"].as_object().into_iter().flatten() {
+            for (method, operation) in item.as_object().into_iter().flatten() {
+                operations.push((
+                    format!("{} {path}", method.to_uppercase()),
+                    operation.clone(),
+                ));
+            }
+        }
+        operations
+    }
+
+    /// Every operation says who may call it: the paired device's `till_session`, or `security: []`
+    /// with an `x-public-reason` that names what gates it instead (ADR-0177 decision 5).
+    #[test]
+    fn every_edge_operation_says_who_may_call_it() {
+        for (route, operation) in operations() {
+            let security = operation["security"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{route} declares no security"));
+            let reason = operation["x-public-reason"].as_str().unwrap_or_default();
+            if security.is_empty() {
+                assert!(
+                    !reason.trim().is_empty(),
+                    "{route} is public, so it needs an x-public-reason"
+                );
+            } else {
+                assert_eq!(
+                    security,
+                    &vec![serde_json::json!({ "till_session": [] })],
+                    "{route} should require till_session and nothing else"
+                );
+                assert!(
+                    reason.is_empty(),
+                    "{route} requires a token, yet gives a public reason"
+                );
+            }
+        }
+    }
+
+    /// `x-permission` is `ROUTE_PERMISSIONS`, which stays the record: one permission id as a string,
+    /// several as a list in the table's order, and none on a route no person's permission gates.
+    #[test]
+    fn x_permission_is_what_route_permissions_lists() {
+        use super::super::route_permissions::{ROUTE_PERMISSIONS, RouteGate};
+        for (route, operation) in operations() {
+            let expected = ROUTE_PERMISSIONS
+                .iter()
+                .find(|(listed, _)| *listed == route)
+                .and_then(|(_, gate)| match gate {
+                    RouteGate::Person(permissions) => Some(*permissions),
+                    RouteGate::NoPerson(_) => None,
+                })
+                .map(|permissions| {
+                    let ids: Vec<&str> = permissions
+                        .iter()
+                        .map(|permission| permission.meta().id)
+                        .collect();
+                    match ids.as_slice() {
+                        [one] => serde_json::json!(one),
+                        _ => serde_json::json!(ids),
+                    }
+                });
+            assert_eq!(
+                operation.get("x-permission"),
+                expected.as_ref(),
+                "{route}'s x-permission disagrees with ROUTE_PERMISSIONS"
+            );
+        }
     }
 
     /// Each `operationId` is its handler's name, so two handlers may not share one (ADR-0177

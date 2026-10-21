@@ -119,6 +119,7 @@ pub(crate) struct BillCheckResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/tables/{id}/check",
+    security(("till_session" = [])),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -160,6 +161,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/orders/{id}/check",
+    security(("till_session" = [])),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
@@ -205,6 +207,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/bills/{id}/check",
+    security(("till_session" = [])),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
@@ -265,6 +268,8 @@ pub(crate) struct PrintResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
     params(
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
@@ -316,6 +321,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/orders/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
     params(
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
@@ -361,6 +368,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/bills/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
     params(
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),

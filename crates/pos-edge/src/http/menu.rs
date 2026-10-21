@@ -329,6 +329,7 @@ pub(crate) struct MenuQuery {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/menu",
+    security(("till_session" = [])),
     params(
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
         ("channel" = Option<String>, Query, description = "A sales channel's wire token. Absent means the store's own channel"),
@@ -424,6 +425,8 @@ pub(crate) struct SoldOutResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/menu/{id}/sold-out",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.item.mark_unavailable"))),
     params(
         ("id" = String, Path, description = "The menu item's id, a ULID"),
     ),
@@ -461,6 +464,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/menu/{id}/restore",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.item.mark_unavailable"))),
     params(
         ("id" = String, Path, description = "The menu item's id, a ULID"),
     ),

@@ -75,6 +75,7 @@ impl SyncResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/sync",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The outbox depth and its level against the planned depth, the cloud link, \
                                       when the outbox last reached the cloud, and the box's measured clock offset. \

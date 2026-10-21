@@ -265,6 +265,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/print/jobs",
+    security(("till_session" = [])),
     params(
         ("kicks_drawer" = Option<bool>, Query, description = "`true` when the agent carries a drawer kick. \
                                                               Anything else reads as no"),
@@ -372,6 +373,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/print/jobs/{job_id}/ack",
+    security(("till_session" = [])),
     params(
         ("job_id" = String, Path, description = "The print job's id, a ULID"),
     ),

@@ -291,6 +291,7 @@ fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/session/sign-in",
+    security(("till_session" = [])),
     request_body(
         description = "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
         content_type = "application/json",
@@ -386,6 +387,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/session/sign-out",
+    security(("till_session" = [])),
     responses(
         (status = 204, description = "Signed out, or nobody was signed in"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -414,6 +416,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/session",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Whether anyone is signed in on this device and who; the box's lease \
                                       standing; whether anyone can sign in; the person's permissions, held \

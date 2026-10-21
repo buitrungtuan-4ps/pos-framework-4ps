@@ -64,6 +64,8 @@ struct OpenDrawerResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts/{id}/paid-in",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.movement.record", "cash.drawer.override_assignment"]))),
     params(
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
@@ -107,6 +109,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts/{id}/paid-out",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.movement.record", "cash.drawer.override_assignment"]))),
     params(
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
@@ -201,6 +205,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/drawer/open",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.drawer.open_no_sale", "cash.drawer.override_assignment"]))),
     request_body(
         description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
                        opening. Both are secrets and are never logged",

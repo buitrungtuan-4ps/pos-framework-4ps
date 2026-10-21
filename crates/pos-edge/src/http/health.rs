@@ -32,6 +32,8 @@ pub(crate) struct Health {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/healthz",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: a liveness probe"))),
     responses(
         (status = 200, description = "`status` `ok`, the binary's name and version, the protocol version it speaks, \
                                       and the store it serves. No credential is needed"),

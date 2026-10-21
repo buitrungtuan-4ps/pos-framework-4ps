@@ -233,6 +233,8 @@ impl From<ShiftView> for ShiftResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.open", "cash.shift.manage_other_till"]))),
     request_body(
         description = "`opening_float`, with optional `terminal_device_id` for another till's drawer, \
                        `assigned_employee_id` or `assigned_staff_code` for whom it is for, and \
@@ -300,6 +302,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/shifts",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Every drawer the store keeps, each with its till, default float and \
                                       open shift; the drawer model the edge runs and any the store has \
@@ -429,6 +432,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/shifts/current",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The shift trading now on this device's drawer, or `null` when none is \
                                       open. Blind: no expectation or variance, unless the store turned the \
@@ -468,6 +472,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts/{id}/count",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
     params(
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
@@ -530,6 +536,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts/{id}/close",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
     params(
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
@@ -616,6 +624,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/shifts:batch_close",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
     request_body(
         description = "`shift_ids` to close, every one or none, with optional `variance_reasons` (each a \
                        `shift_id` and `reason_code_id`) and one `approver_code` and `approver_pin` for the \

@@ -53,6 +53,7 @@ pub(crate) struct TestPrintResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/printers",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "The printers this store published, in publication order"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -80,6 +81,8 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/printers/{id}/test",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
     params(
         ("id" = String, Path, description = "The printer's device id, a ULID"),
     ),

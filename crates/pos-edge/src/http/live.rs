@@ -119,6 +119,7 @@ struct LiveOrderResponse {
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/orders/live",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Every open order, floor and counter, with its table, open bills and \
                                       channel where it has them, and every line with the id a fire, a void \
@@ -143,6 +144,7 @@ where
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/orders/kitchen",
+    security(("till_session" = [])),
     responses(
         (status = 200, description = "Every open order, and each paid order without a table that the kitchen \
                                       has not finished, fired on the current business day, in the shape `GET \

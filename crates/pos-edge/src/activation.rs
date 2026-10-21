@@ -183,6 +183,8 @@ pub async fn boot_standing<V: KeyVault>(vault: &V) -> Result<ActivationStanding,
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/activate",
+    security(),
+    extensions(("x-public-reason" = json!("an activation code from the store's setup sheet (ADR-0050)"))),
     request_body(
         description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
                        spacing",
@@ -301,6 +303,8 @@ async fn store_credential<V: KeyVault>(vault: &V, credential: &Secret) -> Result
 #[cfg_attr(feature = "openapi", utoipa::path(
     get,
     path = "/api/activation",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: it says only whether this box is activated yet"))),
     responses(
         (status = 200, description = "`activated`: whether this box holds a device credential yet; and \
                                       `state_access`, whether the store's state is closed to other local \
