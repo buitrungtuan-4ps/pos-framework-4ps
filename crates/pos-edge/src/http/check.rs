@@ -262,6 +262,23 @@ pub(crate) struct PrintResponse {
     prints: Vec<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/check/print",
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "`prints`: what came of printing each pre-bill, one per open part of a \
+                                      split table, in the order they were sent"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, or there is \
+                                      nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/check/print` — print the table's pre-bill (roadmap-v3 B2.1): one per open
 /// part once its bill is split.
 ///
@@ -296,6 +313,23 @@ where
     .await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/check/print",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "`prints`: what came of printing each pre-bill, in the order they were \
+                                      sent"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, or there is \
+                                      nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order
 /// the guest wants to see priced before paying.
 pub(crate) async fn print_order_check<S>(

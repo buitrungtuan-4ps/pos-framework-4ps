@@ -826,6 +826,93 @@
         }
       }
     },
+    "/api/menu/{id}/restore": {
+      "post": {
+        "tags": [
+          "menu"
+        ],
+        "summary": "`POST /api/menu/{id}/restore` — staff bring an item they marked sold out back.",
+        "operationId": "restore_item",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The menu item's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Back on sale: the `menu_item_id`, and `sold_out` false"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/menu/{id}/sold-out": {
+      "post": {
+        "tags": [
+          "menu"
+        ],
+        "summary": "`POST /api/menu/{id}/sold-out` — staff mark an item sold out at this store (86), so every device\ngreys it out and the edge refuses a line for it until it is restored.",
+        "description": "[`Edge::mark_item_sold_out`] carries the rules: `sales.item.mark_unavailable`, no PIN, and a\nsecond tap on an item already sold out writes nothing.",
+        "operationId": "mark_sold_out",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The menu item's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sold out at this store: the `menu_item_id`, and `sold_out` true. Marking an item already sold out writes nothing"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/orders": {
       "post": {
         "tags": [
@@ -1031,6 +1118,43 @@
           },
           "409": {
             "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/check/print": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order\nthe guest wants to see priced before paying.",
+        "operationId": "print_order_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`prints`: what came of printing each pre-bill, in the order they were sent"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission to open a bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
           }
         }
       }
@@ -1625,6 +1749,87 @@
         }
       }
     },
+    "/api/tables/{id}/check/print": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/check/print` — print the table's pre-bill (roadmap-v3 B2.1): one per open\npart once its bill is split.",
+        "description": "Printing a pre-bill is presenting the bill, so it needs `billing.bill.open`, as opening one does\n(ADR-0158), on all three print routes.",
+        "operationId": "print_table_check",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`prints`: what came of printing each pre-bill, one per open part of a split table, in the order they were sent"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission to open a bill, or there is nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/clean": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/clean` — clean the table down and release it.",
+        "operationId": "clean_table",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The table: its id and its new `state`, a `TABLE_STATE_*` token"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
     "/api/tables/{id}/lines": {
       "post": {
         "tags": [
@@ -1655,6 +1860,148 @@
           },
           "400": {
             "description": "The id is not a ULID, or a note longer than 200 characters or with a control character"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/release": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/release` — give a table seated by mistake straight back to the floor,\nwhile nothing is sold on it\n([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)).",
+        "operationId": "release_table",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Released while nothing is sold on it: its id and its new `state`, a `TABLE_STATE_*` token"
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/seat": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/seat` — seat guests and open an order.",
+        "description": "The body is optional, and read as raw [`Bytes`] rather than through `Json` so that it is\noptional in the way devices actually behave: `Option<Json<_>>` treats a body as absent only when\nthe `content-type` header is missing, and plenty of clients send `application/json` with nothing\nafter it. Both spellings of \"no count\" are accepted; a body that is present but malformed is\nrefused rather than silently ignored, because a device that meant to send a count and got the\nshape wrong should be told.\n\nNo screen prompts for the count yet — whether tap-to-seat should grow a step is roadmap **Q7**'s\ncall, not this slice's; the route carries it so that decision does not also need a wire change.",
+        "operationId": "seat_table",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional `guest_count`. An empty body seats the table with the count unknown",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Seated, with an order opened: its id and its new `state`, a `TABLE_STATE_*` token"
+          },
+          "400": {
+            "description": "The id is not a ULID, or a body is present that is not `guest_count`"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        }
+      }
+    },
+    "/api/tables/{id}/transfer": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/transfer` — move the guests at this table, and their order, to a free\none (`sales.table.transferred`). The body is `{\"to_table_id\": \"<ulid>\"}`.",
+        "operationId": "transfer_table",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`to_table_id`, the free table the guests and their order move to",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Moved: the `order_id` that moved, and both tables after it, `from_table` and `to_table`"
+          },
+          "400": {
+            "description": "An id is not a ULID, or the body has no `to_table_id`"
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1770,11 +2117,15 @@
     },
     {
       "name": "floor",
-      "description": "A table's state, and what it owes."
+      "description": "A table: seating, cleaning, releasing and moving it, its state, what it owes, and its pre-bill."
     },
     {
       "name": "bills",
       "description": "A bill: opening it on a table, what it owes, discounts and fee waives, splitting and merging it, voiding or settling it, and its pre-bill and receipt copies."
+    },
+    {
+      "name": "menu",
+      "description": "Marking an item sold out at this store, and bringing it back."
     }
   ]
 }

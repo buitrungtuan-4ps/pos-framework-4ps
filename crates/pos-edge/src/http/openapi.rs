@@ -82,6 +82,14 @@ use utoipa::OpenApi;
         super::bills::settle_bill,
         super::bills::split_bill,
         super::bills::void_bill,
+        super::menu::mark_sold_out,
+        super::menu::restore_item,
+        super::tables::seat_table,
+        super::tables::clean_table,
+        super::tables::release_table,
+        super::tables::transfer_table,
+        super::check::print_table_check,
+        super::check::print_order_check,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
@@ -98,10 +106,12 @@ use utoipa::OpenApi;
                                          guest orders (ADR-0116), the checks, and opening its bill."),
         (name = "kitchen", description = "What the kitchen has to make, sending food to it by line, \
                                           course or order, and a station bumping what it made."),
-        (name = "floor", description = "A table's state, and what it owes."),
+        (name = "floor", description = "A table: seating, cleaning, releasing and moving it, its \
+                                        state, what it owes, and its pre-bill."),
         (name = "bills", description = "A bill: opening it on a table, what it owes, discounts and fee \
                                         waives, splitting and merging it, voiding or settling it, and \
                                         its pre-bill and receipt copies."),
+        (name = "menu", description = "Marking an item sold out at this store, and bringing it back."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
@@ -124,9 +134,6 @@ const UNDOCUMENTED: &[&str] = &[
     "GET /api/shifts/current",
     "POST /api/activate",
     "POST /api/drawer/open",
-    "POST /api/menu/{id}/restore",
-    "POST /api/menu/{id}/sold-out",
-    "POST /api/orders/{id}/check/print",
     "POST /api/pair/codes",
     "POST /api/pair/revoke",
     "POST /api/print/agent",
@@ -139,11 +146,6 @@ const UNDOCUMENTED: &[&str] = &[
     "POST /api/shifts/{id}/paid-in",
     "POST /api/shifts/{id}/paid-out",
     "POST /api/shifts:batch_close",
-    "POST /api/tables/{id}/check/print",
-    "POST /api/tables/{id}/clean",
-    "POST /api/tables/{id}/release",
-    "POST /api/tables/{id}/seat",
-    "POST /api/tables/{id}/transfer",
 ];
 
 #[cfg(test)]
