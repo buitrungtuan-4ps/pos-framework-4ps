@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! What holds the console document's `security` and `x-permission` to the code
+//! What holds the cloud documents' `security` and `x-permission` to the code
 //! ([ADR-0177](../../../docs/adr/0177-openapi-is-the-route-map.md) decision 5).
 //!
 //! Every `/admin` operation says who may call it: the console's `session_cookie`, or
@@ -12,14 +12,21 @@
 //! permission, or none, fails here. A permission that only redacts part of an answer is not
 //! checked through `require_permission`, and is described in prose rather than named here.
 //!
+//! The same reading holds the `/v1` and store-box documents' roles: an operation's `api_key` or
+//! `device_credential` requirement names, as its one role, the [`Scope`] its handler checks
+//! through `require_scope`, in its own body or the one helper it hands the request to.
+//!
 //! Its own module because the console document's is at the size limit ADR-0170 sets.
 
 use std::path::{Path, PathBuf};
 
+use pos_cloud_api::auth::apikey::Scope;
 use pos_cloud_api::auth::console_rbac::ConsolePermission;
 use utoipa::OpenApi as _;
 
+use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
+use crate::openapi_device::DeviceApiDoc;
 
 /// Every source file of this crate and of each `pos-cloud-*` crate beside it, where a console
 /// handler or a helper it calls may live.
@@ -92,10 +99,17 @@ fn handler_bodies<'a>(source: &'a str, name: &str) -> Vec<&'a str> {
         .collect()
 }
 
-/// The `ConsolePermission` variants a body names, in order, each once.
-fn permissions_in(body: &str) -> Vec<&str> {
+/// The variants of the enum `marker` names (`"Scope::"`) that a body names, in order, each once.
+fn variants_in<'a>(body: &'a str, marker: &str) -> Vec<&'a str> {
     let mut named = Vec::new();
-    for (start, marker) in body.match_indices("ConsolePermission::") {
+    for (start, _) in body.match_indices(marker) {
+        let joined = body
+            .get(..start)
+            .and_then(|before| before.chars().next_back())
+            .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_');
+        if joined {
+            continue;
+        }
         let rest = body.get(start + marker.len()..).unwrap_or_default();
         let end = rest
             .find(|character: char| !character.is_ascii_alphanumeric() && character != '_')
@@ -130,9 +144,9 @@ fn callees(body: &str) -> Vec<&str> {
     names
 }
 
-/// The permission id the handler named `handler` checks: in its own body, or in the one helper of
-/// its file it hands the request to. `None` for a handler that checks only the session.
-fn permission_checked_by(sources: &[String], handler: &str) -> Option<&'static str> {
+/// The variants of `marker`'s enum the handler named `handler` checks: in its own body, or in the
+/// one helper of its file it hands the request to.
+fn checked_by<'a>(sources: &'a [String], handler: &str, marker: &str) -> Vec<&'a str> {
     let found: Vec<(&String, &str)> = sources
         .iter()
         .flat_map(|source| {
@@ -147,16 +161,23 @@ fn permission_checked_by(sources: &[String], handler: &str) -> Option<&'static s
             found.len()
         );
     };
-    let mut named = permissions_in(body);
-    if named.is_empty() {
-        named = callees(body)
-            .into_iter()
-            .filter(|callee| *callee != handler)
-            .flat_map(|callee| function_bodies(source, callee))
-            .map(permissions_in)
-            .find(|permissions| !permissions.is_empty())
-            .unwrap_or_default();
+    let named = variants_in(body, marker);
+    if !named.is_empty() {
+        return named;
     }
+    callees(body)
+        .into_iter()
+        .filter(|callee| *callee != handler)
+        .flat_map(|callee| function_bodies(source, callee))
+        .map(|helper| variants_in(helper, marker))
+        .find(|variants| !variants.is_empty())
+        .unwrap_or_default()
+}
+
+/// The permission id the handler named `handler` checks. `None` for a handler that checks only the
+/// session.
+fn permission_checked_by(sources: &[String], handler: &str) -> Option<&'static str> {
+    let named = checked_by(sources, handler, "ConsolePermission::");
     assert!(
         named.len() <= 1,
         "{handler} checks more than one console permission: {named:?}"
@@ -171,9 +192,34 @@ fn permission_checked_by(sources: &[String], handler: &str) -> Option<&'static s
     })
 }
 
+/// The wire name of the one scope the handler named `handler` checks.
+fn scope_checked_by(sources: &[String], handler: &str) -> String {
+    let named = checked_by(sources, handler, "Scope::");
+    let [variant] = named.as_slice() else {
+        panic!("{handler} should check exactly one scope, found {named:?}");
+    };
+    let mut wire = String::new();
+    for character in variant.chars() {
+        if character.is_ascii_uppercase() && !wire.is_empty() {
+            wire.push('_');
+        }
+        wire.push(character.to_ascii_lowercase());
+    }
+    assert!(
+        Scope::from_wire(&wire).is_some(),
+        "{handler} checks Scope::{variant}, whose wire name is not {wire}"
+    );
+    wire
+}
+
 /// Every operation in the console document, `METHOD /path`, as it renders.
 fn operations() -> Vec<(String, serde_json::Value)> {
-    let json = serde_json::to_value(AdminApiDoc::openapi()).expect("serialize the document");
+    operations_of(&AdminApiDoc::openapi())
+}
+
+/// Every operation in `document`, `METHOD /path`, as it renders.
+fn operations_of(document: &utoipa::openapi::OpenApi) -> Vec<(String, serde_json::Value)> {
+    let json = serde_json::to_value(document).expect("serialize the document");
     let mut operations = Vec::new();
     for (path, item) in json["paths"].as_object().into_iter().flatten() {
         for (method, operation) in item.as_object().into_iter().flatten() {
@@ -240,5 +286,35 @@ fn x_permission_is_what_the_handler_checks() {
         checked > 200,
         "only {checked} handlers were found checking a permission, which means the source reader \
          stopped matching rather than that the console stopped checking"
+    );
+}
+
+/// Each `/v1` and store-box operation that requires a credential names, as its one role, the scope
+/// its handler checks: a documented scope that is real but not the one checked fails here.
+#[test]
+fn each_role_is_the_scope_the_handler_checks() {
+    let sources = cloud_sources();
+    let mut checked = 0;
+    for (document, scheme) in [
+        (ApiDoc::openapi(), "api_key"),
+        (DeviceApiDoc::openapi(), "device_credential"),
+    ] {
+        for (route, operation) in operations_of(&document) {
+            let Some(requirement) = operation["security"].get(0) else {
+                continue;
+            };
+            let handler = operation["operationId"].as_str().unwrap_or_default();
+            let role = requirement[scheme][0].as_str().unwrap_or_default();
+            assert_eq!(
+                role,
+                scope_checked_by(&sources, handler),
+                "{route}'s {scheme} role is not the scope {handler} checks"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(
+        checked, 16,
+        "the /v1 and /sync operations that need a credential"
     );
 }
