@@ -173,8 +173,25 @@ impl From<TransferView> for TransferResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/tables/{id}",
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "The table's id and its projected `state`, a `TABLE_STATE_*` token"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "floor",
+))]
 /// `GET /api/tables/{id}` — the table's current projected state.
-pub(crate) async fn get<S>(State(edge): State<Arc<Edge<S>>>, Path(id): Path<String>) -> Response
+pub(crate) async fn table_state<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Path(id): Path<String>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

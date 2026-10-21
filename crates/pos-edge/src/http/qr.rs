@@ -77,8 +77,20 @@ pub(crate) struct RejectRequest {
     reason_code_id: ReasonCodeId,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/awaiting-confirmation",
+    responses(
+        (status = 200, description = "The guest orders waiting for staff, each with its table, lines and \
+                                      total, and `reject_reasons`: the reasons a refusal may cite, in the \
+                                      store's display language"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/awaiting-confirmation` — the guest orders waiting, and the refusal reasons.
-pub(crate) async fn awaiting<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn awaiting_confirmation<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
@@ -128,8 +140,28 @@ where
     .into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/confirm",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 204, description = "Confirmed: the guest's order may now be fired"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/confirm` — release a guest's order to the kitchen.
-pub(crate) async fn confirm<S>(
+pub(crate) async fn confirm_order<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -146,8 +178,32 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/reject",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    request_body(
+        description = "`reason_code_id`, a reason the managed list offers for refusing an order",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Refused, with the reason recorded, and the order closed"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it.
-pub(crate) async fn reject<S>(
+pub(crate) async fn reject_order<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,

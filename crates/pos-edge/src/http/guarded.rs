@@ -82,10 +82,10 @@ where
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
         .route("/api/tables/{id}/release", post(tables::release::<S>))
         .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
-        .route("/api/tables/{id}", get(tables::get::<S>))
+        .route("/api/tables/{id}", get(tables::table_state::<S>))
         // What the table owes right now, assembled by the edge — the till displays the figure it is
         // going to settle against rather than computing one of its own (roadmap-v3 E5).
-        .route("/api/tables/{id}/check", get(check::read::<S>))
+        .route("/api/tables/{id}/check", get(check::table_check::<S>))
         // The same figures on paper, before payment: a pre-bill, one per open part once a table is
         // split, and unnumbered because nothing has been settled (roadmap-v3 B2.1).
         .route(
@@ -93,7 +93,7 @@ where
             post(check::print_for_table::<S>),
         )
         // The same read keyed on the order, for a counter order that sits on no table (ADR-0093).
-        .route("/api/orders/{id}/check", get(check::read_for_order::<S>))
+        .route("/api/orders/{id}/check", get(check::order_check::<S>))
         .route(
             "/api/orders/{id}/check/print",
             post(check::print_for_order::<S>),
@@ -101,8 +101,8 @@ where
         // What is open right now, with the line ids to act on it. A device learns lines from the
         // fan-out, which carries what happens next — so without this read a till that reloads and a
         // kitchen display switched on mid-service both draw an empty screen over live food.
-        .route("/api/orders/live", get(live::read::<S>))
-        .route("/api/orders/kitchen", get(live::kitchen::<S>))
+        .route("/api/orders/live", get(live::live_orders::<S>))
+        .route("/api/orders/kitchen", get(live::kitchen_orders::<S>))
 }
 
 /// The order: its lines, firing them, the staff-confirmation queue, and the kitchen's bump.
@@ -112,8 +112,8 @@ where
 {
     Router::new()
         // The order: add a line to a table, fire a line to the kitchen.
-        .route("/api/tables/{id}/lines", post(lines::add::<S>))
-        .route("/api/lines/{id}/fire", post(lines::fire::<S>))
+        .route("/api/tables/{id}/lines", post(lines::add_table_line::<S>))
+        .route("/api/lines/{id}/fire", post(lines::fire_line::<S>))
         // How many, while the line is still editable. The till could only ever add one of a thing,
         // so "three beers" was three lines.
         .route("/api/lines/{id}/quantity", post(lines::set_quantity::<S>))
@@ -128,11 +128,14 @@ where
         )
         // The staff-confirmation queue (ADR-0116). A guest's tabled QR order cannot be fired until
         // one of these two decisions lands, which is the guardrail ADR-0012 promised.
-        .route("/api/orders/awaiting-confirmation", get(qr::awaiting::<S>))
-        .route("/api/orders/{id}/confirm", post(qr::confirm::<S>))
-        .route("/api/orders/{id}/reject", post(qr::reject::<S>))
+        .route(
+            "/api/orders/awaiting-confirmation",
+            get(qr::awaiting_confirmation::<S>),
+        )
+        .route("/api/orders/{id}/confirm", post(qr::confirm_order::<S>))
+        .route("/api/orders/{id}/reject", post(qr::reject_order::<S>))
         // The kitchen display: bump a ticket (mark lines prepared), durable and fanned out.
-        .route("/api/kds/bump", post(kds::bump::<S>))
+        .route("/api/kds/bump", post(kds::bump_ticket::<S>))
 }
 
 /// The bill: opening, settling and reprinting it, its check, voids, reductions, and split and merge.
@@ -157,7 +160,7 @@ where
         // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
         // PIN with the request, which is the first thing in the tree to read the permission
         // registry's `pin: true`.
-        .route("/api/lines/{id}/void", post(lines::void::<S>))
+        .route("/api/lines/{id}/void", post(lines::void_line::<S>))
         .route("/api/bills/{id}/void", post(bills::void::<S>))
         .route("/api/bills/{id}/discount", post(bills::discount::<S>))
         // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,

@@ -74,8 +74,22 @@ struct CounterOrderResponse {
     bill_id: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/open",
+    responses(
+        (status = 200, description = "Every counter order still owing money, with its queue number where it \
+                                      was given one, its lines, `total_due`, and any bill open on it"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The figures cannot be assembled, for instance a line whose tax class \
+                                      the store has published no rate for. `pos-error-reason` names why"),
+        (status = 503, description = "The queue numbers could not be read"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/open` — every counter order still owing money.
-async fn open_orders<S, Q>(State(deps): State<Arc<CounterDeps<S, Q>>>) -> Response
+pub(super) async fn open_orders<S, Q>(State(deps): State<Arc<CounterDeps<S, Q>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
@@ -137,11 +151,24 @@ pub(super) fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<Str
     local.split_once(' ').map(|(_date, clock)| clock.to_owned())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/bills/settled",
+    responses(
+        (status = 200, description = "Today's settled bills, newest first and capped: each with its order, \
+                                      table or queue number, receipt number, total, settle time and the \
+                                      shop's clock at it, and how many copies were printed"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 500, description = "The business date could not be derived from the clock"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/bills/settled` — the bills this store settled today, newest first, at most
 /// [`crate::MAX_SETTLED_LISTED`] (ADR-0164). Here rather than beside the other bill routes because a
 /// counter order is listed by the queue number staff shouted, which only this router's authority
 /// holds.
-async fn settled_bills<S, Q>(State(deps): State<Arc<CounterDeps<S, Q>>>) -> Response
+pub(super) async fn settled_bills<S, Q>(State(deps): State<Arc<CounterDeps<S, Q>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
@@ -183,7 +210,7 @@ where
 /// walk-in channel, `counter.walk_in_channel`: takeaway, the ordinary counter order, unless the store
 /// sets its walk-ins to be eaten in (ADR-0160 decision 2).
 #[derive(Debug, Default, Deserialize)]
-struct OpenOrderRequest {
+pub(super) struct OpenOrderRequest {
     #[serde(default)]
     channel: Option<Open<SalesChannel>>,
 }
@@ -196,13 +223,36 @@ struct OpenedOrderResponse {
     business_date: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders",
+    request_body(
+        description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
+                       store's walk-in channel. The body may be left out",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Opened: the `order_id`, the day's `queue_number` it is called by, and \
+                                      its `business_date`"),
+        (status = 400, description = "The channel is not a sales channel this edge knows"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders` — the counter opens a tableless order and gives it the day's next queue
 /// number, as a relayed takeaway order gets one (ADR-0146).
 ///
 /// The channel the till names wins. A till that names none gets the store's walk-in channel, which
 /// is takeaway under `WALK_IN_CHANNEL_ASK` too: there the till names the guest's answer, so only a
 /// till from before the setting names none, and it gets the takeaway order it always opened.
-async fn open_order<S, Q>(
+pub(super) async fn open_order<S, Q>(
     State(deps): State<Arc<CounterDeps<S, Q>>>,
     Extension(actor): Extension<Actor>,
     body: Option<Json<OpenOrderRequest>>,
@@ -247,7 +297,7 @@ where
 /// A line as the counter adds it to an order by id: what the guest chose, and no price — the
 /// edge prices it at the order's own channel (ADR-0146).
 #[derive(Debug, Deserialize)]
-struct OrderLineRequest {
+pub(super) struct OrderLineRequest {
     menu_item_id: MenuItemId,
     quantity: Quantity,
     #[serde(default)]
@@ -264,8 +314,36 @@ struct OrderLineRequest {
     note: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/lines",
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    request_body(
+        description = "What the guest chose: `menu_item_id` and `quantity` (in thousandths), with optional \
+                       `modifier_menu_item_ids`, `seat`, `course_id` and `note`. No price: the edge prices \
+                       the line at the order's channel",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+                                      once fired"),
+        (status = 400, description = "The id is not a ULID, or a note longer than 200 characters or with a \
+                                      control character"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/lines` — add a line to an order by its id, priced by the edge.
-async fn add_order_line<S, Q>(
+pub(super) async fn add_order_line<S, Q>(
     State(deps): State<Arc<CounterDeps<S, Q>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,

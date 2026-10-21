@@ -53,7 +53,7 @@ impl From<BumpView> for BumpResponse {
 }
 
 /// `POST /api/kds/bump` — a station marks a ticket's lines prepared.
-pub(crate) async fn bump<S>(
+pub(crate) async fn bump_ticket<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Json(request): Json<BumpRequest>,

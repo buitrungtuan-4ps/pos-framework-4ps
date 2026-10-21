@@ -116,23 +116,47 @@ struct LiveOrderResponse {
     lines: Vec<LiveLineResponse>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/live",
+    responses(
+        (status = 200, description = "Every open order, floor and counter, with its table, open bills and \
+                                      channel where it has them, and every line with the id a fire, a void \
+                                      or a bump is addressed to"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/live` — every open order with its lines.
 ///
 /// A pure read of the projection: no decision, no write, and nothing that can fail. An order the
 /// store has settled is gone from it, which is what keeps the answer the size of the store's live
 /// trading rather than of its history.
-pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn live_orders<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     respond(edge.live_orders())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/kitchen",
+    responses(
+        (status = 200, description = "Every open order, and each paid order without a table that the kitchen \
+                                      has not finished, fired on the current business day, in the shape `GET \
+                                      /api/orders/live` answers with"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "kitchen",
+))]
 /// `GET /api/orders/kitchen` — what the kitchen still has to make, in the same shape.
 ///
 /// A read, like the live one; it also ends the day for a paid order fired on an earlier business
 /// day, which then leaves the board and has its notes forgotten.
-pub(crate) async fn kitchen<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn kitchen_orders<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

@@ -52,6 +52,19 @@ use utoipa::OpenApi;
         super::printers::list_printers,
         super::sync::sync_status,
         super::reports::takings,
+        super::live::live_orders,
+        super::counter::open_orders,
+        super::counter::open_order,
+        super::check::order_check,
+        super::counter::add_order_line,
+        super::bills::open_for_order,
+        super::qr::awaiting_confirmation,
+        super::qr::confirm_order,
+        super::qr::reject_order,
+        super::counter::settled_bills,
+        super::tables::table_state,
+        super::check::table_check,
+        super::live::kitchen_orders,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
@@ -63,6 +76,12 @@ use utoipa::OpenApi;
                                           (ADR-0173)."),
         (name = "status", description = "The box's own state: liveness, the outbox and the cloud \
                                          link, today's takings, and the live fan-out."),
+        (name = "orders", description = "An order and its lines: opening one at the counter, adding, \
+                                         changing and voiding lines, the staff-confirmation queue for \
+                                         guest orders (ADR-0116), the checks, and opening its bill."),
+        (name = "kitchen", description = "What the kitchen has to make, sending food to it by line, \
+                                          course or order, and a station bumping what it made."),
+        (name = "floor", description = "A table's state, and what it owes."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
@@ -78,20 +97,12 @@ pub(crate) struct EdgeApiDoc;
 )]
 const UNDOCUMENTED: &[&str] = &[
     "GET /api/activation",
-    "GET /api/bills/settled",
     "GET /api/bills/{id}/check",
     "GET /api/claim",
-    "GET /api/orders/awaiting-confirmation",
-    "GET /api/orders/kitchen",
-    "GET /api/orders/live",
-    "GET /api/orders/open",
-    "GET /api/orders/{id}/check",
     "GET /api/print/agent",
     "GET /api/print/jobs",
     "GET /api/shifts",
     "GET /api/shifts/current",
-    "GET /api/tables/{id}",
-    "GET /api/tables/{id}/check",
     "POST /api/activate",
     "POST /api/bills/{id}/check/print",
     "POST /api/bills/{id}/discount",
@@ -108,14 +119,9 @@ const UNDOCUMENTED: &[&str] = &[
     "POST /api/lines/{id}/void",
     "POST /api/menu/{id}/restore",
     "POST /api/menu/{id}/sold-out",
-    "POST /api/orders",
-    "POST /api/orders/{id}/bill",
     "POST /api/orders/{id}/check/print",
-    "POST /api/orders/{id}/confirm",
     "POST /api/orders/{id}/fire",
     "POST /api/orders/{id}/fire/{course_id}",
-    "POST /api/orders/{id}/lines",
-    "POST /api/orders/{id}/reject",
     "POST /api/pair/codes",
     "POST /api/pair/revoke",
     "POST /api/print/agent",
