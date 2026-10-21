@@ -46,7 +46,7 @@ pub(crate) struct PrintAgentDeps<S, A> {
 
 /// The terminal a device is claiming or releasing, named by its cloud-approved device id.
 #[derive(Debug, Deserialize)]
-struct AgentRequest {
+pub(super) struct AgentRequest {
     /// The `TERMINAL` entry's id, as it appears in the published `devices` node.
     agent_device_id: String,
 }
@@ -94,9 +94,9 @@ where
     Router::new()
         .route(
             "/api/print/agent",
-            get(terminals::<S, A>).post(claim::<S, A>),
+            get(list_terminals::<S, A>).post(claim_print_agent::<S, A>),
         )
-        .route("/api/print/agent/revoke", post(revoke::<S, A>))
+        .route("/api/print/agent/revoke", post(release_print_agent::<S, A>))
         .with_state(Arc::new(PrintAgentDeps { edge, agents }))
 }
 
@@ -124,6 +124,20 @@ fn needs_manage_devices() -> Response {
         .into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/print/agent",
+    responses(
+        (status = 200, description = "The store's published terminals, each held by this device, another \
+                                      device or nobody, never naming which other device; and the terminal \
+                                      this device holds that the `devices` node does not list, if any"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices"),
+        (status = 503, description = "The binding record could not be read"),
+    ),
+    tag = "printing",
+))]
 /// `GET /api/print/agent`: the store's published terminals, each held by this device, another
 /// device or nobody, and the terminal this device holds if the node does not list it.
 ///
@@ -135,7 +149,7 @@ fn needs_manage_devices() -> Response {
 /// Read from the published node and the binding record as they stand, so a terminal the console
 /// has not published is not listed, whatever the record holds: this device's own binding to one is
 /// named apart, so the card can release it.
-async fn terminals<S, A>(
+pub(super) async fn list_terminals<S, A>(
     State(deps): State<Arc<PrintAgentDeps<S, A>>>,
     Extension(actor): Extension<Actor>,
 ) -> Response
@@ -192,8 +206,26 @@ where
     .into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/print/agent",
+    request_body(
+        description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or \
+                                      `DEVICE_HOLDS_ANOTHER_AGENT`"),
+        (status = 400, description = "`agent_device_id` is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices"),
+        (status = 503, description = "The binding could not be recorded"),
+    ),
+    tag = "printing",
+))]
 /// A paired device claims a terminal's agent identity, exclusively.
-async fn claim<S, A>(
+pub(super) async fn claim_print_agent<S, A>(
     State(deps): State<Arc<PrintAgentDeps<S, A>>>,
     Extension(actor): Extension<Actor>,
     Json(request): Json<AgentRequest>,
@@ -241,8 +273,26 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/print/agent/revoke",
+    request_body(
+        description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Released, or this device did not hold it: the answer does not say \
+                                      which"),
+        (status = 400, description = "`agent_device_id` is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices"),
+        (status = 503, description = "The binding could not be released"),
+    ),
+    tag = "printing",
+))]
 /// A paired device releases the identity it holds — how a dead terminal is replaced.
-async fn revoke<S, A>(
+pub(super) async fn release_print_agent<S, A>(
     State(deps): State<Arc<PrintAgentDeps<S, A>>>,
     Extension(actor): Extension<Actor>,
     Json(request): Json<AgentRequest>,

@@ -54,7 +54,7 @@ use crate::state_access::StateAccess;
 /// the [`CloudSync`] channel (to exchange the code), and the [`KeyVault`] (to store the credential).
 ///
 /// Cheap to clone — every field is behind an [`Arc`] — because axum hands each handler a clone.
-struct ActivationState<S, C, V> {
+pub(crate) struct ActivationState<S, C, V> {
     edge: Arc<Edge<S>>,
     cloud: Arc<C>,
     vault: Arc<V>,
@@ -92,7 +92,7 @@ const RESTART_AFTER_ACTIVATION: core::time::Duration = core::time::Duration::fro
 
 /// A device presenting its activation code.
 #[derive(Debug, Deserialize)]
-struct ActivateRequest {
+pub(crate) struct ActivateRequest {
     /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
     code: String,
 }
@@ -156,10 +156,10 @@ where
         state_dir,
     };
     Router::new()
-        .route("/api/activate", post(activate::<S, C, V>))
+        .route("/api/activate", post(activate_device::<S, C, V>))
         .merge(
             Router::new()
-                .route("/api/activation", get(standing::<S, C, V>))
+                .route("/api/activation", get(activation_standing::<S, C, V>))
                 .layer(crate::origins::cors_layer(origins))
                 .with_state(state.clone()),
         )
@@ -180,8 +180,35 @@ pub async fn boot_standing<V: KeyVault>(vault: &V) -> Result<ActivationStanding,
     Ok(device_activation(present))
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/activate",
+    request_body(
+        description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
+                       spacing",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Activated: the `device_id` the stored credential authenticates as. The \
+                                      edge restarts a moment later so its cloud loops start with the \
+                                      credential"),
+        (status = 400, description = "The code is malformed (`ACTIVATION_CODE_MALFORMED`)"),
+        (status = 401, description = "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether \
+                                      the code was spent, revoked or never real"),
+        (status = 403, description = "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether \
+                                      the code was spent, revoked or never real"),
+        (status = 404, description = "Refused by the cloud (`ACTIVATION_REFUSED`), saying nothing of whether \
+                                      the code was spent, revoked or never real"),
+        (status = 409, description = "This box already holds a credential (`ALREADY_ACTIVATED`), or the \
+                                      cloud says the device is in the wrong state \
+                                      (`ACTIVATION_WRONG_STATE`)"),
+        (status = 503, description = "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`)"),
+        (status = 500, description = "Activation failed"),
+    ),
+    tag = "activation",
+))]
 /// `POST /api/activate` — exchange the code, store the credential, record the completion.
-async fn activate<S, C, V>(
+pub(crate) async fn activate_device<S, C, V>(
     State(state): State<ActivationState<S, C, V>>,
     Json(request): Json<ActivateRequest>,
 ) -> Response
@@ -271,8 +298,21 @@ async fn store_credential<V: KeyVault>(vault: &V, credential: &Secret) -> Result
     vault.store(SecretName::DeviceCredential, credential).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/activation",
+    responses(
+        (status = 200, description = "`activated`: whether this box holds a device credential yet; and \
+                                      `state_access`, whether the store's state is closed to other local \
+                                      accounts, where the edge reports it"),
+        (status = 503, description = "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"),
+    ),
+    tag = "activation",
+))]
 /// `GET /api/activation` — report whether this box holds a device credential yet.
-async fn standing<S, C, V>(State(state): State<ActivationState<S, C, V>>) -> Response
+pub(crate) async fn activation_standing<S, C, V>(
+    State(state): State<ActivationState<S, C, V>>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
     C: CloudSync + Send + Sync + 'static,
