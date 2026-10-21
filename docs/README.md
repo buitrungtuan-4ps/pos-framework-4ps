@@ -53,6 +53,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [state-machines.md](state-machines.md) | Every state machine's transition table (generated) |
 | [openapi.json](openapi.json) · [openapi-admin.json](openapi-admin.json) · [openapi-edge.json](openapi-edge.json) · [openapi-device.json](openapi-device.json) | The `/v1` integrator, `/admin` console, till and store-box APIs (generated, [ADR-0177](adr/0177-openapi-is-the-route-map.md)) |
 | [generated/crate-graph.md](generated/crate-graph.md) | The workspace crates by layer, what each depends on, and what depends on it (generated) |
+| [generated/route-map.md](generated/route-map.md) | Every route the four OpenAPI documents describe: its handler, who may call it, the permission it needs and the handler's file (generated, [ADR-0177](adr/0177-openapi-is-the-route-map.md)) |
 | [generated/adr-index.md](generated/adr-index.md) | The ADRs nothing in the code cites, and any citation of an ADR that does not exist (generated). `cargo xtask gen-docs --adr-citations [ADR-NNNN]` prints which files cite each ADR |
 | [snapshots/](snapshots/) | The published contracts: [events](snapshots/events.txt), [permissions](snapshots/permissions.txt), [settings](snapshots/settings.txt), [capabilities](snapshots/capabilities.txt), [edge routes](snapshots/routes.txt). Each is generated, and CI refuses a removal |
 | [capacity-and-reliability.md](capacity-and-reliability.md) | Sizing numbers, load limits, and the failure and recovery matrix |
