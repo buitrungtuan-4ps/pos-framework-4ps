@@ -33,6 +33,8 @@ cargo xtask <check>
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
+  api-types       each front end's generated API types name the committed OpenAPI document's blob
+                  (run `pnpm gen:api` in ui/ and dashboard/ to regenerate them; ADR-0177)
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
   guides          every block a guide in docs/guides/ marks is still true to the tree; --run also
@@ -139,6 +141,7 @@ fn main() -> ExitCode {
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
+        "api-types" => checks::api_types::run(&rest),
         "changelog" => checks::changelog::run(&rest),
         "code-stats" => code_stats::ratchet::run(&rest),
         "countries" => checks::countries::run(&rest),

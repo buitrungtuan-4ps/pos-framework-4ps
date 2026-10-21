@@ -32,7 +32,19 @@ export function sizeConfig({ builtinRules, parser, baseline }) {
   // `ESLINT_BASELINE=off` measures the tree without the baseline, which is how the script writes it.
   const listed = process.env.ESLINT_BASELINE === "off" ? {} : baseline;
   return [
-    { ignores: ["dist/**", "node_modules/**", "test-results/**", "playwright-report/**", "tests/**", "bench/**"] },
+    // `src/api/generated/` is written by `pnpm gen:api` from an OpenAPI document (ADR-0177), and its size
+    // is the document's, not anybody's code.
+    {
+      ignores: [
+        "dist/**",
+        "node_modules/**",
+        "test-results/**",
+        "playwright-report/**",
+        "tests/**",
+        "bench/**",
+        "src/api/generated/**",
+      ],
+    },
     {
       files: ["**/*.{ts,tsx,mjs,js}"],
       languageOptions: {
