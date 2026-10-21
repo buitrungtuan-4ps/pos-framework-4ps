@@ -11,7 +11,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0126](../adr/0126-when-an-agent-may-merge.md) When an agent may press merge
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
-- [ADR-0162](../adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md) A bill is taxed at the rates of one stated moment, and the country says which
 
 ## Citations of ADRs that do not exist
 

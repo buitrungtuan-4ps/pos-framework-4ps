@@ -140,6 +140,7 @@ flowchart LR
   pos_cloud_reports --> pos_ports
   pos_cloud_reports --> pos_proto
   pos_cloud_reports --> store_postgres
+  pos_contract_tests --> pos_core
   pos_contract_tests --> pos_ports
   pos_contract_tests --> pos_proto
   pos_core --> pos_proto
@@ -230,7 +231,7 @@ flowchart LR
 | `pos-cloud-people` | app | `crates/pos-cloud-people` | The cloud's people and access: employees, role templates and assignments, their compile to a store's permissions node, its publish and republish queue, the capability flags, and their routes and stores. | `pos-cloud` | — |
 | `pos-cloud-reports` | app | `crates/pos-cloud-reports` | The cloud's reports: rollups folded from the event log and materialised, revenue, the X/Z report, their CSV exports and their routes. | `pos-cloud`, `pos-cloud-catalog` | — |
 | `pos-contract-tests` | testing | `crates/pos-contract-tests` | The shared suite every implementation of every port must pass. | `pos-fakes` | `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign` |
-| `pos-core` | core | `crates/pos-core` | The domain: business rules, state machines, permissions and money arithmetic, with no I/O. | `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-people`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator` | — |
+| `pos-core` | core | `crates/pos-core` | The domain: business rules, state machines, permissions and money arithmetic, with no I/O. | `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-people`, `pos-contract-tests`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator` | — |
 | `pos-country` | country | `crates/pos-country` | What a country module is, and the feature-selected registry a binary builds from the ones it carries. | `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge` | — |
 | `pos-country-in` | country | `countries/in` | The country module for India. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-jp` | country | `countries/jp` | The country module for Japan. | `pos-cloud`, `pos-edge` | — |

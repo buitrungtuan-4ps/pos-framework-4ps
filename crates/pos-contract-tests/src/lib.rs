@@ -54,6 +54,7 @@ use pos_ports::{PortError, PortName};
 pub mod blob_store;
 pub mod cloud_sync;
 pub mod config_store;
+pub mod country_conformance;
 pub mod delivery;
 pub mod determinism;
 pub mod device_registry;

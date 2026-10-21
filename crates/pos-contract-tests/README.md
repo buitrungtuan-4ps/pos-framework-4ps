@@ -9,12 +9,13 @@ The suites that make an adapter swappable as a tested fact: one per port. An ada
 ## Owns
 
 - One suite per port
+- The country conformance runner (`country_conformance`): golden bills a country module's values must produce, through `pos_core::billing`
 - The harness traits an adapter implements to be tested
 - Shared fixtures
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `pos-ports`, `pos-proto`.
+- **Depends on** (workspace crates): `pos-core`, `pos-ports`, `pos-proto`.
 - **Used by** (workspace crates): `pos-fakes`; in tests, `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`.
 
 ## Entry points

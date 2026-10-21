@@ -33,12 +33,17 @@ cargo xtask <check>
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
+  api-types       each front end's generated API types name the committed OpenAPI document's blob
+                  (run `pnpm gen:api` in ui/ and dashboard/ to regenerate them; ADR-0177)
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
   guides          every block a guide in docs/guides/ marks is still true to the tree; --run also
                   does each guide's `cargo xtask new` commands and verify steps in a scratch worktree
+  i18n            every supported UI language is complete in ui/ and dashboard/, settings included;
+                  a country's language not yet supported is reported (packages/shared/i18n/languages.json)
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
+  repo-map        every path docs/repository-map.md names in backticks exists
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
 
@@ -139,12 +144,14 @@ fn main() -> ExitCode {
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
+        "api-types" => checks::api_types::run(&rest),
         "changelog" => checks::changelog::run(&rest),
         "code-stats" => code_stats::ratchet::run(&rest),
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
         "guides" => checks::guides::run(&rest),
+        "i18n" => checks::i18n::run(&rest),
         "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
@@ -152,6 +159,7 @@ fn main() -> ExitCode {
         "mirrored-files" => checks::mirrored_files::run(&rest),
         "new" => scaffold::run(&rest),
         "print-agent-deps" => checks::print_agent_deps::run(&rest),
+        "repo-map" => checks::repo_map::run(&rest),
         "tls-modes" => checks::tls_modes::run(&rest),
         "vendor-neutral-core" => checks::vendor_neutral_core::run(&rest),
         "-h" | "--help" | "help" => {
