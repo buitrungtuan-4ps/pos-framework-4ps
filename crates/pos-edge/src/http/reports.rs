@@ -43,6 +43,18 @@ pub(crate) struct TakingsResponse {
     bill_count: u32,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/reports/takings",
+    responses(
+        (status = 200, description = "The current business day, what its settled bills came to, and how many \
+                                      there were. The store's figure only: no person, till or shift"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in, or the person's own role lacks \
+                                      reports.takings.view (`pos-error-reason: PERMISSION_DENIED`)"),
+    ),
+    tag = "status",
+))]
 /// `GET /api/reports/takings` — what the store has taken in the current business day.
 ///
 /// `403` with `PERMISSION_DENIED` for a person whose own role does not grant

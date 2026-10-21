@@ -58,9 +58,26 @@ pub(crate) struct FloorResponse {
     seated_times: BTreeMap<String, Timestamp>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/floor",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, description = "`floor`, the published areas and tables; `stations`, the kitchen stations and \
+                                      routing, each station with the threshold its board marks a ticket late \
+                                      after; and each table's live state. Empty until a floor is published. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/floor` — the store's published floor plan and kitchen stations, read from the live
 /// session (ADR-0072).
-pub(crate) async fn plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn floor_plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

@@ -50,8 +50,18 @@ pub(crate) struct TestPrintResponse {
     print: &'static str,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/printers",
+    responses(
+        (status = 200, description = "The printers this store published, in publication order"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/printers` — the printers this store published, in publication order.
-pub(crate) async fn list<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn list_printers<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

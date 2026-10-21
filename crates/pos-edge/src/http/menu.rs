@@ -326,8 +326,27 @@ pub(crate) struct MenuQuery {
     channel: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/menu",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+        ("channel" = Option<String>, Query, description = "A sales channel's wire token. Absent means the store's own channel"),
+    ),
+    responses(
+        (status = 200, description = "The published price book for the channel: its currency, and each item with \
+                                      its price, tax and whether it is sold out. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 400, description = "channel is not a sales channel this edge knows, or the query is not one \
+                                      this route reads"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/menu` — the store's published price book, read from the live session.
-pub(crate) async fn catalog<S>(
+pub(crate) async fn menu_catalog<S>(
     State(edge): State<Arc<Edge<S>>>,
     query: Result<Query<MenuQuery>, QueryRejection>,
 ) -> Response

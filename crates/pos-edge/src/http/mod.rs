@@ -453,7 +453,7 @@ where
 {
     let lockout = edge.pin_lockout();
     Router::new()
-        .route("/api/session", get(auth::current::<S>))
+        .route("/api/session", get(auth::current_session::<S>))
         .route("/api/session/sign-in", post(auth::sign_in::<S>))
         .route("/api/session/sign-out", post(auth::sign_out::<S>))
         .with_state(auth::SignInDeps {

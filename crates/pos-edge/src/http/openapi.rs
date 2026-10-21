@@ -40,11 +40,29 @@ use utoipa::OpenApi;
         super::pair::pair,
         super::pair::this_device,
         super::pair::paired_devices,
+        super::auth::current_session,
+        super::auth::sign_in,
+        super::auth::sign_out,
+        super::floor::floor_plan,
+        super::menu::menu_catalog,
+        super::layout::layout_plan,
+        super::locale::locale_settings,
+        super::reason_codes::list_reason_codes,
+        super::integrations::list_integrations,
+        super::printers::list_printers,
+        super::sync::sync_status,
+        super::reports::takings,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
                                           does (ADR-0030, ADR-0091)."),
-        (name = "status", description = "The box's own state: its liveness, and the live fan-out."),
+        (name = "session", description = "Who is signed in on a paired device (ADR-0084, ADR-0158)."),
+        (name = "published configuration", description = "What the cloud published to this store, \
+                                          read from the live session. A configuration read \
+                                          answers 304 to an If-None-Match that names its ETag \
+                                          (ADR-0173)."),
+        (name = "status", description = "The box's own state: liveness, the outbox and the cloud \
+                                         link, today's takings, and the live fan-out."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
@@ -63,11 +81,6 @@ const UNDOCUMENTED: &[&str] = &[
     "GET /api/bills/settled",
     "GET /api/bills/{id}/check",
     "GET /api/claim",
-    "GET /api/floor",
-    "GET /api/integrations",
-    "GET /api/layout",
-    "GET /api/locale",
-    "GET /api/menu",
     "GET /api/orders/awaiting-confirmation",
     "GET /api/orders/kitchen",
     "GET /api/orders/live",
@@ -75,13 +88,8 @@ const UNDOCUMENTED: &[&str] = &[
     "GET /api/orders/{id}/check",
     "GET /api/print/agent",
     "GET /api/print/jobs",
-    "GET /api/printers",
-    "GET /api/reason-codes",
-    "GET /api/reports/takings",
-    "GET /api/session",
     "GET /api/shifts",
     "GET /api/shifts/current",
-    "GET /api/sync",
     "GET /api/tables/{id}",
     "GET /api/tables/{id}/check",
     "POST /api/activate",
@@ -114,8 +122,6 @@ const UNDOCUMENTED: &[&str] = &[
     "POST /api/print/agent/revoke",
     "POST /api/print/jobs/{job_id}/ack",
     "POST /api/printers/{id}/test",
-    "POST /api/session/sign-in",
-    "POST /api/session/sign-out",
     "POST /api/shifts",
     "POST /api/shifts/{id}/close",
     "POST /api/shifts/{id}/count",

@@ -72,8 +72,20 @@ impl SyncResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/sync",
+    responses(
+        (status = 200, description = "The outbox depth and its level against the planned depth, the cloud link, \
+                                      when the outbox last reached the cloud, and the box's measured clock offset. \
+                                      The store sells at any depth"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "status",
+))]
 /// `GET /api/sync` — the outbox depth, its level, the cloud link, and the box's clock.
-pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn sync_status<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
