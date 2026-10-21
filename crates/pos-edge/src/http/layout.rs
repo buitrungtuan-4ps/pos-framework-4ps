@@ -136,8 +136,25 @@ fn respond_with(plan: &DisplayPlan) -> LayoutResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/layout",
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, description = "How the till groups and orders its buttons: the display categories, their \
+                                      sub-categories, and each item's caption and grid slot. No prices. An \
+                                      empty plan means the till draws the flat price book. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/layout` — the store's published presentation plan, read from the live session.
-pub(crate) async fn plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn layout_plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

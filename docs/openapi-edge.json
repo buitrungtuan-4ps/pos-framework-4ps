@@ -10,6 +10,186 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/api/floor": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/floor` — the store's published floor plan and kitchen stations, read from the live\nsession (ADR-0072).",
+        "operationId": "floor_plan",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The ETag of the copy the till holds",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`floor`, the published areas and tables; `stations`, the kitchen stations and routing, each station with the threshold its board marks a ticket late after; and each table's live state. Empty until a floor is published. The ETag tags this body"
+          },
+          "304": {
+            "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/integrations": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/integrations` — the connections that serve this store, most specific first.",
+        "operationId": "list_integrations",
+        "responses": {
+          "200": {
+            "description": "The vendor connections that serve this store, most specific first: each one's family, provider and name. No setting is returned"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/layout": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/layout` — the store's published presentation plan, read from the live session.",
+        "operationId": "layout_plan",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The ETag of the copy the till holds",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How the till groups and orders its buttons: the display categories, their sub-categories, and each item's caption and grid slot. No prices. An empty plan means the till draws the flat price book. The ETag tags this body"
+          },
+          "304": {
+            "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/locale": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/locale` — the store's published money settings, read from the live session.",
+        "operationId": "locale_settings",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The ETag of the copy the till holds",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The money facts the pay screen needs: the currency, the notes a guest can hand over, and what a total rounds to in cash. Empty until a `locale` node is published. The ETag tags this body"
+          },
+          "304": {
+            "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/menu": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/menu` — the store's published price book, read from the live session.",
+        "operationId": "menu_catalog",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The ETag of the copy the till holds",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "description": "A sales channel's wire token. Absent means the store's own channel",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The published price book for the channel: its currency, and each item with its price, tax and whether it is sold out. The ETag tags this body"
+          },
+          "304": {
+            "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
+          },
+          "400": {
+            "description": "channel is not a sales channel this edge knows, or the query is not one this route reads"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
     "/api/pair": {
       "post": {
         "tags": [
@@ -74,6 +254,164 @@
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/api/printers": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/printers` — the printers this store published, in publication order.",
+        "operationId": "list_printers",
+        "responses": {
+          "200": {
+            "description": "The printers this store published, in publication order"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/reason-codes": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/reason-codes` — the active entries of the store's managed list, read from the live\nsession.",
+        "operationId": "list_reason_codes",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The ETag of the copy the till holds",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active entries of the store's managed reason list, each with its id, code, name in the store's display language and the actions it covers. The framework's list until one is published. The ETag tags this body"
+          },
+          "304": {
+            "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        }
+      }
+    },
+    "/api/reports/takings": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "`GET /api/reports/takings` — what the store has taken in the current business day.",
+        "description": "`403` with `PERMISSION_DENIED` for a person whose own role does not grant\n`reports.takings.view`: the device is paired and somebody is signed in, so the answer is about\nstanding, not about signing in again.",
+        "operationId": "takings",
+        "responses": {
+          "200": {
+            "description": "The current business day, what its settled bills came to, and how many there were. The store's figure only: no person, till or shift"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's own role lacks reports.takings.view (`pos-error-reason: PERMISSION_DENIED`)"
+          }
+        }
+      }
+    },
+    "/api/session": {
+      "get": {
+        "tags": [
+          "session"
+        ],
+        "summary": "`GET /api/session` — who is signed in on this (paired) device, so the UI resumes on the right screen\nafter a reload without re-typing a PIN.",
+        "operationId": "current_session",
+        "responses": {
+          "200": {
+            "description": "Whether anyone is signed in on this device and who; the box's lease standing; whether anyone can sign in; the person's permissions, held directly and with approval; the till's idle lock; and the opening float"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/api/session/sign-in": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "`POST /api/session/sign-in` — verify a badge code + PIN against the synced roster and, on success,\nbind the signed-in employee to this device (S0b/ADR-0084).",
+        "operationId": "sign_in",
+        "requestBody": {
+          "description": "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in: the body carries the `employee_id` the device now acts as"
+          },
+          "401": {
+            "description": "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired device also gets 401"
+          },
+          "503": {
+            "description": "The sign-in could not be recorded"
+          }
+        }
+      }
+    },
+    "/api/session/sign-out": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "`POST /api/session/sign-out` — clear the sign-in on this device (end of shift, or handing the tablet\non). Idempotent: signing out a device nobody is signed in on still returns `204`.",
+        "operationId": "sign_out",
+        "responses": {
+          "204": {
+            "description": "Signed out, or nobody was signed in"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          }
+        }
+      }
+    },
+    "/api/sync": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "`GET /api/sync` — the outbox depth, its level, the cloud link, and the box's clock.",
+        "operationId": "sync_status",
+        "responses": {
+          "200": {
+            "description": "The outbox depth and its level against the planned depth, the cloud link, when the outbox last reached the cloud, and the box's measured clock offset. The store sells at any depth"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
           }
         }
       }
@@ -153,8 +491,16 @@
       "description": "How a device comes to hold a token, and whether it still does (ADR-0030, ADR-0091)."
     },
     {
+      "name": "session",
+      "description": "Who is signed in on a paired device (ADR-0084, ADR-0158)."
+    },
+    {
+      "name": "published configuration",
+      "description": "What the cloud published to this store, read from the live session. A configuration read answers 304 to an If-None-Match that names its ETag (ADR-0173)."
+    },
+    {
       "name": "status",
-      "description": "The box's own state: its liveness, and the live fan-out."
+      "description": "The box's own state: liveness, the outbox and the cloud link, today's takings, and the live fan-out."
     }
   ]
 }

@@ -44,10 +44,10 @@ where
     Router::new()
         // The store's published floor plan + kitchen stations, for the UI to render real tables and
         // route fires (ADR-0072).
-        .route("/api/floor", revalidated(get(floor::plan::<S>)))
+        .route("/api/floor", revalidated(get(floor::floor_plan::<S>)))
         // The store's published price book, so the till prices from what the console published
         // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
-        .route("/api/menu", revalidated(get(menu::catalog::<S>)))
+        .route("/api/menu", revalidated(get(menu::menu_catalog::<S>)))
         // Staff mark an item sold out, and bring it back (86). The events have been in the schema
         // since it was written; this is the first thing to emit them.
         .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
@@ -55,16 +55,19 @@ where
         // How the till groups and orders those items, from the `layout` node the same publish writes
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
-        .route("/api/layout", revalidated(get(layout::plan::<S>)))
+        .route("/api/layout", revalidated(get(layout::layout_plan::<S>)))
         // The money facts the pay pad needs — currency, the notes a guest carries, what the total
         // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
-        .route("/api/locale", revalidated(get(locale::settings::<S>)))
+        .route(
+            "/api/locale",
+            revalidated(get(locale::locale_settings::<S>)),
+        )
         // The store's managed reason list, so a picker offers what the store actually holds
         // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
         // till filters by the act in hand.
         .route(
             "/api/reason-codes",
-            revalidated(get(reason_codes::list::<S>)),
+            revalidated(get(reason_codes::list_reason_codes::<S>)),
         )
 }
 
@@ -201,7 +204,7 @@ where
     Router::new()
         // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
         // normally" and how many events are waiting.
-        .route("/api/sync", get(sync::read::<S>))
+        .route("/api/sync", get(sync::sync_status::<S>))
         // What the store has taken today, for the Today screen's tile (ADR-0160 decision 2), to a
         // person whose own role grants `reports.takings.view`, checked in the handler.
         .route("/api/reports/takings", get(reports::takings::<S>))
@@ -209,7 +212,10 @@ where
         // printer is wired before a guest's receipt tells it.
         // The vendor connections the cloud published to this store (ADR-0153): which e-invoice
         // provider, card terminal or courier it is set up for. Names only, never a setting.
-        .route("/api/integrations", get(integrations::list::<S>))
-        .route("/api/printers", get(printers::list::<S>))
+        .route(
+            "/api/integrations",
+            get(integrations::list_integrations::<S>),
+        )
+        .route("/api/printers", get(printers::list_printers::<S>))
         .route("/api/printers/{id}/test", post(printers::test::<S>))
 }
