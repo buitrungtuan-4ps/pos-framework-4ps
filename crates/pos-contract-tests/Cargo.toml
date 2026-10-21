@@ -9,6 +9,7 @@ publish.workspace      = true
 repository.workspace   = true
 
 [dependencies]
+pos-core  = { path = "../pos-core" }
 pos-ports = { path = "../pos-ports" }
 pos-proto = { path = "../pos-proto" }
 serde.workspace      = true
