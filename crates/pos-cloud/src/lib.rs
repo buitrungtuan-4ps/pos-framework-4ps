@@ -92,6 +92,7 @@ pub mod lease;
 pub mod metrics;
 mod openapi;
 mod openapi_admin;
+mod openapi_device;
 pub mod orders;
 pub mod ota;
 mod persistence;

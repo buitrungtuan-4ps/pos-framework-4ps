@@ -27,6 +27,32 @@ use crate::devices::{
     PersistedDeviceProposal,
 };
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/devices",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        description = "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` \
+                       (ADR-0041)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Proposed: its `id`, and `status` pending until an operator approves it \
+                                      at the console"),
+        (status = 400, description = "store_id is not a ULID, kind is not a known device kind, or name or \
+                                      address is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `manage_devices` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the device service, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "devices",
+)]
 /// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
 /// approve; the id is minted here and returned once.
 pub(super) async fn propose_device<D, A, K, C>(
@@ -106,6 +132,25 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/sync/stores/{store_id}/devices",
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    responses(
+        (status = 200, description = "The store's approved devices, never a raw discovery"),
+        (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `manage_devices` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the device service, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "devices",
+)]
 /// A store lists its **approved** devices (`manage_devices` scope) — what the edge acts on, never a
 /// raw discovery.
 pub(super) async fn list_store_devices<D, A, K, C>(

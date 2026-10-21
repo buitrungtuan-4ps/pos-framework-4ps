@@ -1,0 +1,1442 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pizza 4P's POS Store Box API",
+    "description": "What a store's edge calls on its cloud: the store-facing `/sync` surface, and `/activate` and `/claim`, the two ways a box first comes to hold a credential. Generated from the handlers (ADR-0177). Every failure carries the AIP-193 `ErrorResponse` envelope, and the whole surface is rate-limited per client before any credential is read.",
+    "license": {
+      "name": "LicenseRef-Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/activate": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A device exchanges its activation code for a credential (unauthenticated — the code is the\ncredential). Single-use and deny-by-default, per [`pos_core::activation::redeem`].",
+        "operationId": "exchange_activation_code",
+        "requestBody": {
+          "description": "`code`, the activation code from the store's setup sheet, and optionally the `store_id` the box expects to belong to",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Activated: the `device_id`, and the device `credential`, returned this once; the cloud keeps only its hash (ADR-0050)"
+          },
+          "400": {
+            "description": "The code or the store id is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: a spent, revoked, unknown or raced code, or one issued for another store, all answer the same",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many activation attempts from this client: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The activation service, or the OS entropy source, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/claim": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A box opens a claim. Unauthenticated: the box has nothing to authenticate with yet.",
+        "operationId": "open_claim",
+        "responses": {
+          "201": {
+            "description": "A claim: its `claim_id`, the `user_code` the box shows, the `secret` it keeps to collect with, when it expires, and how often to poll (ADR-0148)"
+          },
+          "429": {
+            "description": "Too many activation attempts from this client: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The claim store, or the OS entropy source, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/claim/{claim_id}/collect": {
+      "post": {
+        "tags": [
+          "box activation"
+        ],
+        "summary": "A box polls for its credential. `202` while nobody has bound the code, the credential once it\nhas, `409` with reason `EXPIRED` when the hour is over, and one `403` for everything else.",
+        "operationId": "collect_claim",
+        "parameters": [
+          {
+            "name": "claim_id",
+            "in": "path",
+            "description": "The claim the box opened, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`secret`, the one the claim was opened with",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its device `credential`, returned this once"
+          },
+          "202": {
+            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again"
+          },
+          "400": {
+            "description": "claim_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "This claim cannot be collected. Every such refusal answers the same, so it reveals nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The claim has expired (`EXPIRED`): open a new one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many collection polls from this client: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The claim store, or the OS entropy source, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/archive": {
+      "post": {
+        "tags": [
+          "archives"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/archive?taken_at=` — a store ships a sealed archive.",
+        "description": "The cloud is a **sink for bytes it cannot read**. It does not open the archive, does not parse\nit, and holds no key material for it beyond the wrapped column — the seal happened at the till\nprecisely so that a store's buyer details ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md))\nnever exist here in plaintext.\n\nWhat it *does* check is the header: eight magic bytes and a format version, so an obviously\nwrong body (a plain database, a truncated download, an HTML error page from a proxy) is refused\nat upload instead of discovered at restore. That is a shape check and emphatically not\nverification — only the key opens an archive, and the cloud has none.",
+        "operationId": "receive_store_archive",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "taken_at",
+            "in": "query",
+            "description": "When the store took the archive, in milliseconds since the epoch by its own clock",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The sealed archive's bytes, as `pos-edge archive` writes them. The cloud checks the header and cannot open the rest",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the store to log"
+          },
+          "400": {
+            "description": "store_id is not a ULID, taken_at is not a positive time, or the body is not a store archive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 256 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The archive's storage key could not be built",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the object store or archive registry, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/archive-key": {
+      "post": {
+        "tags": [
+          "archives"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted\non the first ask.",
+        "description": "Mint-on-first-ask rather than an admin action, because a store that starts archiving must not\nneed somebody to have remembered; the console reveals and rotates it afterwards. The mint is\ninsert-if-absent in one statement ([`ArchiveStore::adopt_key`]), so two tills asking in the same\nsecond get the *same* key rather than two — one of which would be the key to archives nobody\ncould open.\n\nA `POST` for a value that reads like a `GET`, and deliberately so: the first call has a side\neffect that outlives it. A `GET` that mints is one a caching proxy or a browser prefetch may\nperform unasked, and the thing it would create here is the key to every archive this store ever\nships.",
+        "operationId": "serve_store_archive_key",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`key`: the key this store seals its archives with, minted on the first ask (ADR-0124)"
+          },
+          "400": {
+            "description": "store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stored key cannot be opened with the configured secret, or no key could be minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the archive registry, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/artifact": {
+      "post": {
+        "tags": [
+          "updates"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/artifact` — hands a store the signed release bytes it decided to\ninstall ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).",
+        "description": "**The cloud is a dumb host.** It stores bytes an operator uploaded and hands them back; it never\nsigns, and it never verifies the minisign signature. The edge verifies against a trust anchor\nbaked into its own binary ([ADR-0047](../../../docs/adr/0047-minisign-verification.md),\n[ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)), so a compromised cloud, a swapped\nblob or a spoofed host can make an update *fail* — never make a box install code.\n\n**`read_config`, the owner's call (2026-09-04).** Every provisioned box already carries that\nscope, so the OTA path works with no re-provisioning; a dedicated `fetch_update` scope would be\ncleaner and would cost a visit to every live store before a single update could ship. The scope\nis here to stop the VPS being an open binary-distribution host, not to keep a signed artifact\nsecret.\n\nThe signature rides `X-Pos-Artifact-Signature` as lowercase hex and the body stays the raw\nartifact: a JSON envelope would mean encoding tens of megabytes to carry a few hundred bytes. The\nblob holds **raw** signature bytes — ADR-0092 Correction 2 put minisign's base64 decode at the\n`/admin` upload, once, under operator supervision, so the edge never sees base64 for a signature.",
+        "operationId": "serve_ota_artifact",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`release`, the release tag, and `arch`, the target the store runs",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The release's binary as `application/octet-stream`, its detached signature in the `X-Pos-Artifact-Signature` header as lowercase hex (ADR-0092). The edge verifies both before it installs anything"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or release or arch is not well formed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The cloud hosts no artifact for that release on that target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The release is recorded but its binary or signature is missing, the stored binary does not match its recorded digest, or the signature could not be sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the release registry or artifact store, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/config": {
+      "get": {
+        "tags": [
+          "configuration"
+        ],
+        "summary": "Serves a store its own configuration update: nothing (up to date), a delta, or a full snapshot\npast *K* versions behind ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).",
+        "description": "Requires a valid API key with the `read_config` scope, and answers **only** for that key's tenant:\nthe tenant comes from the verified grant, never the path, so a store can pull a `store_id` only\nwithin its own tenant. A store outside the tenant, or one with nothing published, reads `404`.",
+        "operationId": "edge_config_sync",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "held_version",
+            "in": "query",
+            "description": "The config version the store holds, a ULID. Absent when it holds none",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`status`: `up_to_date`, or `update` with the snapshot or collapsed delta that brings the store to the current version (ADR-0039)"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or held_version is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nothing is published for this store in the credential's tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the configuration service, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "A store lists its **approved** devices (`manage_devices` scope) — what the edge acts on, never a\nraw discovery.",
+        "operationId": "list_store_devices",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's approved devices, never a raw discovery"
+          },
+          "400": {
+            "description": "store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `manage_devices` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the device service, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to\napprove; the id is minted here and returned once.",
+        "operationId": "propose_device",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` (ADR-0041)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Proposed: its `id`, and `status` pending until an operator approves it at the console"
+          },
+          "400": {
+            "description": "store_id is not a ULID, kind is not a known device kind, or name or address is blank",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `manage_devices` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the device service, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/events": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/events` — a store publishes its own events over HTTPS\n([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).",
+        "description": "Scope `publish_events`, which a box's device credential always carries, and the store in the\npath must be the credential's. **Every envelope must name that store**: a batch with any other\nstore in it is refused whole, so no credential can write another shop's history. Ingest is the\nsame idempotent, all-or-nothing [`Cloud::ingest`] the NATS cursor uses, so a batch published\ntwice is stored once and the answer is the whole batch either way.",
+        "operationId": "edge_publish_events",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`events`: the store's committed event envelopes, oldest first, at most 256 and 4 MiB, each naming this store (ADR-0143)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`accepted`: how many envelopes the cloud holds, which is the whole batch. Ingest is idempotent, so a batch published twice is stored once"
+          },
+          "400": {
+            "description": "store_id is not a ULID, the body is not a batch of events, or it carries more than 256",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `publish_events` scope or belongs to another store, or an envelope names another store; the batch is refused whole",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 4 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store or the event store is unavailable, and nothing was committed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/events/hello": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/events/hello` — the protocol negotiation for the HTTPS event link\n([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with\nthe cloud's own window. Answers `200` with the [`HelloOutcome`](pos_proto::protocol::HelloOutcome)\neither way: a refusal is an answer, not an error, and the store keeps trading on it.",
+        "operationId": "edge_events_hello",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The store's protocol `Hello`, naming this store and the protocol versions it speaks (ADR-0024)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The negotiation's outcome, an agreed version or a refusal. A refusal is an answer, not an error, and the store keeps trading on it"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or the body is not a hello",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `publish_events` scope or belongs to another store, or the hello names another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/heartbeat": {
+      "post": {
+        "tags": [
+          "configuration"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/heartbeat` — a store's lightweight liveness ping\n([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped\nAPI key the config pull uses (`read_config`), it advances the store's `last_seen_at` and nothing\nelse, so a store that is up but not currently pulling config (a parked long-poll, a quiet period\nbetween publishes) still registers as online. `204` on success; unlike the config-pull capture,\nrecording is this request's whole purpose, so a store-write failure is a `503` the edge retries,\nnot a swallowed best-effort write.",
+        "operationId": "edge_heartbeat",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional: `outbox_depth`, `lease_generation` and `print_agents`, each left out when the store cannot say. An empty body is a bare ping",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded: the store's last contact, and what it reported"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or the body is not a heartbeat report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the configuration service, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/orders": {
+      "get": {
+        "tags": [
+          "order relay"
+        ],
+        "summary": "`GET /sync/stores/{store_id}/orders` — the store pulls its pending batch (bounded long-poll).",
+        "operationId": "pull_orders",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's pending relayed orders, each with its `queued_id` and the `order`. Held open for a bounded wait while there are none, and empty if none arrives"
+          },
+          "400": {
+            "description": "store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `relay_orders` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The order queue failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the order queue, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/orders/{queued_id}/ack": {
+      "post": {
+        "tags": [
+          "order relay"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/orders/{queued_id}/ack` — the store reports an outcome.",
+        "operationId": "ack_order",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "queued_id",
+            "in": "path",
+            "description": "The queued order, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The store's `outcome`: `accepted`, with the store's order id, its total and its queue number where the channel issues one; or `rejected`, with the refusal's `status` and `message`",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded. A repeated acknowledgement also answers 204"
+          },
+          "400": {
+            "description": "store_id or queued_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `relay_orders` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The order queue failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the order queue, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/reconcile": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/reconcile` — the **store's** door onto the same diff.",
+        "description": "Identity comes from the scoped key the box presents, not from a body it writes: the tenant is the\ngrant's and the store is the path's, checked against the key's binding. That is the same shape the\nconfig pull, the heartbeat and the OTA report have, and it is why this route needs no shared\nsecret — a store cannot reach the cloud's private network, and never could\n(production-readiness **R3**).",
+        "operationId": "store_reconcile",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`event_ids`: the ids of events the store holds, each a ULID",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`missing`: the ids the cloud does not hold, for the store to publish again"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or an event id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the reconciliation store, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sync/stores/{store_id}/report": {
+      "post": {
+        "tags": [
+          "updates"
+        ],
+        "summary": "Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).\nInternal (the reporting partner of `/internal/ingest`), so it is absent from the public OpenAPI\nand requires the `X-Pos-Internal-Key` shared secret\n([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)) on top of the proxy denies.\nA malformed id or an empty version is a `400`; a store failure is a retryable `503`; success is\n`204`. The key does not make the report *attributable* — the store id rides in the body — which is\nA **store** reports the version it is running, on the route that can say who it is.",
+        "description": "The tenant comes from the scoped key and the store from the path, so a report is\ntenant-attributable — which the `/internal` shape could not be at any strength of secret, because\nit read both out of the body ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).\n\n**What this does not close.** A [`Grant`](crate::auth::apikey::Grant) pins a tenant, not a store,\nso a key issued to one store can still name a sibling store of the *same tenant* in the path.\nThat is a real residual and it is stated rather than glossed: the move closes cross-tenant\nforgery, not intra-tenant. It is bounded by what a report *is* — pure telemetry that never changes\nwhat any box runs (ADR-0078) — so the worst outcome is a distorted rollout picture for one\noperator's own fleet. Closing it needs a store-scoped grant, which is a key-issuance change and\nits own slice.\n\nGated on `read_config`, for the reason [`serve_ota_artifact`] is: every provisioned box already\ncarries it, so the OTA path works with no re-provisioning, and a report is not a secret.",
+        "operationId": "receive_store_report",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`installed`, the release the store now runs, and `self_test_passed` where it has run its post-install self-test (ADR-0078)",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded"
+          },
+          "400": {
+            "description": "store_id is not a ULID, or installed is blank",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the fleet store, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "The error body — the schema mirror of [`pos_proto::error::ErrorBody`].",
+        "required": [
+          "code",
+          "status",
+          "message",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The HTTP status code, repeated here so a body is self-describing once logged.",
+            "minimum": 0
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErrorDetail"
+            },
+            "description": "Field-level detail. Absent when the failure is not about a particular field."
+          },
+          "message": {
+            "type": "string",
+            "description": "A human-readable explanation. Never contains personal data, because responses are logged."
+          },
+          "status": {
+            "type": "string",
+            "description": "The canonical status, e.g. `INVALID_ARGUMENT`, `NOT_FOUND`, `FAILED_PRECONDITION`."
+          }
+        }
+      },
+      "ErrorDetail": {
+        "type": "object",
+        "description": "One reason a request failed, tied to the field responsible — the schema mirror of\n[`pos_proto::error::ErrorDetail`].",
+        "required": [
+          "field",
+          "reason"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The offending field, in the same `snake_case` name the request used. For a whole-request\nfault this can be a header name (`if-match`) rather than a body field."
+          },
+          "reason": {
+            "type": "string",
+            "description": "A stable, machine-readable reason such as `MUST_BE_POSITIVE` or `INVALID_ENUM_VALUE`. Stable\nso a client can branch on it; `message` is for people and may be reworded at any time."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "The envelope every `/admin` failure carries — the schema mirror of\n[`pos_proto::error::ErrorResponse`].\n\nOne level of nesting so a response is unambiguous at the top level: a success body is the record,\na failure body is `{\"error\": …}`.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody",
+            "description": "The error."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "configuration",
+      "description": "The store's published configuration, pulled as a snapshot or a delta, and its liveness heartbeat (ADR-0039, ADR-0068)."
+    },
+    {
+      "name": "events",
+      "description": "The store's own events, published over HTTPS after a protocol hello, and the reconciliation that finds what the cloud is missing (ADR-0143, ADR-0024, ADR-0078)."
+    },
+    {
+      "name": "order relay",
+      "description": "Orders taken for the store elsewhere, pulled by a bounded long-poll and acknowledged with the store's outcome (ADR-0061)."
+    },
+    {
+      "name": "updates",
+      "description": "The signed release a store installs, and what it reports once it runs it (ADR-0088, ADR-0078)."
+    },
+    {
+      "name": "archives",
+      "description": "The key a store seals its archives with, and the sealed archives it ships, which the cloud cannot open (ADR-0124)."
+    },
+    {
+      "name": "devices",
+      "description": "Printers and kitchen displays a store discovers and proposes, and the ones an operator approved (ADR-0041)."
+    },
+    {
+      "name": "box activation",
+      "description": "How a box first comes to hold its device credential: an activation code from the setup sheet, or a claim the console binds (ADR-0050, ADR-0148)."
+    }
+  ]
+}
