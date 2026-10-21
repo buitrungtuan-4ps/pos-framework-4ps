@@ -23,6 +23,25 @@ use axum::Json;
 use pos_cloud_api::refusal::{not_found, parse_optional_ulid};
 use pos_cloud_catalog::routes::catalog::catalog_error_response;
 
+#[utoipa::path(
+    get,
+    path = "/admin/kitchen/routing",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's routing rules, as an array: each names its station, the menu item or the \
+                                      course it matches, and its sort"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin lists a store's kitchen routing rules.
 pub(super) async fn admin_list_routing<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -54,6 +73,27 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/kitchen/routing",
+    security(("session_cookie" = [])),
+    request_body(
+        description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
+                       what the rule matches; and optionally `sort`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, description = "Created, with the id minted here. The body carries `id`. Audited"),
+        (status = 400, description = "tenant_id, store_id, station_id, menu_item_id or course_id is not a ULID; the rule \
+                                      names both an item and a course, or neither; or the course is one the tenant \
+                                      does not carry, or has archived", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store, the catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin routes a menu item or a course to a kitchen station; the id is minted here.
 pub(super) async fn admin_create_routing<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -231,6 +271,25 @@ async fn record_routing_create<F, A, C, Cat>(
     .await;
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/kitchen/routing/{rule_id}",
+    security(("session_cookie" = [])),
+    params(
+        ("rule_id" = String, Path, description = "The routing rule (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Removed. Audited"),
+        (status = 400, description = "rule_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no routing rule with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "kitchen",
+)]
+/// A super-admin removes a kitchen routing rule.
 pub(super) async fn admin_remove_routing<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
