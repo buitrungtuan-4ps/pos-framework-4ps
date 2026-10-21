@@ -41,6 +41,7 @@ cargo xtask <check>
                   does each guide's `cargo xtask new` commands and verify steps in a scratch worktree
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
+  repo-map        every path docs/repository-map.md names in backticks exists
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
 
@@ -155,6 +156,7 @@ fn main() -> ExitCode {
         "mirrored-files" => checks::mirrored_files::run(&rest),
         "new" => scaffold::run(&rest),
         "print-agent-deps" => checks::print_agent_deps::run(&rest),
+        "repo-map" => checks::repo_map::run(&rest),
         "tls-modes" => checks::tls_modes::run(&rest),
         "vendor-neutral-core" => checks::vendor_neutral_core::run(&rest),
         "-h" | "--help" | "help" => {

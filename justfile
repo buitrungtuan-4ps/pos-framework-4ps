@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links guides-check crates gen-docs-check code-size mirrored-files api-types clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links guides-check crates gen-docs-check code-size mirrored-files api-types repo-map clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -144,6 +144,10 @@ mirrored-files:
 # document changes, `pnpm gen:api` in ui/ and dashboard/ regenerates them. No Node is needed here.
 api-types:
     cargo run -q -p xtask -- api-types --check
+
+# Every path the repository map names in backticks exists, so it cannot point at a file that moved.
+repo-map:
+    cargo run -q -p xtask -- repo-map
 
 # No external vendor's brand name may appear in pos-core / pos-proto production code — the
 # automated half of the integration doctrine (ADR-0083).
