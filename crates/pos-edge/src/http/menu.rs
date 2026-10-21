@@ -421,6 +421,27 @@ pub(crate) struct SoldOutResponse {
     sold_out: bool,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/menu/{id}/sold-out",
+    params(
+        ("id" = String, Path, description = "The menu item's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "Sold out at this store: the `menu_item_id`, and `sold_out` true. \
+                                      Marking an item already sold out writes nothing"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "menu",
+))]
 /// `POST /api/menu/{id}/sold-out` — staff mark an item sold out at this store (86), so every device
 /// greys it out and the edge refuses a line for it until it is restored.
 ///
@@ -437,6 +458,26 @@ where
     set_sold_out(&edge, actor, &id, true).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/menu/{id}/restore",
+    params(
+        ("id" = String, Path, description = "The menu item's id, a ULID"),
+    ),
+    responses(
+        (status = 200, description = "Back on sale: the `menu_item_id`, and `sold_out` false"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "menu",
+))]
 /// `POST /api/menu/{id}/restore` — staff bring an item they marked sold out back.
 pub(crate) async fn restore_item<S>(
     State(edge): State<Arc<Edge<S>>>,
