@@ -230,9 +230,34 @@ impl From<ShiftView> for ShiftResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts",
+    request_body(
+        description = "`opening_float`, with optional `terminal_device_id` for another till's drawer, \
+                       `assigned_employee_id` or `assigned_staff_code` for whom it is for, and \
+                       `approver_code` and `approver_pin`. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Opened: its id, till, assignee where the store assigns drawers, \
+                                      `state`, what was paid in and out, and the expectation only where the \
+                                      count is not blind"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or
 /// the one the request names.
-pub(crate) async fn open<S>(
+pub(crate) async fn open_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -272,11 +297,24 @@ where
     )
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/shifts",
+    responses(
+        (status = 200, description = "Every drawer the store keeps, each with its till, default float and \
+                                      open shift; the drawer model the edge runs and any the store has \
+                                      published while shifts are open; and the till this device is"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 503, description = "The till this device is could not be read"),
+    ),
+    tag = "shifts",
+))]
 /// `GET /api/shifts` — every drawer the store keeps: its till, its default float, and its shift
 /// while one is open, as blind as the shift's own read; and the model, with the one the store has
 /// published while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8). Another
 /// till's expectation shows only to a person whose own role grants `cash.shift.manage_other_till`.
-pub(crate) async fn drawers<S>(
+pub(crate) async fn list_drawers<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -388,6 +426,19 @@ where
     Ok(TillScope { own, named })
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/shifts/current",
+    responses(
+        (status = 200, description = "The shift trading now on this device's drawer, or `null` when none is \
+                                      open. Blind: no expectation or variance, unless the store turned the \
+                                      blind count off"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 503, description = "The till this device is could not be read"),
+    ),
+    tag = "shifts",
+))]
 /// `GET /api/shifts/current` — the shift trading now, or `null` when none is open.
 ///
 /// Until this read existed a shift lived in the browser that opened it: a reload, a second till or a
@@ -400,7 +451,7 @@ where
 ///
 /// Where the store keeps a drawer per till, the drawer is the device's own till's, and a device that
 /// is no till has none.
-pub(crate) async fn current<S>(
+pub(crate) async fn current_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -414,8 +465,36 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/count",
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        description = "`counted_minor`, the cash counted in minor units, with `approver_code` and \
+                       `approver_pin` for another till's drawer. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Counted: its id, till, assignee where the store assigns drawers, \
+                                      `state`, what was paid in and out, and the expectation only where the \
+                                      count is not blind"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/count` — enter the blind count.
-pub(crate) async fn count<S>(
+pub(crate) async fn count_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -448,12 +527,41 @@ where
     )
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/close",
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        description = "Optional: `approver_code` and `approver_pin` for another till's drawer, and \
+                       `reason_code_id` for an over or short the store asks a reason for. The body may be \
+                       empty",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Closed: the shift with its expectation, count and variance, and \
+                                      `shift_report_print` where a report was printed"),
+        (status = 400, description = "The id is not a ULID, or the body is not an approver and a reason"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused, with the reason in `pos-error-reason`. For \
+                                      `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the \
+                                      `shifts` still owed a reason"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/close` — close a counted shift, revealing the variance, and print the
 /// shift report when the domain asks for one.
 ///
 /// The report prints after the commit, never before, for the reason a receipt does: a printer that
 /// is down must not reopen a shift, and a close that failed must never have printed.
-pub(crate) async fn close<S>(
+pub(crate) async fn close_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -505,10 +613,36 @@ where
     Json(response).into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts:batch_close",
+    request_body(
+        description = "`shift_ids` to close, every one or none, with optional `variance_reasons` (each a \
+                       `shift_id` and `reason_code_id`) and one `approver_code` and `approver_pin` for the \
+                       other tills' drawers. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Closed: each shift as its own close answers, and `shift_report_print` \
+                                      where the store prints one slip for them all"),
+        (status = 400, description = "No shift is named"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; other \
+                                      tills' drawers need an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused, with the reason in `pos-error-reason`. For \
+                                      `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the \
+                                      `shifts` still owed a reason"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts:batch_close` — close several counted drawers in one act, every one or none,
 /// and print what the store's `shift.close_report` asks for: one slip for them all, each drawer's
 /// report, or nothing (ADR-0167 decision 10). One approver covers every other till's drawer named.
-pub(crate) async fn batch_close<S>(
+pub(crate) async fn batch_close_shifts<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,

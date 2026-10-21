@@ -61,8 +61,37 @@ struct OpenDrawerResponse {
     drawer_open: &'static str,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/paid-in",
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+                       `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
+                       logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+                                      opened for the cash"),
+        (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a drawer \
+                                      assigned to somebody else needs an approval that was missing or \
+                                      refused, or the approver is locked out; or this box was superseded by \
+                                      a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/paid-in` — cash put into the drawer outside a sale (ADR-0165).
-pub(crate) async fn paid_in<S>(
+pub(crate) async fn record_paid_in<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -75,8 +104,37 @@ where
     movement(&edge, actor, printers, &id, CashMovement::PaidIn, request).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/paid-out",
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+                       `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
+                       logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+                                      opened for the cash"),
+        (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a drawer \
+                                      assigned to somebody else needs an approval that was missing or \
+                                      refused, or the approver is locked out; or this box was superseded by \
+                                      a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/paid-out` — cash taken out of the drawer outside a sale (ADR-0165).
-pub(crate) async fn paid_out<S>(
+pub(crate) async fn record_paid_out<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -140,6 +198,29 @@ where
     Json(response).into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/drawer/open",
+    request_body(
+        description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
+                       opening. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, \
+                                      `NO_DRAWER` or `DRAWER_UNAVAILABLE`)"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a no-sale \
+                                      opening needs a manager's approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/drawer/open` — open the drawer outside a sale, with a manager's PIN and a reason
 /// (ADR-0165 decision 3). The opening is recorded first, and the drawer opens after.
 pub(crate) async fn open_drawer<S>(

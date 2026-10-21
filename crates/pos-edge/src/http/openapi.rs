@@ -90,6 +90,15 @@ use utoipa::OpenApi;
         super::tables::transfer_table,
         super::check::print_table_check,
         super::check::print_order_check,
+        super::shifts::list_drawers,
+        super::shifts::current_shift,
+        super::shifts::open_shift,
+        super::shifts::count_shift,
+        super::cash_movements::record_paid_in,
+        super::cash_movements::record_paid_out,
+        super::shifts::close_shift,
+        super::shifts::batch_close_shifts,
+        super::cash_movements::open_drawer,
     ),
     tags(
         (name = "pairing", description = "How a device comes to hold a token, and whether it still \
@@ -112,6 +121,9 @@ use utoipa::OpenApi;
                                         waives, splitting and merging it, voiding or settling it, and \
                                         its pre-bill and receipt copies."),
         (name = "menu", description = "Marking an item sold out at this store, and bringing it back."),
+        (name = "shifts", description = "The cash drawer: opening, counting and closing a shift, cash \
+                                         paid in and out, and opening the drawer outside a sale \
+                                         (ADR-0165, ADR-0167)."),
     )
 )]
 pub(crate) struct EdgeApiDoc;
@@ -130,22 +142,13 @@ const UNDOCUMENTED: &[&str] = &[
     "GET /api/claim",
     "GET /api/print/agent",
     "GET /api/print/jobs",
-    "GET /api/shifts",
-    "GET /api/shifts/current",
     "POST /api/activate",
-    "POST /api/drawer/open",
     "POST /api/pair/codes",
     "POST /api/pair/revoke",
     "POST /api/print/agent",
     "POST /api/print/agent/revoke",
     "POST /api/print/jobs/{job_id}/ack",
     "POST /api/printers/{id}/test",
-    "POST /api/shifts",
-    "POST /api/shifts/{id}/close",
-    "POST /api/shifts/{id}/count",
-    "POST /api/shifts/{id}/paid-in",
-    "POST /api/shifts/{id}/paid-out",
-    "POST /api/shifts:batch_close",
 ];
 
 #[cfg(test)]
