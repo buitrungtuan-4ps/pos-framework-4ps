@@ -30,6 +30,8 @@ thiserror  = { workspace = true }
 # A table's QR code carries an HMAC-SHA256-signed token (ADR-0057), as it did in pos-cloud.
 hmac       = "0.13"
 sha2       = "0.11"
+# The routes are documented in the console's OpenAPI document (ADR-0019, ADR-0177).
+utoipa     = "6"
 
 # The same lint table as pos-cloud, which this code came from.
 [lints.rust]

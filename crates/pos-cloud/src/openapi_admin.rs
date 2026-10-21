@@ -264,6 +264,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_list_scheduled,
         crate::http::campaigns::admin_cancel_scheduled,
         admin_openapi,
+        pos_cloud_floor::routes::admin_list_areas,
+        pos_cloud_floor::routes::admin_create_area,
+        pos_cloud_floor::routes::admin_get_area,
+        pos_cloud_floor::routes::admin_update_area,
+        pos_cloud_floor::routes::admin_list_tables,
+        pos_cloud_floor::routes::admin_create_table,
+        pos_cloud_floor::routes::admin_get_table,
+        pos_cloud_floor::routes::admin_update_table,
+        pos_cloud_floor::routes::admin_publish_floor,
+        pos_cloud_floor::routes::admin_list_table_qr,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -627,6 +637,15 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            cancel is audited."
         ),
         (
+            name = "floor",
+            description = "A store's floor (ADR-0072): its areas and the tables in them, each with a \
+                           label, seats and a place on the editor's grid, archived rather than \
+                           deleted, and every edit conditional on the version it was read at. \
+                           Nothing reaches the store until its floor and kitchen are published \
+                           together. The printable QR sheet mints each active table's signed \
+                           token, which carries no personal data."
+        ),
+        (
             name = "openapi",
             description = "This document (ADR-0019), served without a session: it describes routes \
                            and carries no tenant data."
@@ -722,13 +741,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/inventory/recipes/{item_id}",
     "/admin/inventory/suppliers",
     "/admin/inventory/suppliers/{supplier_id}",
-    // --- floor plan and kitchen stations (M2, ADR-0072) ---
-    "/admin/floor/areas",
-    "/admin/floor/areas/{area_id}",
-    "/admin/floor/publish",
-    "/admin/floor/qr",
-    "/admin/floor/tables",
-    "/admin/floor/tables/{table_id}",
+    // --- kitchen stations and routing (M2, ADR-0072) ---
     "/admin/kitchen/routing",
     "/admin/kitchen/routing/{rule_id}",
     "/admin/kitchen/stations",
