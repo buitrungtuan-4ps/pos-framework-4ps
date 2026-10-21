@@ -698,6 +698,7 @@ struct PendingOrderDto {
 #[utoipa::path(
     get,
     path = "/sync/stores/{store_id}/orders",
+    security(("device_credential" = ["relay_orders"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
@@ -786,6 +787,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/orders/{queued_id}/ack",
+    security(("device_credential" = ["relay_orders"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
         ("queued_id" = String, Path, description = "The queued order, a ULID"),

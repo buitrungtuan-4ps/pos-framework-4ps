@@ -131,6 +131,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/archive-key",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
@@ -263,6 +264,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/archive",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
         ("taken_at" = i64, Query, description = "When the store took the archive, in milliseconds since the \

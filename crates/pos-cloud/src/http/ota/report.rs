@@ -21,6 +21,7 @@ use crate::http::internal_guard;
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/report",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),

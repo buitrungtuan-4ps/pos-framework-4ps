@@ -52,6 +52,7 @@ enum ConfigSyncResponse {
 #[utoipa::path(
     get,
     path = "/sync/stores/{store_id}/config",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
         ("held_version" = Option<String>, Query, description = "The config version the store holds, a ULID. \
@@ -147,6 +148,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/heartbeat",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
@@ -262,6 +264,7 @@ struct PublishedEventsAccepted {
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/events",
+    security(("device_credential" = ["publish_events"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
@@ -354,6 +357,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/events/hello",
+    security(("device_credential" = ["publish_events"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),

@@ -30,6 +30,7 @@ use crate::devices::{
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/devices",
+    security(("device_credential" = ["manage_devices"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
@@ -135,6 +136,7 @@ where
 #[utoipa::path(
     get,
     path = "/sync/stores/{store_id}/devices",
+    security(("device_credential" = ["manage_devices"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),

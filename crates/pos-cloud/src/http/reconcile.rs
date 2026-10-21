@@ -161,6 +161,7 @@ where
 #[utoipa::path(
     post,
     path = "/sync/stores/{store_id}/reconcile",
+    security(("device_credential" = ["read_config"])),
     params(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),

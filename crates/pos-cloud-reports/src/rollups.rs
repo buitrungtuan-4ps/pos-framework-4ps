@@ -39,7 +39,7 @@ use pos_cloud_api::response::{api_error, csv_download_response, parse_ulid_field
     get,
     path = "/v1/stores/{store_id}/rollups/daily",
     params(("store_id" = String, Path, description = "The store's 26-character ULID")),
-    security(("api_key" = [])),
+    security(("api_key" = ["read_rollups"])),
     responses(
         (status = 200, description = "Daily activity rollups, oldest day first", body = Vec<DailyRollup>),
         (status = 400, description = "The store id is not a ULID"),

@@ -67,7 +67,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "a single-use activation code from the store's setup sheet"
       }
     },
     "/claim": {
@@ -101,7 +103,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "nothing: its code works only once the console binds it"
       }
     },
     "/claim/{claim_id}/collect": {
@@ -185,7 +189,9 @@
               }
             }
           }
-        }
+        },
+        "security": [],
+        "x-public-reason": "the secret the claim was opened with"
       }
     },
     "/sync/stores/{store_id}/archive": {
@@ -297,7 +303,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/archive-key": {
@@ -383,7 +396,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/artifact": {
@@ -485,7 +505,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/config": {
@@ -580,7 +607,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/devices": {
@@ -655,7 +689,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "manage_devices"
+            ]
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -734,7 +775,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "manage_devices"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/events": {
@@ -826,7 +874,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "publish_events"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/events/hello": {
@@ -907,7 +962,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "publish_events"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/heartbeat": {
@@ -988,7 +1050,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/orders": {
@@ -1073,7 +1142,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "relay_orders"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/orders/{queued_id}/ack": {
@@ -1173,7 +1249,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "relay_orders"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/reconcile": {
@@ -1255,7 +1338,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     },
     "/sync/stores/{store_id}/report": {
@@ -1337,7 +1427,14 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
       }
     }
   },
@@ -1406,6 +1503,13 @@
             "description": "The error."
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "device_credential": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A box's device credential, issued once by `/activate` or a collected claim, or its store's scoped API key, presented as a bearer token. Each requirement's role is the scope the route checks, and the credential answers only for its own store."
       }
     }
   },

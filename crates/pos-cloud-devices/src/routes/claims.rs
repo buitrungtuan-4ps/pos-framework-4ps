@@ -94,6 +94,8 @@ struct OpenedClaim {
 #[utoipa::path(
     post,
     path = "/claim",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: its code works only once the console binds it"))),
     responses(
         (status = 201, description = "A claim: its `claim_id`, the `user_code` the box shows, the `secret` \
                                       it keeps to collect with, when it expires, and how often to poll \
@@ -170,6 +172,8 @@ struct CollectedClaim {
 #[utoipa::path(
     post,
     path = "/claim/{claim_id}/collect",
+    security(),
+    extensions(("x-public-reason" = json!("the secret the claim was opened with"))),
     params(
         ("claim_id" = String, Path, description = "The claim the box opened, a ULID"),
     ),
