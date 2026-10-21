@@ -236,7 +236,7 @@ flowchart LR
 | `pos-country-jp` | country | `countries/jp` | The country module for Japan. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-vn` | country | `countries/vn` | The country module for Vietnam. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-zz` | country | `countries/zz` | The reference country module, copied to start a new country. | `pos-cloud`, `pos-edge` | — |
-| `pos-edge` | app | `crates/pos-edge` | The store binary, pos_edge: serves the till, applies each decision in one transaction, and syncs with the cloud. | `minimal-edge` | — |
+| `pos-edge` | app | `crates/pos-edge` | The store binary, pos_edge: serves the till, applies each decision in one transaction, and syncs with the cloud. | `minimal-edge` | `pos-edge` |
 | `pos-edge-app` | app | `crates/pos-edge-app` | The store's application layer: Edge and every command it loads, decides, applies and publishes, with sign-in, the fan-out, and the authorities, clocks and status it keeps. | `pos-edge`, `pos-edge-printing` | — |
 | `pos-edge-printing` | app | `crates/pos-edge-printing` | The store's printing: which device prints what, the receipt, ticket and report documents, the cash drawer, and the print-agent lane with its queue. | `pos-edge` | — |
 | `pos-fakes` | testing | `crates/pos-fakes` | In-memory implementations of every port, held to the same contract suites as the real adapters. | `minimal-edge` | `key-vault-keyring`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `printer-escpos`, `store-sqlite`, `updater-minisign` |

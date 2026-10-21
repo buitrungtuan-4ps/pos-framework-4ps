@@ -29,6 +29,8 @@ pub mod lines;
 mod live;
 pub mod locale;
 pub mod menu;
+#[cfg(feature = "openapi")]
+mod openapi;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
@@ -153,7 +155,7 @@ pub fn router(state: AppState) -> Router {
     // B6.1; the 2026-09-02 tree audit ruled it a live hole rather than a deferral. The read-only
     // *scope* and the per-event-type filter still belong to B6.1.
     let live = Router::new()
-        .route("/ws", get(ws::handler))
+        .route("/ws", get(ws::fan_out))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state.pairing),
             auth::require_paired_device_ws,
@@ -200,7 +202,7 @@ pub fn router(state: AppState) -> Router {
         .merge(
             Router::new()
                 .route("/api/pair/this_device", get(pair::this_device))
-                .route("/api/pair/devices", get(pair::devices))
+                .route("/api/pair/devices", get(pair::paired_devices))
                 .layer(axum::middleware::from_fn_with_state(
                     Arc::clone(&state_for_devices.pairing),
                     auth::require_paired_device,
