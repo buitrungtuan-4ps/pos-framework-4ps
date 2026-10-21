@@ -72,6 +72,26 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/floor/qr",
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "`store_id` and `tokens`: for each active table, `table_id`, \
+                                      `label`, and `token`, the signed value its printed QR code \
+                                      carries, binding the tenant, store and table and no personal \
+                                      data. Served only where a table-token secret is configured"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
 /// Mints a signed QR token for each of a store's active tables (ADR-0072).
 async fn admin_list_table_qr<F, A, C>(
     State(state): State<TableQrState<F, A, C>>,
