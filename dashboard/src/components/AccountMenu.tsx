@@ -108,7 +108,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
         aria-expanded={open()}
         aria-haspopup="true"
         onClick={() => setOpen((value) => !value)}
-        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface"
+        class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <Show
           when={avatar()}

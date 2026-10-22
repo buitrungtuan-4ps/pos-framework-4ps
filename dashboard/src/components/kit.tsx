@@ -457,7 +457,7 @@ export function DataTable<T>(props: {
                           <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                             <button
                               type="button"
-                              class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
+                              class="inline-flex items-center gap-1 rounded-token font-medium transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                               onClick={() => toggleSort(column)}
                             >
                               <span>{column.header}</span>
