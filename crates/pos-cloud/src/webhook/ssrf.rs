@@ -376,9 +376,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         let is_v4_compat_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         if is_v4_compat_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
             }
         }
     }
@@ -386,26 +385,16 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     // SIIT IPv4-translated IPv6 address (`<prefix>:ffff:0:a.b.c.d`, RFC 6145).
     if segments[4] == 0xffff && segments[5] == 0 {
         let [.., a, b, c, d] = ip.octets();
-        let is_siit_prefix =
-            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if is_siit_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
-            }
+        if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+            return Some(reason);
         }
     }
 
     // IPv4-mapped interface identifier (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`, RFC 4291).
     if (segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff {
         let [.., a, b, c, d] = ip.octets();
-        let is_v4_mapped_prefix =
-            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if is_v4_mapped_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
-            }
+        if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+            return Some(reason);
         }
     }
 

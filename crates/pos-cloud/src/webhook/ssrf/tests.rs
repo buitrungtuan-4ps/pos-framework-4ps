@@ -142,6 +142,13 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
             ForbiddenReason::LinkLocal
         ))
     );
+    assert_eq!(
+        classify_ip(ip("2606:2800:220:1:ffff:0:0.0.0.1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2606:2800:220:1:ffff:0:0.0.0.1"),
+            ForbiddenReason::Unspecified
+        ))
+    );
     // IPv4-mapped interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`).
     assert_eq!(
         classify_ip(ip("2001:db8::ffff:127.0.0.1")),
