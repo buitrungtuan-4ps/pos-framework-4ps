@@ -78,6 +78,14 @@ macro_rules! resource_id {
             }
         }
 
+        #[cfg(feature = "openapi")]
+        crate::openapi::string_schema!(
+            $name,
+            concat!("A `", stringify!($name), "`: a ULID, 26 Crockford base-32 characters"),
+            Some(crate::openapi::ULID_PATTERN),
+            None
+        );
+
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 Ulid::deserialize(deserializer).map(Self)

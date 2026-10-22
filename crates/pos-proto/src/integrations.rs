@@ -54,6 +54,7 @@ wire_enum! {
 /// setting is an address, a port, a count or a timeout, never an amount, and money is never a
 /// float anywhere in this workspace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(untagged)]
 pub enum SettingValue {
     /// A flag.
@@ -66,6 +67,7 @@ pub enum SettingValue {
 
 /// One connection that serves this store.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedIntegration {
     /// The connection's id in the cloud, a ULID. What a store names when it asks the cloud to act
@@ -90,6 +92,7 @@ pub struct PublishedIntegration {
 
 /// The `integrations` config node: the connections that serve this store.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedIntegrations {
     /// The connections, in the order the cloud resolved them: the store's own before its brand's

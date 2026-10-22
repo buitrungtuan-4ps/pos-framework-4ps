@@ -34,6 +34,7 @@ use crate::wire_enum::Open;
 
 /// Where a button sits on a POS terminal's fixed grid: zero-based `column` and `row`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct GridPosition {
     /// Zero-based column from the left.
@@ -44,6 +45,7 @@ pub struct GridPosition {
 
 /// One item's button in a display group.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct DisplayButton {
     /// The item this button orders — a `menu_item_id` the [`crate::MenuBook`] prices. Layout names
@@ -61,6 +63,7 @@ pub struct DisplayButton {
 
 /// A display sub-category: a second grouping level under a [`DisplayCategory`], with its own buttons.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct DisplaySubcategory {
     /// This sub-category's identity, distinct from any item-master category.
@@ -77,6 +80,7 @@ pub struct DisplaySubcategory {
 /// A **presentation** taxonomy, distinct from an item's operational category ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)):
 /// a flat category has only `buttons`; a nested one groups its items into `subcategories`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct DisplayCategory {
     /// This category's identity, distinct from any item-master category.
@@ -97,6 +101,7 @@ pub struct DisplayCategory {
 /// and the domain never does. A list of categories, for the round-trips-in-a-diff reason every
 /// configuration shape is a list.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct DisplayPlan {
     categories: Vec<DisplayCategory>,
@@ -140,6 +145,7 @@ impl DisplayPlan {
 
 /// One channel's plan within a [`LayoutBook`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ChannelLayout {
     /// The channel this plan lays out. `Open`, so a book from a newer cloud that has learned a
@@ -156,6 +162,7 @@ pub struct ChannelLayout {
 /// presented differently on each. The cloud resolves the channel at compile time; the UI selects the
 /// plan for its channel with [`LayoutBook::plan_for`].
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct LayoutBook {
     channels: Vec<ChannelLayout>,

@@ -43,6 +43,7 @@ wire_enum! {
 /// Each guardrail is `None` where the node does not carry it, or carries something other than its
 /// JSON type, and each is left off the wire while absent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedQr {
     /// What a guest's order does at a table that already has an open order. Read it through
@@ -99,6 +100,7 @@ pub struct PublishedQr {
 /// that is not a whole number reads as absent. The guest intake reads an hour past 23 as no hours
 /// too, as the console refuses to write one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct QrBusinessHours {
     /// The hour orders open, in the store's offset from UTC.
