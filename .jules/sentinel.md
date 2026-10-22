@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-22 - [SSRF Bypass via Embedded IPv4 (0.0.0.0/8) in SIIT and IPv4-Mapped Prefixes]
+**Vulnerability:** Webhook SSRF validation failed to refuse IPv4 unspecified/this host (`0.0.0.0/8`) addresses when embedded in SIIT (`<prefix>:ffff:0:a.b.c.d`) or IPv4-mapped (`<prefix>:0/ffff:ffff:a.b.c.d`) IPv6 addresses with non-zero IPv6 prefixes.
+**Learning:** Requiring `a != 0` (where `a` is the first IPv4 octet) to guard calls to `classify_v4` caused any address starting with `0.x.y.z` to bypass `classify_v4` when paired with custom IPv6 prefixes, allowing `0.0.0.0/8` smuggling.
+**Prevention:** Always invoke `classify_v4` directly on embedded IPv4 octets in SIIT and IPv4-mapped structures without assuming `a == 0` means non-IPv4 data, as `classify_v4` already correctly identifies `0.0.0.0/8` as `ForbiddenReason::Unspecified`.
