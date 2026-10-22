@@ -219,6 +219,25 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
     );
 }
 
+#[test]
+fn v6_isatap_group_bit_prefixes_are_refused() {
+    // ISATAP group-bit / multicast-modified smuggling cases (`segments[4] == 0x0100` and `0x0300`).
+    assert_eq!(
+        classify_ip(ip("2001:db8::100:5efe:127.0.0.1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:db8::100:5efe:127.0.0.1"),
+            ForbiddenReason::Loopback
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("2001:1234:5678:9abc:300:5efe:169.254.169.254")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:1234:5678:9abc:300:5efe:169.254.169.254"),
+            ForbiddenReason::LinkLocal
+        ))
+    );
+}
+
 /// A NAT64 **local-use** address embeds its IPv4 where RFC 6052 says, not in the low 32 bits.
 ///
 /// Its own test because it is its own claim, and because the address below is the only kind that
