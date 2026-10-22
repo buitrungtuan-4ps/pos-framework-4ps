@@ -195,14 +195,23 @@ function sortRows<T>(
 ): readonly T[] {
   const direction = ascending ? 1 : -1;
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  const decorated = rows.map((row) => ({ row, val: value(row) }));
+  // Optimization: Pre-extract both raw values and string conversions in an O(N) pass to avoid
+  // repeatedly invoking String() O(N log N) times inside the sort comparison loop.
+  const decorated = rows.map((row) => {
+    const val = value(row);
+    return {
+      row,
+      val,
+      strVal: typeof val === "string" ? val : String(val),
+    };
+  });
   decorated.sort((a, b) => {
     const av = a.val;
     const bv = b.val;
     if (typeof av === "number" && typeof bv === "number") {
       return (av - bv) * direction;
     }
-    return collator.compare(String(av), String(bv)) * direction;
+    return collator.compare(a.strVal, b.strVal) * direction;
   });
   return decorated.map((entry) => entry.row);
 }
