@@ -1,3 +1,8 @@
+## 2026-09-26 - On-Screen Keypad/CodePad Component Focus Indicators
+
+**Learning:** On-screen keypad or custom code input grids designed for touch devices must still include visible focus indicators (`focus-visible` outline styles) on every key button. When operating on terminals with physical keyboards or assistive technology, users relying on Tab/keyboard navigation cannot determine which key is focused if `focus-visible` styling is missing on the button definition.
+**Action:** Always include `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` on button styles for on-screen input pads like `CodePad` and `Keypad`.
+
 ## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
 
 **Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.
