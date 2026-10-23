@@ -1,3 +1,9 @@
+## 2026-10-22 - Pre-parsing Timestamps in List Sorting
+
+**Learning:** Calling `Date.parse(isoString)` inside `Array.prototype.sort()` comparison functions evaluates date parsing $O(N \log N)$ times. Pre-calculating numerical timestamp values (e.g. `firedTimeMs`) in an $O(N)$ `.map()` transformation prior to `.sort()` eliminates redundant string parsing operations during sorting comparisons.
+
+**Action:** Whenever sorting arrays by ISO date strings or parsed date values, pre-calculate numerical timestamps in an $O(N)$ mapping step before sorting.
+
 ## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
 
 **Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.

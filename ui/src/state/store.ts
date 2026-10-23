@@ -1166,11 +1166,11 @@ export function kitchenTickets(): KitchenTicket[] {
       ticket.firedTime = line.firedTime;
     }
   }
-  const age = (ticket: KitchenTicket) =>
-    ticket.firedTime === undefined ? Number.POSITIVE_INFINITY : Date.parse(ticket.firedTime);
+  // Optimization: Pre-parse timestamps in O(N) pass to avoid repeated Date.parse() in O(N log N) sort.
   return [...tickets.values()]
-    .map((ticket) => ({ ...ticket, lineIds: ticket.lineIds.sort() }))
-    .sort((a, b) => age(a) - age(b) || a.key.localeCompare(b.key));
+    .map((t) => ({ ticket: { ...t, lineIds: t.lineIds.sort() }, ms: t.firedTime ? Date.parse(t.firedTime) : Infinity }))
+    .sort((a, b) => a.ms - b.ms || a.ticket.key.localeCompare(b.ticket.key))
+    .map((e) => e.ticket);
 }
 
 // Table counts by state, for the Today summary.
