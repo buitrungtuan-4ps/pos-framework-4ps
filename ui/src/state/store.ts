@@ -1166,14 +1166,14 @@ export function kitchenTickets(): KitchenTicket[] {
       ticket.firedTime = line.firedTime;
     }
   }
-  // Optimization: Pre-parse timestamps in O(N) pass to avoid repeated Date.parse() in O(N log N) sort comparator.
+  // Optimization: Pre-parse timestamps in O(N) pass to avoid repeated Date.parse() in O(N log N) sort.
   return [...tickets.values()]
-    .map((ticket) => ({
-      ...ticket,
-      lineIds: ticket.lineIds.sort(),
-      firedTimeMs: ticket.firedTime === undefined ? Number.POSITIVE_INFINITY : Date.parse(ticket.firedTime),
+    .map((t) => ({
+      ticket: { ...t, lineIds: t.lineIds.sort() },
+      ms: t.firedTime ? Date.parse(t.firedTime) : Number.POSITIVE_INFINITY,
     }))
-    .sort((a, b) => a.firedTimeMs - b.firedTimeMs || a.key.localeCompare(b.key));
+    .sort((a, b) => a.ms - b.ms || a.ticket.key.localeCompare(b.ticket.key))
+    .map((entry) => entry.ticket);
 }
 
 // Table counts by state, for the Today summary.
