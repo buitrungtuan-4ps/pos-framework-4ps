@@ -128,6 +128,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **SSRF protection in webhook URL classification now checks the AMT (`2001:3::/32`, RFC 7450) and AS112 (`2001:4:112::/48`, RFC 7535) IPv6 ranges.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies both as `ForbiddenReason::Reserved`. They are globally reachable, but their anycast addresses reach multicast-tunnel relays and the AS112 reverse-DNS sinks, never a webhook receiver. **Upgrade note:** none.
 
+- **SSRF protection in webhook URL classification now checks deprecated IPv6 Site-Local range (`fec0::/10`, RFC 3879).**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `fec0::/10` IPv6 site-local addresses as `ForbiddenReason::Private`, preventing SSRF bypasses via site-local IPv6 destinations. **Upgrade note:** none.
+
 ### Changed
 
 - **CI: the `test` job may run for 15 minutes instead of 10.** The workspace's tests alone take 8–9

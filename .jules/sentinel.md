@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-15 - [SSRF IPv6 Site-Local Range fec0::/10 Bypass]
+**Vulnerability:** Webhook SSRF validation did not explicitly check the deprecated RFC 3879 IPv6 Site-Local range `fec0::/10` (`first & 0xffc0 == 0xfec0`). Destinations such as `fec0::1` fell through `classify_v6` unclassified as public unicast.
+**Learning:** Although deprecated by RFC 3879, site-local IPv6 addresses (`fec0::/10`) may still be routed internally by legacy systems/firewalls or OS network stacks as private network space.
+**Prevention:** Include `first & 0xffc0 == 0xfec0` alongside `fc00::/7` (unique-local) in `classify_v6` to classify site-local IPv6 addresses as `ForbiddenReason::Private`.
