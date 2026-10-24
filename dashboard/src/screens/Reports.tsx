@@ -73,8 +73,11 @@ function drawerRows(report: XzReport): DrawerRow[] {
  */
 function DrawerTable(props: { report: XzReport }) {
   const cash = (minor: number) => money(minor, props.report.cash.currency_code);
+  // Memoize drawerRows to avoid redundant Object.entries conversions and localeCompare sorting
+  // on every re-render and inside both Show and For conditions.
+  const rows = createMemo(() => drawerRows(props.report));
   return (
-    <Show when={drawerRows(props.report).length > 0}>
+    <Show when={rows().length > 0}>
       <div class="mt-4 overflow-x-auto">
         <table class="w-full text-left text-sm">
           <caption class="mb-2 text-left font-medium text-ink">{t("reports.drawersTitle")}</caption>
@@ -90,7 +93,7 @@ function DrawerTable(props: { report: XzReport }) {
             </tr>
           </thead>
           <tbody>
-            <For each={drawerRows(props.report)}>
+            <For each={rows()}>
               {(drawer) => {
                 // Only a close says what a drawer should have held: with none closed there is
                 // nothing to show, and nothing here works one out.
