@@ -415,8 +415,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         return Some(reason);
     }
 
-    // ISATAP address (`<prefix>:0:5efe:a.b.c.d` or `<prefix>:200:5efe:a.b.c.d`, RFC 5214).
-    if (segments[4] == 0 || segments[4] == 0x0200) && segments[5] == 0x5efe {
+    // ISATAP address (`<prefix>:0:5efe:a.b.c.d` with u/g bits 0x0000, 0x0100, 0x0200, 0x0300, RFC 5214).
+    if (segments[4] & 0xfcff) == 0 && segments[5] == 0x5efe {
         let [a, b, c, d] = ip.octets()[12..16] else {
             unreachable!()
         };
