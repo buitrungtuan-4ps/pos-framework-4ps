@@ -64,6 +64,7 @@ export function ImagePicker(props: {
   const [open, setOpen] = createSignal(false);
   const [media, setMedia] = createSignal<MediaSummary[] | null>(null);
   const [busy, setBusy] = createSignal(false);
+  const [focusedIndex, setFocusedIndex] = createSignal(0);
 
   const fail = (caught: unknown) =>
     toast.error(apiMessage(caught));
@@ -81,7 +82,40 @@ export function ImagePicker(props: {
 
   const openPicker = () => {
     setOpen(true);
+    setFocusedIndex(0);
     void loadMedia();
+  };
+
+  const onGridKeyDown = (event: KeyboardEvent, index: number, total: number) => {
+    const cols = 4;
+    let next = index;
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      next = (index + 1) % total;
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      next = (index - 1 + total) % total;
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      next = Math.min(index + cols, total - 1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      next = Math.max(index - cols, 0);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      next = 0;
+    } else if (event.key === "End") {
+      event.preventDefault();
+      next = total - 1;
+    }
+
+    if (next !== index) {
+      setFocusedIndex(next);
+      const target = event.currentTarget as HTMLElement;
+      const grid = target.parentElement;
+      const buttons = grid?.querySelectorAll<HTMLButtonElement>("button");
+      buttons?.[next]?.focus();
+    }
   };
 
   const upload = async (file: File) => {
@@ -144,7 +178,7 @@ export function ImagePicker(props: {
                 when={loaded().length > 0}
                 fallback={<p class="text-sm text-ink-muted">{t("media.empty")}</p>}
               >
-                <div class="grid grid-cols-4 gap-2">
+                <div role="grid" aria-label={t("media.pickTitle")} class="grid grid-cols-4 gap-2">
                   <For each={loaded()}>
                     {(asset, index) => (
                       <button
@@ -160,6 +194,8 @@ export function ImagePicker(props: {
                           n: index() + 1,
                           total: loaded().length,
                         })}
+                        tabindex={index() === focusedIndex() ? 0 : -1}
+                        onKeyDown={(event) => onGridKeyDown(event, index(), loaded().length)}
                         class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                         onClick={() => {
                           props.onChange(asset.media_id);
