@@ -271,11 +271,11 @@ describe("the multi-choice picker", () => {
 describe("the image picker grid navigation", () => {
   it("navigates images via arrow keys and roving tabindex", async () => {
     vi.spyOn(api, "listMedia").mockResolvedValue([
-      { media_id: "m1", created_at_time: "2026-01-01T00:00:00Z" },
-      { media_id: "m2", created_at_time: "2026-01-01T00:00:00Z" },
-      { media_id: "m3", created_at_time: "2026-01-01T00:00:00Z" },
-      { media_id: "m4", created_at_time: "2026-01-01T00:00:00Z" },
-      { media_id: "m5", created_at_time: "2026-01-01T00:00:00Z" },
+      { media_id: "m1", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m2", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m3", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m4", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m5", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
     ]);
 
     const onChange = vi.fn();
