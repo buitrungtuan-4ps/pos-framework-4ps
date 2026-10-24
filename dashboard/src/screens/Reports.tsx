@@ -51,6 +51,9 @@ interface DrawerRow {
   readonly figures: CashTotals;
 }
 
+// Optimization: Re-use single Intl.Collator for string sorting in drawerRows to avoid repeated allocations.
+const drawerCollator = new Intl.Collator();
+
 /**
  * The day's drawers for the X/Z table: the store's first, then each till by name, then each till no
  * longer listed by its id. None where the day kept only the store's drawer, so that day reads as it
@@ -61,10 +64,17 @@ function drawerRows(report: XzReport): DrawerRow[] {
   if (entries.every(([key]) => key === STORE_DRAWER)) {
     return [];
   }
-  const rank = (row: DrawerRow) => (row.key === STORE_DRAWER ? 0 : row.name === null ? 2 : 1);
-  return entries
-    .map(([key, figures]) => ({ key, name: report.till_names[key] ?? null, figures }))
-    .sort((a, b) => rank(a) - rank(b) || (a.name ?? a.key).localeCompare(b.name ?? b.key));
+  // Optimization: Schwartzian transform — pre-extract rank and sort label once per item (O(N))
+  // rather than re-computing rank and localeCompare repeatedly during sort (O(N log N)).
+  const mapped = entries.map(([key, figures]) => {
+    const name = report.till_names[key] ?? null;
+    const rank = key === STORE_DRAWER ? 0 : name === null ? 2 : 1;
+    const label = name ?? key;
+    return { item: { key, name, figures }, rank, label };
+  });
+
+  mapped.sort((a, b) => a.rank - b.rank || drawerCollator.compare(a.label, b.label));
+  return mapped.map((entry) => entry.item);
 }
 
 /**
@@ -73,8 +83,12 @@ function drawerRows(report: XzReport): DrawerRow[] {
  */
 function DrawerTable(props: { report: XzReport }) {
   const cash = (minor: number) => money(minor, props.report.cash.currency_code);
+  // Optimization: Memoize drawerRows computation with createMemo to avoid evaluating and sorting
+  // drawer rows twice during render (once for <Show> condition and once for <For> loop).
+  const rows = createMemo(() => drawerRows(props.report));
+
   return (
-    <Show when={drawerRows(props.report).length > 0}>
+    <Show when={rows().length > 0}>
       <div class="mt-4 overflow-x-auto">
         <table class="w-full text-left text-sm">
           <caption class="mb-2 text-left font-medium text-ink">{t("reports.drawersTitle")}</caption>
@@ -90,7 +104,7 @@ function DrawerTable(props: { report: XzReport }) {
             </tr>
           </thead>
           <tbody>
-            <For each={drawerRows(props.report)}>
+            <For each={rows()}>
               {(drawer) => {
                 // Only a close says what a drawer should have held: with none closed there is
                 // nothing to show, and nothing here works one out.
