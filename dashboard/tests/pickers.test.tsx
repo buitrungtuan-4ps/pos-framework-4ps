@@ -15,6 +15,8 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ComboboxField, MultiComboboxField } from "../src/components/ui";
+import { ImagePicker } from "../src/components/ImagePicker";
+import { api } from "../src/api/client";
 
 // Deliberately non-ASCII and deliberately sharing prefixes: the collation and the substring match
 // are the two things a picker over this catalogue has to get right.
@@ -263,5 +265,53 @@ describe("the multi-choice picker", () => {
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect([...values()]).toEqual(["i3"]);
+  });
+});
+
+describe("the image picker grid navigation", () => {
+  it("navigates images via arrow keys and roving tabindex", async () => {
+    vi.spyOn(api, "listMedia").mockResolvedValue([
+      { media_id: "m1", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m2", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m3", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m4", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+      { media_id: "m5", created_at_ms: 1767225600000, content_type: "image/jpeg", detail_bytes: 100 },
+    ]);
+
+    const onChange = vi.fn();
+    render(() => (
+      <ImagePicker
+        tenantId="t1"
+        value={null}
+        onChange={onChange}
+        canManage={true}
+      />
+    ));
+
+    const trigger = screen.getByRole("button", { name: "Set image" });
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Select this image/ })).toHaveLength(5));
+
+    const buttons = screen.getAllByRole("button", { name: /Select this image/ });
+    expect(buttons[0]?.getAttribute("tabindex")).toBe("0");
+    expect(buttons[1]?.getAttribute("tabindex")).toBe("-1");
+
+    // Press ArrowRight to move focus to second button (index 1)
+    fireEvent.keyDown(buttons[0]!, { key: "ArrowRight" });
+    expect(buttons[0]?.getAttribute("tabindex")).toBe("-1");
+    expect(buttons[1]?.getAttribute("tabindex")).toBe("0");
+
+    // Press ArrowDown to jump down 4 columns (index 1 + 4 = 5, clamped to 4)
+    fireEvent.keyDown(buttons[1]!, { key: "ArrowDown" });
+    expect(buttons[4]?.getAttribute("tabindex")).toBe("0");
+
+    // Press Home to jump to first item
+    fireEvent.keyDown(buttons[4]!, { key: "Home" });
+    expect(buttons[0]?.getAttribute("tabindex")).toBe("0");
+
+    // Click active item to select
+    fireEvent.click(buttons[0]!);
+    expect(onChange).toHaveBeenCalledWith("m1");
   });
 });

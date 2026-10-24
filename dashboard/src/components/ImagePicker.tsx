@@ -52,6 +52,83 @@ export function MediaThumbnail(props: {
   );
 }
 
+function calculateNextGridIndex(key: string, index: number, total: number): number | null {
+  const cols = 4;
+  switch (key) {
+    case "ArrowRight":
+      return (index + 1) % total;
+    case "ArrowLeft":
+      return (index - 1 + total) % total;
+    case "ArrowDown":
+      return Math.min(index + cols, total - 1);
+    case "ArrowUp":
+      return Math.max(index - cols, 0);
+    case "Home":
+      return 0;
+    case "End":
+      return total - 1;
+    default:
+      return null;
+  }
+}
+
+function handleGridKeyDown(
+  event: KeyboardEvent,
+  index: number,
+  total: number,
+  setFocusedIndex: (next: number) => void,
+) {
+  const next = calculateNextGridIndex(event.key, index, total);
+  if (next === null) return;
+  event.preventDefault();
+
+  if (next !== index) {
+    setFocusedIndex(next);
+    const target = event.currentTarget as HTMLElement;
+    const grid = target.parentElement;
+    const buttons = grid?.querySelectorAll<HTMLButtonElement>("button");
+    buttons?.[next]?.focus();
+  }
+}
+
+/** The image field for an item (and, later, a brand): a thumbnail plus Change / Remove, backed by a
+ *  modal that lists the tenant's media and accepts a new upload. `onChange(null)` clears the ref. */
+function MediaGrid(props: {
+  tenantId: string;
+  loaded: MediaSummary[];
+  focusedIndex: number;
+  setFocusedIndex: (next: number) => void;
+  onSelect: (mediaId: string) => void;
+}) {
+  return (
+    <div role="grid" aria-label={t("media.pickTitle")} class="grid grid-cols-4 gap-2">
+      <For each={props.loaded}>
+        {(asset, index) => (
+          <button
+            type="button"
+            aria-label={t("media.selectImageAt", {
+              n: index() + 1,
+              total: props.loaded.length,
+            })}
+            tabindex={index() === props.focusedIndex ? 0 : -1}
+            onKeyDown={(event) =>
+              handleGridKeyDown(event, index(), props.loaded.length, props.setFocusedIndex)
+            }
+            class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            onClick={() => props.onSelect(asset.media_id)}
+          >
+            <img
+              src={api.mediaThumbnailUrl(props.tenantId, asset.media_id)}
+              alt=""
+              class="h-16 w-full rounded-token object-cover"
+            />
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
 /** The image field for an item (and, later, a brand): a thumbnail plus Change / Remove, backed by a
  *  modal that lists the tenant's media and accepts a new upload. `onChange(null)` clears the ref. */
 export function ImagePicker(props: {
@@ -64,6 +141,7 @@ export function ImagePicker(props: {
   const [open, setOpen] = createSignal(false);
   const [media, setMedia] = createSignal<MediaSummary[] | null>(null);
   const [busy, setBusy] = createSignal(false);
+  const [focusedIndex, setFocusedIndex] = createSignal(0);
 
   const fail = (caught: unknown) =>
     toast.error(apiMessage(caught));
@@ -81,6 +159,7 @@ export function ImagePicker(props: {
 
   const openPicker = () => {
     setOpen(true);
+    setFocusedIndex(0);
     void loadMedia();
   };
 
@@ -144,37 +223,16 @@ export function ImagePicker(props: {
                 when={loaded().length > 0}
                 fallback={<p class="text-sm text-ink-muted">{t("media.empty")}</p>}
               >
-                <div class="grid grid-cols-4 gap-2">
-                  <For each={loaded()}>
-                    {(asset, index) => (
-                      <button
-                        type="button"
-                        /* Twelve options that all announce "Select this image" are twelve options a
-                           screen-reader user cannot tell apart. The obvious unique string is the
-                           `media_id`, and it is the wrong one twice over: a ULID is read out
-                           character by character, and putting it in a `title` would hang it in a
-                           tooltip in front of every sighted operator — which is the habit V14 and
-                           `TechnicalDetails` exist to break. Position is short, unique, and matches
-                           the order the grid is actually in. */
-                        aria-label={t("media.selectImageAt", {
-                          n: index() + 1,
-                          total: loaded().length,
-                        })}
-                        class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                        onClick={() => {
-                          props.onChange(asset.media_id);
-                          setOpen(false);
-                        }}
-                      >
-                        <img
-                          src={api.mediaThumbnailUrl(props.tenantId, asset.media_id)}
-                          alt=""
-                          class="h-16 w-full rounded-token object-cover"
-                        />
-                      </button>
-                    )}
-                  </For>
-                </div>
+                <MediaGrid
+                  tenantId={props.tenantId}
+                  loaded={loaded()}
+                  focusedIndex={focusedIndex()}
+                  setFocusedIndex={setFocusedIndex}
+                  onSelect={(mediaId) => {
+                    props.onChange(mediaId);
+                    setOpen(false);
+                  }}
+                />
               </Show>
             )}
           </Show>
