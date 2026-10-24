@@ -642,6 +642,20 @@ export function CatalogMenus() {
   const activeItems = createMemo(() => items().filter((item) => item.status === "active"));
   const activeSections = createMemo(() => sections().filter((row) => row.status === "active"));
 
+  // Optimization: Memoize option array mappings to avoid re-allocating option objects on every render pass / input stroke.
+  // Placed below dependent accessors (`items`, `sections`, `currencyOptions`, `menus`) to prevent SolidJS TDZ errors.
+  const activeItemOptions = createMemo(() =>
+    activeItems().map((i) => ({ value: i.menu_item_id, label: i.name, keywords: Object.values(i.name_translations) })),
+  );
+  const activeSectionOptions = createMemo(() =>
+    activeSections().map((s) => ({ value: s.menu_section_id, label: s.name })),
+  );
+  const currencySelectOptions = createMemo(() => currencyOptions().map((c) => ({ value: c, label: c })));
+  const activeMenuOptions = createMemo(() =>
+    (menus() ?? []).filter((m) => m.status === "active").map((m) => ({ value: m.menu_id, label: m.name })),
+  );
+  const allMenuOptions = createMemo(() => (menus() ?? []).map((m) => ({ value: m.menu_id, label: m.name })));
+
   const menuColumns = (): Column<Menu>[] => [
     {
       key: "name",
@@ -859,9 +873,7 @@ export function CatalogMenus() {
           <SelectField
             label={t("catalog.publishMenu")}
             value={publishMenu()}
-            options={(menus() ?? [])
-              .filter((menu) => menu.status === "active")
-              .map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+            options={activeMenuOptions()}
             onChange={setPublishMenu}
             placeholder={t("catalog.chooseMenu")}
           />
@@ -909,7 +921,7 @@ export function CatalogMenus() {
           <SelectField
             label={t("catalog.parent")}
             value={newMenuParent()}
-            options={(menus() ?? []).map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+            options={allMenuOptions()}
             onChange={setNewMenuParent}
             placeholder={t("catalog.noParent")}
           />
@@ -1026,11 +1038,7 @@ export function CatalogMenus() {
           <ComboboxField
             label={t("catalog.item")}
             value={placementItem()}
-            options={activeItems().map((item) => ({
-              value: item.menu_item_id,
-              label: item.name,
-              keywords: Object.values(item.name_translations),
-            }))}
+            options={activeItemOptions()}
             onChange={setPlacementItem}
             placeholder={t("catalog.chooseItem")}
             searchLabel={t("catalog.searchItems")}
@@ -1042,16 +1050,13 @@ export function CatalogMenus() {
           <SelectField
             label={t("catalog.currency")}
             value={placementCurrency()}
-            options={currencyOptions().map((code) => ({ value: code, label: code }))}
+            options={currencySelectOptions()}
             onChange={setPlacementCurrency}
           />
           <SelectField
             label={t("catalog.section")}
             value={placementSection()}
-            options={activeSections().map((row) => ({
-              value: row.menu_section_id,
-              label: row.name,
-            }))}
+            options={activeSectionOptions()}
             onChange={setPlacementSection}
             placeholder={t("catalog.sectionNone")}
           />
@@ -1132,10 +1137,7 @@ export function CatalogMenus() {
           <SelectField
             label={t("catalog.section")}
             value={bulkSection()}
-            options={activeSections().map((row) => ({
-              value: row.menu_section_id,
-              label: row.name,
-            }))}
+            options={activeSectionOptions()}
             onChange={setBulkSection}
             placeholder={t("catalog.bulkAllSections")}
           />
@@ -1151,7 +1153,7 @@ export function CatalogMenus() {
           <SelectField
             label={t("catalog.currency")}
             value={bulkCurrency()}
-            options={currencyOptions().map((code) => ({ value: code, label: code }))}
+            options={currencySelectOptions()}
             onChange={setBulkCurrency}
           />
           <MoneyField
