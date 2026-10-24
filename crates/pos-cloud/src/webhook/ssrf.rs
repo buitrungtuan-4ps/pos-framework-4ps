@@ -121,7 +121,7 @@ pub enum ForbiddenReason {
     Unspecified,
     /// Loopback (`127.0.0.0/8`, `::1`).
     Loopback,
-    /// A private network (`10/8`, `172.16/12`, `192.168/16`, unique-local `fc00::/7`).
+    /// A private network (`10/8`, `172.16/12`, `192.168/16`, unique-local `fc00::/7`, site-local `fec0::/10`).
     Private,
     /// Link-local (`169.254/16` — the cloud metadata range — or `fe80::/10`).
     LinkLocal,
@@ -455,8 +455,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
 
     if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
-    } else if first & 0xfe00 == 0xfc00 {
-        // fc00::/7 unique-local — the v6 private network.
+    } else if (first & 0xfe00 == 0xfc00) || (first & 0xffc0 == 0xfec0) {
+        // fc00::/7 unique-local and fec0::/10 site-local — the v6 private network.
         Some(ForbiddenReason::Private)
     } else if first & 0xffc0 == 0xfe80 {
         // fe80::/10 link-local.

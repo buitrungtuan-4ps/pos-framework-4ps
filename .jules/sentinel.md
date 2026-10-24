@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-04 - [SSRF IPv6 Site-Local Unicast Address Bypass]
+**Vulnerability:** Webhook SSRF validation checked Unique-Local (`fc00::/7`) and Link-Local (`fe80::/10`) IPv6 ranges, but omitted Site-Local (`fec0::/10`, RFC 3513 / RFC 3879) IPv6 addresses, allowing intranet destinations like `fec0::1` to fall through `classify_v6` as public unicast addresses.
+**Learning:** Although deprecated by RFC 3879, IPv6 Site-Local addresses (`fec0::/10`) are strictly internal non-global addresses used in legacy intranet networks. Standard library helpers like `is_private()` in Rust std do not classify `fec0::/10`.
+**Prevention:** Include `first & 0xffc0 == 0xfec0` (`fec0::/10`) alongside `fc00::/7` when classifying IPv6 private network addresses in `classify_v6`.
