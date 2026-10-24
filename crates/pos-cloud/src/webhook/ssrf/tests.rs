@@ -541,9 +541,15 @@ fn iana_s_special_purpose_ipv4_anycast_blocks_are_reserved() {
 
 #[test]
 fn the_rest_of_iana_s_special_purpose_ipv6_blocks_are_reserved() {
-    // Direct Delegation AS112 (2620:4f:8000::/48, RFC 7534), LISP EID space (2001:5::/32, RFC 7954)
-    // and DRIP Entity Tags (2001:30::/28, RFC 9374).
-    for address in ["2620:4f:8000::1", "2001:5::1", "2001:3f::1"] {
+    // Direct Delegation AS112 (2620:4f:8000::/48, RFC 7534), LISP EID space (2001:5::/32, RFC 7954),
+    // DRIP Entity Tags (2001:30::/28, RFC 9374), and SRv6 SIDs (5f00::/8, RFC 8986).
+    for address in [
+        "2620:4f:8000::1",
+        "2001:5::1",
+        "2001:3f::1",
+        "5f00::1",
+        "5fff:ffff::1",
+    ] {
         assert_eq!(
             classify_ip(ip(address)),
             Err(SsrfRejection::ForbiddenAddress(
@@ -553,8 +559,8 @@ fn the_rest_of_iana_s_special_purpose_ipv6_blocks_are_reserved() {
             "{address}"
         );
     }
-    // The neighbours stay public: the /48 and the /28 end where IANA says they do.
-    for address in ["2620:4f:8001::1", "2001:40::1"] {
+    // The neighbours stay public: the /48, /28, and /8 end where IANA says they do.
+    for address in ["2620:4f:8001::1", "2001:40::1", "5e00::1", "6000::1"] {
         assert_eq!(classify_ip(ip(address)), Ok(()), "{address}");
     }
 }
