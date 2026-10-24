@@ -289,6 +289,25 @@ fn an_unassigned_nat64_subnet_is_refused_and_the_assigned_ones_still_decode() {
 }
 
 #[test]
+fn v6_site_local_addresses_are_refused() {
+    // Deprecated site-local IPv6 addresses (fec0::/10, RFC 3879).
+    assert_eq!(
+        classify_ip(ip("fec0::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fec0::1"),
+            ForbiddenReason::Private
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("fec0:0:0:1::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fec0:0:0:1::1"),
+            ForbiddenReason::Private
+        ))
+    );
+}
+
+#[test]
 fn v6_documentation_prefixes_are_refused() {
     // IPv6 Documentation ranges (2001:db8::/32 and 3fff::/20 RFC 9637).
     assert_eq!(
