@@ -347,11 +347,10 @@ export function Pay() {
   // 15,000₫ — what somebody would actually put on the table — and where it does not, Japan and the
   // United States among them, nothing is snapped and the exact share stands.
   //
-  // The snap stands down on a small bill. Under about 20,000₫ a 1,000₫ increment swallows the gap
-  // between 5% and 15% and the row collapses onto one amount; `distinctAndSpendable` catches that
-  // and the exact figures are used instead. Better a key of 400₫ a cashier rounds in their head
-  // than three identical buttons they cannot choose between.
-  const tipKeys = () => {
+  // Optimization: Memoize tipKeys and quickCash using createMemo to avoid redundant calculation
+  // of tip percentages and quick cash denominations on every JSX evaluation / re-render.
+  // Placed below dependent accessors (`due`, `total`, `tip`, etc.) to prevent TDZ errors in SolidJS.
+  const tipKeys = createMemo(() => {
     const exact = tipPercents().map((percent) => percentOf(total(), percent));
     const increment = cashRoundingIncrement();
     if (increment === null) {
@@ -359,7 +358,7 @@ export function Pay() {
     }
     const snapped = exact.map((amount) => roundToIncrement(amount, increment));
     return distinctAndSpendable(snapped) ? snapped : exact;
-  };
+  });
 
   // The exact amount, plus this bill's own currency's banknotes that would cover it (roadmap E5).
   // These were VND's three notes regardless of where the store was, so a store on any other
@@ -369,10 +368,10 @@ export function Pay() {
   // offers the exact amount alone; the total is zero then anyway.
   // Keyed on the sale *plus* the tip: with a tip added, a note that only covers the sale is not
   // enough money, and offering it would hand the cashier a key that cannot settle.
-  const quickCash = () => {
+  const quickCash = createMemo(() => {
     const owed = due() + tip();
     return [owed, ...quickCashFor(cashDenominations(), owed)];
-  };
+  });
 
   // What the cashier typed, or nothing. A blank name means no buyer: the one field both Japan's
   // qualified invoice and India's Rule 46 require is the name, so a tax code with no name beside it
