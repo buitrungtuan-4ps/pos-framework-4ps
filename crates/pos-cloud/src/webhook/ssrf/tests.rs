@@ -510,6 +510,21 @@ fn v6_benchmarking_and_special_purpose_prefixes_are_refused() {
             ForbiddenReason::Reserved
         ))
     );
+    // SRv6 SIDs (5f00::/16, RFC 9602) IPv6 range.
+    assert_eq!(
+        classify_ip(ip("5f00::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("5f00::1"),
+            ForbiddenReason::Reserved
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("5f00:1234::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("5f00:1234::1"),
+            ForbiddenReason::Reserved
+        ))
+    );
 }
 
 #[test]
