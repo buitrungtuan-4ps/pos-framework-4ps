@@ -18,17 +18,7 @@ use crate::openapi_admin::AdminApiDoc;
 use crate::openapi_device::DeviceApiDoc;
 
 /// `/admin` routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const ADMIN_NO_SCHEMA_YET: &[&str] = &[
-    "GET /admin/config/lease",
-    "GET /admin/ota/releases/{release}",
-    "POST /admin/config/campaigns/schedule",
-    "POST /admin/devices/publish",
-    "POST /admin/ota/releases",
-    "POST /admin/ota/releases/fetch",
-    "POST /admin/subjects/{subject_id}/erase",
-    "PUT /admin/config/integrations",
-    "PUT /admin/config/reason-codes",
-];
+const ADMIN_NO_SCHEMA_YET: &[&str] = &["POST /admin/devices/publish"];
 
 /// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
 const DEVICE_NO_SCHEMA_YET: &[&str] = &[

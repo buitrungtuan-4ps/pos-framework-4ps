@@ -50,8 +50,19 @@ struct FetchReleaseRequest {
     release: String,
 }
 
+/// What a release fetch answers: the release, the forge's tag for it, and each artifact it hosted.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReleaseFetched {
+    /// The release, as the console named it.
+    release: String,
+    /// The tag the forge published it under.
+    tag: String,
+    /// Each artifact the fetch put in the cloud.
+    artifacts: Vec<FetchedArtifactResponse>,
+}
+
 /// One artifact the fetch put in the cloud.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct FetchedArtifactResponse {
     arch: String,
     size_bytes: i64,
@@ -155,7 +166,7 @@ fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Every signed executable the release publishes is hosted. The \
+        (status = 200, body = ReleaseFetched, description = "Every signed executable the release publishes is hosted. The \
                                       body carries `release`, `tag`, the release source's tag it \
                                       came from, and `artifacts`: for each, `arch`, `size_bytes`, \
                                       `sha256`, `asset`, and `outcome`, `recorded` or \
@@ -233,11 +244,11 @@ where
         Err(refusal) => return refusal,
     };
     record_release_fetch(&state, &context, &release, &tag, &recorded).await;
-    Json(serde_json::json!({
-        "release": release,
-        "tag": tag,
-        "artifacts": recorded,
-    }))
+    Json(ReleaseFetched {
+        release,
+        tag,
+        artifacts: recorded,
+    })
     .into_response()
 }
 
@@ -349,4 +360,24 @@ where
         });
     }
     Ok(recorded)
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::ReleaseFetched;
+
+    #[test]
+    fn a_fetch_answers_its_release_tag_and_artifacts() {
+        let answer = ReleaseFetched {
+            release: "1.2.3".to_owned(),
+            tag: "v1.2.3".to_owned(),
+            artifacts: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "release": "1.2.3", "tag": "v1.2.3", "artifacts": [] })
+        );
+    }
 }
