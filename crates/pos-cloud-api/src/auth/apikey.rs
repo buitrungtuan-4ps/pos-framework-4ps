@@ -561,7 +561,7 @@ pub trait ApiKeyAdminStore {
 
 /// A key's metadata for a listing — everything but the secret and its hash, which never leave the
 /// store. Serialises to the `/admin/api-keys` list response.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiKeySummary {
     /// The public id (the ULID half of the token).
     pub id: String,

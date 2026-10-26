@@ -37,7 +37,7 @@ use crate::http::{
     security(),
     extensions(("x-public-reason" = json!("an email, password and TOTP code (ADR-0034)"))),
     request_body(
-        description = "Email, password, and the six-digit TOTP code",
+        content = LoginRequest, description = "Email, password, and the six-digit TOTP code",
         content_type = "application/json",
     ),
     responses(
@@ -120,12 +120,12 @@ where
     security(),
     extensions(("x-public-reason" = json!("the enrolment token from the server's environment, used once"))),
     request_body(
-        description = "The enrolment token from the server's environment, and the first \
+        content = SetupRequest, description = "The enrolment token from the server's environment, and the first \
                        administrator's chosen email and password",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Enrolled. The body carries the one-time TOTP enrolment (QR \
+        (status = 201, body = pos_cloud_api::auth::enrol::Enrolment, description = "Enrolled. The body carries the one-time TOTP enrolment (QR \
                                       payload and base32 secret) — returned exactly once, never \
                                       readable again"),
         (status = 400, description = "The password is shorter than the minimum", body = crate::openapi_admin::ErrorResponse),
@@ -293,7 +293,7 @@ where
     path = "/admin/whoami",
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "The acting administrator — id, email, role, status — never a \
+        (status = 200, body = pos_cloud_api::auth::admin::AdminUser, description = "The acting administrator — id, email, role, status — never a \
                                       password hash or a TOTP secret. Role gating in a console is \
                                       a convenience only: the server re-checks every route's \
                                       required permission regardless"),

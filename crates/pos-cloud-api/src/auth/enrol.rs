@@ -37,7 +37,7 @@ const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 /// A first-boot enrolment request: the authorising setup token and the password the operator chooses.
 ///
 /// [`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, utoipa::ToSchema)]
 pub struct SetupRequest {
     /// The one-time setup token (`bootstrap.sh` minted it into `cloud.toml`).
     pub setup_token: String,
@@ -60,7 +60,7 @@ impl fmt::Debug for SetupRequest {
 ///
 /// Both fields carry the shared secret, so [`fmt::Debug`] redacts them — the value reaches the
 /// operator through the HTTP response body, never a log.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, utoipa::ToSchema)]
 pub struct Enrolment {
     /// The `otpauth://totp/…` provisioning URI (SHA1, 6 digits, 30-second period).
     pub otpauth_uri: String,
