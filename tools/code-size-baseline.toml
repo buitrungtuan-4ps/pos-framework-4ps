@@ -9,7 +9,7 @@
 "crates/adapters/store-sqlite/src/writer.rs" = 2389
 "crates/pos-cloud-api/src/auth/admin.rs" = 3468
 "crates/pos-cloud-reports/src/dashboard/rollup.rs" = 1487
-"crates/pos-cloud-catalog/src/catalog.rs" = 2018
+"crates/pos-cloud-catalog/src/catalog.rs" = 2032
 "crates/pos-cloud-catalog/src/fees.rs" = 1623
 "crates/pos-cloud/src/http.rs" = 2827
 "crates/pos-cloud/src/lease.rs" = 1236
