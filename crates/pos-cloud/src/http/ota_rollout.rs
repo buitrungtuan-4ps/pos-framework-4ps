@@ -55,7 +55,7 @@ struct OtaConfigState<Cfg, A, C, L> {
 
 /// A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no
 /// `halted` field — a fresh publish is live; the kill switch is `POST /admin/config/ota/halt`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishRolloutRequest {
     tenant_id: String,
     store_id: String,
@@ -93,7 +93,7 @@ struct OtaRolloutQuery {
 /// and every bump this route served before the field existed, which is why it defaults rather than
 /// being required. Present, it means the store is **moving**, and this is the only route in the tree
 /// that writes the value.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct BumpLeaseRequest {
     tenant_id: String,
     store_id: String,
@@ -126,7 +126,7 @@ struct BumpLeaseRequest {
 
 /// A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —
 /// its ring, and the stable canary bucket that fixes its place in the fleet ramp.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishPlacementRequest {
     tenant_id: String,
     store_id: String,

@@ -27,13 +27,13 @@ use crate::ota::ArtifactStore;
     extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` \
+        content = PublishPlacementRequest, description = "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` \
                        or `fleet`); and `canary_bucket`, 0 to 99, its fixed place in the fleet \
                        ramp. Every terminal of the store takes the same placement",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `device_ota` node on the Device \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `device_ota` node on the Device \
                                       layer, the store's other Device-level settings kept. The body \
                                       carries `config_version_id`. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs a \
@@ -121,7 +121,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The `device_ota` node the store runs, its layers composed; or \
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "The `device_ota` node the store runs, its layers composed; or \
                                       `null` when the store has never been placed"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),

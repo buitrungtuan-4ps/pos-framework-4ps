@@ -173,7 +173,7 @@ where
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's current effective configuration: its four layers \
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "The store's current effective configuration: its four layers \
                                       composed. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
                                       holding console.people.read, and prices only for a role \
                                       holding console.reports.revenue"),

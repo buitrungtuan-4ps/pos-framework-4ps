@@ -246,7 +246,7 @@ where
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "That version's effective configuration, for comparing with \
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "That version's effective configuration, for comparing with \
                                       another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
                                       holding console.people.read, and prices only for a role \
                                       holding console.reports.revenue: a past version is no less sensitive"),

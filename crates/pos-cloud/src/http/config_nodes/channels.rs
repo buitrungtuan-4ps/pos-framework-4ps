@@ -20,6 +20,8 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::origins::PublishedOrigins;
 
 #[utoipa::path(
     get,
@@ -31,7 +33,7 @@ use crate::http::{Json, read_store_node_as_run};
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `channels` node as the store runs it — the sales channels it takes orders on — \
+        (status = 200, body = Option<PublishedChannels>, description = "The store's `channels` node as the store runs it — the sales channels it takes orders on — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -153,7 +155,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `tender` node as the store runs it — the payment methods it accepts — \
+        (status = 200, body = Option<PublishedTender>, description = "The store's `tender` node as the store runs it — the payment methods it accepts — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -275,7 +277,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — \
+        (status = 200, body = Option<PublishedOrigins>, description = "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
