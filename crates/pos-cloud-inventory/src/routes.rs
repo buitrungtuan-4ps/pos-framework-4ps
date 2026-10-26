@@ -79,7 +79,7 @@ struct InventoryState<Inv, A, C> {
 /// A create/update body for an ingredient. The id is **server-owned** — minted on create, the path id
 /// on update — so a client never supplies or forges it. `name` and `unit` are the wire ingredient's own
 /// fields, reused rather than re-declared.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct IngredientRequest {
     tenant_id: String,
     name: String,
@@ -92,7 +92,7 @@ pub struct IngredientRequest {
 /// keeps taking it from the path. A struct of its own rather than an `Option` on `RecipeRequest`,
 /// so neither route carries a field the other requires — and flat rather than
 /// `#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateRecipeRequest {
     item_id: String,
     tenant_id: String,
@@ -117,7 +117,7 @@ impl CreateRecipeRequest {
 /// an existing menu item or modifier, so its id is client-owned, unlike an ingredient's
 /// server-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's
 /// own fields.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct RecipeRequest {
     tenant_id: String,
     #[serde(default)]
@@ -127,7 +127,7 @@ pub struct RecipeRequest {
 }
 
 /// A create/update body for a supplier. The id is **server-owned**, exactly like an ingredient's.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct SupplierRequest {
     tenant_id: String,
     name: String,

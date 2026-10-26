@@ -7515,12 +7515,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`. The tenant's authored ingredients, recipes and suppliers are what is published, never the body",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishInventoryRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Compiled into the store's `inventory` node and published on the Store layer, the store's other settings kept. The body carries `config_version_id`. Audited with how many of each kind went in, never the recipe amounts"
+            "description": "Compiled into the store's `inventory` node and published on the Store layer, the store's other settings kept. The body carries `config_version_id`. Audited with how many of each kind went in, never the recipe amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, or a value needs a recorded confirmation first",
@@ -13556,7 +13568,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's ingredients, as an array, each with its `etag`"
+            "description": "The tenant's ingredients, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -13615,12 +13637,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the ingredient's `name`, which may not be blank, and `unit`, a `UNIT_OF_MEASURE_…` token",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngredientRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, with the id minted here. The body is the ingredient and the ETag carries its version. Audited"
+            "description": "Created, with the id minted here. The body is the ingredient and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or name is blank or unit is not a known unit",
@@ -13710,7 +13744,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The ingredient. The ETag carries the version it was read at"
+            "description": "The ingredient. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "ingredient_id or tenant_id is absent or not a ULID",
@@ -13799,12 +13840,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the ingredient's `name`, which may not be blank, and `unit`, a `UNIT_OF_MEASURE_…` token, as it should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngredientRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the ingredient and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the ingredient and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "ingredient_id or tenant_id is not a ULID, name is blank or unit is not a known unit, or If-Match is absent, malformed or a wildcard",
@@ -13983,7 +14036,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's recipes, as an array, each with its `etag`"
+            "description": "The tenant's recipes, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -14043,12 +14106,24 @@
         "requestBody": {
           "description": "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the amount one unit consumes in thousandths of the ingredient's unit, which must be positive; and `auto_86_threshold`, which may not be negative",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecipeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created. The body is the recipe and the ETag carries its version. Audited with the item, its line count and its threshold, never the amounts"
+            "description": "Created. The body is the recipe and the ETag carries its version. Audited with the item, its line count and its threshold, never the amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or item_id is absent or not a ULID, auto_86_threshold is negative, or a line consumes nothing",
@@ -14138,7 +14213,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The recipe. The ETag carries the version it was read at"
+            "description": "The recipe. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "item_id or tenant_id is absent or not a ULID",
@@ -14227,12 +14309,24 @@
         "requestBody": {
           "description": "`tenant_id`, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the amount one unit consumes in thousandths of the ingredient's unit, which must be positive; and `auto_86_threshold`, which may not be negative, as the recipe should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the recipe and the ETag carries its new version. Audited without the amounts"
+            "description": "Updated. The body is the recipe and the ETag carries its new version. Audited without the amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "item_id or tenant_id is not a ULID, auto_86_threshold is negative, or a line consumes nothing, or If-Match is absent, malformed or a wildcard",
@@ -14411,7 +14505,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's suppliers, as an array, each with its `etag`"
+            "description": "The tenant's suppliers, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -14470,12 +14574,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the supplier's `name`, which may not be blank",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, with the id minted here. The body is the supplier and the ETag carries its version. Audited"
+            "description": "Created, with the id minted here. The body is the supplier and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or name is blank",
@@ -14565,7 +14681,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The supplier. The ETag carries the version it was read at"
+            "description": "The supplier. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "supplier_id or tenant_id is absent or not a ULID",
@@ -14654,12 +14777,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the supplier's `name`, which may not be blank, as it should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the supplier and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the supplier and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "supplier_id or tenant_id is not a ULID, name is blank, or If-Match is absent, malformed or a wildcard",
@@ -23823,6 +23958,32 @@
           }
         }
       },
+      "CreateRecipeRequest": {
+        "type": "object",
+        "description": "A `POST /admin/inventory/recipes` body: a recipe plus the item it makes.\n\nThe item id is in the body here because the collection URI has no room for it, and the `PUT`\nkeeps taking it from the path. A struct of its own rather than an `Option` on `RecipeRequest`,\nso neither route carries a field the other requires — and flat rather than\n`#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].",
+        "required": [
+          "item_id",
+          "tenant_id"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateRoleRequest": {
         "type": "object",
         "description": "Create a role template — a named subset of the `pos-core` permission catalogue (§9).",
@@ -24443,6 +24604,31 @@
           }
         ],
         "description": "One row's key and what would happen to it."
+      },
+      "IngredientId": {
+        "type": "string",
+        "description": "A `IngredientId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "IngredientRequest": {
+        "type": "object",
+        "description": "A create/update body for an ingredient. The id is **server-owned** — minted on create, the path id\non update — so a client never supplies or forges it. `name` and `unit` are the wire ingredient's own\nfields, reused rather than re-declared.",
+        "required": [
+          "tenant_id",
+          "name",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure"
+          }
+        }
       },
       "ItemCategory": {
         "type": "object",
@@ -25107,6 +25293,10 @@
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenUnitOfMeasure_UnitOfMeasure": {
+        "type": "string",
+        "description": "A `UnitOfMeasure` token: UNIT_OF_MEASURE_UNSPECIFIED, UNIT_OF_MEASURE_GRAM, UNIT_OF_MEASURE_KILOGRAM, UNIT_OF_MEASURE_MILLILITER, UNIT_OF_MEASURE_LITER, UNIT_OF_MEASURE_PIECE, or one a newer build sent, which is kept as it arrived"
+      },
       "PagedBody_MediaSummaryView": {
         "type": "object",
         "description": "A page on the wire: the rows, the size of the whole set, and the bounds that produced them.\n\nThe bounds are echoed because a pager needs them to render \"1–25 of 812\" and to build the next\nrequest, and because the alternative — the client tracking what it sent — breaks the moment a\nlink is shared or a page is reloaded.",
@@ -25422,6 +25612,22 @@
           }
         }
       },
+      "PublishInventoryRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/inventory` body: the `(tenant, store)` to push the tenant's authored inventory\nto. Like every other node publish, the ingredients/recipes/suppliers come from what is authored, not\nthe body.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublishMenuRequest": {
         "type": "object",
         "description": "A super-admin selects the (tenant, store, menu) to compile and publish.",
@@ -25474,6 +25680,29 @@
           }
         }
       },
+      "PublishedIngredient": {
+        "type": "object",
+        "description": "One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.",
+        "required": [
+          "id",
+          "name",
+          "unit"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IngredientId",
+            "description": "Its stable id."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The operator-facing name, shown in the console and the recipe editor."
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure",
+            "description": "The unit it is stocked and consumed in. Wrapped in [`Open`] so a unit token from a newer cloud\nround-trips rather than failing the whole node."
+          }
+        }
+      },
       "PublishedMenu": {
         "type": "object",
         "description": "What a menu publish answers: the version it produced, and how the store's fees went with it.",
@@ -25491,6 +25720,82 @@
             "description": "The store's `fees` node, composed on the tree the menu was written onto, with a fee\npublish's outcomes: applied in the same version, unchanged, refused with each rule the store\ncannot apply and why, or failed. Only an applied one wrote anything."
           }
         }
+      },
+      "PublishedRecipe": {
+        "type": "object",
+        "description": "The bill of materials for one makeable thing — a menu item or a modifier — plus its auto-86\nthreshold. A modifier carries its own [`MenuItemId`] and its own recipe (the \"large\" size adds its\nextra dough), so it is a recipe like any other.",
+        "required": [
+          "item"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The auto-86 threshold (§8): the item is sold while strictly more than this many can be made,\nand marked unavailable at or below it. Defaults to `0` — 86 only when nothing can be made."
+          },
+          "item": {
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "The item or modifier this recipe makes."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            },
+            "description": "The ingredients and per-unit amounts. Empty means the item consumes nothing tracked and is\nnever limited by stock."
+          }
+        }
+      },
+      "PublishedRecipeLine": {
+        "type": "object",
+        "description": "One line of a recipe: an ingredient and how much of it one unit of the item (or modifier) consumes,\nin that ingredient's own unit. Wire mirror of `pos_core::inventory::RecipeLine`.",
+        "required": [
+          "ingredient",
+          "per_unit"
+        ],
+        "properties": {
+          "ingredient": {
+            "$ref": "#/components/schemas/IngredientId",
+            "description": "The ingredient consumed."
+          },
+          "per_unit": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "How much of it one unit of the item consumes (a [`Quantity`] in thousandths of the unit)."
+          }
+        }
+      },
+      "PublishedSupplier": {
+        "type": "object",
+        "description": "A supplier a store receives goods from — a lightweight reference only (id + name). The full\npurchasing relationship lives in the ERP (§19).",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SupplierId",
+            "description": "Its stable id."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The operator-facing name."
+          }
+        }
+      },
+      "Quantity": {
+        "type": "object",
+        "description": "A quantity, counted in thousandths of a unit.\n\nThe wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it\n`milli` rather than `value` keeps the scale visible at every use site.",
+        "required": [
+          "milli"
+        ],
+        "properties": {
+          "milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Thousandths of a unit."
+          }
+        },
+        "additionalProperties": false
       },
       "Ratio": {
         "type": "object",
@@ -25511,6 +25816,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "RecipeRequest": {
+        "type": "object",
+        "description": "The body of a recipe write. The item it makes is the URL key on the `PUT` — a recipe references\nan existing menu item or modifier, so its id is client-owned, unlike an ingredient's\nserver-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's\nown fields.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
       },
       "RoleReadiness": {
         "type": "object",
@@ -26088,6 +26415,27 @@
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "SupplierId": {
+        "type": "string",
+        "description": "A `SupplierId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "SupplierRequest": {
+        "type": "object",
+        "description": "A create/update body for a supplier. The id is **server-owned**, exactly like an ingredient's.",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
       },
       "Table": {
         "type": "object",
@@ -27659,6 +28007,147 @@
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
                 "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedIngredient": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.",
+            "required": [
+              "id",
+              "name",
+              "unit"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IngredientId",
+                "description": "Its stable id."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DisplayName",
+                "description": "The operator-facing name, shown in the console and the recipe editor."
+              },
+              "unit": {
+                "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure",
+                "description": "The unit it is stocked and consumed in. Wrapped in [`Open`] so a unit token from a newer cloud\nround-trips rather than failing the whole node."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedRecipe": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "The bill of materials for one makeable thing — a menu item or a modifier — plus its auto-86\nthreshold. A modifier carries its own [`MenuItemId`] and its own recipe (the \"large\" size adds its\nextra dough), so it is a recipe like any other.",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "auto_86_threshold": {
+                "type": "integer",
+                "format": "int64",
+                "description": "The auto-86 threshold (§8): the item is sold while strictly more than this many can be made,\nand marked unavailable at or below it. Defaults to `0` — 86 only when nothing can be made."
+              },
+              "item": {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "The item or modifier this recipe makes."
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PublishedRecipeLine"
+                },
+                "description": "The ingredients and per-unit amounts. Empty means the item consumes nothing tracked and is\nnever limited by stock."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedSupplier": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A supplier a store receives goods from — a lightweight reference only (id + name). The full\npurchasing relationship lives in the ERP (§19).",
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/SupplierId",
+                "description": "Its stable id."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DisplayName",
+                "description": "The operator-facing name."
               }
             }
           },

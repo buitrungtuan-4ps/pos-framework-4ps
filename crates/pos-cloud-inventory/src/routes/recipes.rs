@@ -19,12 +19,13 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::inventory::InventoryStore;
-use crate::version::{CreateOutcome, UpdateOutcome};
+use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 use pos_cloud_api::conditional::{
     already_exists, if_match, version_mismatch, versioned_created, versioned_ok,
 };
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::RegistryTenantQuery;
+use pos_proto::inventory::PublishedRecipe;
 
 #[utoipa::path(
     get,
@@ -35,7 +36,7 @@ use pos_cloud_config::route::RegistryTenantQuery;
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's recipes, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<PublishedRecipe>], description = "The tenant's recipes, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -84,7 +85,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The recipe. The ETag carries the version it was read at"),
+        (status = 200, body = Versioned<PublishedRecipe>, description = "The recipe. The ETag carries the version it was read at"),
         (status = 400, description = "item_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -133,14 +134,14 @@ where
     extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and \
+        content = CreateRecipeRequest, description = "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and \
                        `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the \
                        amount one unit consumes in thousandths of the ingredient's unit, which must \
                        be positive; and `auto_86_threshold`, which may not be negative",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is the recipe and the ETag carries its version. Audited \
+        (status = 201, body = Versioned<PublishedRecipe>, description = "Created. The body is the recipe and the ETag carries its version. Audited \
                                       with the item, its line count and its threshold, never the amounts"),
         (status = 400, description = "tenant_id or item_id is absent or not a ULID, auto_86_threshold is negative, or a line consumes nothing", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -222,13 +223,13 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the \
+        content = RecipeRequest, description = "`tenant_id`, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the \
                        amount one unit consumes in thousandths of the ingredient's unit, which must \
                        be positive; and `auto_86_threshold`, which may not be negative, as the recipe should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the recipe and the ETag carries its new version. Audited \
+        (status = 200, body = Versioned<PublishedRecipe>, description = "Updated. The body is the recipe and the ETag carries its new version. Audited \
                                       without the amounts"),
         (status = 400, description = "item_id or tenant_id is not a ULID, auto_86_threshold is negative, or a line consumes nothing, or If-Match is absent, \
                                       malformed or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
