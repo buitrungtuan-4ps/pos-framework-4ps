@@ -96,6 +96,7 @@ pub(crate) struct PrintJobDeps<S, A, Q, W> {
 
 /// One leased job, as the agent receives it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LeasedJob {
     /// The printer to open. Not on the job — a [`PrintJob`] names a *station*, and a receipt has
     /// none at all.
@@ -117,6 +118,7 @@ struct LeasedJob {
 
 /// What a claim returned. Always present, possibly empty: an empty park is the ordinary answer.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LeasedJobs {
     jobs: Vec<LeasedJob>,
 }
@@ -271,7 +273,7 @@ where
                                                               Anything else reads as no"),
     ),
     responses(
-        (status = 200, description = "`jobs`: at most one per printer the agent owns, each with the \
+        (status = 200, body = LeasedJobs, description = "`jobs`: at most one per printer the agent owns, each with the \
                                       printer's address, connection and capabilities, when its lease lapses, \
                                       and the document. Empty when nothing arrived while the request was \
                                       parked"),

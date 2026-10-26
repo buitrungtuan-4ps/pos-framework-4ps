@@ -71,10 +71,7 @@ const ADMIN_NO_SCHEMA_YET: &[&str] = &[
 ];
 
 /// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const DEVICE_NO_SCHEMA_YET: &[&str] = &[
-    "GET /sync/stores/{store_id}/config",
-    "POST /claim/{claim_id}/collect",
-];
+const DEVICE_NO_SCHEMA_YET: &[&str] = &["POST /claim/{claim_id}/collect"];
 
 /// The operations in `document` with a success answer (other than `204`) that has no content, or
 /// a request body with a media type that names no schema.

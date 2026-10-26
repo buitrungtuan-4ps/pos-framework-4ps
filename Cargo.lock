@@ -2145,9 +2145,11 @@ dependencies = [
 name = "pos-ports"
 version = "0.1.0"
 dependencies = [
+ "pos-ports",
  "pos-proto",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]
