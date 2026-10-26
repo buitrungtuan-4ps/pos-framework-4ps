@@ -135,7 +135,7 @@ struct FeesTenantQuery {
 }
 
 /// One rule as the console lists it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct FeeRuleView {
     /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
     scope: &'static str,

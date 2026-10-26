@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
 use pos_proto::fees::PublishedFees;
@@ -45,7 +46,7 @@ pub(super) struct PublishFeesRequest {
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each store's rules resolved, compiled and republished, with \
+        (status = 200, body = StoresPublished<FeePublishResult>, description = "Each store's rules resolved, compiled and republished, with \
                                       the same per-store outcomes as a write"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -124,11 +125,7 @@ where
         Some(fee_publish_counts(&results)),
     )
     .await;
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "stores": results })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(StoresPublished { stores: results })).into_response()
 }
 
 /// How one store's fee publish went.
