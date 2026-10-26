@@ -73,16 +73,7 @@ const ADMIN_NO_SCHEMA_YET: &[&str] = &[
 /// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
 const DEVICE_NO_SCHEMA_YET: &[&str] = &[
     "GET /sync/stores/{store_id}/config",
-    "GET /sync/stores/{store_id}/orders",
     "POST /claim/{claim_id}/collect",
-    "POST /sync/stores/{store_id}/archive",
-    "POST /sync/stores/{store_id}/archive-key",
-    "POST /sync/stores/{store_id}/artifact",
-    "POST /sync/stores/{store_id}/events",
-    "POST /sync/stores/{store_id}/events/hello",
-    "POST /sync/stores/{store_id}/heartbeat",
-    "POST /sync/stores/{store_id}/orders/{queued_id}/ack",
-    "POST /sync/stores/{store_id}/report",
 ];
 
 /// The operations in `document` with a success answer (other than `204`) that has no content, or

@@ -113,7 +113,7 @@ impl core::fmt::Display for OrderQueueId {
 /// The domain [`InboundOrder`] is not `Serialize` (its `GuestNote` cannot enter the event log), so
 /// the relay carries this explicit shape; the guest note rides along to the store here (this is order
 /// delivery, not the log) and never touches the event stream.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct QueuedOrderPayload {
     /// The caller's reference — the idempotency key, scoped by channel.
     pub external_reference: String,
@@ -134,7 +134,7 @@ pub struct QueuedOrderPayload {
 }
 
 /// One line of a [`QueuedOrderPayload`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct QueuedOrderLine {
     /// The menu item ordered.
     pub menu_item_id: String,
@@ -152,7 +152,7 @@ pub struct QueuedOrderLine {
 }
 
 /// A money value on the wire.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct MoneyPayload {
     /// ISO 4217 currency code.
     pub currency_code: String,
@@ -200,7 +200,7 @@ impl QueuedOrderLine {
 }
 
 /// A serializable [`OrderAcceptance`] — what the store reports and the relay records and replays.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AcceptanceRecord {
     /// The store's order id.
     pub order_id: String,
@@ -253,7 +253,7 @@ impl AcceptanceRecord {
 }
 
 /// What a store reported for a pulled order: an acceptance, or a refusal it decided locally.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum StoreOutcome {
     /// The store accepted (or idempotently matched) the order.
@@ -689,7 +689,7 @@ where
 }
 
 /// One pending order on the wire, for the pull response.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct PendingOrderDto {
     queued_id: String,
     order: QueuedOrderPayload,
@@ -703,7 +703,7 @@ struct PendingOrderDto {
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     responses(
-        (status = 200, description = "The store's pending relayed orders, each with its `queued_id` and the \
+        (status = 200, body = [PendingOrderDto], description = "The store's pending relayed orders, each with its `queued_id` and the \
                                       `order`. Held open for a bounded wait while there are none, and empty \
                                       if none arrives"),
         (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -793,7 +793,7 @@ where
         ("queued_id" = String, Path, description = "The queued order, a ULID"),
     ),
     request_body(
-        description = "The store's `outcome`: `accepted`, with the store's order id, its total and its queue \
+        content = StoreOutcome, description = "The store's `outcome`: `accepted`, with the store's order id, its total and its queue \
                        number where the channel issues one; or `rejected`, with the refusal's `status` and \
                        `message`",
         content_type = "application/json",

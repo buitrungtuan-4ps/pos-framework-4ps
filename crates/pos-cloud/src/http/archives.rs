@@ -68,13 +68,13 @@ struct ArchiveUploadQuery {
 }
 
 /// The key a store seals with, as it comes back over `/sync`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct ArchiveKeyResponse {
     key: String,
 }
 
 /// What the cloud recorded, echoed so a store can log what it shipped.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct ArchiveAcceptedResponse {
     object_key: String,
     size_bytes: i64,
@@ -136,7 +136,7 @@ where
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     responses(
-        (status = 200, description = "`key`: the key this store seals its archives with, minted on the first \
+        (status = 200, body = ArchiveKeyResponse, description = "`key`: the key this store seals its archives with, minted on the first \
                                       ask (ADR-0124)"),
         (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
@@ -271,12 +271,12 @@ where
                                                  epoch by its own clock"),
     ),
     request_body(
-        description = "The sealed archive's bytes, as `pos-edge archive` writes them. The cloud checks the \
+        content = pos_cloud_api::body_schema::Binary, description = "The sealed archive's bytes, as `pos-edge archive` writes them. The cloud checks the \
                        header and cannot open the rest",
-        content_type = "application/json",
+        content_type = "application/octet-stream",
     ),
     responses(
-        (status = 200, description = "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the \
+        (status = 200, body = ArchiveAcceptedResponse, description = "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the \
                                       store to log"),
         (status = 400, description = "store_id is not a ULID, taken_at is not a positive time, or the body \
                                       is not a store archive", body = pos_cloud_api::error_schema::ErrorResponse),
