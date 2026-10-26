@@ -7579,7 +7579,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `channels` node as the store runs it — the sales channels it takes orders on — composed from all four layers, or `null` when it has none"
+            "description": "The store's `channels` node as the store runs it — the sales channels it takes orders on — composed from all four layers, or `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedChannels"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -8008,12 +8022,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`; optionally `edge_placement` (`EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) when the store is moving, absent for a swap in place (ADR-0110); for a hosted placement, `region_country` and `region_label`, where its data will rest (ADR-0114); and `acknowledge_undrained`, the undrained generation this bump knowingly abandons. No body names a generation: the server issues it",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BumpLeaseRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Issued and published: a different machine is the store now (ADR-0108). The new generation is published as the store's `lease` node, with the receipt floor beside it where the cloud has one (ADR-0149), and the box on the old generation stops installing updates. The body carries `config_version_id`. Audited with the generation issued"
+            "description": "Issued and published: a different machine is the store now (ADR-0108). The new generation is published as the store's `lease` node, with the receipt floor beside it where the cloud has one (ADR-0149), and the box on the old generation stops installing updates. The body carries `config_version_id`. Audited with the generation issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID; edge_placement is not one of the three; the region is incomplete, malformed or given where no hosted placement is named; If-Match is absent or malformed; or a value needs a recorded confirmation first",
@@ -8415,7 +8441,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — composed from all four layers, or `null` when it has none"
+            "description": "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — composed from all four layers, or `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedOrigins"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -8592,7 +8632,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The `fleet_update` node the store runs, its layers composed, so a rollout a rollback restored reads as it runs; or `null` when none is published"
+            "description": "The `fleet_update` node the store runs, its layers composed, so a rollout a rollback restored reads as it runs; or `null` when none is published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeFormJson"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -8651,12 +8698,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`; `target_version`, the release to install as `MAJOR.MINOR.PATCH`, which the cloud must already host; `min_ring`, the lowest eligible ring (`lab`, `pilot` or `fleet`); `rollout_percent`, the share of the fleet ring currently eligible, 0 to 100; `signing_key_id`, the key the release is signed by, as sixteen hex digits; and optionally `revoked_key_ids`, keys revocation has retired. There is no `halted`: a fresh publish is live",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRolloutRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `fleet_update` node on the Store layer, the store's other Store-level settings kept. The body carries `config_version_id`. Audited"
+            "description": "Published as the store's `fleet_update` node on the Store layer, the store's other Store-level settings kept. The body carries `config_version_id`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID; target_version cannot name a hosted release; or a value needs a recorded confirmation first",
@@ -8855,7 +8914,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The `device_ota` node the store runs, its layers composed; or `null` when the store has never been placed"
+            "description": "The `device_ota` node the store runs, its layers composed; or `null` when the store has never been placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeFormJson"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -8915,12 +8981,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`; `ring`, the store's rollout ring (`lab`, `pilot` or `fleet`); and `canary_bucket`, 0 to 99, its fixed place in the fleet ramp. Every terminal of the store takes the same placement",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishPlacementRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `device_ota` node on the Device layer, the store's other Device-level settings kept. The body carries `config_version_id`. Audited"
+            "description": "Published as the store's `device_ota` node on the Device layer, the store's other Device-level settings kept. The body carries `config_version_id`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, or a value needs a recorded confirmation first",
@@ -9109,7 +9187,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `qr` node as the store runs it — whether guests may order by QR and the guardrails on it — composed from all four layers, or `null` when it has none"
+            "description": "The store's `qr` node as the store runs it — whether guests may order by QR and the guardrails on it — composed from all four layers, or `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedQr"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -9376,7 +9468,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — composed from all four layers, or `null` when it has none (the edge then keeps 90 days)"
+            "description": "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — composed from all four layers, or `null` when it has none (the edge then keeps 90 days)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedRetention"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -9928,7 +10034,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `tender` node as the store runs it — the payment methods it accepts — composed from all four layers, or `null` when it has none"
+            "description": "The store's `tender` node as the store runs it — the payment methods it accepts — composed from all four layers, or `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedTender"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -10104,7 +10224,21 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's `vendors` node as the store runs it — its policy for each delivery marketplace — composed from all four layers, or `null` when it has none"
+            "description": "The store's `vendors` node as the store runs it — its policy for each delivery marketplace — composed from all four layers, or `null` when it has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PublishedVendorPolicies"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -17071,7 +17205,14 @@
         "operationId": "admin_openapi",
         "responses": {
           "200": {
-            "description": "This document, as JSON. No session is needed"
+            "description": "This document, as JSON. No session is needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeFormJson"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -17431,7 +17572,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The release's Windows executable, byte for byte, as an `application/octet-stream` attachment named for the store and the cloud. Nothing is written into the bytes, so the release's signature still verifies; the store's credential arrives only through activation"
+            "description": "The release's Windows executable, byte for byte, as an `application/octet-stream` attachment named for the store and the cloud. Nothing is written into the bytes, so the release's signature still verifies; the store's credential arrives only through activation",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Binary"
+                }
+              }
+            }
           },
           "400": {
             "description": "The release cannot name a hosted release; store_id is absent or not a ULID; cloud is absent or cannot be written into a file name; or arch is not a target triple or not a Windows build",
@@ -20608,7 +20756,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's current effective configuration: its four layers composed. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue"
+            "description": "The store's current effective configuration: its four layers composed. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeFormJson"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -21032,7 +21187,14 @@
         ],
         "responses": {
           "200": {
-            "description": "That version's effective configuration, for comparing with another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue: a past version is no less sensitive"
+            "description": "That version's effective configuration, for comparing with another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role holding console.people.read, and prices only for a role holding console.reports.revenue: a past version is no less sensitive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeFormJson"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id or version_id is absent or not a ULID",
@@ -25034,6 +25196,51 @@
           }
         }
       },
+      "BumpLeaseRequest": {
+        "type": "object",
+        "description": "A `POST /admin/config/lease/bump` body: the `(tenant, store)` whose next generation to issue, and\noptionally where the machine taking it runs\n([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).\n\n`edge_placement` absent means \"replace the machine where the store already is\" — ADR-0003's swap,\nand every bump this route served before the field existed, which is why it defaults rather than\nbeing required. Present, it means the store is **moving**, and this is the only route in the tree\nthat writes the value.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "acknowledge_undrained": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The undrained generation this bump is knowingly abandoning, or absent.\n\nIt names the value already sitting in `superseded_generation` — *not* the generation this\nbump is about to displace. So an acknowledged bump does not clear the column; it rolls it\nforward, and the fact that the older generation was abandoned survives in the audit trail,\nwhich is why the entry carries both numbers.",
+            "minimum": 0
+          },
+          "edge_placement": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where in the world the machine taking this generation is — its ISO 3166-1 alpha-2 country\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nRequired together with `region_label` when `edge_placement` names a hosted mode, and refused\non any other bump: an in-store machine is in the shop, and a bump that names no placement is\na swap in place, so a region on either would be a region edited without moving the store."
+          },
+          "region_label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The place a person recognises — `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai`.\n\nStored verbatim and never parsed by anything. It is free text an admin typed, so the\nconsole's helper text asks for a place and not a person; it is never logged and never enters\nan event payload."
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CampaignId": {
         "type": "string",
         "description": "A `CampaignId`: a ULID, 26 Crockford base-32 characters",
@@ -27618,6 +27825,9 @@
           }
         }
       },
+      "FreeFormJson": {
+        "description": "Free-form JSON. The route's description names what it is and where its shape is defined"
+      },
       "GenerateVouchersRequest": {
         "type": "object",
         "description": "A `POST /admin/campaigns/{id}/vouchers` body: the tenant and how many codes to mint.",
@@ -28653,6 +28863,10 @@
         "type": "string",
         "description": "A `FeeTax` token: FEE_TAX_UNSPECIFIED, FEE_TAX_NOT_TAXABLE, FEE_TAX_FOLLOW_LINES, FEE_TAX_TAX_CLASS, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenPaymentMethod_PaymentMethod": {
+        "type": "string",
+        "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenReasonAction_ReasonAction": {
         "type": "string",
         "description": "A `ReasonAction` token: REASON_ACTION_UNSPECIFIED, REASON_ACTION_VOID_LINE, REASON_ACTION_VOID_BILL, REASON_ACTION_DISCOUNT, REASON_ACTION_COMP, REASON_ACTION_REFUND, REASON_ACTION_DRAWER_OPEN, REASON_ACTION_REJECT_ORDER, REASON_ACTION_CASH_PAID_IN, REASON_ACTION_CASH_PAID_OUT, REASON_ACTION_STOCK_ADJUSTMENT, REASON_ACTION_STOCK_WASTE, REASON_ACTION_WAIVE_FEE, REASON_ACTION_CASH_VARIANCE, or one a newer build sent, which is kept as it arrived"
@@ -28660,6 +28874,10 @@
       "OpenSalesChannel_SalesChannel": {
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenTableOrder_TableOrder": {
+        "type": "string",
+        "description": "A `TableOrder` token: TABLE_ORDER_UNSPECIFIED, TABLE_ORDER_SEPARATE, TABLE_ORDER_JOIN, or one a newer build sent, which is kept as it arrived"
       },
       "OpenUnitOfMeasure_UnitOfMeasure": {
         "type": "string",
@@ -29353,6 +29571,32 @@
           }
         }
       },
+      "PublishPlacementRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —\nits ring, and the stable canary bucket that fixes its place in the fleet ramp.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "ring",
+          "canary_bucket"
+        ],
+        "properties": {
+          "canary_bucket": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ring": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublishQrRequest": {
         "type": "object",
         "description": "A `PUT /admin/config/qr` body: the store and the QR guardrail settings (P11b/ADR-0057). Composed\ninto the `qr` node the cloud's QR intake reads (`qr_http::qr_config_for`) and the edge reads for its\nstaff-confirmation decision.",
@@ -29433,6 +29677,46 @@
             "minimum": 0
           },
           "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishRolloutRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no\n`halted` field — a fresh publish is live; the kill switch is `POST /admin/config/ota/halt`.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "target_version",
+          "min_ring",
+          "rollout_percent",
+          "signing_key_id"
+        ],
+        "properties": {
+          "min_ring": {
+            "type": "string"
+          },
+          "revoked_key_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rollout_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "signing_key_id": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "target_version": {
             "type": "string"
           },
           "tenant_id": {
@@ -29695,6 +29979,19 @@
           "manual"
         ]
       },
+      "PublishedChannels": {
+        "type": "object",
+        "description": "The `channels` config node: the sales channels a store accepts orders on.",
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
+            },
+            "description": "The enabled channels. An empty list published means the store accepts no channel; an *absent*\nnode (never published) means no restriction — see the module docs."
+          }
+        }
+      },
       "PublishedConditions": {
         "type": "object",
         "description": "The conditions a campaign requires before it applies. Wire mirror of\n`pos_core::campaign::Conditions`; every field is optional and absent means unrestricted.",
@@ -29787,6 +30084,72 @@
           }
         }
       },
+      "PublishedOrigins": {
+        "type": "object",
+        "description": "The `origins` config node: the origins a store's edge answers beside the one that served the\nrequest.\n\nThe serving origin is never in this list and never needs to be — the edge compares it against the\nrequest's own `Host`, so a store that has published nothing keeps serving its own UI.",
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The allowed origins, each `scheme://host[:port]`."
+          }
+        }
+      },
+      "PublishedQr": {
+        "type": "object",
+        "description": "The `qr` node: its setting, and the guardrails the console's QR form writes beside it.\n\nEach guardrail is `None` where the node does not carry it, or carries something other than its\nJSON type, and each is left off the wire while absent.",
+        "properties": {
+          "business_hours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QrBusinessHours",
+                "description": "The hours the store takes QR orders. Absent, or without a whole open and close hour, is\nalways open."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "QR ordering's switch as the node carries it. The switch itself is the store's\n`qr_ordering_enabled` flag (ADR-0160 decision 5), and a cloud that knows it writes this equal\nto it, so a `false` flag beside a value that is not `false` is the flag from before the\nswitch."
+          },
+          "per_table_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many guest orders one table may submit within the rate window. Absent is the guest\nintake's default.",
+            "minimum": 0
+          },
+          "rate_window_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The rate window, in seconds. Absent is the guest intake's default.",
+            "minimum": 0
+          },
+          "staff_confirmation_required": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether a table-bearing guest order waits for a member of staff before the kitchen sees it.\nAbsent is `true` to both readers (ADR-0057): a store that never said holds guest orders."
+          },
+          "table_order": {
+            "$ref": "#/components/schemas/OpenTableOrder_TableOrder",
+            "description": "What a guest's order does at a table that already has an open order. Read it through\n[`PublishedQr::table_order`], which gives an absent or unknown value its default."
+          }
+        }
+      },
       "PublishedReasonCode": {
         "type": "object",
         "description": "One entry in the managed list: what it is called, and what it may be given for.",
@@ -29874,6 +30237,21 @@
           }
         }
       },
+      "PublishedRetention": {
+        "type": "object",
+        "description": "The `retention` node.\n\nNo `deny_unknown_fields`, as for every published node: an edge on an older release applies a node\nthat carries a field it does not know, rather than refusing the whole document.",
+        "properties": {
+          "event_log_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many days the edge keeps a synced event, as the node carries it: a whole number, and\n`None` for anything else. Read it through [`PublishedRetention::event_log_days`].",
+            "minimum": 0
+          }
+        }
+      },
       "PublishedSchedule": {
         "type": "object",
         "description": "A weekly schedule window. Wire mirror of `pos_core::campaign::Schedule`; the window is half-open\nand may wrap past midnight (`start_minute > end_minute`).",
@@ -29918,6 +30296,31 @@
           "name": {
             "$ref": "#/components/schemas/DisplayName",
             "description": "The operator-facing name."
+          }
+        }
+      },
+      "PublishedTender": {
+        "type": "object",
+        "description": "The `tender` config node: the payment methods a store accepts.",
+        "properties": {
+          "accepted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenPaymentMethod_PaymentMethod"
+            },
+            "description": "The accepted payment methods. An empty list published means the store takes no tender; an\n*absent* node means no restriction — any known method is accepted, as before M7."
+          }
+        }
+      },
+      "PublishedVendorPolicies": {
+        "type": "object",
+        "description": "The `vendors` config node: a store's per-marketplace policies.",
+        "properties": {
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedVendorPolicy"
+            }
           }
         }
       },
@@ -29985,6 +30388,36 @@
             "type": "string"
           },
           "value": {}
+        }
+      },
+      "QrBusinessHours": {
+        "type": "object",
+        "description": "The hours a store takes QR orders, as the `qr` node carries them.\n\nRead only through the node ([`PublishedQr`]), field by field: an open or close hour that is not a\nwhole number from 0 to 255 leaves the store with no hours, which is always open, and an offset\nthat is not a whole number reads as absent. The guest intake reads an hour past 23 as no hours\ntoo, as the console refuses to write one.",
+        "required": [
+          "open_hour",
+          "close_hour"
+        ],
+        "properties": {
+          "close_hour": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The hour orders close. An open hour later than the close hour wraps past midnight, and one\nequal to it is always open.",
+            "minimum": 0
+          },
+          "open_hour": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The hour orders open, in the store's offset from UTC.",
+            "minimum": 0
+          },
+          "tz_offset_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The store's offset from UTC, in minutes. Absent reads as UTC."
+          }
         }
       },
       "QrBusinessHoursRequest": {

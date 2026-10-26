@@ -728,7 +728,7 @@ pub(crate) struct AdminApiDoc;
     security(),
     extensions(("x-public-reason" = json!("nothing: it describes routes and carries no tenant data"))),
     responses(
-        (status = 200, description = "This document, as JSON. No session is needed"),
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "This document, as JSON. No session is needed"),
     ),
     tag = "openapi",
 )]

@@ -36,7 +36,7 @@ use crate::ota::ArtifactStore;
                                                      Required"),
     ),
     request_body(
-        description = "`tenant_id` and `store_id`; optionally `edge_placement` \
+        content = BumpLeaseRequest, description = "`tenant_id` and `store_id`; optionally `edge_placement` \
                        (`EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or \
                        `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) when the store is moving, absent for a \
                        swap in place (ADR-0110); for a hosted placement, `region_country` and \
@@ -46,7 +46,7 @@ use crate::ota::ArtifactStore;
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Issued and published: a different machine is the store now \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Issued and published: a different machine is the store now \
                                       (ADR-0108). The new generation is published as the store's \
                                       `lease` node, with the receipt floor beside it where the cloud \
                                       has one (ADR-0149), and the box on the old generation stops \

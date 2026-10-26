@@ -113,7 +113,7 @@ fn parse_installer_request(
                                                          default Windows build"),
     ),
     responses(
-        (status = 200, description = "The release's Windows executable, byte for byte, as an \
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "application/octet-stream", description = "The release's Windows executable, byte for byte, as an \
                                       `application/octet-stream` attachment named for the store and \
                                       the cloud. Nothing is written into the bytes, so the release's \
                                       signature still verifies; the store's credential arrives only \

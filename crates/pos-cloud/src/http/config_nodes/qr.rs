@@ -18,6 +18,7 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::qr::PublishedQr;
 
 /// A `qr.business_hours` window in a `PUT /admin/config/qr` body.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
@@ -56,7 +57,7 @@ pub(super) struct PublishQrRequest {
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `qr` node as the store runs it — whether guests may order by QR and the guardrails on it — \
+        (status = 200, body = Option<PublishedQr>, description = "The store's `qr` node as the store runs it — whether guests may order by QR and the guardrails on it — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
