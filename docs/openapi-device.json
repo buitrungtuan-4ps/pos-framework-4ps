@@ -168,7 +168,14 @@
             }
           },
           "202": {
-            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again"
+            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimPending"
+                }
+              }
+            }
           },
           "400": {
             "description": "claim_id is not a ULID",
@@ -1714,6 +1721,19 @@
           }
         }
       },
+      "ClaimPending": {
+        "type": "object",
+        "description": "What collecting a claim nobody has bound yet answers: that it is pending.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PendingStatus",
+            "description": "Always `PENDING`."
+          }
+        }
+      },
       "CollectClaimRequest": {
         "type": "object",
         "description": "A box presents its secret to collect.",
@@ -2281,6 +2301,13 @@
             "type": "string"
           }
         }
+      },
+      "PendingStatus": {
+        "type": "string",
+        "description": "The one status a pending claim answers with.",
+        "enum": [
+          "PENDING"
+        ]
       },
       "PrintAgentStanding": {
         "type": "object",

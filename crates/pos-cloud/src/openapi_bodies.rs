@@ -18,13 +18,10 @@ use crate::openapi_admin::AdminApiDoc;
 use crate::openapi_device::DeviceApiDoc;
 
 /// `/admin` routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const ADMIN_NO_SCHEMA_YET: &[&str] = &["POST /admin/devices/publish"];
+const ADMIN_NO_SCHEMA_YET: &[&str] = &[];
 
 /// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const DEVICE_NO_SCHEMA_YET: &[&str] = &[
-    "GET /sync/stores/{store_id}/config",
-    "POST /claim/{claim_id}/collect",
-];
+const DEVICE_NO_SCHEMA_YET: &[&str] = &["GET /sync/stores/{store_id}/config"];
 
 /// The operations in `document` with a success answer (other than `204`) that has no content, or
 /// a request body with a media type that names no schema.

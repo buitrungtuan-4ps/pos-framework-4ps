@@ -91,6 +91,21 @@ struct OpenedClaim {
     poll_interval_secs: u64,
 }
 
+/// What collecting a claim nobody has bound yet answers: that it is pending.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ClaimPending {
+    /// Always `PENDING`.
+    status: PendingStatus,
+}
+
+/// The one status a pending claim answers with.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+enum PendingStatus {
+    /// Nobody has bound the code yet; the box asks again.
+    #[serde(rename = "PENDING")]
+    Pending,
+}
+
 #[utoipa::path(
     post,
     path = "/claim",
@@ -184,7 +199,7 @@ struct CollectedClaim {
     responses(
         (status = 200, body = CollectedClaim, description = "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its \
                                       device `credential`, returned this once"),
-        (status = 202, description = "Nobody has bound the code yet: `status` is `PENDING`, and the box asks \
+        (status = 202, body = ClaimPending, description = "Nobody has bound the code yet: `status` is `PENDING`, and the box asks \
                                       again"),
         (status = 400, description = "claim_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "This claim cannot be collected. Every such refusal answers the same, \
@@ -247,7 +262,9 @@ where
             .into_response(),
         Ok(CollectOutcome::Pending) => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({ "status": "PENDING" })),
+            Json(ClaimPending {
+                status: PendingStatus::Pending,
+            }),
         )
             .into_response(),
         Ok(CollectOutcome::Expired) => api_error_with_details(
@@ -398,4 +415,22 @@ fn mint_user_code() -> Option<UserCode> {
     let mut entropy = [0_u8; USER_CODE_ENTROPY];
     getrandom::fill(&mut entropy).ok()?;
     Some(UserCode::from_entropy(entropy))
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! The answer serialises to the bytes the `json!` it replaced did.
+
+    use super::{ClaimPending, PendingStatus};
+
+    #[test]
+    fn a_pending_claim_answers_pending() {
+        let answer = ClaimPending {
+            status: PendingStatus::Pending,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "status": "PENDING" })
+        );
+    }
 }
