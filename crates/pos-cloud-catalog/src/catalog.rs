@@ -403,6 +403,7 @@ pub struct Course {
 /// same id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the
 /// compiled `MenuEntry`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplayCategory)]
 pub struct DisplayCategory {
     /// The display-category id — carried into the compiled `DisplayPlan`.
     pub display_category_id: DisplayCategoryId,
@@ -416,6 +417,7 @@ pub struct DisplayCategory {
 
 /// A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplaySubcategory)]
 pub struct DisplaySubcategory {
     /// The display-sub-category id — carried into the compiled plan.
     pub display_subcategory_id: DisplaySubcategoryId,

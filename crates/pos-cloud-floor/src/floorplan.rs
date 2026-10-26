@@ -324,6 +324,7 @@ impl fmt::Display for RoutingRuleId {
 /// An item→station routing rule as the console reads it. Matches a specific item or any line on a
 /// course (the route layer enforces exactly one); `sort` orders rules within their tier.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[schema(as = FloorRoutingRule)]
 pub struct RoutingRule {
     /// The rule's id.
     pub rule_id: RoutingRuleId,

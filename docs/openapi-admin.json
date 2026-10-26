@@ -2639,7 +2639,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                    "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                   }
                 }
               }
@@ -2716,7 +2716,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                 }
               }
             }
@@ -2814,7 +2814,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                 }
               }
             }
@@ -2914,7 +2914,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                    "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                   }
                 }
               }
@@ -2991,7 +2991,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                 }
               }
             }
@@ -3089,7 +3089,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                 }
               }
             }
@@ -16075,7 +16075,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RoutingRule"
+                    "$ref": "#/components/schemas/FloorRoutingRule"
                   }
                 }
               }
@@ -25639,6 +25639,67 @@
           }
         }
       },
+      "CatalogDisplayCategory": {
+        "type": "object",
+        "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
+        "required": [
+          "display_category_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "display_category_id": {
+            "$ref": "#/components/schemas/DisplayCategoryId",
+            "description": "The display-category id — carried into the compiled `DisplayPlan`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a screen shows as a tab or section."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
+      "CatalogDisplaySubcategory": {
+        "type": "object",
+        "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
+        "required": [
+          "display_subcategory_id",
+          "tenant_id",
+          "display_category_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "display_category_id": {
+            "$ref": "#/components/schemas/DisplayCategoryId",
+            "description": "The parent display category."
+          },
+          "display_subcategory_id": {
+            "$ref": "#/components/schemas/DisplaySubcategoryId",
+            "description": "The display-sub-category id — carried into the compiled plan."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a screen shows."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
       "CatalogItem": {
         "type": "object",
         "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
@@ -27318,34 +27379,6 @@
           }
         }
       },
-      "DisplayCategory": {
-        "type": "object",
-        "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
-        "required": [
-          "display_category_id",
-          "tenant_id",
-          "name",
-          "status"
-        ],
-        "properties": {
-          "display_category_id": {
-            "$ref": "#/components/schemas/DisplayCategoryId",
-            "description": "The display-category id — carried into the compiled `DisplayPlan`."
-          },
-          "name": {
-            "type": "string",
-            "description": "The name a screen shows as a tab or section."
-          },
-          "status": {
-            "$ref": "#/components/schemas/EntityStatus",
-            "description": "Active or archived."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
-          }
-        }
-      },
       "DisplayCategoryId": {
         "type": "string",
         "description": "A `DisplayCategoryId`: a ULID, 26 Crockford base-32 characters",
@@ -27354,39 +27387,6 @@
       "DisplayName": {
         "type": "string",
         "description": "A human-readable name for a product, category, modifier or campaign.\n\nTenant content, resolved per language in the configuration tree. Admissible in an\nevent payload because a line snapshot must capture the name shown to the guest at\nthe moment the line was added — changing or deleting a menu item afterwards must\nnot alter an open order or a settled bill."
-      },
-      "DisplaySubcategory": {
-        "type": "object",
-        "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
-        "required": [
-          "display_subcategory_id",
-          "tenant_id",
-          "display_category_id",
-          "name",
-          "status"
-        ],
-        "properties": {
-          "display_category_id": {
-            "$ref": "#/components/schemas/DisplayCategoryId",
-            "description": "The parent display category."
-          },
-          "display_subcategory_id": {
-            "$ref": "#/components/schemas/DisplaySubcategoryId",
-            "description": "The display-sub-category id — carried into the compiled plan."
-          },
-          "name": {
-            "type": "string",
-            "description": "The name a screen shows."
-          },
-          "status": {
-            "$ref": "#/components/schemas/EntityStatus",
-            "description": "Active or archived."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
-          }
-        }
       },
       "DisplaySubcategoryId": {
         "type": "string",
@@ -28233,6 +28233,63 @@
           },
           "store_id": {
             "type": "string"
+          }
+        }
+      },
+      "FloorRoutingRule": {
+        "type": "object",
+        "description": "An item→station routing rule as the console reads it. Matches a specific item or any line on a\ncourse (the route layer enforces exactly one); `sort` orders rules within their tier.",
+        "required": [
+          "rule_id",
+          "tenant_id",
+          "store_id",
+          "station_id",
+          "sort"
+        ],
+        "properties": {
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId",
+                "description": "The course this rule matches, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "menu_item_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "The item this rule matches, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule_id": {
+            "$ref": "#/components/schemas/RoutingRuleId",
+            "description": "The rule's id."
+          },
+          "sort": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The author-controlled order within its tier.",
+            "minimum": 0
+          },
+          "station_id": {
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a matching line routes to."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store this rule belongs to."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -31640,63 +31697,6 @@
           }
         }
       },
-      "RoutingRule": {
-        "type": "object",
-        "description": "An item→station routing rule as the console reads it. Matches a specific item or any line on a\ncourse (the route layer enforces exactly one); `sort` orders rules within their tier.",
-        "required": [
-          "rule_id",
-          "tenant_id",
-          "store_id",
-          "station_id",
-          "sort"
-        ],
-        "properties": {
-          "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "The course this rule matches, if any."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "menu_item_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MenuItemId",
-                "description": "The item this rule matches, if any."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rule_id": {
-            "$ref": "#/components/schemas/RoutingRuleId",
-            "description": "The rule's id."
-          },
-          "sort": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The author-controlled order within its tier.",
-            "minimum": 0
-          },
-          "station_id": {
-            "$ref": "#/components/schemas/StationId",
-            "description": "The station a matching line routes to."
-          },
-          "store_id": {
-            "$ref": "#/components/schemas/StoreId",
-            "description": "The store this rule belongs to."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
-          }
-        }
-      },
       "RoutingRuleId": {
         "$ref": "#/components/schemas/Ulid",
         "description": "A routing rule's identifier — a ULID minted at creation. Cloud-local (like `pos-cloud`'s\n`people::EmployeeId`): a rule is authoring-only and compiles into the\n`stations` node's flat routing list, which carries no rule id."
@@ -32388,38 +32388,6 @@
           }
         }
       },
-      "SettingValue": {
-        "type": "object",
-        "description": "One value written at one scope.",
-        "required": [
-          "setting_key",
-          "scope",
-          "scope_id",
-          "value",
-          "update_time"
-        ],
-        "properties": {
-          "scope": {
-            "$ref": "#/components/schemas/OpenSettingScope_SettingScope",
-            "description": "The scope the value was written at."
-          },
-          "scope_id": {
-            "type": "string",
-            "description": "The tenant, brand, store group or store it was written for."
-          },
-          "setting_key": {
-            "type": "string",
-            "description": "The setting's key, `node.field`."
-          },
-          "update_time": {
-            "$ref": "#/components/schemas/Timestamp",
-            "description": "When it was written. Decides between two store groups that disagree."
-          },
-          "value": {
-            "description": "The value, as the node carries it."
-          }
-        }
-      },
       "SettingValues": {
         "type": "object",
         "description": "What the settings list answers: every value the tenant has written, at every scope.",
@@ -32430,7 +32398,7 @@
           "values": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SettingValue"
+              "$ref": "#/components/schemas/StoredSettingValue"
             },
             "description": "The stored values."
           }
@@ -32732,6 +32700,38 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "StoredSettingValue": {
+        "type": "object",
+        "description": "One value written at one scope.",
+        "required": [
+          "setting_key",
+          "scope",
+          "scope_id",
+          "value",
+          "update_time"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/OpenSettingScope_SettingScope",
+            "description": "The scope the value was written at."
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "The tenant, brand, store group or store it was written for."
+          },
+          "setting_key": {
+            "type": "string",
+            "description": "The setting's key, `node.field`."
+          },
+          "update_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was written. Decides between two store groups that disagree."
+          },
+          "value": {
+            "description": "The value, as the node carries it."
           }
         }
       },
@@ -33990,6 +33990,117 @@
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
       },
+      "Versioned_CatalogDisplayCategory": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
+            "required": [
+              "display_category_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "display_category_id": {
+                "$ref": "#/components/schemas/DisplayCategoryId",
+                "description": "The display-category id — carried into the compiled `DisplayPlan`."
+              },
+              "name": {
+                "type": "string",
+                "description": "The name a screen shows as a tab or section."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_CatalogDisplaySubcategory": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
+            "required": [
+              "display_subcategory_id",
+              "tenant_id",
+              "display_category_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "display_category_id": {
+                "$ref": "#/components/schemas/DisplayCategoryId",
+                "description": "The parent display category."
+              },
+              "display_subcategory_id": {
+                "$ref": "#/components/schemas/DisplaySubcategoryId",
+                "description": "The display-sub-category id — carried into the compiled plan."
+              },
+              "name": {
+                "type": "string",
+                "description": "The name a screen shows."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
       "Versioned_CatalogItem": {
         "allOf": [
           {
@@ -34266,117 +34377,6 @@
               "store_id": {
                 "$ref": "#/components/schemas/StoreId",
                 "description": "The owning store."
-              },
-              "tenant_id": {
-                "$ref": "#/components/schemas/TenantId",
-                "description": "The owning tenant."
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "etag"
-            ],
-            "properties": {
-              "etag": {
-                "$ref": "#/components/schemas/Version",
-                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
-              },
-              "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int64",
-                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
-              }
-            }
-          }
-        ],
-        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
-      },
-      "Versioned_DisplayCategory": {
-        "allOf": [
-          {
-            "type": "object",
-            "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
-            "required": [
-              "display_category_id",
-              "tenant_id",
-              "name",
-              "status"
-            ],
-            "properties": {
-              "display_category_id": {
-                "$ref": "#/components/schemas/DisplayCategoryId",
-                "description": "The display-category id — carried into the compiled `DisplayPlan`."
-              },
-              "name": {
-                "type": "string",
-                "description": "The name a screen shows as a tab or section."
-              },
-              "status": {
-                "$ref": "#/components/schemas/EntityStatus",
-                "description": "Active or archived."
-              },
-              "tenant_id": {
-                "$ref": "#/components/schemas/TenantId",
-                "description": "The owning tenant."
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "etag"
-            ],
-            "properties": {
-              "etag": {
-                "$ref": "#/components/schemas/Version",
-                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
-              },
-              "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int64",
-                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
-              }
-            }
-          }
-        ],
-        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
-      },
-      "Versioned_DisplaySubcategory": {
-        "allOf": [
-          {
-            "type": "object",
-            "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
-            "required": [
-              "display_subcategory_id",
-              "tenant_id",
-              "display_category_id",
-              "name",
-              "status"
-            ],
-            "properties": {
-              "display_category_id": {
-                "$ref": "#/components/schemas/DisplayCategoryId",
-                "description": "The parent display category."
-              },
-              "display_subcategory_id": {
-                "$ref": "#/components/schemas/DisplaySubcategoryId",
-                "description": "The display-sub-category id — carried into the compiled plan."
-              },
-              "name": {
-                "type": "string",
-                "description": "The name a screen shows."
-              },
-              "status": {
-                "$ref": "#/components/schemas/EntityStatus",
-                "description": "Active or archived."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
