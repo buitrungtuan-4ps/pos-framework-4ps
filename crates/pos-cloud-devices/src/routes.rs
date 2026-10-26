@@ -147,7 +147,7 @@ where
 }
 
 /// A store's proposal of a discovered device.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ProposeDeviceRequest {
     /// `printer` or `kds`.
     kind: String,
@@ -158,7 +158,7 @@ struct ProposeDeviceRequest {
 }
 
 /// The id and status of a freshly-proposed device (always `pending`).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ProposeDeviceResponse {
     /// The proposal's id (a ULID).
     id: String,

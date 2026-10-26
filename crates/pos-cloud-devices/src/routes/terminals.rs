@@ -26,7 +26,7 @@ use pos_cloud_api::conditional::if_match;
 use pos_cloud_api::refusal::{not_found, optional_choice};
 
 /// An operator names a POS terminal that exists because somebody carried it into the shop.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateTerminalRequest {
     /// The tenant the store belongs to (a 26-character ULID).
     tenant_id: String,
@@ -37,7 +37,7 @@ pub(super) struct CreateTerminalRequest {
 }
 
 /// The id a freshly created terminal was given.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CreateTerminalResponse {
     /// The terminal's device id (a ULID) — what a printer names to make it its agent.
     id: String,
@@ -52,14 +52,14 @@ struct CreateTerminalResponse {
     extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an \
+        content = CreateTerminalRequest, description = "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an \
                        operator recognises it by. A terminal is never discovered, so there is no \
                        proposal to approve: creating it is the decision (ADR-0112). It has no \
                        address, because nothing dials a terminal",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, approved. The body carries the terminal's `id`, what a \
+        (status = 201, body = CreateTerminalResponse, description = "Created, approved. The body carries the terminal's `id`, what a \
                                       printer names to make it its print agent, and `status`. \
                                       Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -162,7 +162,7 @@ where
 ///
 /// The three fields are the till's whole receipt state, as a station's update is its whole state: an
 /// absent or `null` field is the store's again.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetReceiptRequest {
     /// The tenant the terminal belongs to (a 26-character ULID).
     tenant_id: String,
@@ -190,7 +190,7 @@ pub(super) struct SetReceiptRequest {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's \
+        content = SetReceiptRequest, description = "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's \
                        store that serves no station; `receipt_language`, one of \
                        `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, \
                        `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and \
@@ -372,7 +372,7 @@ fn till_receipt_refusal(
 ///
 /// The float is the till's whole float state, as the receipt fields are its receipt state: an absent
 /// or `null` float is the store's again.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetFloatRequest {
     /// The tenant the terminal belongs to (a 26-character ULID).
     tenant_id: String,
@@ -393,7 +393,7 @@ pub(super) struct SetFloatRequest {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`; and `opening_float_minor`, a whole amount in the store \
+        content = SetFloatRequest, description = "`tenant_id`; and `opening_float_minor`, a whole amount in the store \
                        currency's minor unit from `0` to `1000000000`, the bounds of \
                        `shift.opening_float_minor`, or `null` or absent for that setting's float. \
                        It is the till's whole float state, so a float left out is the store's \
