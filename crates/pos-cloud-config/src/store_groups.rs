@@ -113,7 +113,7 @@ pub struct StoreGroup {
 ///
 /// Three variants, because there are three real answers to "what happened at this shop", and the
 /// distinction between the first two is the whole reason the report exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BatchOutcome {
     /// The publish ran and produced a config version.
@@ -650,5 +650,24 @@ mod tests {
             assert_eq!(BatchOutcome::from_wire(outcome.as_wire()), Some(outcome));
         }
         assert_eq!(BatchOutcome::from_wire("partially_applied"), None);
+    }
+}
+
+#[cfg(test)]
+mod outcome_serialise_tests {
+    //! A batch outcome serialises as the token the database stores.
+
+    use super::BatchOutcome;
+
+    #[test]
+    fn each_outcome_serialises_as_its_wire_token() {
+        for outcome in [
+            BatchOutcome::Applied,
+            BatchOutcome::Skipped,
+            BatchOutcome::Failed,
+        ] {
+            let sent = serde_json::to_value(outcome).expect("json");
+            assert_eq!(sent, serde_json::json!(outcome.as_wire()));
+        }
     }
 }

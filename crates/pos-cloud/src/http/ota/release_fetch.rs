@@ -61,15 +61,25 @@ struct ReleaseFetched {
     artifacts: Vec<FetchedArtifactResponse>,
 }
 
+/// What a fetch did with one artifact: `recorded` for a new one, `already_hosted` for one the cloud
+/// already held with these exact bytes, so a re-run reads as a no-op rather than as work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum ArtifactFetchOutcome {
+    /// Stored now.
+    Recorded,
+    /// Already held with these bytes.
+    AlreadyHosted,
+}
+
 /// One artifact the fetch put in the cloud.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct FetchedArtifactResponse {
     arch: String,
     size_bytes: i64,
     sha256: String,
-    /// `recorded` for a new artifact, `already_hosted` for one the cloud already held with these
-    /// exact bytes — so a re-run reads as a no-op rather than as work.
-    outcome: &'static str,
+    /// Whether the cloud stored it now or already held these exact bytes.
+    outcome: ArtifactFetchOutcome,
     /// The asset the bytes came from, so the console can say what it took.
     asset: String,
 }
@@ -353,8 +363,8 @@ where
             size_bytes: admitted.size_bytes,
             sha256: admitted.sha256,
             outcome: match outcome {
-                RecordOutcome::Recorded => "recorded",
-                RecordOutcome::AlreadyRecorded => "already_hosted",
+                RecordOutcome::Recorded => ArtifactFetchOutcome::Recorded,
+                RecordOutcome::AlreadyRecorded => ArtifactFetchOutcome::AlreadyHosted,
             },
             asset,
         });
@@ -379,5 +389,26 @@ mod answer_tests {
             serde_json::to_value(answer).expect("json"),
             serde_json::json!({ "release": "1.2.3", "tag": "v1.2.3", "artifacts": [] })
         );
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::ArtifactFetchOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        let tokens = [
+            (ArtifactFetchOutcome::Recorded, "recorded"),
+            (ArtifactFetchOutcome::AlreadyHosted, "already_hosted"),
+        ];
+        for (outcome, token) in tokens {
+            assert_eq!(
+                serde_json::to_value(outcome).expect("json"),
+                serde_json::json!(token)
+            );
+        }
     }
 }

@@ -128,13 +128,42 @@ where
     (StatusCode::OK, Json(StoresPublished { stores: results })).into_response()
 }
 
+/// How one store's fee publish went, as its token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub enum FeePublishOutcome {
+    /// The store's `fees` node was written in a new version.
+    #[serde(rename = "FEE_PUBLISH_APPLIED")]
+    Applied,
+    /// The store already ran these fees; no version was made.
+    #[serde(rename = "FEE_PUBLISH_UNCHANGED")]
+    Unchanged,
+    /// The store cannot apply a rule, so nothing was published to it.
+    #[serde(rename = "FEE_PUBLISH_REFUSED")]
+    Refused,
+    /// The publish could not be written; it is retried with `POST /admin/fees/publish`.
+    #[serde(rename = "FEE_PUBLISH_FAILED")]
+    Failed,
+}
+
+impl FeePublishOutcome {
+    /// The token, as the answer carries it.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Applied => "FEE_PUBLISH_APPLIED",
+            Self::Unchanged => "FEE_PUBLISH_UNCHANGED",
+            Self::Refused => "FEE_PUBLISH_REFUSED",
+            Self::Failed => "FEE_PUBLISH_FAILED",
+        }
+    }
+}
+
 /// How one store's fee publish went.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::routes) struct FeePublishResult {
     store_id: String,
-    /// `FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or
-    /// `FEE_PUBLISH_FAILED`.
-    pub(super) outcome: &'static str,
+    /// How it went.
+    pub(super) outcome: FeePublishOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     config_version_id: Option<String>,
@@ -145,7 +174,7 @@ pub(in crate::routes) struct FeePublishResult {
 
 impl FeePublishResult {
     /// An outcome with nothing more to say.
-    pub(in crate::routes) fn of(store_id: StoreId, outcome: &'static str) -> Self {
+    pub(in crate::routes) fn of(store_id: StoreId, outcome: FeePublishOutcome) -> Self {
         Self {
             store_id: store_id.to_string(),
             outcome,
@@ -190,7 +219,7 @@ where
             tracing::error!(%error, "the fee rules could not be read for a fee publish");
             return stores
                 .iter()
-                .map(|store_id| FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"))
+                .map(|store_id| FeePublishResult::of(*store_id, FeePublishOutcome::Failed))
                 .collect();
         }
     };
@@ -205,7 +234,7 @@ where
                 };
                 publish_fees_to_store(state, layout.tenant_id, *store_id, &fees).await
             }
-            None => FeePublishResult::of(*store_id, "FEE_PUBLISH_FAILED"),
+            None => FeePublishResult::of(*store_id, FeePublishOutcome::Failed),
         });
     }
     results
@@ -280,7 +309,7 @@ impl TenantFeeRules {
 /// What a batch member's report says when its menu went out without the store's fees: the fee
 /// publish's own outcome token and, for a refusal, each rule the store cannot apply and why.
 #[must_use]
-pub fn fees_left_behind(outcome: &str, faults: &[FeeFaultView]) -> String {
+pub fn fees_left_behind(outcome: FeePublishOutcome, faults: &[FeeFaultView]) -> String {
     let named: Vec<String> = faults
         .iter()
         .map(|fault| format!("{} {}", fault.fee_id, fault.reason))
@@ -290,7 +319,10 @@ pub fn fees_left_behind(outcome: &str, faults: &[FeeFaultView]) -> String {
     } else {
         format!(" ({})", named.join(", "))
     };
-    format!("the menu is published, but not the store's fees, which it keeps: {outcome}{why}")
+    format!(
+        "the menu is published, but not the store's fees, which it keeps: {}{why}",
+        outcome.as_wire()
+    )
 }
 
 /// One store's fee rules as a write composes its `fees` node: the tenant's rules, where the store
@@ -379,8 +411,8 @@ impl FeesOnTree {
     pub fn note(&self) -> Option<String> {
         match self {
             Self::Changed(_) | Self::Unchanged => None,
-            Self::Refused(faults) => Some(fees_left_behind("FEE_PUBLISH_REFUSED", faults)),
-            Self::Unwritable => Some(fees_left_behind("FEE_PUBLISH_FAILED", &[])),
+            Self::Refused(faults) => Some(fees_left_behind(FeePublishOutcome::Refused, faults)),
+            Self::Unwritable => Some(fees_left_behind(FeePublishOutcome::Failed, &[])),
         }
     }
 
@@ -393,9 +425,9 @@ impl FeesOnTree {
         match (self, written) {
             (Self::Changed(_), Some(version)) => FeePublishResult {
                 config_version_id: Some(version.to_string()),
-                ..FeePublishResult::of(store_id, "FEE_PUBLISH_APPLIED")
+                ..FeePublishResult::of(store_id, FeePublishOutcome::Applied)
             },
-            (Self::Unchanged, _) => FeePublishResult::of(store_id, "FEE_PUBLISH_UNCHANGED"),
+            (Self::Unchanged, _) => FeePublishResult::of(store_id, FeePublishOutcome::Unchanged),
             (Self::Refused(faults), _) => {
                 tracing::warn!(
                     %store_id,
@@ -404,14 +436,14 @@ impl FeesOnTree {
                 );
                 FeePublishResult {
                     faults: faults.clone(),
-                    ..FeePublishResult::of(store_id, "FEE_PUBLISH_REFUSED")
+                    ..FeePublishResult::of(store_id, FeePublishOutcome::Refused)
                 }
             }
             (Self::Unwritable, _) => {
                 tracing::error!("could not serialise a store's fees node");
-                FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
+                FeePublishResult::of(store_id, FeePublishOutcome::Failed)
             }
-            (Self::Changed(_), None) => FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+            (Self::Changed(_), None) => FeePublishResult::of(store_id, FeePublishOutcome::Failed),
         }
     }
 }
@@ -465,7 +497,27 @@ where
                 %store_id,
                 "a store's configuration could not be read for a fee publish, or refused it"
             );
-            FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED")
+            FeePublishResult::of(store_id, FeePublishOutcome::Failed)
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::FeePublishOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        for outcome in [
+            FeePublishOutcome::Applied,
+            FeePublishOutcome::Unchanged,
+            FeePublishOutcome::Refused,
+            FeePublishOutcome::Failed,
+        ] {
+            let sent = serde_json::to_value(outcome).expect("json");
+            assert_eq!(sent, serde_json::json!(outcome.as_wire()));
         }
     }
 }

@@ -43,7 +43,7 @@ struct CreateTerminalResponse {
     id: String,
     /// `approved`, always: a terminal is created resolved, because the console write *is* the
     /// decision.
-    status: String,
+    status: DeviceProposalStatus,
 }
 
 #[utoipa::path(
@@ -149,7 +149,7 @@ where
                 StatusCode::CREATED,
                 Json(CreateTerminalResponse {
                     id: id.to_string(),
-                    status: DeviceProposalStatus::Approved.as_wire().to_owned(),
+                    status: DeviceProposalStatus::Approved,
                 }),
             )
                 .into_response()

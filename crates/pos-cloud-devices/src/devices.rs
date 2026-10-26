@@ -57,7 +57,8 @@ impl DeviceKind {
 }
 
 /// Where a proposal sits in the approval workflow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum DeviceProposalStatus {
     /// Proposed by a store, awaiting an operator's decision.
     Pending,
@@ -391,4 +392,24 @@ pub trait DeviceProposalStore {
         opening_float_minor: Option<i64>,
         expected: &str,
     ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+}
+
+#[cfg(test)]
+mod status_serialise_tests {
+    //! A proposal status serialises as the token the answers always carried.
+
+    use super::DeviceProposalStatus;
+
+    #[test]
+    fn each_status_serialises_as_its_wire_token() {
+        let all = [
+            DeviceProposalStatus::Pending,
+            DeviceProposalStatus::Approved,
+            DeviceProposalStatus::Rejected,
+        ];
+        for status in all {
+            let sent = serde_json::to_value(status).expect("json");
+            assert_eq!(sent, serde_json::json!(status.as_wire()));
+        }
+    }
 }

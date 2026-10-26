@@ -97,6 +97,7 @@ pub(super) struct FleetStoreView {
     /// console does not decide it: the alert engine reads the same `FleetRow` and scores an
     /// undecodable token with the hosted case rather than the in-store one.
     #[schema(required = true)]
+    #[schema(value_type = pos_proto::EdgePlacement)]
     edge_placement: Option<&'static str>,
     /// Where in the world that machine is — its ISO 3166-1 alpha-2 country — or `null`
     /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).

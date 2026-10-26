@@ -116,12 +116,26 @@ where
     publish_results_response(&results)
 }
 
+/// How one store's settings publish went, as its token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(super) enum SettingPublishOutcome {
+    /// The store's settings were written in a new version.
+    #[serde(rename = "SETTING_PUBLISH_APPLIED")]
+    Applied,
+    /// The store already ran these settings; no version was made.
+    #[serde(rename = "SETTING_PUBLISH_UNCHANGED")]
+    Unchanged,
+    /// The publish could not be written; it is retried with `POST /admin/settings/publish`.
+    #[serde(rename = "SETTING_PUBLISH_FAILED")]
+    Failed,
+}
+
 /// How one store's settings publish went.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct SettingPublishResult {
     store_id: String,
-    /// `SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`.
-    outcome: &'static str,
+    /// How it went.
+    outcome: SettingPublishOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     config_version_id: Option<String>,
@@ -156,7 +170,7 @@ where
                 .iter()
                 .map(|store_id| SettingPublishResult {
                     store_id: store_id.to_string(),
-                    outcome: "SETTING_PUBLISH_FAILED",
+                    outcome: SettingPublishOutcome::Failed,
                     config_version_id: None,
                 })
                 .collect();
@@ -178,17 +192,17 @@ where
         results.push(match published.version {
             Ok(Some(version)) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_APPLIED",
+                outcome: SettingPublishOutcome::Applied,
                 config_version_id: Some(version.to_string()),
             },
             Ok(None) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_UNCHANGED",
+                outcome: SettingPublishOutcome::Unchanged,
                 config_version_id: None,
             },
             Err(()) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_FAILED",
+                outcome: SettingPublishOutcome::Failed,
                 config_version_id: None,
             },
         });
@@ -285,5 +299,30 @@ where
     StorePublish {
         version,
         switch_without_people,
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::SettingPublishOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        let tokens = [
+            (SettingPublishOutcome::Applied, "SETTING_PUBLISH_APPLIED"),
+            (
+                SettingPublishOutcome::Unchanged,
+                "SETTING_PUBLISH_UNCHANGED",
+            ),
+            (SettingPublishOutcome::Failed, "SETTING_PUBLISH_FAILED"),
+        ];
+        for (outcome, token) in tokens {
+            assert_eq!(
+                serde_json::to_value(outcome).expect("json"),
+                serde_json::json!(token)
+            );
+        }
     }
 }

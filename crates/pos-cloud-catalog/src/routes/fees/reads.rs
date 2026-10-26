@@ -113,6 +113,7 @@ struct EffectiveFees {
 struct EffectiveFee {
     fee_id: String,
     /// The scope of the rule in force, and what it was written for.
+    #[schema(value_type = crate::fees::FeeScope)]
     scope: &'static str,
     scope_id: String,
     /// The rule as written: the wire rule's fields, and the categories it names.
