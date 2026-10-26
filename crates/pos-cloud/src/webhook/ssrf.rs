@@ -478,7 +478,8 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
         Some(ForbiddenReason::Reserved)
-    } else if is_special_purpose_v6(first, second, third) {
+    } else if is_special_purpose_v6(first, second, third) || (first & 0xff00 == 0x5f00) {
+        // 5f00::/8 Segment Routing (SRv6) SIDs (RFC 9433) and special-purpose v6 ranges.
         Some(ForbiddenReason::Reserved)
     } else {
         None
