@@ -33,7 +33,7 @@ use crate::http::{Json, PublishedConfig, publish_config_nodes};
 /// country, so the framework imposes no shape on it; the one field with a checkable shape is the tax
 /// registration number, and the check is the **country module's**
 /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishStoreProfileRequest {
     tenant_id: String,
     store_id: String,
@@ -125,14 +125,14 @@ fn trimmed_lines(lines: &[String]) -> Vec<String> {
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then who the store legally is (ADR-0106): `legal_name`, and optionally `trading_name`, \
+        content = PublishStoreProfileRequest, description = "`tenant_id` and `store_id`, then who the store legally is (ADR-0106): `legal_name`, and optionally `trading_name`, \
                        `address_lines`, `tax_registration_number` and its `tax_registration_label`, \
                        `contact_lines`, `footer_lines`, and `country_code`, whose country module, \
                        where this cloud carries it, checks the registration number's shape",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `store_profile` node on its \
+        (status = 200, body = PublishedConfig, description = "Published as the store's `store_profile` node on its \
                                       Store layer. The body carries `config_version_id`, which the \
                                       store pulls on its next sync. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID, the tax registration number is not the shape the named country issues, or a value needs \

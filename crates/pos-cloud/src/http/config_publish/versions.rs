@@ -29,7 +29,7 @@ use crate::http::{
 
 /// One published config version as the console lists it: the version id, when it was published (from
 /// the ULID's own timestamp, Unix ms), and whether it is the store's current version.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigVersionView {
     version_id: String,
     at_ms: i64,
@@ -42,7 +42,7 @@ struct ConfigVersionView {
 /// last edited?" — and until now the only answer available was per tree: one version id covering
 /// thirteen nodes, so publishing a tax change made the menu look freshly published too. Every
 /// version now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodeView {
     /// The node key — `locale`, `tax`, `menu`, `permissions`, and so on.
     node: String,
@@ -62,14 +62,14 @@ struct ConfigNodeView {
 /// version it *is* holding is on the fleet read (`GET /admin/fleet/stores/{id}`), which every screen
 /// that asks this question has already loaded — so it is not repeated here, and the comparison
 /// happens where both numbers already are.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodesView {
     current_version_id: Option<String>,
     nodes: Vec<ConfigNodeView>,
 }
 
 /// A super-admin rolls a store's config back to a past version.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct RollbackConfigRequest {
     /// The version to restore (a ULID); its effective document becomes the new current version.
     version_id: String,
@@ -85,7 +85,7 @@ pub(in crate::http) struct RollbackConfigRequest {
         ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tree's current version id and, per node of the effective \
+        (status = 200, body = ConfigNodesView, description = "The tree's current version id and, per node of the effective \
                                       document, the version that last published it and when. A \
                                       node whose version is null is published but by a version \
                                       that does not record which nodes it wrote"),
@@ -170,7 +170,7 @@ where
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every configuration version the store has had, newest first, \
+        (status = 200, body = [ConfigVersionView], description = "Every configuration version the store has had, newest first, \
                                       as an array: `version_id`, `at_ms` (read from the id) and \
                                       `current`. The history only grows: a rollback adds a version"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -329,11 +329,11 @@ where
                                                      decided against (ADR-0095). Required"),
     ),
     request_body(
-        description = "`version_id`, the past version to restore",
+        content = RollbackConfigRequest, description = "`version_id`, the past version to restore",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Restored as a new current version: the history is never \
+        (status = 200, body = PublishedConfig, description = "Restored as a new current version: the history is never \
                                       rewritten. The body carries `config_version_id`, which the \
                                       store pulls on its next sync. Audited with both versions"),
         (status = 400, description = "An id is absent or not a ULID; If-Match is absent or \

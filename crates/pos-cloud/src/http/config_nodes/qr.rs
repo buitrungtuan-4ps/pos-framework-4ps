@@ -20,7 +20,7 @@ use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
 
 /// A `qr.business_hours` window in a `PUT /admin/config/qr` body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct QrBusinessHoursRequest {
     pub(in crate::http) open_hour: u8,
     pub(in crate::http) close_hour: u8,
@@ -31,7 +31,7 @@ pub(in crate::http) struct QrBusinessHoursRequest {
 /// A `PUT /admin/config/qr` body: the store and the QR guardrail settings (P11b/ADR-0057). Composed
 /// into the `qr` node the cloud's QR intake reads (`qr_http::qr_config_for`) and the edge reads for its
 /// staff-confirmation decision.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishQrRequest {
     tenant_id: String,
     store_id: String,
@@ -105,11 +105,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then the QR guardrails (ADR-0057): optionally `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`, and optionally `business_hours`, an opening and closing hour",
+        content = PublishQrRequest, description = "`tenant_id` and `store_id`, then the QR guardrails (ADR-0057): optionally `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`, and optionally `business_hours`, an opening and closing hour",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `qr` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `qr` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, an hour is out of range, or a value needs \

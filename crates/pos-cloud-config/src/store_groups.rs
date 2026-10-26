@@ -46,7 +46,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 /// Like `pos-cloud-catalog`'s `MenuId` it never crosses the store wire: a group is an authoring
 /// and delivery concept in the cloud, and what reaches a store is the same config node it would have
 /// received from a single publish.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 #[serde(transparent)]
 pub struct StoreGroupId(Ulid);
 
@@ -96,7 +96,7 @@ impl fmt::Display for ConfigBatchId {
 }
 
 /// A cohort of stores an operator publishes to as one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct StoreGroup {
     /// The group's id.
     pub group_id: StoreGroupId,
