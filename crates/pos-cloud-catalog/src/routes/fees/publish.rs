@@ -136,6 +136,7 @@ pub(in crate::routes) struct FeePublishResult {
     /// `FEE_PUBLISH_FAILED`.
     pub(super) outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     config_version_id: Option<String>,
     /// For a refused store: each rule it cannot apply, and why.
     #[serde(skip_serializing_if = "Vec::is_empty")]

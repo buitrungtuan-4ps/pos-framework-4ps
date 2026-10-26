@@ -271,6 +271,7 @@ pub struct ConnectionView {
     provider_id: String,
     scope_level: ScopeLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     scope_id: Option<String>,
     display_name: String,
     enabled: bool,

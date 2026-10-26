@@ -235,10 +235,12 @@ pub struct AdmittedDevice {
     pub admitted_at_ms: i64,
     /// The paired till whose signed-in manager minted the code, where one did. `None` for the code a
     /// box announces at boot, which nothing authorised because nothing could.
+    #[schema(required = true)]
     pub admitted_by_device_id: Option<String>,
     /// When the store retired it, Unix ms, or `None` while it is still admitted. A revocation does
     /// not delete the row: a roster that forgets what it retired cannot answer "was this tablet ever
     /// here", which is the first question asked about a device that turns up somewhere it should not.
+    #[schema(required = true)]
     pub revoked_at_ms: Option<i64>,
 }
 

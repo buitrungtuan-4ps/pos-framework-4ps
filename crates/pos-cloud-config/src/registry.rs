@@ -118,6 +118,7 @@ pub struct StoreRecord {
     /// The owning tenant.
     pub tenant_id: TenantId,
     /// The owning brand, or `None` until an operator assigns one.
+    #[schema(required = true)]
     pub brand_id: Option<BrandId>,
     /// The human name (a placeholder until renamed).
     pub name: String,

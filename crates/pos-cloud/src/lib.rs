@@ -96,6 +96,8 @@ mod openapi_admin;
 mod openapi_bodies;
 mod openapi_device;
 #[cfg(test)]
+mod openapi_required;
+#[cfg(test)]
 mod openapi_security;
 pub mod orders;
 pub mod ota;

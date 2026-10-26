@@ -36,9 +36,11 @@ struct EffectiveSetting {
     value: serde_json::Value,
     /// The scope that set it, or absent when the store runs the default.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     scope: Option<&'static str>,
     /// The tenant, brand, store group or store that set it.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     scope_id: Option<String>,
 }
 

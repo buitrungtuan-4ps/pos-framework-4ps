@@ -82,6 +82,7 @@ pub struct Versioned<T> {
     /// [`new`](Self::new) call sites compile untouched, and a read that does not project the
     /// column serialises exactly the bytes it did before.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub updated_at_ms: Option<i64>,
 }
 

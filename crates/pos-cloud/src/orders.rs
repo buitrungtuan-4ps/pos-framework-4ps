@@ -103,6 +103,7 @@ pub(crate) struct OrderResponse {
     order_id: String,
     created: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     queue_number: Option<u32>,
     total: MoneyDto,
     repriced: bool,

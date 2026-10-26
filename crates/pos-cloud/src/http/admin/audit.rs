@@ -83,6 +83,7 @@ struct AuditReadQuery {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct AuditEntryView {
     id: String,
+    #[schema(required = true)]
     tenant_id: Option<String>,
     actor_admin_id: String,
     actor_email: String,
@@ -90,8 +91,11 @@ pub(in crate::http) struct AuditEntryView {
     action: String,
     entity_type: String,
     entity_id: String,
+    #[schema(required = true)]
     before: Option<serde_json::Value>,
+    #[schema(required = true)]
     pub(in crate::http) after: Option<serde_json::Value>,
+    #[schema(required = true)]
     request_id: Option<String>,
     at_ms: i64,
 }

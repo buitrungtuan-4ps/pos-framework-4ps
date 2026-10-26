@@ -29,6 +29,7 @@ use crate::ota::ArtifactStore;
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct LeaseRead {
     /// The generation, or `null` when the store was never issued one.
+    #[schema(required = true)]
     generation: Option<u64>,
 }
 

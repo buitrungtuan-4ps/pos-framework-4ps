@@ -24810,6 +24810,8 @@
         "description": "One of the acting admin's live sessions, as the console lists it. `id` is the opaque revocation\nhandle (hex of `SHA-256(token)` — never the token, and not reversible to it); `current` marks the\nsession making this very request, which the console protects from accidental self-revocation.",
         "required": [
           "id",
+          "ip",
+          "user_agent",
           "created_at_ms",
           "expires_at_ms",
           "current"
@@ -24895,7 +24897,9 @@
         "description": "One device a store has admitted, as the fleet console finally sees it\n([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).\n\nFolded from `device.admission.granted` and `device.admission.revoked`. Until those events the\ncloud's picture of a store's tills was **zero rows**, so a lost tablet meant sending somebody to\nthe store and a remote revocation had nothing to name.\n\n# Not the console's named-device registry, and not confusable with it\n\n`local_device_id` is minted by the **edge** at redemption (ADR-0030); the `devices` table's ids\nare minted by the **console** when an admin names a terminal. Nothing joins the two, by decision\n— a browser till presents no identity of its own and clearing its storage creates a new device —\nso this roster sits beside that registry rather than inside it. A row here means *this store\nadmitted this thing*, which is the fact the registry has never been able to state.\n\n**T3 (internal): device identifiers and instants, no money and no person.** Who admitted a\ndevice is deliberately absent — that is recorded on the store's own disk and reaches no cloud\n(ADR-0118 §5). `admitted_by_device_id` is a *device*, the till whose signed-in manager minted the\ncode.",
         "required": [
           "local_device_id",
-          "admitted_at_ms"
+          "admitted_at_ms",
+          "admitted_by_device_id",
+          "revoked_at_ms"
         ],
         "properties": {
           "admitted_at_ms": {
@@ -24929,13 +24933,16 @@
         "description": "The console's view of a stored alert: the record with the kind/severity as their wire tokens and\nthe lifecycle instants as Unix ms.",
         "required": [
           "id",
+          "tenant_id",
           "kind",
           "dedup_key",
           "severity",
           "summary",
           "detail",
           "first_seen_at_ms",
-          "last_seen_at_ms"
+          "last_seen_at_ms",
+          "resolved_at_ms",
+          "acknowledged_at_ms"
         ],
         "properties": {
           "acknowledged_at_ms": {
@@ -24989,8 +24996,10 @@
         "description": "A key's metadata for a listing — everything but the secret and its hash, which never leave the\nstore. Serialises to the `/admin/api-keys` list response.",
         "required": [
           "id",
+          "store_id",
           "scopes",
-          "revoked"
+          "revoked",
+          "expires_at_ms"
         ],
         "properties": {
           "expires_at_ms": {
@@ -25140,7 +25149,9 @@
               "assignment_id",
               "tenant_id",
               "employee_id",
-              "role_template_id"
+              "role_template_id",
+              "employee_name",
+              "employee_code"
             ],
             "properties": {
               "assignment_id": {
@@ -25190,10 +25201,7 @@
             "description": "The new assignment's id, a ULID."
           },
           "stores": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/PermissionsPublishResult"
             },
@@ -25267,12 +25275,16 @@
         "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
         "required": [
           "id",
+          "tenant_id",
           "actor_admin_id",
           "actor_email",
           "actor_role",
           "action",
           "entity_type",
           "entity_id",
+          "before",
+          "after",
+          "request_id",
           "at_ms"
         ],
         "properties": {
@@ -25373,10 +25385,7 @@
             "minimum": 0
           },
           "finished_at_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for."
           },
@@ -25416,17 +25425,11 @@
             "format": "int64"
           },
           "config_version_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The config version the publish produced, for `applied`."
           },
           "detail": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the\nwrite left something behind: a menu whose store's fees did not go with it says so, with the\nfee publish's outcome and reason tokens."
           },
           "outcome": {
@@ -25832,6 +25835,10 @@
           "name",
           "name_translations",
           "tax_class_id",
+          "item_category_id",
+          "item_subcategory_id",
+          "course_id",
+          "image_ref",
           "status"
         ],
         "properties": {
@@ -26011,7 +26018,9 @@
         "type": "object",
         "description": "One node of a store's published configuration, as the console lists it (finding **F6**).\n\nThe console's question has always been per node — \"is the menu this store is running the menu I\nlast edited?\" — and until now the only answer available was per tree: one version id covering\nthirteen nodes, so publishing a tax change made the menu look freshly published too. Every\nversion now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.",
         "required": [
-          "node"
+          "node",
+          "version_id",
+          "at_ms"
         ],
         "properties": {
           "at_ms": {
@@ -26039,6 +26048,7 @@
         "type": "object",
         "description": "The per-node publish state of one store's configuration.\n\n`current_version_id` is the tree's newest version, which is what a store *should* be holding. The\nversion it *is* holding is on the fleet read (`GET /admin/fleet/stores/{id}`), which every screen\nthat asks this question has already loaded — so it is not repeated here, and the comparison\nhappens where both numbers already are.",
         "required": [
+          "current_version_id",
           "nodes"
         ],
         "properties": {
@@ -26060,6 +26070,7 @@
         "type": "object",
         "description": "What publishing a candidate node *would* change, computed without minting a version or saving:\nthe RFC 7386 merge patch from the store's current effective document to the candidate, so the\nconsole can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).",
         "required": [
+          "from_version_id",
           "diff",
           "unchanged"
         ],
@@ -26179,10 +26190,7 @@
             "type": "string"
           },
           "scope_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "scope_level": {
             "$ref": "#/components/schemas/ScopeLevel"
@@ -26213,6 +26221,7 @@
           "digits_per_group",
           "default_retention_days",
           "prices_include_tax",
+          "cash_rounding_increment",
           "cash_denominations"
         ],
         "properties": {
@@ -27361,7 +27370,16 @@
           "kind",
           "name",
           "address",
+          "connection",
+          "station_id",
+          "agent_device_id",
           "drawer_attached",
+          "paper_width",
+          "cuts_paper",
+          "receipt_printer_id",
+          "receipt_language",
+          "receipt_second_language",
+          "opening_float_minor",
           "status",
           "version"
         ],
@@ -27613,17 +27631,11 @@
         ],
         "properties": {
           "scope": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The scope that set it, or absent when the store runs the default."
           },
           "scope_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The tenant, brand, store group or store that set it."
           },
           "setting_key": {
@@ -27815,10 +27827,7 @@
         ],
         "properties": {
           "config_version_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "faults": {
             "type": "array",
@@ -28122,31 +28131,19 @@
             "type": "string"
           },
           "max": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64"
           },
           "max_length": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "minimum": 0
           },
           "min": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64"
           },
           "options": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
@@ -28169,10 +28166,7 @@
             "description": "The terminal a console admin created and a manager bound at the till."
           },
           "oldest_unacknowledged_secs": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "How long the oldest still-unacknowledged job has waited, or `null` when nothing is waiting.\n`null` is the healthy answer and is deliberately not zero.",
             "minimum": 0
@@ -28191,9 +28185,31 @@
           "name",
           "status",
           "online",
+          "last_seen_at_ms",
+          "last_config_pull_at_ms",
+          "config_version_held",
+          "config_version_published",
           "config_current",
           "relay_backlog",
-          "lease_superseded"
+          "relay_oldest_pending_at_ms",
+          "installed_version",
+          "self_test_ok",
+          "reported_at_ms",
+          "outbox_depth",
+          "outbox_reported_at_ms",
+          "print_agents",
+          "print_agents_reported_at_ms",
+          "lease_generation_held",
+          "lease_reported_at_ms",
+          "lease_generation_authoritative",
+          "lease_superseded",
+          "edge_placement",
+          "region_country",
+          "region_label",
+          "lease_superseded_generation",
+          "handover",
+          "retired_at_ms",
+          "retired_by"
         ],
         "properties": {
           "config_current": {
@@ -28327,28 +28343,15 @@
             "description": "Unix ms of the heartbeat that reported them, or `null`. A standing is only as current as the\nbeat that carried it, so the instant travels with the list."
           },
           "profile_country": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The country this store publishes in its `locale` node\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\n**Present only on the single-store read**, which is the one route that loads a store's\nconfiguration; the listing omits the key entirely rather than sending `null`, so a console\ncan tell \"not compared here\" from \"compared, and there is no country\". Absence must never\nrender as agreement."
           },
           "region_acknowledgement": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/RegionAcknowledgementView",
-                "description": "The answer somebody recorded for **this** difference, or absent\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nPresent only when a stored acknowledgement names the same two country codes the store has\nright now. An answer written about a difference the store no longer has is not returned —\nsee [`standing_acknowledgement`] — so a console that renders \"acknowledged\" whenever this key\nis present is correct without knowing the rule.\n\nOmitted on the listing with the two fields above it, for the same reason."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/RegionAcknowledgementView",
+            "description": "The answer somebody recorded for **this** difference, or absent\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nPresent only when a stored acknowledgement names the same two country codes the store has\nright now. An answer written about a difference the store no longer has is not returned —\nsee [`standing_acknowledgement`] — so a console that renders \"acknowledged\" whenever this key\nis present is correct without knowing the rule.\n\nOmitted on the listing with the two fields above it, for the same reason."
           },
           "region_agreement": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "Whether the region agrees with that country — `agrees`, `differs`, `country-not-recorded` —\nor absent when there is nothing to compare\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nDerived by [`region_agreement`] rather than in the console, for the reason `handover` beside\nit is: the third case is the one that is easy to get wrong, and getting it wrong means a\nstore with no recorded country renders as agreeing.\n\nOmitted on the listing, exactly as [`profile_country`](Self::profile_country) is — a\ncomparison there would be one config-tree load per row."
           },
           "region_country": {
@@ -28423,6 +28426,8 @@
           "tenant_id",
           "store_id",
           "station_id",
+          "menu_item_id",
+          "course_id",
           "sort"
         ],
         "properties": {
@@ -28844,8 +28849,10 @@
           "tenant_id",
           "sales_channel",
           "display_category_id",
+          "display_subcategory_id",
           "menu_item_id",
           "label",
+          "position",
           "sort"
         ],
         "properties": {
@@ -28901,6 +28908,9 @@
       "LeaseRead": {
         "type": "object",
         "description": "What the lease read answers: the store's authoritative generation.",
+        "required": [
+          "generation"
+        ],
         "properties": {
           "generation": {
             "type": [
@@ -28922,12 +28932,16 @@
               "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
               "required": [
                 "id",
+                "tenant_id",
                 "actor_admin_id",
                 "actor_email",
                 "actor_role",
                 "action",
                 "entity_type",
                 "entity_id",
+                "before",
+                "after",
+                "request_id",
                 "at_ms"
               ],
               "properties": {
@@ -29036,6 +29050,10 @@
                     "name",
                     "name_translations",
                     "tax_class_id",
+                    "item_category_id",
+                    "item_subcategory_id",
+                    "course_id",
+                    "image_ref",
                     "status"
                   ],
                   "properties": {
@@ -29126,10 +29144,7 @@
                       "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
                     },
                     "updated_at_ms": {
-                      "type": [
-                        "integer",
-                        "null"
-                      ],
+                      "type": "integer",
                       "format": "int64",
                       "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
                     }
@@ -29202,10 +29217,7 @@
                       "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
                     },
                     "updated_at_ms": {
-                      "type": [
-                        "integer",
-                        "null"
-                      ],
+                      "type": "integer",
                       "format": "int64",
                       "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
                     }
@@ -29292,6 +29304,7 @@
           "menu_id",
           "tenant_id",
           "name",
+          "parent_menu_id",
           "status"
         ],
         "properties": {
@@ -29340,6 +29353,7 @@
           "tenant_id",
           "menu_id",
           "menu_item_id",
+          "menu_section_id",
           "prices",
           "available"
         ],
@@ -29534,6 +29548,7 @@
         "description": "What a preview answers with: the node it compiled, and the diff a publish of it would apply.",
         "required": [
           "node",
+          "from_version_id",
           "diff",
           "unchanged"
         ],
@@ -29615,12 +29630,16 @@
               "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
               "required": [
                 "id",
+                "tenant_id",
                 "actor_admin_id",
                 "actor_email",
                 "actor_role",
                 "action",
                 "entity_type",
                 "entity_id",
+                "before",
+                "after",
+                "request_id",
                 "at_ms"
               ],
               "properties": {
@@ -29769,10 +29788,7 @@
                       "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
                     },
                     "updated_at_ms": {
-                      "type": [
-                        "integer",
-                        "null"
-                      ],
+                      "type": "integer",
                       "format": "int64",
                       "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
                     }
@@ -29841,10 +29857,7 @@
         ],
         "properties": {
           "config_version_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "outcome": {
             "type": "string",
@@ -29870,17 +29883,11 @@
             "description": "What the store runs for `permissions.enforced`."
           },
           "enforced_scope": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The scope of the value the store runs, a `SETTING_SCOPE_*` token, absent when it runs the\ndefault."
           },
           "enforced_scope_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The tenant, brand, store group or store that value was written for, beside `enforced_scope`."
           },
           "people_without_role": {
@@ -31696,7 +31703,10 @@
           "store_id",
           "node",
           "status",
-          "effective_at_ms"
+          "effective_at_ms",
+          "resolved_timezone",
+          "applied_version_id",
+          "failure"
         ],
         "properties": {
           "applied_version_id": {
@@ -31787,6 +31797,10 @@
           "tenant_id",
           "name",
           "status",
+          "target_group_id",
+          "wall_clock_date",
+          "wall_clock_time",
+          "instant_at_ms",
           "created_by",
           "created_at_ms",
           "updated_at_ms"
@@ -31956,6 +31970,7 @@
           "name",
           "permissions",
           "permissions_with_approval",
+          "discount_ceiling_minor",
           "status"
         ],
         "properties": {
@@ -32621,14 +32636,7 @@
         ],
         "properties": {
           "confirm": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CatalogueConfirm"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CatalogueConfirm"
           },
           "default": {},
           "field": {
@@ -32638,17 +32646,11 @@
             "type": "string"
           },
           "max": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64"
           },
           "min": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64"
           },
           "node": {
@@ -32668,16 +32670,10 @@
             "type": "string"
           },
           "unit": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "values": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
@@ -32693,10 +32689,7 @@
         ],
         "properties": {
           "config_version_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "outcome": {
             "type": "string",
@@ -32805,7 +32798,10 @@
           "tenant_id",
           "store_id",
           "name",
+          "backup_station_id",
           "is_default",
+          "late_after_seconds",
+          "ticket_language",
           "status"
         ],
         "properties": {
@@ -32989,6 +32985,7 @@
         "required": [
           "store_id",
           "tenant_id",
+          "brand_id",
           "name",
           "status"
         ],
@@ -33072,10 +33069,7 @@
               ],
               "properties": {
                 "config_version_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": "string"
                 },
                 "faults": {
                   "type": "array",
@@ -33115,10 +33109,7 @@
               ],
               "properties": {
                 "config_version_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": "string"
                 },
                 "outcome": {
                   "type": "string",
@@ -33151,10 +33142,7 @@
               ],
               "properties": {
                 "config_version_id": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                  "type": "string"
                 },
                 "outcome": {
                   "type": "string",
@@ -33277,6 +33265,7 @@
           "area_id",
           "label",
           "seats",
+          "position",
           "status"
         ],
         "properties": {
@@ -33393,6 +33382,8 @@
           "task",
           "expected",
           "healthy",
+          "last_tick_at_ms",
+          "seconds_since",
           "detail"
         ],
         "properties": {
@@ -34262,10 +34253,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34315,10 +34303,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34368,10 +34353,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34426,10 +34408,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34449,6 +34428,10 @@
               "name",
               "name_translations",
               "tax_class_id",
+              "item_category_id",
+              "item_subcategory_id",
+              "course_id",
+              "image_ref",
               "status"
             ],
             "properties": {
@@ -34539,10 +34522,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34579,10 +34559,7 @@
                 "type": "string"
               },
               "scope_id": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+                "type": "string"
               },
               "scope_level": {
                 "$ref": "#/components/schemas/ScopeLevel"
@@ -34610,10 +34587,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34669,10 +34643,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34732,10 +34703,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34795,10 +34763,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34848,10 +34813,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34906,10 +34868,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -34927,8 +34886,10 @@
               "tenant_id",
               "sales_channel",
               "display_category_id",
+              "display_subcategory_id",
               "menu_item_id",
               "label",
+              "position",
               "sort"
             ],
             "properties": {
@@ -34992,10 +34953,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35013,6 +34971,7 @@
               "menu_id",
               "tenant_id",
               "name",
+              "parent_menu_id",
               "status"
             ],
             "properties": {
@@ -35056,10 +35015,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35077,6 +35033,7 @@
               "tenant_id",
               "menu_id",
               "menu_item_id",
+              "menu_section_id",
               "prices",
               "available"
             ],
@@ -35128,10 +35085,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35192,10 +35146,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35275,10 +35226,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35356,10 +35304,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35404,10 +35349,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35473,10 +35415,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35523,10 +35462,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35566,10 +35502,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35589,6 +35522,7 @@
               "name",
               "permissions",
               "permissions_with_approval",
+              "discount_ceiling_minor",
               "status"
             ],
             "properties": {
@@ -35643,10 +35577,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35665,7 +35596,10 @@
               "tenant_id",
               "store_id",
               "name",
+              "backup_station_id",
               "is_default",
+              "late_after_seconds",
+              "ticket_language",
               "status"
             ],
             "properties": {
@@ -35733,10 +35667,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35786,10 +35717,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35806,6 +35734,7 @@
             "required": [
               "store_id",
               "tenant_id",
+              "brand_id",
               "name",
               "status"
             ],
@@ -35850,10 +35779,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35874,6 +35800,7 @@
               "area_id",
               "label",
               "seats",
+              "position",
               "status"
             ],
             "properties": {
@@ -35931,10 +35858,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -35984,10 +35908,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -36032,10 +35953,7 @@
                 "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
               },
               "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int64",
                 "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
               }
@@ -36080,6 +35998,7 @@
           "id",
           "store_id",
           "url",
+          "cursor",
           "disabled"
         ],
         "properties": {
