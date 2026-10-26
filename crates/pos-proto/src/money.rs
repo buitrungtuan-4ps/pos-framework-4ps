@@ -134,9 +134,12 @@ pub enum Rounding {
 /// exists to prevent. `NonZeroI64` means a zero denominator is unrepresentable, so a
 /// malformed rate is rejected at the edge rather than dividing by zero later.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Ratio {
     numerator: i64,
+    /// Never zero.
+    #[cfg_attr(feature = "openapi", schema(value_type = i64))]
     denominator: NonZeroI64,
 }
 
@@ -193,6 +196,7 @@ impl Ratio {
 /// database form is `char(3)` plus `bigint`. Both halves travel together always —
 /// an amount without its currency is not money, it is a number.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Money {
     /// ISO 4217 code.

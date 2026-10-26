@@ -160,6 +160,7 @@ where
 /// The serving origin is never in this list and never needs to be — the edge compares it against the
 /// request's own `Host`, so a store that has published nothing keeps serving its own UI.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedOrigins {
     /// The allowed origins, each `scheme://host[:port]`.

@@ -42,7 +42,9 @@ path = "src/main.rs"
 [dependencies]
 # The backbone and the cloud store this binary composes. Paths, not versions.
 pos-ports = { path = "../pos-ports" }
-pos-proto = { path = "../pos-proto" }
+# With `openapi`, so the wire types carry the schemas the OpenAPI documents describe responses
+# with (ADR-0177 decision 3).
+pos-proto = { path = "../pos-proto", features = ["openapi"] }
 # Authentication, the audit trail, paging and the error envelope every route module shares
 # (ADR-0170 decision 4). Re-exported, so `pos_cloud::auth` and the others keep their paths.
 pos-cloud-api = { path = "../pos-cloud-api" }

@@ -25,6 +25,7 @@ use crate::wire_enum::Open;
 
 /// The `channels` config node: the sales channels a store accepts orders on.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedChannels {
     /// The enabled channels. An empty list published means the store accepts no channel; an *absent*
@@ -55,6 +56,7 @@ impl PublishedChannels {
 
 /// The `tender` config node: the payment methods a store accepts.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedTender {
     /// The accepted payment methods. An empty list published means the store takes no tender; an
@@ -90,6 +92,7 @@ impl PublishedTender {
 /// menu items suppressed (86'd) on that vendor. The live loop that pushes this to a marketplace is the
 /// flagged follow-up; publishing the policy is this track.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedVendorPolicy {
     /// The vendor's operator-facing name (e.g. the marketplace brand). Reference/display only.
@@ -111,6 +114,7 @@ pub struct PublishedVendorPolicy {
 
 /// The `vendors` config node: a store's per-marketplace policies.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedVendorPolicies {
     #[serde(default)]

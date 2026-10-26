@@ -13,7 +13,8 @@
 //! # What this crate must never contain
 //!
 //! No I/O, no runtime, no procedural macros, and nothing outside
-//! `tools/backbone-allowlist.toml`. Names published here are contracts: they may be
+//! `tools/backbone-allowlist.toml`. The one exception is behind the off-by-default `openapi`
+//! feature: `utoipa`'s `ToSchema` derive, for the OpenAPI documents (ADR-0177 decision 3). Names published here are contracts: they may be
 //! added to, never renamed or removed (`docs/naming-and-api.md` §1).
 //!
 //! Changing anything in this crate requires an ADR merged first (`AGENTS.md` §7),
@@ -67,6 +68,16 @@ pub mod text;
 pub mod time;
 pub mod ulid;
 pub mod wire_enum;
+
+/// Schemas for the OpenAPI documents (ADR-0177 decision 3), behind the `openapi` feature.
+#[cfg(feature = "openapi")]
+pub mod openapi;
+
+/// `utoipa`, for the `ToSchema` a `wire_enum!` enum declared in another crate implements, so that
+/// crate needs no `utoipa` of its own.
+#[cfg(feature = "openapi")]
+#[doc(hidden)]
+pub use utoipa as __utoipa;
 
 pub use determinism::{ClockSource, IdGenerator};
 pub use display::{

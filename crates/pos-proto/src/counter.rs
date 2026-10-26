@@ -54,6 +54,7 @@ impl WalkInChannel {
 /// No `deny_unknown_fields`, as for every published node: an edge on an older release applies a
 /// node that carries a field it does not know, rather than refusing the whole document.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedCounter {
     /// The channel a walk-in takes. Read it through [`PublishedCounter::walk_in_channel`], which

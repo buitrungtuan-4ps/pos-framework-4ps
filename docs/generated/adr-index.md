@@ -12,6 +12,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
 - [ADR-0178](../adr/0178-data-residency-per-country.md) Data residency and cross-border transfer, per country
+- [ADR-0179](../adr/0179-cells-the-directory-and-the-front-door.md) Cells, the directory and the front door
 
 ## Citations of ADRs that do not exist
 

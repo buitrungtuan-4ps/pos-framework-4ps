@@ -13,9 +13,20 @@ serde.workspace = true
 thiserror.workspace = true
 jiff.workspace = true
 serde_json.workspace = true
+# Schemas for the OpenAPI documents, generated from these types (ADR-0177 decision 3). Optional and
+# enabled by no default feature, which `cargo xtask deps-rule` holds: only a crate that asks for
+# `openapi` compiles it, and the store binary's default build does not.
+utoipa = { version = "6", optional = true }
+
+[features]
+# `utoipa::ToSchema` on the wire types, the `wire_enum!` enums and the hand-written string types.
+openapi = ["dep:utoipa"]
 
 [dev-dependencies]
 proptest = "1"
+# This crate's own `openapi` feature, so `cargo test -p pos-proto` checks the schemas it publishes
+# (ADR-0177 decision 3) while its normal build, and every crate that does not ask, links no utoipa.
+pos-proto = { path = ".", features = ["openapi"] }
 
 [lints]
 workspace = true
@@ -23,5 +34,5 @@ workspace = true
 [package.metadata.pos]
 layer = "core"
 purpose = "Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION."
-adrs = [10, 13, 24, 160]
+adrs = [10, 13, 24, 160, 177]
 owners = ["@maintainers-architecture"]

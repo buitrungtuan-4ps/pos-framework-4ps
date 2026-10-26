@@ -104,6 +104,7 @@ wire_enum! {
 /// fee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It
 /// names a charge, as a [`DisplayName`] names a product, and never a person.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct FeeCode(Box<str>);
 
@@ -143,6 +144,7 @@ impl core::fmt::Display for FeeCode {
               booleans, which is the confusion this lint guards against"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedFee {
     /// Its stable id: the same fee across a rename, and the key ADR-0159 merges a tenant's, a
@@ -434,6 +436,7 @@ impl RuleFields<'_> {
 /// bill opened does not change what it prints; its translations stay in the `fees` node, and no
 /// event carries one. Every field is as on [`PublishedFee`], and reads with the same defaults.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct FrozenFee {
     /// As [`PublishedFee::fee_id`].
@@ -595,6 +598,7 @@ pub enum FeeViolation {
 ///
 /// No `deny_unknown_fields`, for the same reason as [`PublishedFee`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedFees {
     /// Every rule, in the order the node lists them, including paused ones and ones of a kind this

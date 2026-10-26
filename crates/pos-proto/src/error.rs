@@ -133,6 +133,8 @@ impl WireEnum for ErrorStatus {
     }
 }
 
+crate::__wire_enum_schema!(ErrorStatus);
+
 impl ErrorStatus {
     /// The HTTP status code to send alongside.
     ///
@@ -173,6 +175,7 @@ impl core::fmt::Display for ErrorStatus {
 
 /// One reason a request failed, tied to the field responsible.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ErrorDetail {
     /// The offending field, in the same `snake_case` name the request used.
@@ -186,6 +189,7 @@ pub struct ErrorDetail {
 
 /// The error body.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ErrorBody {
     /// The HTTP status code, repeated here so a body is self-describing once logged.
@@ -205,6 +209,7 @@ pub struct ErrorBody {
 
 /// The envelope wrapping [`ErrorBody`], so a response is unambiguous at the top level.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ErrorResponse {
     /// The error.

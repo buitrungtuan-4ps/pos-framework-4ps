@@ -23,6 +23,11 @@ thiserror   = { reason = "error enum derive; no runtime", adr = "0006" }
 itoa        = { reason = "integer formatting; transitive from serde_json", adr = "0006" }
 zmij        = { reason = "number formatting; transitive from serde_json, which replaced ryu with it", adr = "0006" }
 memchr      = { reason = "substring search; transitive from serde_json", adr = "0006" }
+# Optional-only: admitted as an optional dependency that no default feature turns on, which
+# `deps-rule` checks. `pos-proto`'s `openapi` feature enables it, for the OpenAPI documents' schemas;
+# a crate that does not ask for `openapi`, the store binary's default build among them, links none of
+# it. Its own closure (`indexmap`, `hashbrown`, `equivalent`, `foldhash`) is therefore not listed.
+utoipa      = { reason = "OpenAPI schemas from the wire types, behind pos-proto's off-by-default openapi feature", adr = "0177", optional-only = true }
 
 # Features that make an otherwise-allowed crate unacceptable. A match here fails
 # the build even though the crate name is allowed.

@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 /// read by humans in a diagnostic; the cost is 32 bytes a record, and the benefit is that
 /// a chain break can be pasted into a bug report.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct ChainHash(String);
 
@@ -126,6 +127,7 @@ impl fmt::Display for ChainHash {
 /// as a cursor once writers are concurrent: a chain built on ULID order would re-link
 /// itself the first time two transactions interleaved.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ChainLink {
     /// This record's position in its store's chain. The first record is one.
@@ -160,6 +162,7 @@ impl ChainLink {
 /// report: a missing record and an edited one are different incidents, and telling them apart is
 /// most of the value of looking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChainBreak {
     /// The sequence skips. A record was removed from the middle of the log.
@@ -173,6 +176,7 @@ pub enum ChainBreak {
 
 /// What a walk of a store's chain found.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum ChainStatus {
     /// Every chained record links to the one before it and hashes to its stored hash.

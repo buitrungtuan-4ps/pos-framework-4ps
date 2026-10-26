@@ -29,6 +29,7 @@ use crate::wire_enum::Open;
 
 /// One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedIngredient {
     /// Its stable id.
@@ -43,6 +44,7 @@ pub struct PublishedIngredient {
 /// One line of a recipe: an ingredient and how much of it one unit of the item (or modifier) consumes,
 /// in that ingredient's own unit. Wire mirror of `pos_core::inventory::RecipeLine`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedRecipeLine {
     /// The ingredient consumed.
@@ -55,6 +57,7 @@ pub struct PublishedRecipeLine {
 /// threshold. A modifier carries its own [`MenuItemId`] and its own recipe (the "large" size adds its
 /// extra dough), so it is a recipe like any other.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedRecipe {
     /// The item or modifier this recipe makes.
@@ -72,6 +75,7 @@ pub struct PublishedRecipe {
 /// A supplier a store receives goods from — a lightweight reference only (id + name). The full
 /// purchasing relationship lives in the ERP (§19).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedSupplier {
     /// Its stable id.
@@ -87,6 +91,7 @@ pub struct PublishedSupplier {
 /// published tracks no stock, so every item is unlimited and nothing auto-86s, the never-blank config
 /// contract keeping whatever the edge already holds if a publish is absent or unparseable.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedInventory {
     #[serde(default)]

@@ -36,6 +36,7 @@ pub const DEFAULT_INTERVAL_HOURS: u32 = 24;
 /// No `deny_unknown_fields`, as for every published node: an edge on an older release applies a node
 /// that carries a field it does not know, rather than refusing the whole document.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedBackup {
     /// The hours between two archives. Read it through [`PublishedBackup::interval_hours`].

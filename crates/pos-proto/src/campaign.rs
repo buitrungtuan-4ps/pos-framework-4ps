@@ -28,6 +28,7 @@ use crate::wire_enum::Open;
 /// The five campaign kinds, in the order the pricing spec (§7) evaluates them. Wire mirror of
 /// `pos_core::campaign::CampaignKind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PublishedCampaignKind {
     /// A discount on one item or category.
@@ -44,6 +45,7 @@ pub enum PublishedCampaignKind {
 
 /// What a campaign takes off. Wire mirror of `pos_core::campaign::Action`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum PublishedAction {
     /// A percentage off the base.
@@ -61,6 +63,7 @@ pub enum PublishedAction {
 /// A weekly schedule window. Wire mirror of `pos_core::campaign::Schedule`; the window is half-open
 /// and may wrap past midnight (`start_minute > end_minute`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedSchedule {
     /// The weekday bitmask, `Monday` = bit 0 — the same 7-bit mask
@@ -75,6 +78,7 @@ pub struct PublishedSchedule {
 /// The conditions a campaign requires before it applies. Wire mirror of
 /// `pos_core::campaign::Conditions`; every field is optional and absent means unrestricted.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedConditions {
     /// A minimum bill total. Absent means no minimum.
@@ -92,6 +96,7 @@ pub struct PublishedConditions {
 /// One authored campaign, in wire form. Faithful mirror of `pos_core::campaign::Campaign` plus the
 /// authoring `name` the console and receipt show (the engine does not need a name to evaluate).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedCampaign {
     /// Its stable id — the tiebreak that makes evaluation order total.
@@ -124,6 +129,7 @@ pub struct PublishedCampaign {
 /// — a store with no node published simply runs no promotions, the never-blank config contract
 /// keeping whatever the edge already holds if a publish is absent or unparseable.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedCampaigns {
     #[serde(default)]
