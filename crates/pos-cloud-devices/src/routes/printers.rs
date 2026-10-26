@@ -24,7 +24,7 @@ use pos_cloud_api::conditional::if_match;
 use pos_cloud_api::refusal::{accepted_tokens, enum_refusal};
 
 /// An operator points an approved device at the terminal that holds its transport, or clears it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPrintAgentRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -45,7 +45,7 @@ pub(super) struct SetPrintAgentRequest {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id` and `agent_device_id`, the terminal whose print agent writes this \
+        content = SetPrintAgentRequest, description = "`tenant_id` and `agent_device_id`, the terminal whose print agent writes this \
                        printer's bytes (ADR-0112), or `null` for the store's edge to open the \
                        printer's address itself. Whether the id names a terminal is checked when \
                        the devices are published, since the terminal may be created after the pick",
@@ -139,7 +139,7 @@ where
 }
 
 /// An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetDrawerRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -158,7 +158,7 @@ pub(super) struct SetDrawerRequest {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id` and `drawer_attached`, whether a cash drawer is wired to the \
+        content = SetDrawerRequest, description = "`tenant_id` and `drawer_attached`, whether a cash drawer is wired to the \
                        printer's kick port (ADR-0165 decision 4). It decides whether the till can \
                        open a drawer of cash",
         content_type = "application/json",
@@ -233,7 +233,7 @@ where
 }
 
 /// An operator says what paper an approved printer takes and whether it cuts it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPaperRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -254,7 +254,7 @@ pub(super) struct SetPaperRequest {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
+        content = SetPaperRequest, description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
                        characters a line and a 576-dot raster), \
                        `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and \
                        `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, \

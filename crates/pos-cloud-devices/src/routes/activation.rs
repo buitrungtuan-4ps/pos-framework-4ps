@@ -70,7 +70,7 @@ where
     clippy::struct_field_names,
     reason = "tenant_id/store_id/device_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
 )]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct IssueActivationRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -81,7 +81,7 @@ struct IssueActivationRequest {
 }
 
 /// The freshly-issued code, shown once for the operator to put on the setup sheet.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct IssueActivationResponse {
     /// The `XXXX-XXXX-XXXX` code — the only time it is visible; only its hash is stored.
     activation_code: String,
@@ -92,7 +92,7 @@ struct IssueActivationResponse {
     clippy::struct_field_names,
     reason = "tenant_id/store_id/device_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
 )]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct RevokeActivationRequest {
     /// The tenant the device belongs to (a ULID).
     tenant_id: String,
@@ -103,14 +103,14 @@ struct RevokeActivationRequest {
 }
 
 /// How many still-issued codes were cancelled.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct RevokeActivationResponse {
     /// The number of codes moved from `issued` to `revoked`.
     revoked: u64,
 }
 
 /// A device presents its activation code. Unauthenticated: the code is the credential.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ExchangeRequest {
     /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
     code: String,
@@ -121,7 +121,7 @@ struct ExchangeRequest {
 }
 
 /// The device's minted credential and the device id it was activated as — shown once.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ExchangeResponse {
     /// The device id the credential authenticates as.
     device_id: String,
@@ -135,12 +135,12 @@ struct ExchangeResponse {
     extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
+        content = IssueActivationRequest, description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
                        registered under `/admin/stores/{store_id}/devices`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, \
+        (status = 201, body = IssueActivationResponse, description = "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, \
                                       for the setup sheet. It is returned exactly once, since only \
                                       its hash is stored, and it is spent the first time a box \
                                       exchanges it for a credential (ADR-0050)"),
@@ -210,12 +210,12 @@ where
     extensions(("x-permission" = json!("console.devices.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
+        content = RevokeActivationRequest, description = "The device slot: `tenant_id`, `store_id` and `device_id`, the device \
                        registered under `/admin/stores/{store_id}/devices`",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Every code issued for the slot and not yet spent is cancelled, \
+        (status = 200, body = RevokeActivationResponse, description = "Every code issued for the slot and not yet spent is cancelled, \
                                       as for a setup sheet that went astray. The body carries \
                                       `revoked`, how many were"),
         (status = 400, description = "tenant_id, store_id or device_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -274,12 +274,12 @@ where
     security(),
     extensions(("x-public-reason" = json!("a single-use activation code from the store's setup sheet"))),
     request_body(
-        description = "`code`, the activation code from the store's setup sheet, and optionally the \
+        content = ExchangeRequest, description = "`code`, the activation code from the store's setup sheet, and optionally the \
                        `store_id` the box expects to belong to",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Activated: the `device_id`, and the device `credential`, returned this \
+        (status = 201, body = ExchangeResponse, description = "Activated: the `device_id`, and the device `credential`, returned this \
                                       once; the cloud keeps only its hash (ADR-0050)"),
         (status = 400, description = "The code or the store id is malformed", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "Refused: a spent, revoked, unknown or raced code, or one issued for \
