@@ -175,12 +175,12 @@ where
     extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
+        content = HaltRolloutRequest, description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
                        resumes it. The rest of the rollout is kept as the store runs it",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The kill switch is set on the rollout the store runs, read \
+        (status = 200, body = PublishedConfig, description = "The kill switch is set on the rollout the store runs, read \
                                       from the tree the write lands on, and republished on the Store \
                                       layer. The body carries `config_version_id`. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID; the store has no \

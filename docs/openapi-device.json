@@ -1334,12 +1334,24 @@
         "requestBody": {
           "description": "`event_ids`: the ids of events the store holds, each a ULID",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreReconcileRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "`missing`: the ids the cloud does not hold, for the store to publish again"
+            "description": "`missing`: the ids the cloud does not hold, for the store to publish again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or an event id is not a ULID",
@@ -1815,6 +1827,38 @@
           "status": {
             "type": "string",
             "description": "The status — `pending` until an operator resolves it."
+          }
+        }
+      },
+      "ReconcileResponse": {
+        "type": "object",
+        "description": "The ids the cloud is missing from the manifest — what the edge should re-push.",
+        "required": [
+          "missing"
+        ],
+        "properties": {
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The subset of the manifest the cloud's event log does not contain (ULID strings)."
+          }
+        }
+      },
+      "StoreReconcileRequest": {
+        "type": "object",
+        "description": "A store's own reconciliation manifest: just the ids, because the tenant and the store come from\nthe key it presented and the path it called (production-readiness **R3**).\n\nDeliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a\n`tenant_id` the server discards is a body a caller will eventually believe is honoured.",
+        "required": [
+          "event_ids"
+        ],
+        "properties": {
+          "event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The event ids this store holds over the window it is reconciling."
           }
         }
       }

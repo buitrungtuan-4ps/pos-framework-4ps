@@ -29,7 +29,7 @@ use crate::http::{Json, unprocessable_violations};
 /// What publishing a candidate node *would* change, computed without minting a version or saving:
 /// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
 /// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct ConfigPreview {
     /// The version the diff is computed against — the store's current version — or `null` when the
     /// store has no published configuration yet (the candidate is then entirely new).

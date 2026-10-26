@@ -166,11 +166,11 @@ pub(crate) use config_publish::{
     __path_admin_list_releases, __path_admin_read_release, __path_admin_schedule_release,
 };
 use config_publish::{
-    LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
-    admin_config_rollback, admin_config_version_effective, admin_config_versions,
-    config_redacted_for, if_match_config, load_tree_for_write, preview_config_node,
-    publish_config_nodes, publish_nodes, release_error_response, release_report_response,
-    release_target_stores, release_target_timezones, unresolvable_moment,
+    ConfigPreview, LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest,
+    admin_config_nodes, admin_config_rollback, admin_config_version_effective,
+    admin_config_versions, config_redacted_for, if_match_config, load_tree_for_write,
+    preview_config_node, publish_config_nodes, publish_nodes, release_error_response,
+    release_report_response, release_target_stores, release_target_timezones, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};

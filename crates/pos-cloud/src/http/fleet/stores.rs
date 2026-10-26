@@ -32,7 +32,7 @@ use crate::lease::{
         ("tenant_id" = String, Query, description = "The tenant whose stores to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every store of the tenant, as an array, with its last contact, \
+        (status = 200, body = [FleetStoreView], description = "Every store of the tenant, as an array, with its last contact, \
                                       `online` (derived at read time from the last contact), the \
                                       configuration version it holds against the one published and \
                                       `config_current`, the binary it runs and its last self-test, \
@@ -97,7 +97,7 @@ where
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store as the fleet list shows it, plus the region \
+        (status = 200, body = FleetStoreView, description = "The store as the fleet list shows it, plus the region \
                                       comparison (ADR-0114): `profile_country`, the country its \
                                       configuration publishes; `region_agreement`, `agrees`, \
                                       `differs` or `country-not-recorded`; and \

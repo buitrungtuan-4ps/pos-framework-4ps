@@ -36,7 +36,7 @@ use crate::lease::{RegionAcknowledgement, RegionAcknowledgementStore};
 /// `If-Match` would have to name one of them and silently miss changes to the other. Naming both
 /// codes catches every move of either, and says in the request exactly what the admin was looking at
 /// when they decided. The departure is written up in the record's delivery note.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct AcknowledgeRegionRequest {
     /// The tenant the store belongs to.
     tenant_id: String,
@@ -133,12 +133,12 @@ struct RegionDifference {
     extensions(("x-permission" = json!("console.stores.manage"))),
     params(("store_id" = String, Path, description = "The store's 26-character ULID")),
     request_body(
-        description = "The tenant, the two country codes the console showed, and one sentence \
+        content = AcknowledgeRegionRequest, description = "The tenant, the two country codes the console showed, and one sentence \
                        saying why the difference between them is correct",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded. The body is the answer as stored"),
+        (status = 200, body = RegionAcknowledgementView, description = "Recorded. The body is the answer as stored"),
         (status = 400, description = "A country code is not two letters, or the reason is blank \
                                       or over 280 characters", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),

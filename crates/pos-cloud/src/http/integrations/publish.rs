@@ -44,7 +44,7 @@ struct ConfigIntegrationsState<S, Rg, Cfg, A, C> {
 
 /// A `PUT /admin/config/integrations` body: the store to publish to. What goes on it is resolved
 /// from the tenant's connections, never sent.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishIntegrationsRequest {
     tenant_id: String,
     store_id: String,
@@ -104,7 +104,7 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to publish to. The node's content is resolved from \
+        content = PublishIntegrationsRequest, description = "The tenant and the store to publish to. The node's content is resolved from \
                        the tenant's connections: the store's own, then its brand's, then the \
                        tenant's, with one per e-invoice and ERP family",
         content_type = "application/json",

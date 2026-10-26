@@ -45,7 +45,7 @@ struct OtaReleaseFetchState<B, L, A, C, S> {
 /// `release` is spelled the way the registry keys it and a rollout's `target_version` names it —
 /// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). Which tag that is on the forge is the source's business, and it tries both.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct FetchReleaseRequest {
     release: String,
 }
@@ -150,7 +150,7 @@ fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
     extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`release`: the version to fetch, spelled bare, without a leading `v`. The \
+        content = FetchReleaseRequest, description = "`release`: the version to fetch, spelled bare, without a leading `v`. The \
                        cloud tries the release workflow's tag with and without one",
         content_type = "application/json",
     ),

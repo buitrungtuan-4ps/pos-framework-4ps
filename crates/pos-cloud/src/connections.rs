@@ -215,7 +215,7 @@ pub fn open(
 ///
 /// The tree's own layers ([ADR-0033](../../../docs/adr/0033-config-tree.md)), so a connection is
 /// inherited the way every other setting is: a store uses its own, or its brand's, or the tenant's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ScopeLevel {
     /// Every store the tenant runs.
     #[serde(rename = "CONNECTION_SCOPE_TENANT")]
@@ -265,7 +265,7 @@ impl Connection {
 }
 
 /// A connection as the API answers it: the record without its sealed values.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct ConnectionView {
     connection_id: String,
     provider_id: String,

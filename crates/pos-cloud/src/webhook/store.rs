@@ -69,7 +69,7 @@ pub struct PersistedWebhook {
 }
 
 /// An endpoint's metadata for a listing — everything but the secret, which never leaves the store.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct WebhookSummary {
     /// The endpoint id (a ULID string).
     pub id: String,

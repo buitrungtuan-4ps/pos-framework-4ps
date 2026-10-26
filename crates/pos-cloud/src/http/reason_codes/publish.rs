@@ -43,7 +43,7 @@ struct ConfigReasonCodeState<R, Cfg, A, C> {
 
 /// A `PUT /admin/config/reason-codes` body: the `(tenant, store)` to push the tenant's authored list
 /// to. Like every other node publish, the entries come from what is authored, not from the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishReasonCodesRequest {
     tenant_id: String,
     store_id: String,
@@ -211,7 +211,7 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to publish to. The entries come from what the \
+        content = PublishReasonCodesRequest, description = "The tenant and the store to publish to. The entries come from what the \
                        tenant has authored, never from this body",
         content_type = "application/json",
     ),

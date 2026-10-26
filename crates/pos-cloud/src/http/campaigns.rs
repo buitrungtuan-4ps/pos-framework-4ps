@@ -70,7 +70,7 @@ struct CampaignState<Camp, A, C> {
 /// A create/update body: the tenant and the campaign's authoring fields. The id is **server-owned** —
 /// minted on create, the path id on update — so a client never supplies or forges it. Everything else
 /// is the wire campaign's own shape (kind, action, conditions), reused rather than re-declared.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CampaignRequest {
     tenant_id: String,
     name: String,

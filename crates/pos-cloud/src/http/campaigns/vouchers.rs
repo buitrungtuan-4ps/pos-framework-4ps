@@ -45,14 +45,14 @@ struct VoucherState<V, Camp, A, C> {
 }
 
 /// A `POST /admin/campaigns/{id}/vouchers` body: the tenant and how many codes to mint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct GenerateVouchersRequest {
     tenant_id: String,
     count: u32,
 }
 
 /// One minted or listed voucher on the wire: the id, the code, and its status.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct VoucherView {
     voucher_id: String,
     code: String,
@@ -102,11 +102,11 @@ where
         ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
     ),
     request_body(
-        description = "`tenant_id` and `count`, how many codes to mint, from 1 to 10000",
+        content = GenerateVouchersRequest, description = "`tenant_id` and `count`, how many codes to mint, from 1 to 10000",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Minted, as an array: each code's `voucher_id`, `code` and \
+        (status = 201, body = [VoucherView], description = "Minted, as an array: each code's `voucher_id`, `code` and \
                                       `status`, `active`. A code carries redeemable value; the audit \
                                       entry records the count, never the codes"),
         (status = 400, description = "An id is not a ULID, count is out of range, or the campaign \
@@ -229,7 +229,7 @@ where
                                                      with `limit`"),
     ),
     responses(
-        (status = 200, description = "Without `limit`, every code as an array; with it, a page: \
+        (status = 200, body = [VoucherView], description = "Without `limit`, every code as an array; with it, a page: \
                                       `items`, `total`, `limit` and `offset`. Each code has \
                                       `voucher_id`, `code` and `status` (`active`, `redeemed` or \
                                       `void`). Listing codes needs the manage permission, because a \

@@ -14,7 +14,7 @@ use crate::registry::EntityStatus;
 /// time — `online` (from `last_seen_at` against [`FLEET_ONLINE_THRESHOLD_MS`]) and `config_current`
 /// (the held version equals the published one). Timestamps are Unix milliseconds, the shape the
 /// dashboard reads; the store id is a string so the console shows a name and hides the ULID.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct FleetStoreView {
     store_id: String,
     name: String,
