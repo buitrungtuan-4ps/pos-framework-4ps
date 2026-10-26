@@ -38,7 +38,7 @@ struct SubjectState<Su, A, C> {
 /// A subject lookup — existence and status, without the personal fields. What a lookup returns so the
 /// operator can confirm the right subject before exporting or erasing; the values only leave the server
 /// on an explicit export.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SubjectMetaView {
     subject_id: String,
     collected_at_ms: i64,
@@ -51,7 +51,7 @@ struct SubjectMetaView {
 /// A subject export — the portability/access payload: the record with its field values. This is the one
 /// route that returns the personal data, and only to an operator holding `console.subjects.manage`; the
 /// audit trail records that an export happened and how many fields, never the values.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SubjectExportView {
     subject_id: String,
     collected_at_ms: i64,
@@ -131,7 +131,7 @@ fn parse_subject_target(
                                                    not found"),
     ),
     responses(
-        (status = 200, description = "The subject exists: `subject_id`, `collected_at_ms`, `masked` \
+        (status = 200, body = SubjectMetaView, description = "The subject exists: `subject_id`, `collected_at_ms`, `masked` \
                                       (whether it has been erased) and `field_count`, how many \
                                       personal fields the record holds. No field value is returned. \
                                       This is the step that confirms the right person before an \
@@ -216,7 +216,7 @@ where
                                                    not found"),
     ),
     responses(
-        (status = 200, description = "The record for an access or portability request: \
+        (status = 200, body = SubjectExportView, description = "The record for an access or portability request: \
                                       `subject_id`, `collected_at_ms`, `masked` and `fields`, the \
                                       personal field values by name. The only route on this surface \
                                       that returns them. An erased record returns its redacted \

@@ -69,7 +69,7 @@ struct PublishRolloutRequest {
 
 /// A `POST /admin/config/ota/halt` body: the `(tenant, store)` whose rollout to halt (`true`) or
 /// resume (`false`) — the kill switch, without re-typing the whole rollout.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct HaltRolloutRequest {
     tenant_id: String,
     store_id: String,

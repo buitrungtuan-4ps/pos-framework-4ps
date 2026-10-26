@@ -58,7 +58,7 @@ struct ReasonCodeState<R, A, C> {
 /// entry's own fields, reused rather than re-declared, except that the two name fields arrive as
 /// plain strings so a blank a form left behind can be trimmed away before it becomes a
 /// [`DisplayName`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ReasonCodeRequest {
     tenant_id: String,
     code: String,

@@ -73,7 +73,7 @@ struct ConnectionState<S, A, C> {
 /// connection already holds, because the console cannot show it to be sent back. `clear_secrets`
 /// removes a stored value on purpose. Switching `provider_id` drops every stored secret: one
 /// vendor's key is never another's, even when both call the field `api_key`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ConnectionRequest {
     tenant_id: String,
     provider_id: String,

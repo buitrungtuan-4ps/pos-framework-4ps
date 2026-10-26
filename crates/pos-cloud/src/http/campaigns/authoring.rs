@@ -23,7 +23,9 @@ use crate::http::{
     RegistryTenantQuery, already_exists, if_match, not_found, version_mismatch, versioned_created,
     versioned_ok,
 };
+use crate::version::Versioned;
 use crate::version::{CreateOutcome, UpdateOutcome};
+use pos_proto::campaign::PublishedCampaign;
 
 #[utoipa::path(
     get,
@@ -34,7 +36,7 @@ use crate::version::{CreateOutcome, UpdateOutcome};
         ("tenant_id" = String, Query, description = "The tenant whose campaigns to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's campaigns as authored, each with its `etag`. A \
+        (status = 200, body = [Versioned<PublishedCampaign>], description = "The tenant's campaigns as authored, each with its `etag`. A \
                                       campaign reaches a store only when the store's campaigns are \
                                       published"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -85,7 +87,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The campaign as authored, with its `etag` field — the token a \
+        (status = 200, body = Versioned<PublishedCampaign>, description = "The campaign as authored, with its `etag` field — the token a \
                                       PUT must send back as If-Match"),
         (status = 400, description = "tenant_id or campaign_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -137,7 +139,7 @@ where
     extensions(("x-permission" = json!("console.campaigns.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
+        content = CampaignRequest, description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
                        or `manual`), `priority`, and optionally `exclusion_group`, then the \
                        `action` the edge's pricing engine applies, its `conditions` (channels, a \
                        daily schedule window and the rest) and `quota_remaining`, in the shape of \
@@ -145,7 +147,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, with the id minted here. The body is the campaign and \
+        (status = 201, body = Versioned<PublishedCampaign>, description = "Created, with the id minted here. The body is the campaign and \
                                       the ETag carries its version. Audited with its name, kind and \
                                       priority, never its discount terms"),
         (status = 400, description = "An id is not a ULID; name is blank; a schedule minute is \
@@ -228,7 +230,7 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
+        content = CampaignRequest, description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
                        or `manual`), `priority`, and optionally `exclusion_group`, then the \
                        `action` the edge's pricing engine applies, its `conditions` (channels, a \
                        daily schedule window and the rest) and `quota_remaining`, in the shape of \
@@ -236,7 +238,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the campaign and the ETag carries its new \
+        (status = 200, body = Versioned<PublishedCampaign>, description = "Updated. The body is the campaign and the ETag carries its new \
                                       version. Audited with its name, kind and priority before and \
                                       after, never its discount terms"),
         (status = 400, description = "An id is not a ULID; name is blank; a schedule minute is \

@@ -43,7 +43,7 @@ struct HealthState<H, A, C> {
 
 /// One background loop as the console sees it: identity, whether the deployment expects it to run, a
 /// health verdict derived at read time, when it last ticked, and its self-describing detail.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TaskHealthView {
     task: String,
     expected: bool,
@@ -99,7 +99,7 @@ impl TaskHealthView {
 /// The whole-fleet-of-loops report: an overall verdict (every *expected* loop is healthy) plus the
 /// per-loop views. Extra loops that ticked but the deployment does not expect are reported too
 /// (`expected: false`), so nothing is hidden, but they do not sway the overall verdict.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TaskHealthReport {
     healthy: bool,
     tasks: Vec<TaskHealthView>,
@@ -140,7 +140,7 @@ fn health_error_response(error: &TaskHealthError) -> Response {
     extensions(("x-permission" = json!("console.data.read"))),
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "`healthy`, whether every loop this deployment expects is \
+        (status = 200, body = TaskHealthReport, description = "`healthy`, whether every loop this deployment expects is \
                                       healthy, and `tasks`: each loop with `task`, `expected`, \
                                       `healthy` (it ticked within a few of its intervals and its last \
                                       tick succeeded), `last_tick_at_ms`, `seconds_since` and the \

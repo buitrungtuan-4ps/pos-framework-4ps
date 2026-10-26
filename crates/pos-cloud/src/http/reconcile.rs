@@ -115,14 +115,14 @@ struct ReconcileRequest {
 ///
 /// Deliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a
 /// `tenant_id` the server discards is a body a caller will eventually believe is honoured.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct StoreReconcileRequest {
     /// The event ids this store holds over the window it is reconciling.
     event_ids: Vec<String>,
 }
 
 /// The ids the cloud is missing from the manifest — what the edge should re-push.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ReconcileResponse {
     /// The subset of the manifest the cloud's event log does not contain (ULID strings).
     missing: Vec<String>,
@@ -166,11 +166,11 @@ where
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        description = "`event_ids`: the ids of events the store holds, each a ULID",
+        content = StoreReconcileRequest, description = "`event_ids`: the ids of events the store holds, each a ULID",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "`missing`: the ids the cloud does not hold, for the store to publish \
+        (status = 200, body = ReconcileResponse, description = "`missing`: the ids the cloud does not hold, for the store to publish \
                                       again"),
         (status = 400, description = "store_id is not a ULID, or an event id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
@@ -308,7 +308,7 @@ struct ReconcileHistoryQuery {
 
 /// One reconciliation run on the wire ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
 /// counts and a timestamp, never event contents or a customer identifier.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ReconcileRunView {
     /// The run's id (a ULID string; chronological).
     run_id: String,
@@ -345,7 +345,7 @@ impl ReconcileRunView {
         ("limit" = Option<u32>, Query, description = "The most runs to return (default 100, at most 500)"),
     ),
     responses(
-        (status = 200, description = "The runs, newest first, as an array: each with `run_id`, \
+        (status = 200, body = [ReconcileRunView], description = "The runs, newest first, as an array: each with `run_id`, \
                                       `store_id`, `candidates_offered` (the events the store \
                                       offered), `missing_found` (how many of them the cloud lacked \
                                       and asked for again; zero is in sync) and `ran_at_ms`"),

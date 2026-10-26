@@ -24,7 +24,7 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::campaigns::{CampaignStore, to_node as campaigns_to_node};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::http::{
-    PublishedConfig, config_redacted_for, load_tree_for_write, preview_config_node,
+    ConfigPreview, PublishedConfig, config_redacted_for, load_tree_for_write, preview_config_node,
     publish_config_nodes, unprocessable_violations,
 };
 use crate::version::records;
@@ -45,7 +45,7 @@ struct ConfigCampaignsState<Camp, Cfg, A, C> {
 
 /// A `PUT /admin/config/campaigns` body: the `(tenant, store)` to push the tenant's authored campaigns
 /// to. Like every other node publish, the campaigns come from what is authored, not the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishCampaignsRequest {
     tenant_id: String,
     store_id: String,
@@ -117,12 +117,12 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+        content = PublishCampaignsRequest, description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
                        authored, never from the body",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Every campaign the tenant has authored is compiled into the \
+        (status = 200, body = PublishedConfig, description = "Every campaign the tenant has authored is compiled into the \
                                       store's `campaigns` node and published on the Store layer, the \
                                       store's other Store-level settings kept. The body carries \
                                       `config_version_id`. Audited with the number of campaigns, \
@@ -219,12 +219,12 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+        content = PublishCampaignsRequest, description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
                        authored, never from the body. Nothing is written",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "What publishing the campaigns would change: \
+        (status = 200, body = ConfigPreview, description = "What publishing the campaigns would change: \
                                       `from_version_id`, the version the diff is against, or `null` \
                                       for a store never published to; `diff`, the merge patch \
                                       (RFC 7386) the publish would apply; and `unchanged`. The diff \
