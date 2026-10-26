@@ -18,6 +18,10 @@ interface TableGroup {
   lines: KitchenLine[];
 }
 
+// Optimization: Reusing a single Intl.Collator instance avoids recreating collators
+// O(N log N) times during sorting in `groups`.
+const labelCollator = new Intl.Collator(undefined, { numeric: true });
+
 // The pass: fired lines gathered by table, so the expeditor runs a whole table together. "All away"
 // bumps the whole table's lines — the same durable `kitchen.ticket.bumped` event a KDS records (#44),
 // so the pass and every kitchen screen agree the table is done rather than each holding a private
@@ -41,7 +45,7 @@ export function Expo() {
     }
     return [...byOrder.values()].sort(
       (a, b) =>
-        a.label.localeCompare(b.label, undefined, { numeric: true }) ||
+        labelCollator.compare(a.label, b.label) ||
         a.orderId.localeCompare(b.orderId),
     );
   });
