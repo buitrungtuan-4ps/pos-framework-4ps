@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
@@ -18,6 +19,7 @@ use super::assignment_scope::{
     already_assigned, assignment_audit, assignment_ids, requested_scope,
 };
 use super::checks::refuse_unassignable;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     AssignmentListQuery, AssignmentListing, CreateAssignmentRequest, PeopleTenantQuery,
     people_entropy_unavailable, people_error_response,
@@ -32,6 +34,17 @@ use crate::people::{
 use crate::registry::RegistryStore;
 use crate::store_groups::StoreGroupId;
 use pos_cloud_api::refusal::{enum_refusal, not_found};
+
+/// What an assignment's create answers: the id it minted, and, where the assignment reached a
+/// store at once, how publishing to each went (ADR-0158 decision 7).
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct AssignmentCreated {
+    /// The new assignment's id, a ULID.
+    id: String,
+    /// One result per store the assignment reached, absent when it reached none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stores: Option<Vec<PermissionsPublishResult>>,
+}
 
 #[utoipa::path(
     get,
@@ -177,7 +190,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Assigned. The body is `{ \"id\": … }`. An assignment to a \
+        (status = 201, body = AssignmentCreated, description = "Assigned. The body is `{ \"id\": … }`. An assignment to a \
                                       group or to every store is published at once to every open \
                                       store it reaches, and the body also carries `stores`, each \
                                       with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
@@ -290,21 +303,17 @@ where
                 )),
             )
             .await;
-            let created = match reached {
-                None => serde_json::json!({ "id": assignment_id.to_string() }),
-                Some(reached) => {
-                    let stores = state
+            let id = assignment_id.to_string();
+            let stores = match reached {
+                None => None,
+                Some(reached) => Some(
+                    state
                         .publisher()
-                        .publish_all(
-                            &context,
-                            tenant_id,
-                            &reached,
-                            ("assignment_id", &assignment_id.to_string()),
-                        )
-                        .await;
-                    serde_json::json!({ "id": assignment_id.to_string(), "stores": stores })
-                }
+                        .publish_all(&context, tenant_id, &reached, ("assignment_id", &id))
+                        .await,
+                ),
             };
+            let created = AssignmentCreated { id, stores };
             (StatusCode::CREATED, Json(created)).into_response()
         }
         Err(AssignmentStoreError::AlreadyAssigned(_)) => already_assigned(scope),
@@ -322,7 +331,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Removed, and every store the assignment reached is published \
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Removed, and every store the assignment reached is published \
                                       to at once, so the person cannot sign in there a moment longer \
                                       (ADR-0158 decision 7): `stores` lists each store with its \
                                       `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
@@ -423,5 +432,36 @@ where
         }
         Ok(false) => not_found("assignment"),
         Err(error) => people_error_response(&error),
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! [`AssignmentCreated`] serialises to the bytes the `json!` it replaced did.
+
+    use super::AssignmentCreated;
+
+    #[test]
+    fn a_create_that_reached_no_store_is_the_bare_id() {
+        let created = AssignmentCreated {
+            id: "01J0000000000000000000000A".to_owned(),
+            stores: None,
+        };
+        assert_eq!(
+            serde_json::to_value(created).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000A" })
+        );
+    }
+
+    #[test]
+    fn a_create_that_reached_stores_carries_their_results() {
+        let created = AssignmentCreated {
+            id: "01J0000000000000000000000A".to_owned(),
+            stores: Some(Vec::new()),
+        };
+        assert_eq!(
+            serde_json::to_value(created).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000A", "stores": [] })
+        );
     }
 }

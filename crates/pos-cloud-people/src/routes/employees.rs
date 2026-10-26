@@ -3,6 +3,8 @@
 
 //! `/admin/employees`: a tenant's employees.
 
+use pos_cloud_api::response::CreatedId;
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::version::Versioned;
 use std::collections::BTreeSet;
 
@@ -17,6 +19,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
 use super::PeopleState;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     CreateEmployeeRequest, EmployeeListQuery, PIN_MAX_DIGITS, PeopleTenantQuery, SetPinRequest,
     UpdateEmployeeRequest, hash_pin, people_entropy_unavailable, people_error_response,
@@ -248,7 +251,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
                                       the new employee's version. The employee starts active"),
         (status = 400, description = "tenant_id is absent or not a ULID, or code or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -337,11 +340,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": employee_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(employee_id))).into_response(),
                 &version,
             )
         }
@@ -381,7 +380,7 @@ fn code_in_use() -> Response {
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Archived. The person is taken off every store they were \
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Archived. The person is taken off every store they were \
                                       assigned to at once (ADR-0158 decision 7): `stores` lists each \
                                       store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with \
                                       its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which \

@@ -999,7 +999,14 @@
         },
         "responses": {
           "201": {
-            "description": "Assigned. The body is `{ \"id\": … }`. An assignment to a group or to every store is published at once to every open store it reaches, and the body also carries `stores`, each with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`. One to a single store is published when someone publishes"
+            "description": "Assigned. The body is `{ \"id\": … }`. An assignment to a group or to every store is published at once to every open store it reaches, and the body also carries `stores`, each with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`. One to a single store is published when someone publishes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentCreated"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is absent or not a ULID, the scope is named twice or not at all, or scope_kind is not one the route accepts",
@@ -1100,7 +1107,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Removed, and every store the assignment reached is published to at once, so the person cannot sign in there a moment longer (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries"
+            "description": "Removed, and every store the assignment reached is published to at once, so the person cannot sign in there a moment longer (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_PermissionsPublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or assignment_id is absent or not a ULID",
@@ -11588,7 +11602,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new employee's version. The employee starts active"
+            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new employee's version. The employee starts active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or code or name is blank",
@@ -11785,7 +11806,14 @@
         },
         "responses": {
           "200": {
-            "description": "Archived. The person is taken off every store they were assigned to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version"
+            "description": "Archived. The person is taken off every store they were assigned to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_PermissionsPublishResult"
+                }
+              }
+            }
           },
           "204": {
             "description": "Updated: a rename, or restoring an archived person. Nothing is published until someone publishes. The ETag carries the new version"
@@ -12874,7 +12902,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited"
+            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, or name is blank",
@@ -13424,7 +13459,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited"
+            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id or area_id is absent or not a ULID, or name is blank",
@@ -16057,7 +16099,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created, with the id minted here. The body carries `id`. Audited"
+            "description": "Created, with the id minted here. The body carries `id`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id, station_id, menu_item_id or course_id is not a ULID; the rule names both an item and a course, or neither; or the course is one the tenant does not carry, or has archived",
@@ -16306,7 +16355,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited"
+            "description": "Created, active, with the id minted here. The body carries `id`, and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID; name is blank; backup_station_id is not a ULID; late_after_seconds is outside 60 to 3600; or ticket_language is not a language token",
@@ -18559,7 +18615,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new role's version"
+            "description": "Created. The body is `{ \"id\": … }` and the ETag carries the new role's version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedId"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID; name is blank; a permission id is unknown, not PIN-flagged where granted with approval, or in both lists; or the ceiling is negative",
@@ -18746,7 +18809,14 @@
         },
         "responses": {
           "200": {
-            "description": "Archived. An archived role grants nothing, so every store where someone holds it is published to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version"
+            "description": "Archived. An archived role grants nothing, so every store where someone holds it is published to at once (ADR-0158 decision 7): `stores` lists each store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which `POST /admin/people/publish` retries. The ETag carries the new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_PermissionsPublishResult"
+                }
+              }
+            }
           },
           "204": {
             "description": "Updated: a rename, a changed permission set or ceiling, or restoring the role. Nothing is published until someone publishes. The ETag carries the new version"
@@ -24899,6 +24969,29 @@
         ],
         "description": "A person's assignment with a role, at one store, a store group or every store of the tenant\n([`AssignmentScope`]). Every id is the same tenant (the `tenant_id` column + RLS isolate them;\nthe route layer checks referential validity before writing).\n\n# Who the assignment is for\n\nThe row carries the assigned person's name and code alongside their id, resolved by the store as\nit reads. Without them a caller can only name the person by looking the id up in the tenant's\nroster, which is a whole-set read the console cannot keep making once the roster is paged\n([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), B3-4).\n\nBoth are `Option`, and the reason is in the schema rather than the domain: nothing declares a\nforeign key from an assignment to an employee, so an assignment can outlive the row it names.\n`None` means exactly that, and a caller should fall back to showing the id — the assignment is\nreal and still grants access, so hiding it would be worse than showing it unlabelled.\n\nThe name and code are T1 personal data\n([ADR-0070](../../../docs/adr/0070-people-and-access.md)) and reaching them needs\n`console.people.read`, the same gate as reading the roster\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md))."
       },
+      "AssignmentCreated": {
+        "type": "object",
+        "description": "What an assignment's create answers: the id it minted, and, where the assignment reached a\nstore at once, how publishing to each went (ADR-0158 decision 7).",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The new assignment's id, a ULID."
+          },
+          "stores": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PermissionsPublishResult"
+            },
+            "description": "One result per store the assignment reached, absent when it reached none."
+          }
+        }
+      },
       "AssignmentId": {
         "$ref": "#/components/schemas/Ulid",
         "description": "An assignment's identifier — a ULID minted at creation."
@@ -26734,6 +26827,19 @@
           "status": {
             "type": "string",
             "description": "`approved`, always: a terminal is created resolved, because the console write *is* the\ndecision."
+          }
+        }
+      },
+      "CreatedId": {
+        "type": "object",
+        "description": "What a create answers when its record is not returned: the id it minted.\n\nAn entity whose update payload does not carry every field answers its create with this rather\nthan a representation it would have to invent (`conditional::with_etag` says why); the `ETag`\nheader carries the version.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The new record's id, a ULID."
           }
         }
       },
@@ -29118,6 +29224,29 @@
           "risk": {
             "type": "string",
             "description": "The risk token (`LOW`/`MEDIUM`/`HIGH`)."
+          }
+        }
+      },
+      "PermissionsPublishResult": {
+        "type": "object",
+        "description": "How one store's `permissions` publish went, as a write that publishes at once reports it.",
+        "required": [
+          "store_id",
+          "outcome"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`."
+          },
+          "store_id": {
+            "type": "string"
           }
         }
       },
@@ -31953,6 +32082,42 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "StoresPublished_PermissionsPublishResult": {
+        "type": "object",
+        "description": "What a write that publishes to several stores at once answers: one result per store it reached,\nin the order it reached them.",
+        "required": [
+          "stores"
+        ],
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "How one store's `permissions` publish went, as a write that publishes at once reports it.",
+              "required": [
+                "store_id",
+                "outcome"
+              ],
+              "properties": {
+                "config_version_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outcome": {
+                  "type": "string",
+                  "description": "`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`."
+                },
+                "store_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One result per store."
           }
         }
       },

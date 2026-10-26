@@ -8,6 +8,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
@@ -16,6 +18,7 @@ use pos_proto::ids::TenantId;
 
 use super::PeopleState;
 use super::checks::planned_role_update;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     CreateRoleRequest, PeopleTenantQuery, UpdateRoleRequest, people_entropy_unavailable,
     people_error_response,
@@ -258,7 +261,7 @@ pub(super) fn granted_with_approval(
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
                                       the new role's version"),
         (status = 400, description = "tenant_id is absent or not a ULID; name is blank; a \
                                       permission id is unknown, not PIN-flagged where granted with \
@@ -316,11 +319,7 @@ where
         Ok(version) => {
             record_role_create(&state, &context, &new_role).await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": role_template_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(role_template_id))).into_response(),
                 &version,
             )
         }
@@ -417,7 +416,7 @@ async fn record_role_create<P, R, Cfg, A, C>(
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Archived. An archived role grants nothing, so every store where \
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Archived. An archived role grants nothing, so every store where \
                                       someone holds it is published to at once (ADR-0158 decision \
                                       7): `stores` lists each store with its `outcome`, \
                                       `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or \
