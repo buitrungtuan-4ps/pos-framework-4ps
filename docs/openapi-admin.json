@@ -7422,7 +7422,14 @@
         },
         "responses": {
           "201": {
-            "description": "Scheduled: the compiled `campaigns` node is held until its time, when the scheduler publishes it. The body carries `id`, what a cancel names, and `effective_at_ms`. Audited with the number of campaigns and the instant"
+            "description": "Scheduled: the compiled `campaigns` node is held until its time, when the scheduler publishes it. The body carries `id`, what a cancel names, and `effective_at_ms`. Audited with the number of campaigns and the instant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignsScheduled"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, or effective_at_ms is not in the future",
@@ -7781,7 +7788,14 @@
         },
         "responses": {
           "200": {
-            "description": "Published. The body names the config version and how many connections the store now has"
+            "description": "Published. The body names the config version and how many connections the store now has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationsPublished"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -7970,7 +7984,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`generation`, the store's authoritative lease generation, or `null` if it has never been issued one. Read from the lease itself, not from what the tills were told"
+            "description": "`generation`, the store's authoritative lease generation, or `null` if it has never been issued one. Read from the lease itself, not from what the tills were told",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseRead"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -9389,7 +9410,14 @@
         },
         "responses": {
           "200": {
-            "description": "Published. The body carries the new config version, how many entries went on (retired ones included, so a historic event still resolves), how many staff may pick, and `uncovered_actions` — the acts this list leaves with no reason to cite, which a store cannot then record"
+            "description": "Published. The body carries the new config version, how many entries went on (retired ones included, so a historic event still resolves), how many staff may pick, and `uncovered_actions` — the acts this list leaves with no reason to cite, which a store cannot then record",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonCodesPublished"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -17364,15 +17392,34 @@
         "requestBody": {
           "description": "The bare release executable, not the release archive: the edge installs the bytes it is handed, so the signature has to cover these (ADR-0088). `docs/release-runbook.md` step 5 gives the exact request",
           "content": {
-            "application/octet-stream": {}
-          }
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/Binary"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Already hosted with these exact bytes: the release is unchanged, so a re-run of a release step does not fail. The body is as for 201. Audited"
+            "description": "Already hosted with these exact bytes: the release is unchanged, so a re-run of a release step does not fail. The body is as for 201. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactUploaded"
+                }
+              }
+            }
           },
           "201": {
-            "description": "Hosted: the signature, then the executable, are stored, and only then the release is recorded. The body carries `release`, `arch`, `size_bytes` and `sha256`. Audited"
+            "description": "Hosted: the signature, then the executable, are stored, and only then the release is recorded. The body carries `release`, `arch`, `size_bytes` and `sha256`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactUploaded"
+                }
+              }
+            }
           },
           "400": {
             "description": "release or arch is absent or unusable; the body is empty; or the signature header is absent, not base64, or not a minisign signature. An absent query parameter is refused by the framework, without the error envelope",
@@ -17467,7 +17514,14 @@
         },
         "responses": {
           "200": {
-            "description": "Every signed executable the release publishes is hosted. The body carries `release`, `tag`, the release source's tag it came from, and `artifacts`: for each, `arch`, `size_bytes`, `sha256`, `asset`, and `outcome`, `recorded` or `already_hosted`. Audited"
+            "description": "Every signed executable the release publishes is hosted. The body carries `release`, `tag`, the release source's tag it came from, and `artifacts`: for each, `arch`, `size_bytes`, `sha256`, `asset`, and `outcome`, `recorded` or `already_hosted`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseFetched"
+                }
+              }
+            }
           },
           "400": {
             "description": "release cannot name a hosted release",
@@ -17578,7 +17632,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`release` and `artifacts`: for each target it is hosted for, `arch`, `size_bytes`, `sha256` and `recorded_at_ms`. An empty list means the release is not hosted, and a rollout naming it is refused"
+            "description": "`release` and `artifacts`: for each target it is hosted for, `arch`, `size_bytes`, `sha256` and `recorded_at_ms`. An empty list means the release is not hosted, and a rollout naming it is refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseArtifacts"
+                }
+              }
+            }
           },
           "400": {
             "description": "The release cannot name a hosted release",
@@ -23318,7 +23379,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Erased: every personal field value is masked in place and the erasure time stamped, while the id and `collected_at` remain so the books still reconcile (ADR-0035). Irreversible. Idempotent: erasing a subject already masked changes nothing and still succeeds. The body is `erased` and `already_masked`. Audited"
+            "description": "Erased: every personal field value is masked in place and the erasure time stamped, while the id and `collected_at` remain so the books still reconcile (ADR-0035). Irreversible. Idempotent: erasing a subject already masked changes nothing and still succeeds. The body is `erased` and `already_masked`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectErased"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or subject_id is absent or not a ULID",
@@ -25024,6 +25092,35 @@
         "description": "A `AreaId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "ArtifactUploaded": {
+        "type": "object",
+        "description": "What an artifact upload answers: the artifact it recorded.",
+        "required": [
+          "release",
+          "arch",
+          "size_bytes",
+          "sha256"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string",
+            "description": "The target it runs on."
+          },
+          "release": {
+            "type": "string",
+            "description": "The release it belongs to."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Its SHA-256, as lowercase hex."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its size."
+          }
+        }
+      },
       "Assignment": {
         "allOf": [
           {
@@ -25489,6 +25586,25 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "CampaignsScheduled": {
+        "type": "object",
+        "description": "What scheduling a campaign publish answers: the scheduled publish and when it takes effect.",
+        "required": [
+          "id",
+          "effective_at_ms"
+        ],
+        "properties": {
+          "effective_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it publishes, in Unix milliseconds."
+          },
+          "id": {
+            "type": "string",
+            "description": "The scheduled publish's id, a ULID."
           }
         }
       },
@@ -27923,6 +28039,37 @@
           }
         }
       },
+      "FetchedArtifactResponse": {
+        "type": "object",
+        "description": "One artifact the fetch put in the cloud.",
+        "required": [
+          "arch",
+          "size_bytes",
+          "sha256",
+          "outcome",
+          "asset"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string",
+            "description": "The asset the bytes came from, so the console can say what it took."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`recorded` for a new artifact, `already_hosted` for one the cloud already held with these\nexact bytes — so a re-run reads as a no-op rather than as work."
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "FieldView": {
         "type": "object",
         "description": "One field of a provider's settings schema.",
@@ -28356,6 +28503,32 @@
           }
         }
       },
+      "HostedArtifactResponse": {
+        "type": "object",
+        "description": "One hosted artifact, as the console reads it.",
+        "required": [
+          "arch",
+          "size_bytes",
+          "sha256",
+          "recorded_at_ms"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ImportReport": {
         "type": "object",
         "description": "The dry-run (and post-apply) report: every row's fate plus the totals the UI headlines.",
@@ -28433,6 +28606,25 @@
           },
           "unit": {
             "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure"
+          }
+        }
+      },
+      "IntegrationsPublished": {
+        "type": "object",
+        "description": "What an integrations publish answers: the version it made, and how many connections it carries.",
+        "required": [
+          "config_version_id",
+          "integrations"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The new config version, a ULID."
+          },
+          "integrations": {
+            "type": "integer",
+            "description": "How many connections the store's node now names.",
+            "minimum": 0
           }
         }
       },
@@ -28671,6 +28863,21 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "LeaseRead": {
+        "type": "object",
+        "description": "What the lease read answers: the store's authoritative generation.",
+        "properties": {
+          "generation": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The generation, or `null` when the store was never issued one.",
+            "minimum": 0
           }
         }
       },
@@ -31155,6 +31362,39 @@
           }
         }
       },
+      "ReasonCodesPublished": {
+        "type": "object",
+        "description": "What a reason-code publish answers: the version it made, and what the store now holds.",
+        "required": [
+          "config_version_id",
+          "published",
+          "active",
+          "uncovered_actions"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer",
+            "description": "How many of them are active.",
+            "minimum": 0
+          },
+          "config_version_id": {
+            "type": "string",
+            "description": "The new config version, a ULID."
+          },
+          "published": {
+            "type": "integer",
+            "description": "How many reason codes were published.",
+            "minimum": 0
+          },
+          "uncovered_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The actions no active reason code covers, which nobody can now record."
+          }
+        }
+      },
       "RecipeRequest": {
         "type": "object",
         "description": "The body of a recipe write. The item it makes is the URL key on the `PUT` — a recipe references\nan existing menu item or modifier, so its id is client-owned, unlike an ingredient's\nserver-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's\nown fields.",
@@ -31337,6 +31577,53 @@
           "url": {
             "type": "string",
             "description": "The normalized destination URL that was stored."
+          }
+        }
+      },
+      "ReleaseArtifacts": {
+        "type": "object",
+        "description": "What a release's artifact list answers: the release and each artifact it hosts.",
+        "required": [
+          "release",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostedArtifactResponse"
+            },
+            "description": "Each hosted artifact."
+          },
+          "release": {
+            "type": "string",
+            "description": "The release."
+          }
+        }
+      },
+      "ReleaseFetched": {
+        "type": "object",
+        "description": "What a release fetch answers: the release, the forge's tag for it, and each artifact it hosted.",
+        "required": [
+          "release",
+          "tag",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FetchedArtifactResponse"
+            },
+            "description": "Each artifact the fetch put in the cloud."
+          },
+          "release": {
+            "type": "string",
+            "description": "The release, as the console named it."
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag the forge published it under."
           }
         }
       },
@@ -32847,6 +33134,24 @@
               }
             },
             "description": "One result per store."
+          }
+        }
+      },
+      "SubjectErased": {
+        "type": "object",
+        "description": "What an erasure answers: that it is done, and whether the record was already masked.",
+        "required": [
+          "erased",
+          "already_masked"
+        ],
+        "properties": {
+          "already_masked": {
+            "type": "boolean",
+            "description": "Whether it was masked before this request."
+          },
+          "erased": {
+            "type": "boolean",
+            "description": "Always `true`: the record is masked now."
           }
         }
       },

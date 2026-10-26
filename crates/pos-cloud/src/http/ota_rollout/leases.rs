@@ -25,6 +25,13 @@ use crate::http::{Json, lease_bump};
 use crate::lease::{LeaseBumpOutcome, LeaseStore, lease_node, resolve_region};
 use crate::ota::ArtifactStore;
 
+/// What the lease read answers: the store's authoritative generation.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct LeaseRead {
+    /// The generation, or `null` when the store was never issued one.
+    generation: Option<u64>,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/config/lease/bump",
@@ -238,7 +245,7 @@ async fn receipt_floor<Cfg: LeaseStore>(
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`generation`, the store's authoritative lease generation, or \
+        (status = 200, body = LeaseRead, description = "`generation`, the store's authoritative lease generation, or \
                                       `null` if it has never been issued one. Read from the lease \
                                       itself, not from what the tills were told"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -285,11 +292,34 @@ where
     match state.config_trees.current(tenant_id, store_id).await {
         Ok(current) => (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "generation": current.map(LeaseGeneration::value),
-            })),
+            Json(LeaseRead {
+                generation: current.map(LeaseGeneration::value),
+            }),
         )
             .into_response(),
         Err(error) => lease_store_error_response(&error),
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::LeaseRead;
+
+    #[test]
+    fn the_lease_read_is_its_generation_or_null() {
+        let issued = serde_json::to_value(LeaseRead {
+            generation: Some(3),
+        });
+        assert_eq!(
+            issued.expect("json"),
+            serde_json::json!({ "generation": 3 })
+        );
+        let never = serde_json::to_value(LeaseRead { generation: None });
+        assert_eq!(
+            never.expect("json"),
+            serde_json::json!({ "generation": null })
+        );
     }
 }
