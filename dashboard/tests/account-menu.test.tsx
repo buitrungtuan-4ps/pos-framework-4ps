@@ -153,6 +153,7 @@ describe("the theme switcher", () => {
     expect(document.documentElement.dataset["theme"]).toBe("light");
     expect(screen.getByRole("radio", { name: "Light" }).getAttribute("tabindex")).toBe("0");
     expect(screen.getByRole("radio", { name: "System" }).getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Light" }));
 
     const lightBtn = screen.getByRole("radio", { name: "Light" });
     fireEvent.keyDown(lightBtn, { key: "ArrowLeft" });
