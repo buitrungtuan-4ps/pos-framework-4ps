@@ -25337,6 +25337,27 @@
           }
         }
       },
+      "AuthoredFeeRule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PublishedFee",
+            "description": "The rule's own fields, as the wire carries them."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "item_category_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ItemCategoryId"
+                },
+                "description": "The item categories it names, absent when it names none."
+              }
+            }
+          }
+        ],
+        "description": "A fee rule as its author wrote it: the wire rule's fields, and the item categories it names,\nwhich the store is sent compiled into items. The same bytes as the rule store keeps\n([`crate::fees::authored_json`]), which `authored_rule_tests` holds."
+      },
       "BTreeMap": {
         "type": "object",
         "additionalProperties": {
@@ -27608,7 +27629,7 @@
           "faults": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/StoreFault"
             },
             "description": "Why the store cannot apply it, if it cannot."
           },
@@ -27620,6 +27641,7 @@
             "description": "The rule as the store is sent it, its categories compiled into items."
           },
           "rule": {
+            "$ref": "#/components/schemas/AuthoredFeeRule",
             "description": "The rule as written: the wire rule's fields, and the categories it names."
           },
           "scope": {
@@ -27676,7 +27698,9 @@
           "setting_key": {
             "type": "string"
           },
-          "value": {}
+          "value": {
+            "$ref": "#/components/schemas/SettingValueSchema"
+          }
         }
       },
       "EffectiveSettings": {
@@ -27843,7 +27867,7 @@
             "type": "string"
           },
           "reason": {
-            "type": "string",
+            "$ref": "#/components/schemas/StoreFault",
             "description": "`CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`."
           }
         }
@@ -28025,6 +28049,7 @@
         ],
         "properties": {
           "rule": {
+            "$ref": "#/components/schemas/AuthoredFeeRule",
             "description": "The rule as written: the wire rule's fields, and the categories it names."
           },
           "scope": {
@@ -31319,7 +31344,9 @@
           "tenant_id": {
             "type": "string"
           },
-          "value": {}
+          "value": {
+            "$ref": "#/components/schemas/SettingValueSchema"
+          }
         }
       },
       "QrBusinessHours": {
@@ -32708,7 +32735,9 @@
           "confirm": {
             "$ref": "#/components/schemas/CatalogueConfirm"
           },
-          "default": {},
+          "default": {
+            "$ref": "#/components/schemas/SettingValueSchema"
+          },
           "field": {
             "type": "string"
           },
@@ -32726,7 +32755,9 @@
           "node": {
             "type": "string"
           },
-          "preset": {},
+          "preset": {
+            "$ref": "#/components/schemas/SettingValueSchema"
+          },
           "scopes": {
             "type": "array",
             "items": {
@@ -32787,6 +32818,23 @@
             "type": "string"
           }
         }
+      },
+      "SettingValueSchema": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "A `CHOICE`'s token"
+          },
+          {
+            "type": "integer",
+            "description": "An `INT`'s whole number"
+          },
+          {
+            "type": "boolean",
+            "description": "A `BOOL`"
+          }
+        ],
+        "description": "A setting's value, in the shape its kind gives it"
       },
       "SettingValues": {
         "type": "object",
@@ -32966,6 +33014,14 @@
           }
         }
       },
+      "StoreFault": {
+        "type": "string",
+        "description": "Why a store cannot apply a rule it would be sent. Each one would fail every bill the rule\napplies to, so a store with one is not sent its rules at all.",
+        "enum": [
+          "CURRENCY_MISMATCH",
+          "TAX_RATE_NOT_CONFIGURED"
+        ]
+      },
       "StoreGroup": {
         "type": "object",
         "description": "A cohort of stores an operator publishes to as one.",
@@ -33135,6 +33191,7 @@
             "description": "When it was written. Decides between two store groups that disagree."
           },
           "value": {
+            "$ref": "#/components/schemas/SettingValueSchema",
             "description": "The value, as the node carries it."
           }
         }

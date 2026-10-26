@@ -15,12 +15,14 @@ use axum::routing::{get, post};
 use pos_cloud_api::response::service_unavailable;
 use pos_proto::WireEnum;
 use pos_proto::determinism::ClockSource;
+use pos_proto::fees::PublishedFee;
 use pos_proto::ids::FeeId;
 use serde::Deserialize;
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::catalog::CatalogStore;
+use crate::catalog::ItemCategoryId;
 use crate::config_tree::ConfigTreeStore;
 use crate::fees::{FeeRule, FeeRuleStore, FeeRuleStoreError, FeeScope};
 use crate::registry::RegistryStore;
@@ -143,21 +145,43 @@ struct FeeRuleView {
     /// The tenant, brand or store it was written for.
     scope_id: String,
     /// The rule as written: the wire rule's fields, and the categories it names.
-    rule: serde_json::Value,
+    rule: AuthoredFeeRule,
     update_time: pos_proto::Timestamp,
     /// The console admin who last wrote it, by id.
     updated_by: String,
 }
 
 impl FeeRuleView {
-    pub(in crate::routes) fn of(rule: &FeeRule) -> Option<Self> {
-        Some(Self {
+    pub(in crate::routes) fn of(rule: &FeeRule) -> Self {
+        Self {
             scope: rule.scope.as_wire(),
             scope_id: rule.scope_id.clone(),
-            rule: crate::fees::authored_json(rule).ok()?,
+            rule: AuthoredFeeRule::of(rule),
             update_time: rule.update_time,
             updated_by: rule.updated_by.clone(),
-        })
+        }
+    }
+}
+
+/// A fee rule as its author wrote it: the wire rule's fields, and the item categories it names,
+/// which the store is sent compiled into items. The same bytes as the rule store keeps
+/// ([`crate::fees::authored_json`]), which `authored_rule_tests` holds.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct AuthoredFeeRule {
+    /// The rule's own fields, as the wire carries them.
+    #[serde(flatten)]
+    rule: PublishedFee,
+    /// The item categories it names, absent when it names none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    item_category_ids: Vec<ItemCategoryId>,
+}
+
+impl AuthoredFeeRule {
+    fn of(rule: &FeeRule) -> Self {
+        Self {
+            rule: rule.rule.clone(),
+            item_category_ids: rule.item_category_ids.clone(),
+        }
     }
 }
 
@@ -188,4 +212,30 @@ fn fee_audit_id(fee_id: FeeId, scope: FeeScope, scope_id: &str) -> String {
 fn fee_store_error_response(error: &FeeRuleStoreError) -> Response {
     tracing::error!(%error, "the fee rule store failed");
     service_unavailable("fees")
+}
+
+#[cfg(test)]
+mod authored_rule_tests {
+    //! [`AuthoredFeeRule`] answers the bytes the rule store keeps.
+
+    use super::AuthoredFeeRule;
+    use crate::fees::authored_json;
+    use crate::fees::contract::rule;
+
+    #[test]
+    fn an_authored_rule_is_what_the_store_keeps() {
+        let mut written = rule(
+            crate::fees::FeeScope::Tenant,
+            "01J0000000000000000000000T",
+            pos_proto::ids::FeeId::new(pos_proto::ulid::Ulid::from_u128(1)),
+            "SERVICE",
+        );
+        let without = serde_json::to_value(AuthoredFeeRule::of(&written)).expect("json");
+        assert_eq!(without, authored_json(&written).expect("json"));
+        written.item_category_ids = vec![crate::catalog::ItemCategoryId::new(
+            pos_proto::ulid::Ulid::from_u128(2),
+        )];
+        let with = serde_json::to_value(AuthoredFeeRule::of(&written)).expect("json");
+        assert_eq!(with, authored_json(&written).expect("json"));
+    }
 }
