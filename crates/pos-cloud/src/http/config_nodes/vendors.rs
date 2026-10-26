@@ -21,7 +21,7 @@ use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
 
 /// A `PUT /admin/config/vendors` body: the store and its per-marketplace policies.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishVendorsRequest {
     tenant_id: String,
     store_id: String,
@@ -88,11 +88,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `policies`, one per delivery marketplace: its name, whether the store takes its orders, the store's availability to it, and the preparation time it quotes while the store is busy",
+        content = PublishVendorsRequest, description = "`tenant_id` and `store_id`, then `policies`, one per delivery marketplace: its name, whether the store takes its orders, the store's availability to it, and the preparation time it quotes while the store is busy",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `vendors` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `vendors` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, an availability is not a recognised value, or a value needs \

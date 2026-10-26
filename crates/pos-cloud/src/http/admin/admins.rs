@@ -21,7 +21,7 @@ use crate::http::{CloudApp, Json, enum_refusal, not_found};
     extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "Every console administrator, as an array: `id`, `email`, \
+        (status = 200, body = [pos_cloud_api::auth::admin::AdminUser], description = "Every console administrator, as an array: `id`, `email`, \
                                       `name`, `role` and `status`. Never a password hash or a TOTP \
                                       secret"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -65,7 +65,7 @@ where
 }
 
 /// A request to change an admin's role.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct UpdateAdminRoleRequest {
     /// The new role: `owner`/`admin`/`ops`/`viewer`.
     role: String,
@@ -80,7 +80,7 @@ pub(in crate::http) struct UpdateAdminRoleRequest {
         ("id" = String, Path, description = "The administrator's id"),
     ),
     request_body(
-        description = "`role`: `owner`, `admin`, `ops` or `viewer`",
+        content = UpdateAdminRoleRequest, description = "`role`: `owner`, `admin`, `ops` or `viewer`",
         content_type = "application/json",
     ),
     responses(
@@ -154,7 +154,7 @@ where
 }
 
 /// A request to change an admin's status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct UpdateAdminStatusRequest {
     /// The new status: `active` or `suspended`.
     status: String,
@@ -169,7 +169,7 @@ pub(in crate::http) struct UpdateAdminStatusRequest {
         ("id" = String, Path, description = "The administrator's id"),
     ),
     request_body(
-        description = "`status`: `active` or `suspended`",
+        content = UpdateAdminStatusRequest, description = "`status`: `active` or `suspended`",
         content_type = "application/json",
     ),
     responses(

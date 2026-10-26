@@ -25,7 +25,7 @@ use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 
 /// A store to publish settings to, or every store of the tenant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SettingsStoreRequest {
     pub(super) tenant_id: String,
     #[serde(default)]
@@ -38,7 +38,7 @@ pub(super) struct SettingsStoreRequest {
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to give the new-store values",
+        content = SettingsStoreRequest, description = "The tenant and the store to give the new-store values",
         content_type = "application/json",
     ),
     responses(

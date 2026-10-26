@@ -89,7 +89,7 @@ pub struct AdminLogin {
 /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the
 /// schema and seam store; the role→permission templates (the compile-forced §9-style registry) land
 /// in a later G1 slice and are built on top of these variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AdminRole {
     /// Everything, including managing other admins. There is always at least one active owner.
@@ -130,7 +130,7 @@ impl AdminRole {
 
 /// Whether an admin can sign in. `Suspended` keeps the row and its history but refuses new sessions —
 /// the off-boarding path that does not destroy the audit trail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AdminStatus {
     /// In use — can sign in.
@@ -166,7 +166,7 @@ impl AdminStatus {
 
 /// A console admin as listed — identity and role, never the credential. Safe to serialise to the
 /// console: it carries no password hash and no TOTP secret.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AdminUser {
     /// The admin's ULID id (a string; minted at the HTTP edge).
     pub id: String,
@@ -220,7 +220,7 @@ impl fmt::Debug for NewAdminUser {
 
 /// A pending or accepted invitation, as listed ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 /// Carries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AdminInvite {
     /// The invite's ULID id.
     pub id: String,
@@ -720,7 +720,7 @@ impl AdminStoreError {
 /// [`fmt::Debug`] redacts the password and any recovery code, so a logged request cannot leak either.
 /// The email is not redacted: it is the identity, and it is what the log needs to attribute a failed
 /// attempt.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, utoipa::ToSchema)]
 pub struct LoginRequest {
     /// Who is signing in. Absent resolves to the single admin; see the type's own note.
     #[serde(default)]

@@ -80,11 +80,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
+        content = PublishChannelsRequest, description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `channels` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `channels` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a sales channel, or a value needs \
@@ -202,11 +202,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
+        content = PublishTenderRequest, description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `tender` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `tender` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a payment method, or a value needs \
@@ -324,11 +324,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
+        content = PublishOriginsRequest, description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `origins` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `origins` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, an origin is refused by that rule, or a value needs \

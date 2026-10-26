@@ -23,6 +23,7 @@ use crate::http::{
     Json, enum_refusal, offset_without_limit_refusal, page_bound_refusal, paged_ok, present_param,
 };
 use crate::paging::{Page, PageRequest, PageRequestError};
+use pos_cloud_api::paged::ListOrPage;
 
 // --- Console audit read (`GET /admin/audit`, ADR-0069 slice 4) ----------------------------------
 
@@ -79,7 +80,7 @@ struct AuditReadQuery {
 
 /// One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw
 /// ULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct AuditEntryView {
     id: String,
     tenant_id: Option<String>,
@@ -165,7 +166,7 @@ where
                                                        with `offset`"),
     ),
     responses(
-        (status = 200, description = "Without `offset`, the newest matching entries as an array; \
+        (status = 200, body = ListOrPage<AuditEntryView>, description = "Without `offset`, the newest matching entries as an array; \
                                       with it, a page: `items`, `total`, `limit` and `offset`. Each \
                                       entry has `id`, `tenant_id`, the acting administrator's id, \
                                       email and role, `action`, `entity_type`, `entity_id`, \

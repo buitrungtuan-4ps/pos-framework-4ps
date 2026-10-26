@@ -124,7 +124,7 @@ impl RollupWindowQuery {
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "The store's activity for each trading day in the window, \
+        (status = 200, body = [DailyRollup], description = "The store's activity for each trading day in the window, \
                                       oldest first, as an array: `business_date`, `total_events` \
                                       and `by_type`, the count of each kind of event. Counts only, \
                                       no amounts and no person. Read from the materialised rollup; \
@@ -211,7 +211,7 @@ pub struct AdminRollupWindowQuery {
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`rollups.csv`, as a `text/csv` attachment: the header \
+        (status = 200, body = String, content_type = "text/csv", description = "`rollups.csv`, as a `text/csv` attachment: the header \
                                       `business_date,total_events`, then one row per trading day, \
                                       oldest first. The audit entry records how many rows, never \
                                       what they held"),

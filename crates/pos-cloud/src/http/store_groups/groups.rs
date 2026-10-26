@@ -40,7 +40,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
     extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's store groups, creation order, each with its \
+        (status = 200, body = [StoreGroupView], description = "The tenant's store groups, creation order, each with its \
                                       membership. Archived groups are included: an operator needs to \
                                       see a retired cohort in order to bring it back"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -108,8 +108,9 @@ where
     path = "/admin/store-groups",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.stores.manage"))),
+    request_body(content = CreateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
+        (status = 201, body = Versioned<StoreGroup>, description = "The group, with the ETag to hand back on its first edit. It \
                                       holds no stores yet — membership is a second call, so naming \
                                       a cohort is never itself an act with a fleet-wide reach"),
         (status = 400, description = "tenant_id is absent or not a ULID, or name is empty", body = crate::openapi_admin::ErrorResponse),
@@ -194,8 +195,9 @@ where
         ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
     ),
+    request_body(content = UpdateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The group as it now stands, with its new ETag"),
+        (status = 200, body = Versioned<StoreGroup>, description = "The group as it now stands, with its new ETag"),
         (status = 400, description = "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
@@ -283,6 +285,7 @@ where
         ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
     ),
+    request_body(content = SetStoreGroupMembersRequest, content_type = "application/json"),
     responses(
         (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
                                       when an assignment names the group, how the `permissions` publish went at each open store \

@@ -175,7 +175,17 @@
         "operationId": "admin_list_admins",
         "responses": {
           "200": {
-            "description": "Every console administrator, as an array: `id`, `email`, `name`, `role` and `status`. Never a password hash or a TOTP secret"
+            "description": "Every console administrator, as an array: `id`, `email`, `name`, `role` and `status`. Never a password hash or a TOTP secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUser"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -237,8 +247,13 @@
         "requestBody": {
           "description": "`role`: `owner`, `admin`, `ops` or `viewer`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminRoleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -334,8 +349,13 @@
         "requestBody": {
           "description": "`status`: `active` or `suspended`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminStatusRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -634,7 +654,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's keys, as an array: each with `id`, `store_id` (absent for a tenant-wide key), `scopes`, `revoked` and `expires_at_ms`. Never a token or a secret"
+            "description": "The tenant's keys, as an array: each with `id`, `store_id` (absent for a tenant-wide key), `scopes`, `revoked` and `expires_at_ms`. Never a token or a secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeySummary"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -694,12 +724,24 @@
         "requestBody": {
           "description": "`tenant_id`; `store_id` to bind the key to one store, or absent for a tenant-wide key (a store's own sync credential must name its store); `scopes`, the only things the key may do: `read_rollups`, `read_config`, `manage_devices`, `place_orders`, `relay_orders` or `publish_events`; and `expires_at_ms`, or absent for a key that never expires",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Provisioned. The body carries the key's `id` and its `token`, `pos_<id>_<secret>`. The token is returned exactly once — only a hash of the secret is stored. The audit entry records the scopes and the expiry, never the token"
+            "description": "Provisioned. The body carries the key's `id` and its `token`, `pos_<id>_<secret>`. The token is returned exactly once — only a hash of the secret is stored. The audit entry records the scopes and the expiry, never the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApiKeyResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, a scope is unknown, or expires_at_ms is out of range",
@@ -1222,7 +1264,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Without `offset`, the newest matching entries as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each entry has `id`, `tenant_id`, the acting administrator's id, email and role, `action`, `entity_type`, `entity_id`, `before`, `after`, `request_id` and `at_ms`. An entry about an employee carries the person's staff code only for a role holding console.people.read (ADR-0158 decision 9)"
+            "description": "Without `offset`, the newest matching entries as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each entry has `id`, `tenant_id`, the acting administrator's id, email and role, `action`, `entity_type`, `entity_id`, `before`, `after`, `request_id` and `at_ms`. An entry about an employee carries the person's staff code only for a role holding console.people.read (ADR-0158 decision 9)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOrPage_AuditEntryView"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID; limit or offset is not an integer in range; or order is sent without offset or is not one the route accepts",
@@ -1293,7 +1342,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's brands, as an array: `brand_id`, `tenant_id`, `name` and `status`, each with its `etag`"
+            "description": "The tenant's brands, as an array: `brand_id`, `tenant_id`, `name` and `status`, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_BrandRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -1352,12 +1411,24 @@
         "requestBody": {
           "description": "The `tenant_id` the brand belongs to and its `name`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBrandRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_BrandRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID",
@@ -1438,12 +1509,24 @@
         "requestBody": {
           "description": "The `tenant_id` that owns the brand, and its `name` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBrandRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_BrandRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "brand_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -6727,9 +6810,26 @@
         "summary": "A super-admin names a release, aims it, and times it. Nothing is scheduled yet.",
         "description": "A draft, deliberately: a release across nine nodes and forty stores is assembled over minutes,\nand half-assembled must not fire (ADR-0125 §4). The nodes and the concrete store list arrive at\n`/schedule`, which is also when the snapshot is taken.",
         "operationId": "admin_create_release",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "201": {
-            "description": "The release exists as a draft. It carries no nodes and no pairs yet; `/schedule` adds both"
+            "description": "The release exists as a draft. It carries no nodes and no pairs yet; `/schedule` adds both",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseView"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, the name is empty, or the moment is half-given (a date without a time) or doubly-given (a wall-clock time and an instant)",
@@ -6809,7 +6909,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The release and one row per (node, store) pair, each with its status, its instant, the version it published as, and why it last failed. Snapshotted node values are deliberately not returned"
+            "description": "The release and one row per (node, store) pair, each with its status, its instant, the version it published as, and why it last failed. Snapshotted node values are deliberately not returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID",
@@ -6889,9 +6996,26 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseTenantRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "The still-pending pairs are cancelled and the body is the report. Applied pairs are left alone — they are config versions now"
+            "description": "The still-pending pairs are cancelled and the body is the report. Applied pairs are left alone — they are config versions now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID",
@@ -6981,9 +7105,26 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "The release is scheduled, and the body is its node × store report. Every pair is `PENDING` until its instant arrives"
+            "description": "The release is scheduled, and the body is its node × store report. Every pair is `PENDING` until its instant arrives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, the node is not one of the batchable kinds, or a pair would make its store run a value that needs a recorded confirmation, which it does not run now (the setting key, CONFIRMATION_REQUIRED; confirm it on Settings). Nothing is written",
@@ -7497,12 +7638,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishChannelsRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `channels` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `channels` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, a token is not a sales channel, or a value needs a recorded confirmation first (ADR-0169)",
@@ -8145,12 +8298,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), `cutoff_hour` (0 to 23, where a business day ends), and optionally `display_language`, `prices_include_tax`, `cash_rounding_increment` and `cash_denominations`, both in the currency's minor units (ADR-0074, ADR-0104, ADR-0105, ADR-0114). The node is rebuilt whole",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishLocaleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `locale` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+            "description": "Published as the store's `locale` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, country_code is absent or not a country, a currency, timezone or hour does not parse, or a rounding increment or denomination is not positive, or a value needs a recorded confirmation first (ADR-0169)",
@@ -8310,12 +8475,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishOriginsRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `origins` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `origins` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, an origin is refused by that rule, or a value needs a recorded confirmation first (ADR-0169)",
@@ -8825,12 +9002,24 @@
         "requestBody": {
           "description": "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can compile), and `arguments`, that node's own publish body without the tenant and store. Nothing is written",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewNodeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "What publishing the node would change: `node`; `from_version_id`, the version the diff is against, or `null` for a store never published to; `diff`, the merge patch (RFC 7386) the publish would apply; and `unchanged`. The node is compiled by the publish's own code, so the preview cannot differ from it. The diff never shows a staff PIN hash; shows a name or staff code only to a role holding console.people.read; and shows the priced nodes (`menu`, `campaigns`, `fees`) only to a role holding console.reports.revenue, so Ops, who may publish, is not shown prices. `unchanged` is computed before redaction. Not audited"
+            "description": "What publishing the node would change: `node`; `from_version_id`, the version the diff is against, or `null` for a store never published to; `diff`, the merge patch (RFC 7386) the publish would apply; and `unchanged`. The node is compiled by the publish's own code, so the preview cannot differ from it. The diff never shows a staff PIN hash; shows a name or staff code only to a role holding console.people.read; and shows the priced nodes (`menu`, `campaigns`, `fees`) only to a role holding console.reports.revenue, so Ops, who may publish, is not shown prices. `unchanged` is computed before redaction. Not audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodePreview"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, node is not one the batch publish knows, or the node's own publish would refuse the arguments — with that publish's own words",
@@ -8979,12 +9168,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then the QR guardrails (ADR-0057): optionally `enabled`, `staff_confirmation_required`, `per_table_limit`, `rate_window_secs`, and optionally `business_hours`, an opening and closing hour",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishQrRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `qr` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `qr` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, an hour is out of range, or a value needs a recorded confirmation first (ADR-0169)",
@@ -9234,12 +9435,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `event_log_days`, how many days the store's edge keeps an event once synced, from 30 to 3650 (ADR-0145)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRetentionRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `retention` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `retention` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, event_log_days is out of range, or a value needs a recorded confirmation first (ADR-0169)",
@@ -9500,12 +9713,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then who the store legally is (ADR-0106): `legal_name`, and optionally `trading_name`, `address_lines`, `tax_registration_number` and its `tax_registration_label`, `contact_lines`, `footer_lines`, and `country_code`, whose country module, where this cloud carries it, checks the registration number's shape",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishStoreProfileRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `store_profile` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+            "description": "Published as the store's `store_profile` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, the tax registration number is not the shape the named country issues, or a value needs a recorded confirmation first (ADR-0169)",
@@ -9586,12 +9811,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is compiled into the node",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishTaxRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `tax` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+            "description": "Published as the store's `tax` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, or a value needs a recorded confirmation first (ADR-0169)",
@@ -9750,12 +9987,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishTenderRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `tender` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `tender` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, a token is not a payment method, or a value needs a recorded confirmation first (ADR-0169)",
@@ -9914,12 +10163,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `policies`, one per delivery marketplace: its name, whether the store takes its orders, the store's availability to it, and the preparation time it quotes while the store is busy",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishVendorsRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `vendors` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value"
+            "description": "Published as the store's `vendors` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited with the node's value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, an availability is not a recognised value, or a value needs a recorded confirmation first (ADR-0169)",
@@ -15282,7 +15543,17 @@
         "operationId": "admin_list_invites",
         "responses": {
           "200": {
-            "description": "The invitations not yet accepted and not expired, as an array: each with `id`, `email`, `name`, `role`, `invited_by` and `accepted`. Never the token, which is stored only as a hash"
+            "description": "The invitations not yet accepted and not expired, as an array: each with `id`, `email`, `name`, `role`, `invited_by` and `accepted`. Never the token, which is stored only as a hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminInvite"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -15331,12 +15602,24 @@
         "requestBody": {
           "description": "The invitee's `email`, the address they will sign in with; their `name`; and the `role` they are granted on acceptance: `owner`, `admin`, `ops` or `viewer`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteAdminRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Invited. The body carries `invite_id`, the single-use `token` and `expires_at_ms`. The token is returned exactly once — only its hash is stored — and the inviter hands the link carrying it to the invitee themselves. The audit entry records the role, never the email or the token"
+            "description": "Invited. The body carries `invite_id`, the single-use `token` and `expires_at_ms`. The token is returned exactly once — only its hash is stored — and the inviter hands the link carrying it to the invitee themselves. The audit entry records the role, never the email or the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteAdminResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "role is not one of the four, or email is not an address",
@@ -15407,12 +15690,24 @@
         "requestBody": {
           "description": "The single-use `token` from the invite link and the `password` the invitee chooses, at least 12 characters. No session: the token is the authorisation",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInviteRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Enrolled. The invitation is used up, and the body carries the new administrator's one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again. Sign in with `POST /admin/login`"
+            "description": "Enrolled. The invitation is used up, and the body carries the new administrator's one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again. Sign in with `POST /admin/login`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "400": {
             "description": "The password is shorter than the minimum",
@@ -16195,8 +16490,13 @@
         "requestBody": {
           "description": "Email, password, and the six-digit TOTP code",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -17930,7 +18230,14 @@
         "operationId": "admin_recovery_codes_status",
         "responses": {
           "200": {
-            "description": "How many unused recovery codes remain — never the codes themselves — so a console can prompt a regeneration before the supply runs out"
+            "description": "How many unused recovery codes remain — never the codes themselves — so a console can prompt a regeneration before the supply runs out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesStatus"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -17968,7 +18275,14 @@
         "operationId": "admin_generate_recovery_codes",
         "responses": {
           "200": {
-            "description": "A fresh set of one-time recovery codes, returned exactly once. Only their hashes are stored, and any previous set is replaced"
+            "description": "A fresh set of one-time recovery codes, returned exactly once. Only their hashes are stored, and any previous set is replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -18407,7 +18721,17 @@
         "operationId": "admin_list_sessions",
         "responses": {
           "200": {
-            "description": "The acting administrator's own live sessions, newest first, as an array: each with `id`, an opaque revocation handle (never the session token, and not reversible to it), the `ip` and `user_agent` it was signed in from where known, `created_at_ms`, `expires_at_ms`, and `current` for the session making this request. Any signed-in administrator, whatever their role"
+            "description": "The acting administrator's own live sessions, newest first, as an array: each with `id`, an opaque revocation handle (never the session token, and not reversible to it), the `ip` and `user_agent` it was signed in from where known, `created_at_ms`, `expires_at_ms`, and `current` for the session making this request. Any signed-in administrator, whatever their role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminSessionView"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -18625,8 +18949,13 @@
         "requestBody": {
           "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, the value, and notice_confirmed (default false), true when the person confirmed the notice of a value its catalogue entry's confirm names",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutSettingRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -18948,8 +19277,13 @@
         "requestBody": {
           "description": "The tenant and the store to give the new-store values",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -19025,8 +19359,13 @@
         "requestBody": {
           "description": "The tenant, and optionally one store. Without a store, every store of the tenant is republished",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -19102,12 +19441,24 @@
         "requestBody": {
           "description": "The enrolment token from the server's environment, and the first administrator's chosen email and password",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Enrolled. The body carries the one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again"
+            "description": "Enrolled. The body carries the one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "400": {
             "description": "The password is shorter than the minimum",
@@ -19174,7 +19525,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's store groups, creation order, each with its membership. Archived groups are included: an operator needs to see a retired cohort in order to bring it back"
+            "description": "The tenant's store groups, creation order, each with its membership. Archived groups are included: an operator needs to see a retired cohort in order to bring it back",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoreGroupView"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -19231,9 +19592,26 @@
         "summary": "A super-admin creates an empty store group.",
         "description": "Empty, deliberately: a group that started holding every store would make *creating* one an act\nwith a fleet-wide blast radius, and an operator naming a cohort has not yet said what is in it.",
         "operationId": "admin_create_store_group",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoreGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "201": {
-            "description": "The group, with the ETag to hand back on its first edit. It holds no stores yet — membership is a second call, so naming a cohort is never itself an act with a fleet-wide reach"
+            "description": "The group, with the ETag to hand back on its first edit. It holds no stores yet — membership is a second call, so naming a cohort is never itself an act with a fleet-wide reach",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreGroup"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or name is empty",
@@ -19311,9 +19689,26 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "The group as it now stands, with its new ETag"
+            "description": "The group as it now stands, with its new ETag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreGroup"
+                }
+              }
+            }
           },
           "400": {
             "description": "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived",
@@ -19424,7 +19819,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The group's batches, newest first, each with its per-store outcomes. A member whose last batch was not `applied` is a store that is not running what its group runs"
+            "description": "The group's batches, newest first, each with its per-store outcomes. A member whose last batch was not `applied` is a store that is not running what its group runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BatchReport"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, or limit is out of range",
@@ -19513,7 +19918,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The batch and an outcome for every member it reached"
+            "description": "The batch and an outcome for every member it reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID",
@@ -19602,6 +20014,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetStoreGroupMembersRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "The membership as stored, deduplicated, with the group's new ETag, and `stores`: when an assignment names the group, how the `permissions` publish went at each open store that joined or left it (ADR-0158), and empty otherwise"
@@ -19704,9 +20126,26 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishToStoreGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "The batch ran and every member has an outcome — `applied`, `skipped` or `failed`. A `200` does **not** mean every store succeeded: a batch is deliberately not atomic (ADR-0122 §5), and the per-store report is the answer"
+            "description": "The batch ran and every member has an outcome — `applied`, `skipped` or `failed`. A `200` does **not** mean every store succeeded: a batch is deliberately not atomic (ADR-0122 §5), and the per-store report is the answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, the node is not one of the thirteen batchable kinds, or its arguments are the wrong shape",
@@ -19797,7 +20236,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's stores, as an array: `store_id`, `tenant_id`, `brand_id` (absent for a store under no brand), `name` and `status`, each with its `etag`"
+            "description": "The tenant's stores, as an array: `store_id`, `tenant_id`, `brand_id` (absent for a store under no brand), `name` and `status`, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_StoreRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -19856,12 +20305,24 @@
         "requestBody": {
           "description": "The `tenant_id` the store belongs to, its `name`, and optionally the `brand_id` it trades under. A new store has no configuration until one is published to it",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or brand_id is not a ULID",
@@ -19942,12 +20403,24 @@
         "requestBody": {
           "description": "The `tenant_id` that owns the store, and its `name`, `brand_id` (absent clears it) and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id, tenant_id or brand_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -20226,7 +20699,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The tree's current version id and, per node of the effective document, the version that last published it and when. A node whose version is null is published but by a version that does not record which nodes it wrote"
+            "description": "The tree's current version id and, per node of the effective document, the version that last published it and when. A node whose version is null is published but by a version that does not record which nodes it wrote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigNodesView"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -20326,12 +20806,24 @@
         "requestBody": {
           "description": "`version_id`, the past version to restore",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackConfigRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Restored as a new current version: the history is never rewritten. The body carries `config_version_id`, which the store pulls on its next sync. Audited with both versions"
+            "description": "Restored as a new current version: the history is never rewritten. The body carries `config_version_id`, which the store pulls on its next sync. Audited with both versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is absent or not a ULID; If-Match is absent or malformed; or the restored version runs a value that needs a recorded confirmation first (ADR-0169)",
@@ -20431,7 +20923,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Every configuration version the store has had, newest first, as an array: `version_id`, `at_ms` (read from the id) and `current`. The history only grows: a rollback adds a version"
+            "description": "Every configuration version the store has had, newest first, as an array: `version_id`, `at_ms` (read from the id) and `current`. The history only grows: a rollback adds a version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigVersionView"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -20640,12 +21142,22 @@
         "requestBody": {
           "description": "The whole document for that layer, as JSON. It replaces the layer, every key of it, and the four layers are composed and validated into the store's new configuration (ADR-0033)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published. The body carries `config_version_id`, the new version, which the store pulls on its next sync. Audited with the level and the version, never the document"
+            "description": "Published. The body carries `config_version_id`, the new version, which the store pulls on its next sync. Audited with the level and the version, never the document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID; level is not one of the four; If-Match is absent or malformed; or a value needs a recorded confirmation first (ADR-0169)",
@@ -20745,7 +21257,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's device slots, as an array: `device_id`, `tenant_id`, `store_id`, `name`, `kind` and `status`, each with its `etag`. These are the slots a box is activated or claimed into; their ids are not the ids of the devices a store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)"
+            "description": "The store's device slots, as an array: `device_id`, `tenant_id`, `store_id`, `name`, `kind` and `status`, each with its `etag`. These are the slots a box is activated or claimed into; their ids are not the ids of the devices a store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -20815,12 +21337,24 @@
         "requestBody": {
           "description": "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, `kds` or `tablet`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID",
@@ -21110,12 +21644,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -21432,7 +21978,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The day's report: `kind`, `X` for the current day (interim) or `Z` for a past one (final); `business_date`; `activity`, the day's event counts; `revenue`, its takings and mix; `cash`, its drawers; and `till_names`, each till's name from the store's published devices, which are device names, never a person"
+            "description": "The day's report: `kind`, `X` for the current day (interim) or `Z` for a past one (final); `business_date`; `activity`, the day's event counts; `revenue`, its takings and mix; `cash`, its drawers; and `till_names`, each till's name from the store's published devices, which are device names, never a person",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XzReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -21541,7 +22094,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's takings for each trading day in the window, oldest first, as an array: `business_date`, `currency_code`, `bills`, `gross`, `reductions`, `service_charge`, `tax`, `net`, and the day's product mix, fees by code and tax by component. Amounts are integers in the currency's minor units. No customer or employee identifier"
+            "description": "The store's takings for each trading day in the window, oldest first, as an array: `business_date`, `currency_code`, `bills`, `gross`, `reductions`, `service_charge`, `tax`, `net`, and the day's product mix, fees by code and tax by component. Amounts are integers in the currency's minor units. No customer or employee identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailyRevenue"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21649,7 +22212,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue.csv`, as a `text/csv` attachment: the header `business_date,currency_code,bills,gross,reductions,service_charge,tax,net`, then one row per trading day, oldest first, in the currency's minor units. The audit entry records how many rows, never what they held"
+            "description": "`revenue.csv`, as a `text/csv` attachment: the header `business_date,currency_code,bills,gross,reductions,service_charge,tax,net`, then one row per trading day, oldest first, in the currency's minor units. The audit entry records how many rows, never what they held",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21768,7 +22338,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue-fees.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,fee_code,fee_name,bills,amount,tax`, then one row per trading day per fee code the day's settled bills charged, oldest day first and then by code: the fee's name, the bills that charged it, what it charged and the tax on it, in the store's currency's minor units. A day that charged no fee has no row, and neither has a bill settled by an edge from before fee lines, whose charge is only in `revenue.csv`'s `service_charge`. Only the header for a window with no fees, and for a store whose rollup has not been projected yet"
+            "description": "`revenue-fees.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,fee_code,fee_name,bills,amount,tax`, then one row per trading day per fee code the day's settled bills charged, oldest day first and then by code: the fee's name, the bills that charged it, what it charged and the tax on it, in the store's currency's minor units. A day that charged no fee has no row, and neither has a bill settled by an edge from before fee lines, whose charge is only in `revenue.csv`'s `service_charge`. Only the header for a window with no fees, and for a store whose rollup has not been projected yet",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21887,7 +22464,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue-tax.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,component_name,rate_basis_points,tax`, then one row per trading day per tax component name and rate the day's settled bills recorded, oldest day first and then by name and rate: the tax their tax lines recorded under it, in the store's currency's minor units. A fee's tax is inside its tax line, so it adds no row of its own. Nothing is invented: a bill that recorded no components, settled before its store recorded them or taxed at rates with none, is in `revenue.csv`'s `tax` and in no row here, so a day's rows can sum to less than its tax and no row stands for the difference. Only the header for a window with no components, as for a store whose tax table names none, and for a store whose rollup has not been projected yet"
+            "description": "`revenue-tax.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,component_name,rate_basis_points,tax`, then one row per trading day per tax component name and rate the day's settled bills recorded, oldest day first and then by name and rate: the tax their tax lines recorded under it, in the store's currency's minor units. A fee's tax is inside its tax line, so it adds no row of its own. Nothing is invented: a bill that recorded no components, settled before its store recorded them or taxed at rates with none, is in `revenue.csv`'s `tax` and in no row here, so a day's rows can sum to less than its tax and no row stands for the difference. Only the header for a window with no components, as for a store whose tax table names none, and for a store whose rollup has not been projected yet",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -22005,7 +22589,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's activity for each trading day in the window, oldest first, as an array: `business_date`, `total_events` and `by_type`, the count of each kind of event. Counts only, no amounts and no person. Read from the materialised rollup; a store not yet projected reads back empty"
+            "description": "The store's activity for each trading day in the window, oldest first, as an array: `business_date`, `total_events` and `by_type`, the count of each kind of event. Counts only, no amounts and no person. Read from the materialised rollup; a store not yet projected reads back empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailyRollup"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -22113,7 +22707,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`rollups.csv`, as a `text/csv` attachment: the header `business_date,total_events`, then one row per trading day, oldest first. The audit entry records how many rows, never what they held"
+            "description": "`rollups.csv`, as a `text/csv` attachment: the header `business_date,total_events`, then one row per trading day, oldest first. The audit entry records how many rows, never what they held",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -22547,7 +23148,17 @@
         "operationId": "admin_list_tenants",
         "responses": {
           "200": {
-            "description": "Every tenant, as an array: `tenant_id`, `name` and `status`, each with the `etag` its version is at"
+            "description": "Every tenant, as an array: `tenant_id`, `name` and `status`, each with the `etag` its version is at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_TenantRecord"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -22597,12 +23208,24 @@
         "requestBody": {
           "description": "The tenant's `name`, and optionally `language`, a language tag such as `vi` that the tenant's starting roles are named in. Absent, or one the console's language packs do not carry, names them in English",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. The tenant is given its six starting roles (ADR-0158); if that fails the tenant still stands, with fewer roles"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. The tenant is given its six starting roles (ADR-0158); if that fails the tenant still stands, with fewer roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_TenantRecord"
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -22673,12 +23296,24 @@
         "requestBody": {
           "description": "The `name` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntityRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_TenantRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -22760,12 +23395,24 @@
         "requestBody": {
           "description": "The acting administrator's current password — re-asked so a session-only attacker cannot rotate the second factor and lock the owner out",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReenrolTotpRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Re-enrolled. The new one-time enrolment (QR payload and base32 secret) is returned once; existing sessions stay valid and the next sign-in uses the new authenticator"
+            "description": "Re-enrolled. The new one-time enrolment (QR payload and base32 secret) is returned once; existing sessions stay valid and the next sign-in uses the new authenticator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session, or the password is wrong",
@@ -23613,7 +24260,14 @@
         "operationId": "admin_whoami",
         "responses": {
           "200": {
-            "description": "The acting administrator — id, email, role, status — never a password hash or a TOTP secret. Role gating in a console is a convenience only: the server re-checks every route's required permission regardless"
+            "description": "The acting administrator — id, email, role, status — never a password hash or a TOTP secret. Role gating in a console is a convenience only: the server re-checks every route's required permission regardless",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -23646,6 +24300,24 @@
   },
   "components": {
     "schemas": {
+      "AcceptInviteRequest": {
+        "type": "object",
+        "description": "A self-enrolment request: the single-use invite token and the password the invitee chooses.\n\n[`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The password the invitee is choosing."
+          },
+          "token": {
+            "type": "string",
+            "description": "The single-use invite token from the invite link."
+          }
+        }
+      },
       "AcknowledgeRegionRequest": {
         "type": "object",
         "description": "What a console sends to answer a store's region warning\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\n**The two country codes are the precondition, and they are in the body rather than in an\n`If-Match` header.** ADR-0114's Consequences said `If-Match`; the code does not, and the reason\nis the one [`LeaseStore::settle_handover`] already gives one table over: *the named value is the\nprecondition*, and here it is strictly stronger than any version could be. There is no single\nresource whose `ETag` covers both halves of this comparison — the region lives on `store_lease`\nand the country lives in the config tree, two rows with two independent writers — so an\n`If-Match` would have to name one of them and silently miss changes to the other. Naming both\ncodes catches every move of either, and says in the request exactly what the admin was looking at\nwhen they decided. The departure is written up in the record's delivery note.",
@@ -23670,6 +24342,139 @@
           "tenant_id": {
             "type": "string",
             "description": "The tenant the store belongs to."
+          }
+        }
+      },
+      "AdminInvite": {
+        "type": "object",
+        "description": "A pending or accepted invitation, as listed ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).\nCarries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "invited_by",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Whether the invite has been accepted (its self-enrolment completed)."
+          },
+          "email": {
+            "type": "string",
+            "description": "The address the invitee will sign in with once they accept."
+          },
+          "id": {
+            "type": "string",
+            "description": "The invite's ULID id."
+          },
+          "invited_by": {
+            "type": "string",
+            "description": "The id of the admin who issued the invite."
+          },
+          "name": {
+            "type": "string",
+            "description": "The display name the accepted admin will carry."
+          },
+          "role": {
+            "$ref": "#/components/schemas/AdminRole",
+            "description": "The role the accepted admin will be granted."
+          }
+        }
+      },
+      "AdminRole": {
+        "type": "string",
+        "description": "A console admin's role — the least-privilege tier its session is granted\n([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the\nschema and seam store; the role→permission templates (the compile-forced §9-style registry) land\nin a later G1 slice and are built on top of these variants.",
+        "enum": [
+          "owner",
+          "admin",
+          "ops",
+          "viewer"
+        ]
+      },
+      "AdminSessionView": {
+        "type": "object",
+        "description": "One of the acting admin's live sessions, as the console lists it. `id` is the opaque revocation\nhandle (hex of `SHA-256(token)` — never the token, and not reversible to it); `current` marks the\nsession making this very request, which the console protects from accidental self-revocation.",
+        "required": [
+          "id",
+          "created_at_ms",
+          "expires_at_ms",
+          "current"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the session was minted (Unix ms)."
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether this is the session making the current request."
+          },
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the session currently expires (Unix ms), after any sliding."
+          },
+          "id": {
+            "type": "string",
+            "description": "The opaque handle the console revokes this session by."
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client IP the session was minted for, if it was known."
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client user-agent the session was minted for, if it was known."
+          }
+        }
+      },
+      "AdminStatus": {
+        "type": "string",
+        "description": "Whether an admin can sign in. `Suspended` keeps the row and its history but refuses new sessions —\nthe off-boarding path that does not destroy the audit trail.",
+        "enum": [
+          "active",
+          "suspended"
+        ]
+      },
+      "AdminUser": {
+        "type": "object",
+        "description": "A console admin as listed — identity and role, never the credential. Safe to serialise to the\nconsole: it carries no password hash and no TOTP secret.",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "status"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The login identity. Unique case-insensitively across admins."
+          },
+          "id": {
+            "type": "string",
+            "description": "The admin's ULID id (a string; minted at the HTTP edge)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The display name."
+          },
+          "role": {
+            "$ref": "#/components/schemas/AdminRole",
+            "description": "The role that decides the session's permissions."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AdminStatus",
+            "description": "Whether the admin can sign in."
           }
         }
       },
@@ -23764,6 +24569,47 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ApiKeySummary": {
+        "type": "object",
+        "description": "A key's metadata for a listing — everything but the secret and its hash, which never leave the\nstore. Serialises to the `/admin/api-keys` list response.",
+        "required": [
+          "id",
+          "scopes",
+          "revoked"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the key expires, in milliseconds since the Unix epoch, if ever."
+          },
+          "id": {
+            "type": "string",
+            "description": "The public id (the ULID half of the token)."
+          },
+          "revoked": {
+            "type": "boolean",
+            "description": "Whether the key has been revoked."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The granted scopes, as their wire names, sorted."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store this key is bound to, or `None` for a tenant-wide key (S1)."
           }
         }
       },
@@ -23952,6 +24798,61 @@
         ],
         "description": "Where an assignment grants its role: `scope_kind`, with `store_id` for one store, `store_group_id` for a group, and neither for every store of the tenant"
       },
+      "AuditEntryView": {
+        "type": "object",
+        "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+        "required": [
+          "id",
+          "actor_admin_id",
+          "actor_email",
+          "actor_role",
+          "action",
+          "entity_type",
+          "entity_id",
+          "at_ms"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_admin_id": {
+            "type": "string"
+          },
+          "actor_email": {
+            "type": "string"
+          },
+          "actor_role": {
+            "type": "string"
+          },
+          "after": {},
+          "at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "before": {},
+          "entity_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "BTreeMap": {
         "type": "object",
         "additionalProperties": {
@@ -23974,6 +24875,103 @@
         },
         "propertyNames": {
           "type": "string"
+        }
+      },
+      "BatchReport": {
+        "type": "object",
+        "description": "A batch and what it did at every member — the response body, and the read routes' shape.",
+        "required": [
+          "batch_id",
+          "group_id",
+          "node",
+          "arguments",
+          "actor_email",
+          "started_at_ms",
+          "applied",
+          "skipped",
+          "failed",
+          "results"
+        ],
+        "properties": {
+          "actor_email": {
+            "type": "string"
+          },
+          "applied": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "arguments": {},
+          "batch_id": {
+            "type": "string"
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "finished_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for."
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchResultView"
+            }
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "BatchResultView": {
+        "type": "object",
+        "description": "What a batch did at one store.",
+        "required": [
+          "store_id",
+          "outcome",
+          "at_ms"
+        ],
+        "properties": {
+          "at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "config_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The config version the publish produced, for `applied`."
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the\nwrite left something behind: a menu whose store's fees did not go with it says so, with the\nfee publish's outcome and reason tokens."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6."
+          },
+          "store_id": {
+            "type": "string"
+          }
         }
       },
       "Binary": {
@@ -24001,6 +24999,38 @@
           },
           "user_code": {
             "type": "string"
+          }
+        }
+      },
+      "BrandId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "A brand's public identifier — a ULID minted at creation. The other three entities already have id\ntypes in [`pos_proto::ids`]; a brand is new here, so its id is defined alongside the seam."
+      },
+      "BrandRecord": {
+        "type": "object",
+        "description": "A brand — grouped under a tenant.",
+        "required": [
+          "brand_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "$ref": "#/components/schemas/BrandId",
+            "description": "The brand id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -24143,6 +25173,64 @@
           },
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "CashTotals": {
+        "type": "object",
+        "description": "A day's cash figures for one drawer (part of [`DailyCash`]), the same as the store's.\n\nThe store's stay inline on [`DailyCash`] rather than in one of these under\n`#[serde(flatten)]`, which would keep the wire as it is and does not pass the lints: the\nflatten buffer carries `f32` and `f64`, which `clippy.toml` bans (money is never a float).",
+        "required": [
+          "opening_float",
+          "paid_in",
+          "paid_out",
+          "shifts_opened",
+          "shifts_closed",
+          "expected",
+          "counted",
+          "variance"
+        ],
+        "properties": {
+          "counted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of counted amounts across closes (the blind counts)."
+          },
+          "expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of expected drawer amounts across closes. Only a close carries one: the edge works out\nwhat a drawer should hold at its close, so a shift still open adds nothing here."
+          },
+          "opening_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of opening floats across shifts opened on the day."
+          },
+          "paid_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-in movements."
+          },
+          "paid_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-out movements."
+          },
+          "shifts_closed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts closed on the day.",
+            "minimum": 0
+          },
+          "shifts_opened": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts opened on the day.",
+            "minimum": 0
+          },
+          "variance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of variance (counted − expected) across closes; negative is short."
           }
         }
       },
@@ -24314,6 +25402,55 @@
           }
         }
       },
+      "ConfigNodeView": {
+        "type": "object",
+        "description": "One node of a store's published configuration, as the console lists it (finding **F6**).\n\nThe console's question has always been per node — \"is the menu this store is running the menu I\nlast edited?\" — and until now the only answer available was per tree: one version id covering\nthirteen nodes, so publishing a tax change made the menu look freshly published too. Every\nversion now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.",
+        "required": [
+          "node"
+        ],
+        "properties": {
+          "at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When that version was published (from its ULID's own timestamp, Unix ms), or `null` with it."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node key — `locale`, `tax`, `menu`, `permissions`, and so on."
+          },
+          "version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version that last published this node, or `null` when no recorded version names it.\n\n`null` is *not* \"never published\": the node is in the effective document, so it was. It means\nthe version that put it there predates this field, or was a whole-layer replace that named\nnothing. The console says \"published, when is not recorded\" rather than inventing a date."
+          }
+        }
+      },
+      "ConfigNodesView": {
+        "type": "object",
+        "description": "The per-node publish state of one store's configuration.\n\n`current_version_id` is the tree's newest version, which is what a store *should* be holding. The\nversion it *is* holding is on the fleet read (`GET /admin/fleet/stores/{id}`), which every screen\nthat asks this question has already loaded — so it is not repeated here, and the comparison\nhappens where both numbers already are.",
+        "required": [
+          "nodes"
+        ],
+        "properties": {
+          "current_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigNodeView"
+            }
+          }
+        }
+      },
       "ConfigPreview": {
         "type": "object",
         "description": "What publishing a candidate node *would* change, computed without minting a version or saving:\nthe RFC 7386 merge patch from the store's current effective document to the candidate, so the\nconsole can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).",
@@ -24335,6 +25472,27 @@
           "unchanged": {
             "type": "boolean",
             "description": "True when `diff` is empty — nothing would change, so there is nothing to publish."
+          }
+        }
+      },
+      "ConfigVersionView": {
+        "type": "object",
+        "description": "One published config version as the console lists it: the version id, when it was published (from\nthe ULID's own timestamp, Unix ms), and whether it is the store's current version.",
+        "required": [
+          "version_id",
+          "at_ms",
+          "current"
+        ],
+        "properties": {
+          "at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "version_id": {
+            "type": "string"
           }
         }
       },
@@ -24545,6 +25703,60 @@
         "description": "A `CourseId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "description": "A super-admin request to provision a new API key for a tenant.",
+        "required": [
+          "tenant_id",
+          "scopes"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The one store the key will act for (a ULID), or absent for a tenant-wide key.\n\nA store's own credential — the key its edge presents on `/sync/stores/{store_id}/…` — must\nname its store here: those routes serve one store's configuration, including its employee\nroster and PIN hashes, and refuse a key that is not bound to the store in the path (S1). A\ntenant-wide key stays right for an integration reading a whole tenant's rollups."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the key will act for (a 26-character ULID)."
+          }
+        }
+      },
+      "CreateApiKeyResponse": {
+        "type": "object",
+        "description": "The one-time response to a provisioning request: the id, and the token shown exactly once.",
+        "required": [
+          "id",
+          "token"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The key's public id (the ULID half of the token)."
+          },
+          "token": {
+            "type": "string",
+            "description": "The full `pos_<id>_<secret>` token. **Shown once** — only its hash is stored, so it cannot be\nrecovered later."
+          }
+        }
+      },
       "CreateAreaRequest": {
         "type": "object",
         "description": "Create a floor area.",
@@ -24606,6 +25818,21 @@
           }
         }
       },
+      "CreateBrandRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateCourseRequest": {
         "type": "object",
         "description": "Create a course — a named point in the service sequence (ADR-0130).",
@@ -24621,6 +25848,25 @@
             "type": "integer",
             "format": "int32",
             "description": "Where it falls in the sequence, ascending. Absent is `0`, which puts a first course first\nand leaves the id to break the tie with any other unpositioned one."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateDeviceRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           },
           "tenant_id": {
             "type": "string"
@@ -24964,6 +26210,50 @@
           }
         }
       },
+      "CreateReleaseRequest": {
+        "type": "object",
+        "description": "A `POST /admin/config-releases` body: the name, the cohort, and the moment. No nodes — those arrive at\nschedule time, with the store list, because both are snapshotted then (ADR-0125 §3).",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "instant_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "A single instant instead, for a release timed in UTC. The escape hatch for a store being set\nup: it needs no published `locale` and is always available."
+          },
+          "name": {
+            "type": "string"
+          },
+          "target_group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cohort this release is aimed at, recorded for the report. Optional: a release may name\nits stores explicitly at schedule time instead."
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "wall_clock_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's local date and time — \"Monday 04:00, local\". Converted to one instant per\nstore at schedule time (ADR-0125 §2)."
+          },
+          "wall_clock_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "CreateRoleRequest": {
         "type": "object",
         "description": "Create a role template — a named subset of the `pos-core` permission catalogue (§9).",
@@ -25084,6 +26374,43 @@
           }
         }
       },
+      "CreateStoreGroupRequest": {
+        "type": "object",
+        "description": "A `POST /admin/store-groups` body. The id is server-minted.",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateStoreRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "brand_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateTableRequest": {
         "type": "object",
         "description": "Create a floor table.",
@@ -25144,6 +26471,24 @@
           }
         }
       },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language the tenant's starting roles are named in, a language tag such as `vi`. The\nconsole sends the one it is shown in. Absent, or one the console's language packs do not\ncarry, names them in English. Nothing about the tenant records it."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateTerminalRequest": {
         "type": "object",
         "description": "An operator names a POS terminal that exists because somebody carried it into the shop.",
@@ -25189,6 +26534,205 @@
         "type": "string",
         "description": "An ISO 4217 currency code: three upper-case letters",
         "pattern": "^[A-Z]{3}$"
+      },
+      "DailyCash": {
+        "type": "object",
+        "description": "A day's **cash-drawer** summary for one store, folded from the shift and drawer events\n([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4). Amounts are the store's\nsingle currency's minor units. Part of an X/Z report; T2 (it exposes money).",
+        "required": [
+          "business_date",
+          "currency_code",
+          "opening_float",
+          "paid_in",
+          "paid_out",
+          "shifts_opened",
+          "shifts_closed",
+          "expected",
+          "counted",
+          "variance"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "by_drawer": {
+            "type": "object",
+            "description": "The same figures for each drawer, keyed by the till's `terminal_device_id`, or by\n[`STORE_DRAWER`] for the store's one drawer\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).\nEach drawer's are the sums of its own events, which are the events the store's figures sum,\nso the drawers add up to the store.\n\n`#[serde(default)]`, so a day stored before this field loads with no drawers and gains them\nfrom the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay\nlever) folds every cash event on the log into it.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CashTotals"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "counted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of counted amounts across closes (the blind counts)."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 code, or empty until a cash event on the day sets it."
+          },
+          "expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of expected drawer amounts across closes."
+          },
+          "opening_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of opening floats across shifts opened on the day."
+          },
+          "paid_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-in movements."
+          },
+          "paid_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-out movements."
+          },
+          "shifts_closed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts closed on the day.",
+            "minimum": 0
+          },
+          "shifts_opened": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts opened on the day.",
+            "minimum": 0
+          },
+          "variance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of variance (counted − expected) across closes; negative is short."
+          }
+        }
+      },
+      "DailyRevenue": {
+        "type": "object",
+        "description": "A day's **revenue** for one store, folded from the settlement and line events\n([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4).\n\nRevenue is recognised from `billing.bill.settled` (the settled totals); the product mix is the\n**gross ordered** mix from `sales.order_line.added` — units and value as ordered, **before** voids\nand comps are netted (which the line events do not carry back to a menu item), so it reads menu\npopularity, not per-item recognised revenue. All amounts are the store's single currency's minor\nunits (`docs/pos-spec.md` §19). Prices are **T2**: this rollup, and every route that serves it, is\ngated behind `console.reports.revenue`. It carries no customer or employee identifier.",
+        "required": [
+          "business_date",
+          "currency_code",
+          "bills",
+          "gross",
+          "reductions",
+          "service_charge",
+          "tax",
+          "net",
+          "by_item"
+        ],
+        "properties": {
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled bills on the day.",
+            "minimum": 0
+          },
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "by_fee": {
+            "type": "object",
+            "description": "The fees the day's settled bills charged, keyed by the fee's `code` and ordered by it\n([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).\n\nFolded from each `billing.bill.settled`'s `fee_lines`, whose amounts sum to that bill's\n`service_charge`. So on a day whose every bill recorded its fee lines, these amounts sum to\n[`service_charge`](Self::service_charge). A bill settled by an edge from before fee lines\nrecords none, and adds to `service_charge` alone. There is no entry for that difference: a\nbucket for it would read as a fee nobody wrote, so the gap is left as the gap between the\ntwo figures.\n\nBounded by the store's fee rules, not by its trade: one entry per code a rule charged that\nday, and the cloud refuses a second active fee under a code a store already runs\n(`pos_cloud::fees::shares_code_with`).\n\n`#[serde(default)]`, so a day stored before this field loads with no fees and gains them\nfrom the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay\nlever) folds every settled bill on the log into it.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FeeTotal"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "by_item": {
+            "type": "object",
+            "description": "Gross ordered mix, keyed by `menu_item_id`, ordered by key for determinism.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ItemMix"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "by_tax_component": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaxComponentTotal"
+            },
+            "description": "The tax the day's settled bills recorded by tax component, one entry per component name and\nrate, in order of name and then rate\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5).\n\nFolded from each `billing.bill.settled`'s tax lines' `components` alone, never from its fee\nlines' `tax_components`, because a fee's tax is already inside the tax lines as its share of\nits class's tax, and folding both would count it twice.\n\nSo on a day whose every bill recorded its components, these sum to [`tax`](Self::tax). A\nbill that recorded none adds to `tax` alone: one settled before its edge recorded them, one\ntaxed at rates with no components, as every Vietnamese and Japanese bill is, and one whose\nnames are not tokens, which reads as not split. There is no entry for that difference: a\nbucket for it would read as a component no bill named, so the gap is left as the gap between\nthe two figures, as it is for [`by_fee`](Self::by_fee).\n\nBounded by the tenant's tax table, not by the store's trade: one entry per component name and\nrate a row of the table in force named that day.\n\nLeft out when empty, so a day with none serialises byte for byte as before this field, and\n`#[serde(default)]`, so a day stored before it loads with none and gains them from the\nrollup's cursor forward. Resetting the rollup re-folds every settled bill on the log into it."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 code of the store's currency, or empty until the first settled bill sets it."
+          },
+          "gross": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of settled subtotals (before reductions), minor units."
+          },
+          "net": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of `total_due` — what guests owed — minor units. The headline \"revenue\" figure."
+          },
+          "reductions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of reductions (discounts + comps), minor units."
+          },
+          "service_charge": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of service charge, minor units."
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of tax, minor units."
+          }
+        }
+      },
+      "DailyRollup": {
+        "type": "object",
+        "description": "A day's activity for one store, derived from the event log.\n\nThe cloud's dashboards answer from rollups rather than by scanning the raw log\n(`docs/roadmap.md` P7). This first rollup counts events per store trading day and per event\ntype — enough for an activity dashboard, and it uses only envelope fields (`business_date`,\n`event_type`), so it needs no per-event-type decoding. Money- and order-shaped rollups, and the\nmaterialised tables that make the <10 ms dashboard query real, land with the dashboard slice.",
+        "required": [
+          "business_date",
+          "total_events",
+          "by_type"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD` ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md))."
+          },
+          "by_type": {
+            "type": "object",
+            "description": "Per-event-type counts, ordered by type so the output is deterministic.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every event recorded on that day.",
+            "minimum": 0
+          }
+        }
+      },
+      "DeviceId": {
+        "type": "string",
+        "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "DeviceProposalSummary": {
         "type": "object",
@@ -25299,6 +26843,44 @@
           "version": {
             "type": "string",
             "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
+          }
+        }
+      },
+      "DeviceRecord": {
+        "type": "object",
+        "description": "A device — the canonical device identity, grouped under a store. Shares its `device_id` with\n`device_proposals` / `device_credentials`.",
+        "required": [
+          "device_id",
+          "tenant_id",
+          "store_id",
+          "name",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "The device id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`pos`, `printer`, `kds`, `tablet`, `unknown`, …"
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The owning store."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -25418,6 +27000,24 @@
       "EmployeeId": {
         "$ref": "#/components/schemas/Ulid",
         "description": "An employee's identifier — a ULID minted at creation. Defined here beside the seam, like\n[`BrandId`](crate::registry::BrandId): an employee is a cloud-only concept, so it needs no\n`pos-proto` id type."
+      },
+      "Enrolment": {
+        "type": "object",
+        "description": "The TOTP enrolment returned once on a successful first-boot: the `otpauth://` URI an authenticator\napp imports (as a QR or by paste) and the raw base32 secret for manual entry.\n\nBoth fields carry the shared secret, so [`fmt::Debug`] redacts them — the value reaches the\noperator through the HTTP response body, never a log.",
+        "required": [
+          "otpauth_uri",
+          "secret_base32"
+        ],
+        "properties": {
+          "otpauth_uri": {
+            "type": "string",
+            "description": "The `otpauth://totp/…` provisioning URI (SHA1, 6 digits, 30-second period)."
+          },
+          "secret_base32": {
+            "type": "string",
+            "description": "The base32-encoded shared secret, for an authenticator that takes a typed key."
+          }
+        }
       },
       "EntityStatus": {
         "type": "string",
@@ -25658,6 +27258,38 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "FeeTotal": {
+        "type": "object",
+        "description": "One fee's total on a trading day, under its code (part of [`DailyRevenue`]).",
+        "required": [
+          "name",
+          "bills",
+          "amount",
+          "tax"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of what the fee charged, minor units."
+          },
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled bills that charged the fee.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The most recent name a settled bill recorded for the fee, for a human-readable report."
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the tax on it, minor units."
           }
         }
       },
@@ -26126,6 +27758,53 @@
           }
         }
       },
+      "InviteAdminRequest": {
+        "type": "object",
+        "description": "A request to invite a new console admin.",
+        "required": [
+          "email",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The invitee's email — the address they will sign in with (normalised server-side)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The invitee's display name."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role to grant on acceptance: `owner`/`admin`/`ops`/`viewer`."
+          }
+        }
+      },
+      "InviteAdminResponse": {
+        "type": "object",
+        "description": "The one-time response to an invitation: the id, the single-use token (shown once) the inviter\ncopies into the invite link, and the expiry. Only the token's hash is stored.",
+        "required": [
+          "invite_id",
+          "token",
+          "expires_at_ms"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the invite stops being acceptable (Unix milliseconds)."
+          },
+          "invite_id": {
+            "type": "string",
+            "description": "The invite's id (a ULID)."
+          },
+          "token": {
+            "type": "string",
+            "description": "The single-use invite token. **Shown once** — only its hash is stored, so it cannot be\nrecovered later; the inviter hands the link carrying it to the invitee out-of-band."
+          }
+        }
+      },
       "IssueActivationRequest": {
         "type": "object",
         "description": "A super-admin issues an activation code for a device slot.",
@@ -26193,6 +27872,31 @@
       "ItemCategoryId": {
         "type": "string",
         "description": "An item category's identifier — a ULID minted at creation. The operational taxonomy is a\ncloud-authoring concept (reporting/tax-default/kitchen grouping); like [`MenuId`], its id is\ndefined beside the seam rather than in [`pos_proto::ids`]."
+      },
+      "ItemMix": {
+        "type": "object",
+        "description": "One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).",
+        "required": [
+          "name",
+          "ordered_qty_milli",
+          "ordered_value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The most recent display name seen for the item, for a human-readable report."
+          },
+          "ordered_qty_milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of ordered quantity, in thousandths of a unit (`Quantity::milli`)."
+          },
+          "ordered_value": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of ordered line totals, minor units — gross, before voids/comps."
+          }
+        }
       },
       "ItemSubcategory": {
         "type": "object",
@@ -26291,6 +27995,74 @@
             "description": "The owning tenant."
           }
         }
+      },
+      "ListOrPage_AuditEntryView": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+              "required": [
+                "id",
+                "actor_admin_id",
+                "actor_email",
+                "actor_role",
+                "action",
+                "entity_type",
+                "entity_id",
+                "at_ms"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor_admin_id": {
+                  "type": "string"
+                },
+                "actor_email": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "after": {},
+                "at_ms": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "before": {},
+                "entity_id": {
+                  "type": "string"
+                },
+                "entity_type": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tenant_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "The whole set, when the caller named no `limit`."
+          },
+          {
+            "$ref": "#/components/schemas/PagedBody_AuditEntryView",
+            "description": "One page, when it did."
+          }
+        ],
+        "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
       },
       "ListOrPage_MediaSummaryView": {
         "oneOf": [
@@ -26533,6 +28305,37 @@
           }
         ],
         "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "An admin sign-in request: who is signing in, their password, and the current TOTP code.\n\n`email` is **optional**, and that is the one load-bearing choice in\n[ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md). Migration 0018 gave the\nonly admin every existing installation has a synthetic, non-routable address\n([`IMPLICIT_OWNER_EMAIL`]) that nobody has seen and no route can change, so requiring the field\nwould lock out every installation on the day this deployed. Absent, it resolves to the single\nadmin when there is exactly one — which is every installation today — and is refused once there\nare two, which is exactly when guessing would start being wrong.\n\n[`fmt::Debug`] redacts the password and any recovery code, so a logged request cannot leak either.\nThe email is not redacted: it is the identity, and it is what the log needs to attribute a failed\nattempt.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is signing in. Absent resolves to the single admin; see the type's own note."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin's password."
+          },
+          "recovery_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A one-time recovery code, used in place of the TOTP second factor when the authenticator is\nlost ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Absent for an\nordinary password + TOTP sign-in."
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "The current 6-digit TOTP code. Ignored when a `recovery_code` is present."
+          }
+        }
       },
       "MediaId": {
         "type": "string",
@@ -26809,6 +28612,35 @@
         },
         "additionalProperties": false
       },
+      "NodePreview": {
+        "type": "object",
+        "description": "What a preview answers with: the node it compiled, and the diff a publish of it would apply.",
+        "required": [
+          "node",
+          "diff",
+          "unchanged"
+        ],
+        "properties": {
+          "diff": {
+            "description": "The RFC 7386 merge patch the publish would apply to the store's effective document, with its\nstaff and prices redacted for the caller's role ([`admin_preview_config_node`])."
+          },
+          "from_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version the diff is computed against, or `null` when the store has no tree yet."
+          },
+          "node": {
+            "type": "string",
+            "description": "Echoed back so a console that fired several previews can tell the answers apart."
+          },
+          "unchanged": {
+            "type": "boolean",
+            "description": "True when nothing would change — there is nothing to publish."
+          }
+        }
+      },
       "OpenFeeItems_FeeItems": {
         "type": "string",
         "description": "A `FeeItems` token: FEE_ITEMS_UNSPECIFIED, FEE_ITEMS_ALL, FEE_ITEMS_INCLUDE, FEE_ITEMS_EXCLUDE, or one a newer build sent, which is kept as it arrived"
@@ -26832,6 +28664,95 @@
       "OpenUnitOfMeasure_UnitOfMeasure": {
         "type": "string",
         "description": "A `UnitOfMeasure` token: UNIT_OF_MEASURE_UNSPECIFIED, UNIT_OF_MEASURE_GRAM, UNIT_OF_MEASURE_KILOGRAM, UNIT_OF_MEASURE_MILLILITER, UNIT_OF_MEASURE_LITER, UNIT_OF_MEASURE_PIECE, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenVendorAvailability_VendorAvailability": {
+        "type": "string",
+        "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
+      },
+      "PagedBody_AuditEntryView": {
+        "type": "object",
+        "description": "A page on the wire: the rows, the size of the whole set, and the bounds that produced them.\n\nThe bounds are echoed because a pager needs them to render \"1–25 of 812\" and to build the next\nrequest, and because the alternative — the client tracking what it sent — breaks the moment a\nlink is shared or a page is reloaded.",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+              "required": [
+                "id",
+                "actor_admin_id",
+                "actor_email",
+                "actor_role",
+                "action",
+                "entity_type",
+                "entity_id",
+                "at_ms"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor_admin_id": {
+                  "type": "string"
+                },
+                "actor_email": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "after": {},
+                "at_ms": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "before": {},
+                "entity_id": {
+                  "type": "string"
+                },
+                "entity_type": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tenant_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "PagedBody_MediaSummaryView": {
         "type": "object",
@@ -27087,6 +29008,30 @@
           }
         }
       },
+      "PreviewNodeRequest": {
+        "type": "object",
+        "description": "A `POST /admin/config/preview` body — the same `(node, arguments)` pair a batch publish takes,\naimed at one store instead of a cohort.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "node"
+        ],
+        "properties": {
+          "arguments": {
+            "description": "That node's own arguments: the single-store publish body minus the `(tenant, store)`.\nNodes compiled from tenant-wide authoring take none, and an object is accepted and ignored."
+          },
+          "node": {
+            "type": "string",
+            "description": "Which node to compile — one of the thirteen the registry knows."
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "ProviderView": {
         "type": "object",
         "description": "One provider, with the schema the console draws its form from.",
@@ -27169,6 +29114,28 @@
               "type": "boolean"
             },
             "propertyNames": {
+              "type": "string"
+            }
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishChannelsRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/channels` body: the `(tenant, store)` and the enabled sales-channel tokens.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "array",
+            "items": {
               "type": "string"
             }
           },
@@ -27264,6 +29231,67 @@
           }
         }
       },
+      "PublishLocaleRequest": {
+        "type": "object",
+        "description": "A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA\ntimezone, and business-date cutoff hour. These drive money display and business-date derivation on\nthe edge (ADR-0014); until M4 they were hardcoded to VND/UTC/04:00 in the edge bootstrap.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "currency_code",
+          "timezone",
+          "cutoff_hour"
+        ],
+        "properties": {
+          "cash_denominations": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The notes the till offers as quick-cash keys, in minor units. Absent or empty means the exact\namount only, which is the honest answer rather than a guess."
+          },
+          "cash_rounding_increment": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What the grand total is rounded to in cash, in minor units — `1000` for Vietnam's thousand\nđồng, `100` for India's rupee, absent for Japan\n([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md))."
+          },
+          "country_code": {
+            "type": "string",
+            "description": "Which country this store is in, as an ISO 3166-1 alpha-2 code\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\n**Required, and that is a deliberate break** from the shape this route had before. It sits\nbeside `currency_code` and `timezone` because [D21](../../../docs/roadmap-v3.md) puts all\nthree in the same place — attributes of a *store* — and this node already carried the other\ntwo. It was simply missing.\n\nRequired rather than optional because a publish rebuilds this node wholesale, so an optional\nfield has only two possible meanings and both are wrong. \"Absent clears it\" makes an edit to\nthe cutoff hour erase where a store's data rests, silently. \"Absent keeps it\" makes this\nfield behave unlike `display_language` one line down, which *does* clear when omitted — a\ntrap for the next reader of this struct. Required leaves no absent case at all: a caller\nthat does not send one is refused by name, loudly, and fixes one line.\n\n`#[serde(default)]` and *not* a bare required field, deliberately. A missing field makes\naxum's `Json` extractor answer `422` with its own plain body, which is off the\n[AIP-193](../../../docs/naming-and-api.md) envelope the whole `/admin` surface was moved\nonto. Defaulting to the empty string routes \"absent\" through the same check as \"malformed\",\nso both answer one `400` naming `country_code` and saying what it accepts."
+          },
+          "currency_code": {
+            "type": "string"
+          },
+          "cutoff_hour": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "display_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store's display language (a locale code, e.g. `\"vi\"`), which selects a compiled item's\nper-locale name at the edge (ADR-0074). Optional; when absent or blank the store shows each\nitem's default name, exactly as before."
+          },
+          "prices_include_tax": {
+            "type": "boolean",
+            "description": "Whether this store's menu prices already contain their tax\n([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)): Japan's 税込 and\nIndia's MRP are `true`, Vietnam's `++` is `false`. Defaults to `false`, which is what every\nstore did before the field existed."
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
       "PublishMenuRequest": {
         "type": "object",
         "description": "A super-admin selects the (tenant, store, menu) to compile and publish.",
@@ -27287,6 +29315,28 @@
           }
         }
       },
+      "PublishOriginsRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/origins` body: the `(tenant, store)` and the origins that store's edge\nanswers beside the one that served the request\n([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).\n\nThe serving origin is never listed here and never needs to be: the edge compares it against the\nrequest's own `Host`, so a store that publishes nothing keeps serving its own UI.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublishPermissionsRequest": {
         "type": "object",
         "description": "A super-admin selects the (tenant, store) whose `permissions` node to compile and publish.",
@@ -27303,6 +29353,55 @@
           }
         }
       },
+      "PublishQrRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/qr` body: the store and the QR guardrail settings (P11b/ADR-0057). Composed\ninto the `qr` node the cloud's QR intake reads (`qr_http::qr_config_for`) and the edge reads for its\nstaff-confirmation decision.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "staff_confirmation_required",
+          "per_table_limit",
+          "rate_window_secs"
+        ],
+        "properties": {
+          "business_hours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QrBusinessHoursRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "QR ordering's switch, as [`QrGuardrailFields::enabled`] takes it: optional, and written as\nthe switch when sent."
+          },
+          "per_table_limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "rate_window_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "staff_confirmation_required": {
+            "type": "boolean"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublishReasonCodesRequest": {
         "type": "object",
         "description": "A `PUT /admin/config/reason-codes` body: the `(tenant, store)` to push the tenant's authored list\nto. Like every other node publish, the entries come from what is authored, not from the body.",
@@ -27311,6 +29410,171 @@
           "store_id"
         ],
         "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishRetentionRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event\n(ADR-0145).",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "event_log_days"
+        ],
+        "properties": {
+          "event_log_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishStoreProfileRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/store-profile` body: the `(tenant, store)` and who that store legally is.\n\nEvery field is text the operator supplies. A registered address is written differently in every\ncountry, so the framework imposes no shape on it; the one field with a checkable shape is the tax\nregistration number, and the check is the **country module's**\n([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "address_lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "contact_lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which country's rule to check the registration number's *shape* against, as an ISO 3166-1\nalpha-2 code. Optional: a fork whose country module is not compiled into this cloud still\npublishes a profile, with the number stored unchecked rather than the publish refused."
+          },
+          "footer_lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "legal_name": {
+            "type": "string",
+            "description": "The registered name — what the law wants on the paper."
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tax_registration_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tax_registration_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "trading_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PublishTaxRequest": {
+        "type": "object",
+        "description": "A super-admin publishes a tenant's authored tax rates to one of its stores: the `(tenant, store)`.\nThe rates come from the authored table, not the body — publishing is \"push what is authored\".",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishTenderRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/tender` body: the `(tenant, store)` and the accepted payment-method tokens.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishToStoreGroupRequest": {
+        "type": "object",
+        "description": "A `POST /admin/store-groups/{group_id}/publish` body.",
+        "required": [
+          "tenant_id",
+          "node"
+        ],
+        "properties": {
+          "arguments": {
+            "description": "That node's own arguments: the single-store body minus the `(tenant, store)`. Nodes\ncompiled from tenant-wide authoring (`tax`, `campaigns`, `inventory`, `reason_codes`,\n`permissions`, `floor`) take none, and an object is accepted and ignored for them."
+          },
+          "node": {
+            "type": "string",
+            "description": "Which node kind to publish — one of the thirteen batchable ones (ADR-0122 §4)."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishVendorsRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/vendors` body: the store and its per-marketplace policies.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "policies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedVendorPolicy"
+            }
+          },
           "store_id": {
             "type": "string"
           },
@@ -27657,6 +29921,96 @@
           }
         }
       },
+      "PublishedVendorPolicy": {
+        "type": "object",
+        "description": "One store's policy toward a single delivery marketplace, in wire form ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).\n\nA lightweight authoring shape only: which vendor, whether it is on, its availability (open/busy/\nclosed, mirroring the `DeliveryVendor` busy-mode), the prep time authored for the busy case, and the\nmenu items suppressed (86'd) on that vendor. The live loop that pushes this to a marketplace is the\nflagged follow-up; publishing the policy is this track.",
+        "required": [
+          "vendor"
+        ],
+        "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/OpenVendorAvailability_VendorAvailability",
+            "description": "The store's availability to this vendor. Wrapped in [`Open`] for forward-compatibility."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the store currently offers orders to this vendor at all."
+          },
+          "prep_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The prep time (minutes) authored for the busy case — how long the vendor should quote while the\nstore is throttling. `0` means \"use the vendor's default\".",
+            "minimum": 0
+          },
+          "suppressed_items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemId"
+            },
+            "description": "Menu items suppressed (86'd) on this vendor specifically, independent of stock-driven auto-86."
+          },
+          "vendor": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The vendor's operator-facing name (e.g. the marketplace brand). Reference/display only."
+          }
+        }
+      },
+      "PutSettingRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/settings` body: one value, at one scope.",
+        "required": [
+          "tenant_id",
+          "setting_key",
+          "scope",
+          "scope_id",
+          "value"
+        ],
+        "properties": {
+          "notice_confirmed": {
+            "type": "boolean",
+            "description": "Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2)."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`SETTING_SCOPE_TENANT`, `_BRAND`, `_STORE_GROUP` or `_STORE`."
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "The tenant, brand, store group or store the value is for."
+          },
+          "setting_key": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "value": {}
+        }
+      },
+      "QrBusinessHoursRequest": {
+        "type": "object",
+        "description": "A `qr.business_hours` window in a `PUT /admin/config/qr` body.",
+        "required": [
+          "open_hour",
+          "close_hour"
+        ],
+        "properties": {
+          "close_hour": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "open_hour": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "tz_offset_minutes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "Quantity": {
         "type": "object",
         "description": "A quantity, counted in thousandths of a unit.\n\nThe wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it\n`milli` rather than `value` keeps the scale visible at every use site.",
@@ -27801,6 +30155,56 @@
           }
         }
       },
+      "RecoveryCodesResponse": {
+        "type": "object",
+        "description": "The freshly-generated recovery codes, returned exactly once. [`fmt::Debug`] redacts the codes so\nthey cannot reach a log — they exist in the response body and nowhere else.",
+        "required": [
+          "codes",
+          "remaining"
+        ],
+        "properties": {
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plaintext codes, shown this once; only their hashes are stored."
+          },
+          "remaining": {
+            "type": "integer",
+            "description": "How many codes are now available (the count just generated).",
+            "minimum": 0
+          }
+        }
+      },
+      "RecoveryCodesStatus": {
+        "type": "object",
+        "description": "How many unused recovery codes the acting admin has left — the codes themselves are never listed.",
+        "required": [
+          "remaining"
+        ],
+        "properties": {
+          "remaining": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of unused recovery codes.",
+            "minimum": 0
+          }
+        }
+      },
+      "ReenrolTotpRequest": {
+        "type": "object",
+        "description": "A request to re-enrol TOTP: the current password, re-confirming the knowledge factor before the\npossession factor is rotated. [`fmt::Debug`] redacts it.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The current super-admin password."
+          }
+        }
+      },
       "RegionAcknowledgementView": {
         "type": "object",
         "description": "A recorded answer to a store's region difference, as the console sees it\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nThe two country codes ride along rather than being left implicit: the console renders them in\nthe sentence it shows (\"data in SG, store registered in VN — acknowledged\"), and a reader of the\npayload can see *what* was answered without inferring it from the fields beside it.\n\nNo `acknowledged_by`. The row does not carry one — the audit action\n`store.edge_placement.acknowledge` does, and it is the copy that survives the next answer. The\nconsole links to the store's audit tab rather than showing a name this read cannot honestly give.",
@@ -27873,6 +30277,176 @@
           "url": {
             "type": "string",
             "description": "The normalized destination URL that was stored."
+          }
+        }
+      },
+      "ReleaseNodeRequest": {
+        "type": "object",
+        "description": "One node of a release, and the arguments its plan needs — the same pair a batch publish takes.",
+        "required": [
+          "node"
+        ],
+        "properties": {
+          "arguments": {},
+          "node": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleasePairView": {
+        "type": "object",
+        "description": "One `(node, store)` cell of the report — F9's whole point.\n\n`failure` is why the pair last could not apply. A pair that failed is still `PENDING`: the\nactivator retries it, and what an operator needs meanwhile is the reason, not a status that\npretends the attempt never happened.",
+        "required": [
+          "pair_id",
+          "store_id",
+          "node",
+          "status",
+          "effective_at_ms"
+        ],
+        "properties": {
+          "applied_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effective_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node": {
+            "type": "string"
+          },
+          "pair_id": {
+            "type": "string"
+          },
+          "resolved_timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone `effective_at_ms` was resolved against, or `None`.\n\nWhat turns the instant back into the sentence the operator approved. A wall-clock release is\none instant per timezone (ADR-0125 §2), and a console that prints the instant without the\nclock it came from draws every shop's 04:00 in the reader's own time — which is the review\nADR-0125 §26 rejected fire-time conversion to avoid. `None` for a release timed as a plain\nUTC instant, which has no per-store clock, and for pairs written before the column existed."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScheduledPublishStatus",
+            "description": "The same spelling `GET /admin/config/scheduled` already gives this exact row."
+          },
+          "store_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleaseReport": {
+        "type": "object",
+        "description": "A release and the grid of its pairs.",
+        "required": [
+          "release",
+          "pairs"
+        ],
+        "properties": {
+          "pairs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleasePairView"
+            }
+          },
+          "release": {
+            "$ref": "#/components/schemas/ReleaseView"
+          }
+        }
+      },
+      "ReleaseStatus": {
+        "type": "string",
+        "description": "Where a release stands. Derived from its pairs, stored so a list read need not aggregate.\n\n`Partial` is the state the whole record exists for: N × M writes fail individually, and at forty\nstores an operator needs the two shops that did not take it, not a red cross over the fleet. There\nis no `RolledBack` — an applied write is a config version, and the way back is\n[ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)'s version history.",
+        "enum": [
+          "draft",
+          "scheduled",
+          "applying",
+          "applied",
+          "partial"
+        ]
+      },
+      "ReleaseTenantRequest": {
+        "type": "object",
+        "description": "A body carrying nothing but the tenant — what `cancel` needs, since the id is in the path.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ReleaseView": {
+        "type": "object",
+        "description": "A release on the wire.",
+        "required": [
+          "release_id",
+          "tenant_id",
+          "name",
+          "status",
+          "created_by",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "instant_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The single instant, for a release timed in UTC. Null for a wall-clock release."
+          },
+          "name": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReleaseStatus",
+            "description": "Serialised as the enum, not as `as_wire()`: `as_wire` is the **stored** token (`SCHEDULED`),\nand every other status on this surface reaches the console `snake_case`. Two spellings for one\nconcept is two branches in the console's type for no gain."
+          },
+          "target_group_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "wall_clock_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The operator's local date, for a wall-clock release. Null for an instant release."
+          },
+          "wall_clock_time": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -28033,6 +30607,19 @@
       "RoleTemplateId": {
         "$ref": "#/components/schemas/Ulid",
         "description": "A role template's identifier — a ULID minted at creation."
+      },
+      "RollbackConfigRequest": {
+        "type": "object",
+        "description": "A super-admin rolls a store's config back to a past version.",
+        "required": [
+          "version_id"
+        ],
+        "properties": {
+          "version_id": {
+            "type": "string",
+            "description": "The version to restore (a ULID); its effective document becomes the new current version."
+          }
+        }
       },
       "RoutingRule": {
         "type": "object",
@@ -28361,6 +30948,36 @@
           }
         }
       },
+      "ScheduleReleaseRequest": {
+        "type": "object",
+        "description": "A `POST /admin/config-releases/{release_id}/schedule` body.",
+        "required": [
+          "tenant_id",
+          "nodes"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseNodeRequest"
+            },
+            "description": "The nodes to carry, in any order — the activator applies them in dependency order per store."
+          },
+          "store_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The stores, explicitly. Omitted, the release's `target_group_id` is expanded instead."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "ScheduledPublishStatus": {
         "type": "string",
         "description": "A scheduled publish's lifecycle status.",
@@ -28614,6 +31231,25 @@
           }
         }
       },
+      "SetStoreGroupMembersRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/store-groups/{group_id}/members` body: the whole membership, not a delta.\n\nWholesale rather than add/remove because the operator's mental model is a *set* — \"these are the\nairport shops\" — and a delta API makes two admins' concurrent edits merge into a cohort neither\nof them chose. Under `If-Match` (ADR-0095 shape C) the second one is refused instead.",
+        "required": [
+          "tenant_id",
+          "store_ids"
+        ],
+        "properties": {
+          "store_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "SetTaxRatesRequest": {
         "type": "object",
         "description": "A `PUT /admin/catalog/tax-rates` body: the tenant and its whole rate table (a wholesale replace).",
@@ -28627,6 +31263,24 @@
             "items": {
               "$ref": "#/components/schemas/TaxRateRowRequest"
             }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SettingsStoreRequest": {
+        "type": "object",
+        "description": "A store to publish settings to, or every store of the tenant.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tenant_id": {
             "type": "string"
@@ -28652,6 +31306,24 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "description": "A first-boot enrolment request: the authorising setup token and the password the operator chooses.\n\n[`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.",
+        "required": [
+          "setup_token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The password the operator is choosing for the super-admin."
+          },
+          "setup_token": {
+            "type": "string",
+            "description": "The one-time setup token (`bootstrap.sh` minted it into `cloud.toml`)."
           }
         }
       },
@@ -28740,10 +31412,116 @@
           }
         }
       },
+      "StoreGroup": {
+        "type": "object",
+        "description": "A cohort of stores an operator publishes to as one.",
+        "required": [
+          "group_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "group_id": {
+            "$ref": "#/components/schemas/StoreGroupId",
+            "description": "The group's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name — \"Airport\", \"VN-South\", \"Pilot\"."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived. An archived group keeps its membership (so the record of what it *was*\nsurvives) and is refused as a batch target."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
+      "StoreGroupId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "A store group's identifier — a ULID minted when the group is created.\n\nLike `pos-cloud-catalog`'s `MenuId` it never crosses the store wire: a group is an authoring\nand delivery concept in the cloud, and what reaches a store is the same config node it would have\nreceived from a single publish."
+      },
+      "StoreGroupView": {
+        "type": "object",
+        "description": "A store group on the wire, with its membership.\n\nMembers ride along with the list rather than needing a read per group: the console's first\nquestion about a cohort is how big it is, and a screen that had to fetch each one would show a\nlist of names with the counts arriving afterwards.",
+        "required": [
+          "group_id",
+          "tenant_id",
+          "name",
+          "status",
+          "store_ids",
+          "etag"
+        ],
+        "properties": {
+          "etag": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus"
+          },
+          "store_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "StoreId": {
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StoreRecord": {
+        "type": "object",
+        "description": "A store — grouped under a tenant and, optionally, a brand. Shares its `store_id` with its\n`config_trees` row.",
+        "required": [
+          "store_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandId",
+                "description": "The owning brand, or `None` until an operator assigns one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name (a placeholder until renamed)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store id."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
       },
       "SubjectExportView": {
         "type": "object",
@@ -29013,6 +31791,32 @@
         "description": "A `TaxClassId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "TaxComponentTotal": {
+        "type": "object",
+        "description": "One tax component's tax on a trading day, at one rate (part of [`DailyRevenue`]).",
+        "required": [
+          "component_name",
+          "rate_basis_points",
+          "tax"
+        ],
+        "properties": {
+          "component_name": {
+            "type": "string",
+            "description": "The component's name as the bills recorded it, such as `CGST`: a\n[`TaxComponentName`](pos_proto::locale::TaxComponentName) when it was folded. Text here, so\na stored day loads whatever a later release lets a name be."
+          },
+          "rate_basis_points": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its part of the rate, in basis points: CGST at 2.5 % and at 9 % are two entries.",
+            "minimum": 0
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the tax the day's tax lines recorded under it, minor units."
+          }
+        }
+      },
       "TaxComponentView": {
         "type": "object",
         "description": "One named part of a rate, on the wire.",
@@ -29101,6 +31905,29 @@
         "description": "A `TenantId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "TenantRecord": {
+        "type": "object",
+        "description": "A tenant — the root of the tree.",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant id."
+          }
+        }
+      },
       "TranslationGrid": {
         "type": "object",
         "description": "A tenant's translation grid: content key → (locale → rendered string).",
@@ -29122,9 +31949,54 @@
         "description": "A ULID: 26 Crockford base-32 characters, ordered by the time it was minted",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "UpdateAdminRoleRequest": {
+        "type": "object",
+        "description": "A request to change an admin's role.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "The new role: `owner`/`admin`/`ops`/`viewer`."
+          }
+        }
+      },
+      "UpdateAdminStatusRequest": {
+        "type": "object",
+        "description": "A request to change an admin's status.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "The new status: `active` or `suspended`."
+          }
+        }
+      },
       "UpdateAreaRequest": {
         "type": "object",
         "description": "Rename an area and/or set its status.",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateBrandRequest": {
+        "type": "object",
         "required": [
           "tenant_id",
           "name",
@@ -29157,6 +32029,29 @@
           "sort": {
             "type": "integer",
             "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateDeviceRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           },
           "status": {
             "type": "string"
@@ -29224,6 +32119,21 @@
             "type": "string"
           },
           "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateEntityRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         }
@@ -29506,6 +32416,51 @@
           }
         }
       },
+      "UpdateStoreGroupRequest": {
+        "type": "object",
+        "description": "A `PATCH /admin/store-groups/{group_id}` body: rename and/or set the status.",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateStoreRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateTableRequest": {
         "type": "object",
         "description": "Update a table's area, label, seats, position, and status.",
@@ -29620,6 +32575,59 @@
               "store_id": {
                 "$ref": "#/components/schemas/StoreId",
                 "description": "The store this area belongs to."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_BrandRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A brand — grouped under a tenant.",
+            "required": [
+              "brand_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "brand_id": {
+                "$ref": "#/components/schemas/BrandId",
+                "description": "The brand id."
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
@@ -29863,6 +32871,69 @@
               "status": {
                 "$ref": "#/components/schemas/EntityStatus",
                 "description": "Active or archived. An archived course is not published, the same posture an archived item\nand an archived modifier group already get."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_DeviceRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A device — the canonical device identity, grouped under a store. Shares its `device_id` with\n`device_proposals` / `device_credentials`.",
+            "required": [
+              "device_id",
+              "tenant_id",
+              "store_id",
+              "name",
+              "kind",
+              "status"
+            ],
+            "properties": {
+              "device_id": {
+                "$ref": "#/components/schemas/DeviceId",
+                "description": "The device id."
+              },
+              "kind": {
+                "type": "string",
+                "description": "`pos`, `printer`, `kds`, `tablet`, `unknown`, …"
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "store_id": {
+                "$ref": "#/components/schemas/StoreId",
+                "description": "The owning store."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
@@ -31005,6 +34076,123 @@
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
       },
+      "Versioned_StoreGroup": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A cohort of stores an operator publishes to as one.",
+            "required": [
+              "group_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "group_id": {
+                "$ref": "#/components/schemas/StoreGroupId",
+                "description": "The group's id."
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name — \"Airport\", \"VN-South\", \"Pilot\"."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived. An archived group keeps its membership (so the record of what it *was*\nsurvives) and is refused as a batch target."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_StoreRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A store — grouped under a tenant and, optionally, a brand. Shares its `store_id` with its\n`config_trees` row.",
+            "required": [
+              "store_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "brand_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BrandId",
+                    "description": "The owning brand, or `None` until an operator assigns one."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name (a placeholder until renamed)."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "store_id": {
+                "$ref": "#/components/schemas/StoreId",
+                "description": "The store id."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
       "Versioned_Table": {
         "allOf": [
           {
@@ -31139,6 +34327,54 @@
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
       },
+      "Versioned_TenantRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A tenant — the root of the tree.",
+            "required": [
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The tenant id."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
       "VoucherStatus": {
         "type": "string",
         "description": "A voucher's lifecycle status. Minting creates it [`Active`](VoucherStatus::Active); the engine's\nonline redemption (a later, runtime concern) moves it to [`Redeemed`](VoucherStatus::Redeemed), and\nan operator may [`Void`](VoucherStatus::Void) one.",
@@ -31200,6 +34436,49 @@
           "url": {
             "type": "string",
             "description": "The destination URL."
+          }
+        }
+      },
+      "XzReport": {
+        "type": "object",
+        "description": "An **X or Z report** for one store's trading day (ADR-0081, Track O4, resolving spec gap D10).\n\nAn **X** report is the current (open) day's running totals — non-resetting, recomputed each call.\nA **Z** report is a closed day's totals — a day that no longer receives events, so the same read\nreturns the same figures verbatim thereafter. `kind` is `\"X\"` for the latest day present and\n`\"Z\"` for any earlier (closed) day. It bundles the day's activity counts, revenue, and cash\nsummary; T2, so it is served only behind `console.reports.revenue`. Not a legal fiscal document —\nthat stays with the country module's invoice range.",
+        "required": [
+          "kind",
+          "business_date",
+          "activity",
+          "revenue",
+          "cash"
+        ],
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/DailyRollup",
+            "description": "The day's event-activity counts."
+          },
+          "business_date": {
+            "type": "string",
+            "description": "The trading day, `YYYY-MM-DD`."
+          },
+          "cash": {
+            "$ref": "#/components/schemas/DailyCash",
+            "description": "The day's cash-drawer summary."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"X\"` (current, interim) or `\"Z\"` (closed, final)."
+          },
+          "revenue": {
+            "$ref": "#/components/schemas/DailyRevenue",
+            "description": "The day's recognised revenue and product mix."
+          },
+          "till_names": {
+            "type": "object",
+            "description": "The name of each till among the day's drawers, keyed as [`DailyCash::by_drawer`] is, from the\nstore's published `devices` node when the report is served (ADR-0167 decision 13). The\nstore's drawer, and a till the node no longer lists, have none. Device names, never a person.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       }

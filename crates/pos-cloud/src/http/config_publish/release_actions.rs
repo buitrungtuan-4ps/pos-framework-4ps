@@ -32,8 +32,9 @@ use crate::store_groups::StoreGroupStore;
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The draft to schedule")),
+    request_body(content = ScheduleReleaseRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The release is scheduled, and the body is its node × store \
+        (status = 200, body = ReleaseReport, description = "The release is scheduled, and the body is its node × store \
                                       report. Every pair is `PENDING` until its instant arrives"),
         (status = 400, description = "An id is not a ULID, the node is not one of the batchable \
                                       kinds, or a pair would make its store run a value that \
@@ -135,8 +136,9 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The release to withdraw")),
+    request_body(content = ReleaseTenantRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The still-pending pairs are cancelled and the body is the \
+        (status = 200, body = ReleaseReport, description = "The still-pending pairs are cancelled and the body is the \
                                       report. Applied pairs are left alone — they are config \
                                       versions now"),
         (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -311,7 +313,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The release and one row per (node, store) pair, each with its \
+        (status = 200, body = ReleaseReport, description = "The release and one row per (node, store) pair, each with its \
                                       status, its instant, the version it published as, and why it \
                                       last failed. Snapshotted node values are deliberately not \
                                       returned"),

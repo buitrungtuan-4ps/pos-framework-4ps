@@ -21,7 +21,7 @@ use crate::http::{CloudApp, Json, hex_decode_32, hex_encode, not_found};
 /// One of the acting admin's live sessions, as the console lists it. `id` is the opaque revocation
 /// handle (hex of `SHA-256(token)` — never the token, and not reversible to it); `current` marks the
 /// session making this very request, which the console protects from accidental self-revocation.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct AdminSessionView {
     /// The opaque handle the console revokes this session by.
     id: String,
@@ -42,7 +42,7 @@ struct AdminSessionView {
     path = "/admin/sessions",
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "The acting administrator's own live sessions, newest first, as \
+        (status = 200, body = [AdminSessionView], description = "The acting administrator's own live sessions, newest first, as \
                                       an array: each with `id`, an opaque revocation handle (never \
                                       the session token, and not reversible to it), the `ip` and \
                                       `user_agent` it was signed in from where known, \
