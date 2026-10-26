@@ -843,7 +843,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The assignments, as an array. Each says its scope and names the person it grants, by name and staff code"
+            "description": "The assignments, as an array. Each says its scope and names the person it grants, by name and staff code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Assignment"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID; not exactly one of store_id, employee_id, store_group_id and scope_kind is sent; the id sent is not a ULID; or scope_kind is not `ASSIGNMENT_SCOPE_TENANT`",
@@ -903,8 +913,13 @@
         "requestBody": {
           "description": "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: a `store_id` for one store, a `store_group_id` for every store the group holds, or `scope_kind` `ASSIGNMENT_SCOPE_TENANT` for every store of the tenant (ADR-0158 decision 3)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAssignmentRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -2088,7 +2103,14 @@
         "operationId": "admin_list_capabilities",
         "responses": {
           "200": {
-            "description": "The capability catalogue, the same for every tenant: `flags`, each with its `key`, `default_on`, `description` and `offered` (whether the console offers it as a switch); `presets`, each an `id` and the keys it turns on; and `rules`, the inter-flag rules a publish enforces"
+            "description": "The capability catalogue, the same for every tenant: `flags`, each with its `key`, `default_on`, `description` and `offered` (whether the console offers it as a switch); `presets`, each an `id` and the keys it turns on; and `rules`, the inter-flag rules a publish enforces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityCatalogueView"
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -7155,12 +7177,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then `flags`, each capability key from `GET /admin/capabilities` with its value. Only the flags named are changed",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishCapabilitiesRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published as the store's `capabilities` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited"
+            "description": "Published as the store's `capabilities` node on its Store layer. The body carries `config_version_id`, which the store pulls on its next sync. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, a key is not a capability flag, or a value needs a recorded confirmation first (ADR-0169)",
@@ -10823,7 +10857,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Without `limit`, every employee as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each employee has `employee_id`, `tenant_id`, `code`, `name`, `status` and `has_pin` — never the PIN or its hash"
+            "description": "Without `limit`, every employee as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each employee has `employee_id`, `tenant_id`, `code`, `name`, `status` and `has_pin` — never the PIN or its hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOrPage_Versioned_Employee"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID; limit or offset is not an integer in range; offset, q, sort or order is sent without limit; or sort or order is not one the route accepts",
@@ -10882,8 +10923,13 @@
         "requestBody": {
           "description": "`tenant_id`, the staff `code` the person types to sign in, unique within the tenant, and their `name`. No PIN: it is set with `PUT …/pin`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEmployeeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -10977,7 +11023,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The employee, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match"
+            "description": "The employee, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_Employee"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or employee_id is absent or not a ULID",
@@ -11067,8 +11120,13 @@
         "requestBody": {
           "description": "`tenant_id`, the `name` and the `status` (`active` or `archived`) as they should now stand. The staff code cannot be changed",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEmployeeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -11168,8 +11226,13 @@
         "requestBody": {
           "description": "`tenant_id` and the `pin`: digits only, at least the tenant's `session.pin_min_length` (four where it sets none) and at most eight. The PIN is hashed at once and is never returned, stored in the clear, logged or audited (ADR-0070)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPinRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -16563,7 +16626,17 @@
         "operationId": "admin_list_permissions",
         "responses": {
           "200": {
-            "description": "Every permission a role may grant, as an array: each with `id`, `group`, `risk`, `pin_required` (whether it may be granted with approval) and `description`. The same for every tenant"
+            "description": "Every permission a role may grant, as an array: each with `id`, `group`, `risk`, `pin_required` (whether it may be granted with approval) and `description`. The same for every tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionInfo"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -16604,12 +16677,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`: the store whose people, roles and assignments to compile into its `permissions` node",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishPermissionsRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Published. The body is `{ \"config_version_id\": … }`, the configuration version the store syncs. The node carries each assigned person's PIN hash for the store to verify against; the audit entry records only the version and the staff count"
+            "description": "Published. The body is `{ \"config_version_id\": … }`, the configuration version the store syncs. The node carries each assigned person's PIN hash for the store to verify against; the audit entry records only the version and the staff count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -17297,7 +17382,17 @@
         ],
         "responses": {
           "200": {
-            "description": "Every role template of the tenant, as an array. A role names permissions, never a person"
+            "description": "Every role template of the tenant, as an array. A role names permissions, never a person",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_RoleTemplate"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -17356,8 +17451,13 @@
         "requestBody": {
           "description": "`tenant_id`, `name`, `permissions` (granted directly), `permissions_with_approval` (granted only with a direct holder's approval, each PIN-flagged; absent is none) and `discount_ceiling_minor` (how much the role may discount without a manager, in the currency's minor unit; absent is no ceiling, which a store reads as zero). Every id must be in `GET /admin/people/permissions`, and none may be in both lists",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -17441,7 +17541,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The role template, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match"
+            "description": "The role template, with an ETag carrying the version it was read at — the token a PATCH must send back as If-Match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_RoleTemplate"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or role_id is absent or not a ULID",
@@ -17531,8 +17638,13 @@
         "requestBody": {
           "description": "The role as it should now stand: `tenant_id`, `name`, `permissions`, `discount_ceiling_minor` and `status` (`active` or `archived`), and optionally `permissions_with_approval` — absent, the role keeps what it grants with approval, less anything `permissions` now grants directly",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -20434,7 +20546,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`store_id`; `enforced`, what the store runs for `permissions.enforced`, with `enforced_scope` and `enforced_scope_id` naming the value's level, both absent for the default; `roles`, one per active role an active person holds at the store through any assignment that reaches it, by name, each with `role_template_id`, `name`, `people` (how many hold it, each once) and `missing` — every permission a store decides that the role grants neither directly nor with approval, as `id`, `group` and `risk`, low risk first and catalogue order within a level; and `people_without_role`, how many people at the store hold no active role there. No person is named"
+            "description": "`store_id`; `enforced`, what the store runs for `permissions.enforced`, with `enforced_scope` and `enforced_scope_id` naming the value's level, both absent for the default; `roles`, one per active role an active person holds at the store through any assignment that reaches it, by name, each with `role_template_id`, `name`, `people` (how many hold it, each once) and `missing` — every permission a store decides that the role grants neither directly nor with approval, as `id`, `group` and `risk`, low risk first and catalogue order within a level; and `people_without_role`, how many people at the store hold no active role there. No person is named",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsReadiness"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id or tenant_id is absent or not a ULID",
@@ -22809,9 +22928,209 @@
   },
   "components": {
     "schemas": {
+      "Assignment": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AssignmentScope",
+            "description": "Where it grants the role: `scope_kind`, and `store_id` or `store_group_id` beside it."
+          },
+          {
+            "type": "object",
+            "required": [
+              "assignment_id",
+              "tenant_id",
+              "employee_id",
+              "role_template_id"
+            ],
+            "properties": {
+              "assignment_id": {
+                "$ref": "#/components/schemas/AssignmentId",
+                "description": "The assignment id."
+              },
+              "employee_code": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The assigned person's staff code, `None` on the same terms as the name."
+              },
+              "employee_id": {
+                "$ref": "#/components/schemas/EmployeeId",
+                "description": "The assigned employee."
+              },
+              "employee_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The assigned person's name, or `None` if no employee row matches `employee_id`."
+              },
+              "role_template_id": {
+                "$ref": "#/components/schemas/RoleTemplateId",
+                "description": "The role it grants wherever it reaches."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          }
+        ],
+        "description": "A person's assignment with a role, at one store, a store group or every store of the tenant\n([`AssignmentScope`]). Every id is the same tenant (the `tenant_id` column + RLS isolate them;\nthe route layer checks referential validity before writing).\n\n# Who the assignment is for\n\nThe row carries the assigned person's name and code alongside their id, resolved by the store as\nit reads. Without them a caller can only name the person by looking the id up in the tenant's\nroster, which is a whole-set read the console cannot keep making once the roster is paged\n([ADR-0098](../../../docs/adr/0098-paged-admin-reads.md), B3-4).\n\nBoth are `Option`, and the reason is in the schema rather than the domain: nothing declares a\nforeign key from an assignment to an employee, so an assignment can outlive the row it names.\n`None` means exactly that, and a caller should fall back to showing the id — the assignment is\nreal and still grants access, so hiding it would be worse than showing it unlabelled.\n\nThe name and code are T1 personal data\n([ADR-0070](../../../docs/adr/0070-people-and-access.md)) and reaching them needs\n`console.people.read`, the same gate as reading the roster\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md))."
+      },
+      "AssignmentId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "An assignment's identifier — a ULID minted at creation."
+      },
+      "AssignmentScope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "scope_kind",
+              "store_id"
+            ],
+            "properties": {
+              "scope_kind": {
+                "type": "string",
+                "enum": [
+                  "ASSIGNMENT_SCOPE_STORE"
+                ]
+              },
+              "store_id": {
+                "type": "string",
+                "description": "The one store it reaches, a ULID"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scope_kind",
+              "store_group_id"
+            ],
+            "properties": {
+              "scope_kind": {
+                "type": "string",
+                "enum": [
+                  "ASSIGNMENT_SCOPE_STORE_GROUP"
+                ]
+              },
+              "store_group_id": {
+                "type": "string",
+                "description": "The group whose stores it reaches when read, a ULID"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scope_kind"
+            ],
+            "properties": {
+              "scope_kind": {
+                "type": "string",
+                "enum": [
+                  "ASSIGNMENT_SCOPE_TENANT"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where an assignment grants its role: `scope_kind`, with `store_id` for one store, `store_group_id` for a group, and neither for every store of the tenant"
+      },
       "Binary": {
         "type": "string",
         "format": "binary"
+      },
+      "CapabilityCatalogueView": {
+        "type": "object",
+        "description": "The whole capability catalogue the form editor needs: the flags, the presets, and the inter-flag\nrules — all §10 data, tenant-independent.",
+        "required": [
+          "flags",
+          "presets",
+          "rules"
+        ],
+        "properties": {
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityFlagView"
+            }
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityPresetView"
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityRuleView"
+            }
+          }
+        }
+      },
+      "CapabilityFlagView": {
+        "type": "object",
+        "description": "One capability flag as the console's form editor reads it: its config key, default, and the\none-line description (§10 catalogue). Mirrors `pos-core`'s `CapabilityMeta` so the console renders\ntoggles from the framework's own source of truth rather than a hand-kept list.",
+        "required": [
+          "key",
+          "default_on",
+          "description",
+          "offered"
+        ],
+        "properties": {
+          "default_on": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "offered": {
+            "type": "boolean",
+            "description": "Whether the console offers the flag as a switch: `false` for one no release reads yet\n([`offered`])."
+          }
+        }
+      },
+      "CapabilityPresetView": {
+        "type": "object",
+        "description": "One capability preset (§10) — a named starting profile the console offers as a button, given as the\nset of flag keys it turns on.",
+        "required": [
+          "id",
+          "keys"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CapabilityRuleView": {
+        "type": "object",
+        "description": "One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is\ncreated rather than as a `422` on publish.",
+        "required": [
+          "id",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        }
       },
       "CatalogItem": {
         "type": "object",
@@ -22958,6 +23277,47 @@
         "description": "A `CourseId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "CreateAssignmentRequest": {
+        "type": "object",
+        "description": "Assign an employee with a role, at one store, a store group or every store of the tenant\n(ADR-0158 decision 3) — see [`requested_scope`] for how the three fields name one.",
+        "required": [
+          "tenant_id",
+          "employee_id",
+          "role_template_id"
+        ],
+        "properties": {
+          "employee_id": {
+            "type": "string"
+          },
+          "role_template_id": {
+            "type": "string"
+          },
+          "scope_kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An [`AssignmentScopeKind`] token. Absent, or `ASSIGNMENT_SCOPE_UNSPECIFIED`, the scope is\nthe one the id sent names."
+          },
+          "store_group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group, for an assignment to every store it holds."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store, for an assignment to one store."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateCourseRequest": {
         "type": "object",
         "description": "Create a course — a named point in the service sequence (ADR-0130).",
@@ -23003,6 +23363,26 @@
         ],
         "properties": {
           "display_category_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateEmployeeRequest": {
+        "type": "object",
+        "description": "Create an employee — identity only; the PIN is set separately.",
+        "required": [
+          "tenant_id",
+          "code",
+          "name"
+        ],
+        "properties": {
+          "code": {
             "type": "string"
           },
           "name": {
@@ -23270,6 +23650,45 @@
           }
         }
       },
+      "CreateRoleRequest": {
+        "type": "object",
+        "description": "Create a role template — a named subset of the `pos-core` permission catalogue (§9).",
+        "required": [
+          "tenant_id",
+          "name",
+          "permissions"
+        ],
+        "properties": {
+          "discount_ceiling_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much this role may discount before it needs a manager, in the currency's minor unit.\nAbsent leaves the role with no configured ceiling, which the edge reads as zero — every\ndiscount then needs a manager, exactly as it does today."
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the role grants directly, stored as sent."
+          },
+          "permissions_with_approval": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the role grants only with approval (ADR-0158 decision 4), checked by\n[`granted_with_approval`]. Absent is none: every permission in `permissions` is granted\ndirectly, as before the list existed.\n\nThe catalogue's PIN flag, the default a new role starts from, is the console's to apply: its\nrole editor starts a newly ticked PIN-flagged permission with approval and always sends both\nlists. Applied here, it would give a role created by a script or an old console tab holders\nwho can no longer approve, since only a direct holder approves, and a `permissions` that\nreads back without the ids it was sent."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateTaxClassRequest": {
         "type": "object",
         "required": [
@@ -23364,6 +23783,48 @@
         "type": "string",
         "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "Employee": {
+        "type": "object",
+        "description": "An employee as the console reads them. Note what is **absent**: no PIN and no PIN hash — a read\nexposes only `has_pin`, whether a PIN is set, so the directory never becomes a way to exfiltrate\ncredentials. Serializes for the `/admin` read (a later slice).",
+        "required": [
+          "employee_id",
+          "tenant_id",
+          "code",
+          "name",
+          "status",
+          "has_pin"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The staff/badge code an operator types — unique within the tenant."
+          },
+          "employee_id": {
+            "$ref": "#/components/schemas/EmployeeId",
+            "description": "The employee's id."
+          },
+          "has_pin": {
+            "type": "boolean",
+            "description": "Whether a sign-in PIN is set. The hash itself is never read out."
+          },
+          "name": {
+            "type": "string",
+            "description": "The person's name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
+      "EmployeeId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "An employee's identifier — a ULID minted at creation. Defined here beside the seam, like\n[`BrandId`](crate::registry::BrandId): an employee is a cloud-only concept, so it needs no\n`pos-proto` id type."
       },
       "EntityStatus": {
         "type": "string",
@@ -23980,6 +24441,82 @@
         ],
         "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
       },
+      "ListOrPage_Versioned_Employee": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "type": "object",
+                  "description": "An employee as the console reads them. Note what is **absent**: no PIN and no PIN hash — a read\nexposes only `has_pin`, whether a PIN is set, so the directory never becomes a way to exfiltrate\ncredentials. Serializes for the `/admin` read (a later slice).",
+                  "required": [
+                    "employee_id",
+                    "tenant_id",
+                    "code",
+                    "name",
+                    "status",
+                    "has_pin"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "description": "The staff/badge code an operator types — unique within the tenant."
+                    },
+                    "employee_id": {
+                      "$ref": "#/components/schemas/EmployeeId",
+                      "description": "The employee's id."
+                    },
+                    "has_pin": {
+                      "type": "boolean",
+                      "description": "Whether a sign-in PIN is set. The hash itself is never read out."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The person's name."
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/EntityStatus",
+                      "description": "Active or archived."
+                    },
+                    "tenant_id": {
+                      "$ref": "#/components/schemas/TenantId",
+                      "description": "The owning tenant."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "etag"
+                  ],
+                  "properties": {
+                    "etag": {
+                      "$ref": "#/components/schemas/Version",
+                      "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+                    },
+                    "updated_at_ms": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int64",
+                      "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+                    }
+                  }
+                }
+              ],
+              "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+            },
+            "description": "The whole set, when the caller named no `limit`."
+          },
+          {
+            "$ref": "#/components/schemas/PagedBody_Versioned",
+            "description": "One page, when it did."
+          }
+        ],
+        "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
+      },
       "MediaId": {
         "type": "string",
         "description": "A media asset's identifier — a ULID minted at upload. Cloud-only: an item or brand references it\n(`image_ref`), but it never crosses the edge wire, so it lives beside the seam like\n[`MenuId`](crate::catalog::Menu) rather than in `pos-proto`. Serializes as its bare ULID string, so\nan item's/brand's `image_ref` is a plain id (or `null`) on the admin API."
@@ -24148,6 +24685,29 @@
       "MenuSectionId": {
         "type": "string",
         "description": "A menu section's identifier — a ULID minted at creation. A section is an authoring grouping within\na menu (ADR-0066 entity 7); like [`MenuId`] it never crosses the wire (the compiled `MenuBook` is a\nflat list of entries with no sections), so its id lives beside the seam."
+      },
+      "MissingPermission": {
+        "type": "object",
+        "description": "One catalogue permission a role grants neither directly nor with approval.",
+        "required": [
+          "id",
+          "group",
+          "risk"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": "Its group token, such as `SALES`."
+          },
+          "id": {
+            "type": "string",
+            "description": "The permission's `domain.resource.action` id."
+          },
+          "risk": {
+            "type": "string",
+            "description": "Its risk token: `LOW`, `MEDIUM` or `HIGH`."
+          }
+        }
       },
       "ModifierGroup": {
         "type": "object",
@@ -24320,7 +24880,7 @@
             "items": {
               "allOf": [
                 {
-                  "$ref": "#/components/schemas/CatalogItem",
+                  "$ref": "#/components/schemas/Employee",
                   "description": "The record itself, flattened so the wire shape is unchanged but for `etag`."
                 },
                 {
@@ -24361,6 +24921,82 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "PermissionInfo": {
+        "type": "object",
+        "description": "One entry of the permission catalogue the console offers when authoring a role. Mirrors the\n`pos-core` [`Permission`] metadata (§9) so the console renders permissions grouped, with their\nrisk and PIN policy, from the framework's own source of truth rather than a hand-kept UI list.",
+        "required": [
+          "id",
+          "group",
+          "risk",
+          "pin_required",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "A one-line description for the dashboard."
+          },
+          "group": {
+            "type": "string",
+            "description": "The group token the dashboard groups by (e.g. `BILLING`)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The stable `domain.resource.action` id a role template stores."
+          },
+          "pin_required": {
+            "type": "boolean",
+            "description": "Whether the permission always demands a PIN at the point of use, whatever the role."
+          },
+          "risk": {
+            "type": "string",
+            "description": "The risk token (`LOW`/`MEDIUM`/`HIGH`)."
+          }
+        }
+      },
+      "PermissionsReadiness": {
+        "type": "object",
+        "description": "What `GET /admin/stores/{store_id}/permissions/readiness` answers.",
+        "required": [
+          "store_id",
+          "enforced",
+          "roles",
+          "people_without_role"
+        ],
+        "properties": {
+          "enforced": {
+            "type": "boolean",
+            "description": "What the store runs for `permissions.enforced`."
+          },
+          "enforced_scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The scope of the value the store runs, a `SETTING_SCOPE_*` token, absent when it runs the\ndefault."
+          },
+          "enforced_scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tenant, brand, store group or store that value was written for, beside `enforced_scope`."
+          },
+          "people_without_role": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleReadiness"
+            }
+          },
+          "store_id": {
+            "type": "string"
           }
         }
       },
@@ -24426,6 +25062,33 @@
           }
         }
       },
+      "PublishCapabilitiesRequest": {
+        "type": "object",
+        "description": "A super-admin sets a store's capability flags from the form editor: the (tenant, store) and the flag\nvalues to write. Only the flags named are changed; the rest of the store's config is untouched.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "flags"
+        ],
+        "properties": {
+          "flags": {
+            "type": "object",
+            "description": "The capability flag values to set, keyed by each capability's config key (`tables_enabled`, …).",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublishFeesRequest": {
         "type": "object",
         "description": "A `POST /admin/fees/publish` body: the tenant, and one store or, without one, every store.",
@@ -24467,6 +25130,35 @@
           }
         }
       },
+      "PublishPermissionsRequest": {
+        "type": "object",
+        "description": "A super-admin selects the (tenant, store) whose `permissions` node to compile and publish.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishedConfig": {
+        "type": "object",
+        "description": "The version id a successful publish produced.",
+        "required": [
+          "config_version_id"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The new config version id (a ULID)."
+          }
+        }
+      },
       "PublishedMenu": {
         "type": "object",
         "description": "What a menu publish answers: the version it produced, and how the store's fees went with it.",
@@ -24504,6 +25196,94 @@
           }
         },
         "additionalProperties": false
+      },
+      "RoleReadiness": {
+        "type": "object",
+        "description": "One active role held at the store, and what it does not grant.",
+        "required": [
+          "role_template_id",
+          "name",
+          "people",
+          "missing"
+        ],
+        "properties": {
+          "missing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MissingPermission"
+            },
+            "description": "What it does not grant, everyday permissions first."
+          },
+          "name": {
+            "type": "string",
+            "description": "The role's name — a job, never a person's."
+          },
+          "people": {
+            "type": "integer",
+            "description": "How many people on the store's roster hold it, each counted once however many of their\nassignments name it.",
+            "minimum": 0
+          },
+          "role_template_id": {
+            "$ref": "#/components/schemas/RoleTemplateId",
+            "description": "The role."
+          }
+        }
+      },
+      "RoleTemplate": {
+        "type": "object",
+        "description": "A tenant's named role — a stored subset of the `pos-core` permission catalogue (§9). One tenant's\n*Manager* is not another's, so templates are per-tenant. Archived, never deleted, so an assignment\nor published permission set that references it stays reconcilable.",
+        "required": [
+          "role_template_id",
+          "tenant_id",
+          "name",
+          "permissions",
+          "permissions_with_approval",
+          "status"
+        ],
+        "properties": {
+          "discount_ceiling_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much this role may discount before it needs a manager, in the currency's minor unit.\n\n`billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own\ndescription is *\"apply a discount up to the role's configured ceiling\"*, and until this field\nexisted there was nowhere to configure one. The edge reads an absent ceiling as **zero**\nrather than as \"no limit\" — the safe direction — so a role that leaves this `None` keeps\ntoday's behaviour exactly: every discount needs `billing.discount.override_ceiling` and a\nmanager's PIN.\n\n`None` and `Some(0)` land in the same place and are not the same statement. The first is an\nabsence; the second is a tenant saying this role discounts nothing. Never negative — the\ncolumn refuses it, and so does the route."
+          },
+          "name": {
+            "type": "string",
+            "description": "The human role name (e.g. *Cashier*), unique within the tenant."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission ids the role grants **directly**, each a `pos-core` catalogue id: its holder\nacts on them alone."
+          },
+          "permissions_with_approval": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission ids the role grants only **with approval**: another person who holds one\ndirectly enters their code and PIN for each act\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 4). Each is a PIN-flagged catalogue id, and none is also in [`Self::permissions`].\nAlways on the wire, empty for a role that grants everything directly."
+          },
+          "role_template_id": {
+            "$ref": "#/components/schemas/RoleTemplateId",
+            "description": "The template's id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
+      "RoleTemplateId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "A role template's identifier — a ULID minted at creation."
       },
       "RowAction": {
         "oneOf": [
@@ -24795,6 +25575,22 @@
           }
         }
       },
+      "SetPinRequest": {
+        "type": "object",
+        "description": "Set or reset an employee's sign-in PIN. The digits are hashed here and never stored or logged in\nthe clear (ADR-0070); the request body is the only place they appear, and it is never audited.",
+        "required": [
+          "tenant_id",
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "SetPlacementRequest": {
         "type": "object",
         "required": [
@@ -24979,6 +25775,11 @@
           "type": "string"
         }
       },
+      "Ulid": {
+        "type": "string",
+        "description": "A ULID: 26 Crockford base-32 characters, ordered by the time it was minted",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "UpdateCourseRequest": {
         "type": "object",
         "description": "Update a course's name, position and/or status.",
@@ -25034,6 +25835,26 @@
           "display_category_id": {
             "type": "string"
           },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateEmployeeRequest": {
+        "type": "object",
+        "description": "Rename an employee and/or set their status (`active`/`archived`).",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
           "name": {
             "type": "string"
           },
@@ -25226,6 +26047,52 @@
           },
           "name": {
             "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateRoleRequest": {
+        "type": "object",
+        "description": "Update a role template's name, permission sets, ceiling and status.",
+        "required": [
+          "tenant_id",
+          "name",
+          "permissions",
+          "status"
+        ],
+        "properties": {
+          "discount_ceiling_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How much this role may discount before it needs a manager, in the currency's minor unit.\nAbsent leaves the role with no configured ceiling, which the edge reads as zero — every\ndiscount then needs a manager, exactly as it does today."
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the role grants directly."
+          },
+          "permissions_with_approval": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "What the role grants only with approval (ADR-0158 decision 4). Absent, the role keeps what\nit grants with approval, less anything `permissions` now grants directly\n([`granted_with_approval`])."
           },
           "status": {
             "type": "string"
@@ -25525,6 +26392,69 @@
               "name": {
                 "type": "string",
                 "description": "The name a screen shows."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_Employee": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "An employee as the console reads them. Note what is **absent**: no PIN and no PIN hash — a read\nexposes only `has_pin`, whether a PIN is set, so the directory never becomes a way to exfiltrate\ncredentials. Serializes for the `/admin` read (a later slice).",
+            "required": [
+              "employee_id",
+              "tenant_id",
+              "code",
+              "name",
+              "status",
+              "has_pin"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The staff/badge code an operator types — unique within the tenant."
+              },
+              "employee_id": {
+                "$ref": "#/components/schemas/EmployeeId",
+                "description": "The employee's id."
+              },
+              "has_pin": {
+                "type": "boolean",
+                "description": "Whether a sign-in PIN is set. The hash itself is never read out."
+              },
+              "name": {
+                "type": "string",
+                "description": "The person's name."
               },
               "status": {
                 "$ref": "#/components/schemas/EntityStatus",
@@ -26005,6 +26935,83 @@
               "name": {
                 "type": "string",
                 "description": "The human name (`Size`, `Extra toppings`)."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_RoleTemplate": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A tenant's named role — a stored subset of the `pos-core` permission catalogue (§9). One tenant's\n*Manager* is not another's, so templates are per-tenant. Archived, never deleted, so an assignment\nor published permission set that references it stays reconcilable.",
+            "required": [
+              "role_template_id",
+              "tenant_id",
+              "name",
+              "permissions",
+              "permissions_with_approval",
+              "status"
+            ],
+            "properties": {
+              "discount_ceiling_minor": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "How much this role may discount before it needs a manager, in the currency's minor unit.\n\n`billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own\ndescription is *\"apply a discount up to the role's configured ceiling\"*, and until this field\nexisted there was nowhere to configure one. The edge reads an absent ceiling as **zero**\nrather than as \"no limit\" — the safe direction — so a role that leaves this `None` keeps\ntoday's behaviour exactly: every discount needs `billing.discount.override_ceiling` and a\nmanager's PIN.\n\n`None` and `Some(0)` land in the same place and are not the same statement. The first is an\nabsence; the second is a tenant saying this role discounts nothing. Never negative — the\ncolumn refuses it, and so does the route."
+              },
+              "name": {
+                "type": "string",
+                "description": "The human role name (e.g. *Cashier*), unique within the tenant."
+              },
+              "permissions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The permission ids the role grants **directly**, each a `pos-core` catalogue id: its holder\nacts on them alone."
+              },
+              "permissions_with_approval": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The permission ids the role grants only **with approval**: another person who holds one\ndirectly enters their code and PIN for each act\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 4). Each is a PIN-flagged catalogue id, and none is also in [`Self::permissions`].\nAlways on the wire, empty for a role that grants everything directly."
+              },
+              "role_template_id": {
+                "$ref": "#/components/schemas/RoleTemplateId",
+                "description": "The template's id."
               },
               "status": {
                 "$ref": "#/components/schemas/EntityStatus",

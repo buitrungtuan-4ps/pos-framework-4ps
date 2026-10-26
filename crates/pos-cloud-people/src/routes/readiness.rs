@@ -88,7 +88,7 @@ struct ReadinessQuery {
 }
 
 /// What `GET /admin/stores/{store_id}/permissions/readiness` answers.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct PermissionsReadiness {
     store_id: String,
     /// What the store runs for `permissions.enforced`.
@@ -140,7 +140,7 @@ fn enforced_at(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`store_id`; `enforced`, what the store runs for \
+        (status = 200, body = PermissionsReadiness, description = "`store_id`; `enforced`, what the store runs for \
                                       `permissions.enforced`, with `enforced_scope` and \
                                       `enforced_scope_id` naming the value's level, both absent \
                                       for the default; `roles`, one per active role an active \

@@ -50,7 +50,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 /// An employee's identifier — a ULID minted at creation. Defined here beside the seam, like
 /// [`BrandId`](crate::registry::BrandId): an employee is a cloud-only concept, so it needs no
 /// `pos-proto` id type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 pub struct EmployeeId(Ulid);
 
 impl EmployeeId {
@@ -76,7 +76,7 @@ impl fmt::Display for EmployeeId {
 /// An employee as the console reads them. Note what is **absent**: no PIN and no PIN hash — a read
 /// exposes only `has_pin`, whether a PIN is set, so the directory never becomes a way to exfiltrate
 /// credentials. Serializes for the `/admin` read (a later slice).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Employee {
     /// The employee's id.
     pub employee_id: EmployeeId,
@@ -341,7 +341,7 @@ impl EmployeeStoreError {
 /// One entry of the permission catalogue the console offers when authoring a role. Mirrors the
 /// `pos-core` [`Permission`] metadata (§9) so the console renders permissions grouped, with their
 /// risk and PIN policy, from the framework's own source of truth rather than a hand-kept UI list.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct PermissionInfo {
     /// The stable `domain.resource.action` id a role template stores.
     pub id: &'static str,
@@ -397,7 +397,7 @@ pub fn is_pin_flagged_permission(id: &str) -> bool {
 }
 
 /// A role template's identifier — a ULID minted at creation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 pub struct RoleTemplateId(Ulid);
 
 impl RoleTemplateId {
@@ -423,7 +423,7 @@ impl fmt::Display for RoleTemplateId {
 /// A tenant's named role — a stored subset of the `pos-core` permission catalogue (§9). One tenant's
 /// *Manager* is not another's, so templates are per-tenant. Archived, never deleted, so an assignment
 /// or published permission set that references it stays reconcilable.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoleTemplate {
     /// The template's id.
     pub role_template_id: RoleTemplateId,
@@ -580,7 +580,7 @@ impl RoleTemplateStoreError {
 // --- assignments: bind a person to a store with a role ---
 
 /// An assignment's identifier — a ULID minted at creation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 pub struct AssignmentId(Ulid);
 
 impl AssignmentId {
@@ -705,7 +705,7 @@ impl Serialize for AssignmentScope {
 /// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)) and reaching them needs
 /// `console.people.read`, the same gate as reading the roster
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Assignment {
     /// The assignment id.
     pub assignment_id: AssignmentId,
