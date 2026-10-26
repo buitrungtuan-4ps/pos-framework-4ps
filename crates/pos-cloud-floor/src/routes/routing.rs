@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, ulid_refusal};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
@@ -85,7 +86,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, with the id minted here. The body carries `id`. Audited"),
+        (status = 201, body = CreatedId, description = "Created, with the id minted here. The body carries `id`. Audited"),
         (status = 400, description = "tenant_id, store_id, station_id, menu_item_id or course_id is not a ULID; the rule \
                                       names both an item and a course, or neither; or the course is one the tenant \
                                       does not carry, or has archived", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -169,11 +170,7 @@ where
     match RoutingRuleStore::create(&state.floor, rule).await {
         Ok(()) => {
             record_routing_create(state, context, rule).await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": rule.rule_id.to_string() })),
-            )
-                .into_response()
+            (StatusCode::CREATED, Json(CreatedId::new(rule.rule_id))).into_response()
         }
         Err(error) => floor_error_response(&error),
     }

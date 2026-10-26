@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use pos_cloud_api::console::{audit_action, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{parse_ulid_fields, service_unavailable};
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
@@ -434,11 +435,7 @@ where
         cause: (&'static str, &str),
     ) -> Response {
         let results = self.publish_all(context, tenant_id, stores, cause).await;
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "stores": results })),
-        )
-            .into_response()
+        (StatusCode::OK, Json(StoresPublished { stores: results })).into_response()
     }
 
     /// Publishes to every store a write reached, in turn, and reports how each went, for a write
@@ -513,7 +510,7 @@ where
 }
 
 /// How one store's `permissions` publish went, as a write that publishes at once reports it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PermissionsPublishResult {
     store_id: String,
     /// `PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`.

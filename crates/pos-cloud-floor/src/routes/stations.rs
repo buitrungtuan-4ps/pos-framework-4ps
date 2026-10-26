@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, ulid_refusal};
 use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
@@ -155,7 +156,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
                                       its version. Audited"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID; name is blank; backup_station_id is \
                                       not a ULID; late_after_seconds is outside 60 to 3600; or ticket_language is not \
@@ -254,11 +255,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": station_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(station_id))).into_response(),
                 &version,
             )
         }
