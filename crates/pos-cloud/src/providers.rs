@@ -59,12 +59,16 @@ pub struct FieldView {
     kind: &'static str,
     required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max_length: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     min: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     options: Option<&'static [&'static str]>,
 }
 

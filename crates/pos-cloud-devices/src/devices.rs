@@ -135,13 +135,16 @@ pub struct DeviceProposalSummary {
     pub address: String,
     /// How the device is attached (`usb`/`network`/`serial`), as approval recorded it — `None` while
     /// pending, because discovery cannot find this out ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+    #[schema(required = true)]
     pub connection: Option<String>,
     /// The kitchen station this device serves, as approval recorded it. `None` for the counter's
     /// receipt printer, which serves the bill rather than a station — and `None` while pending.
+    #[schema(required = true)]
     pub station_id: Option<String>,
     /// The `terminal` device whose transport reaches this printer, if an operator has picked one
     /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). `None` — the ordinary case — means the
     /// edge opens the address itself, exactly as it always has.
+    #[schema(required = true)]
     pub agent_device_id: Option<String>,
     /// Whether an operator has marked a cash drawer as wired to this printer
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
@@ -151,25 +154,31 @@ pub struct DeviceProposalSummary {
     /// [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every
     /// store assumed before the field existed.
+    #[schema(required = true)]
     pub paper_width: Option<String>,
     /// Whether an operator says this printer cuts its paper. `None` until somebody says, which the
     /// edge reads as `true`.
+    #[schema(required = true)]
     pub cuts_paper: Option<bool>,
     /// On a `terminal`, the printer an operator says this till's receipts, receipt copies and
     /// pre-bills go to (a ULID string,
     /// [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 4). `None` until somebody says, which is the store's receipt printer.
+    #[schema(required = true)]
     pub receipt_printer_id: Option<String>,
     /// On a `terminal`, the language an operator says this till's receipts print in, as its wire
     /// token (`RECEIPT_LANGUAGE_…`). `None` until somebody says, which is the store's.
+    #[schema(required = true)]
     pub receipt_language: Option<String>,
     /// On a `terminal`, the second language an operator says this till's receipts print in, as its
     /// wire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's.
+    #[schema(required = true)]
     pub receipt_second_language: Option<String>,
     /// On a `terminal`, the float an operator says this till's drawer opens with by default, in the
     /// store currency's minor unit
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). `None`
     /// until somebody says, which is the store's `shift.opening_float_minor`.
+    #[schema(required = true)]
     pub opening_float_minor: Option<i64>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,

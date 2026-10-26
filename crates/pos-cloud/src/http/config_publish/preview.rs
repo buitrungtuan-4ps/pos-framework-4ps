@@ -33,6 +33,7 @@ use crate::http::{Json, unprocessable_violations};
 pub(in crate::http) struct ConfigPreview {
     /// The version the diff is computed against — the store's current version — or `null` when the
     /// store has no published configuration yet (the candidate is then entirely new).
+    #[schema(required = true)]
     pub(in crate::http) from_version_id: Option<String>,
     /// The RFC 7386 merge patch a publish would apply to the effective document. An empty object
     /// means the candidate composes to exactly today's effective document.
@@ -150,6 +151,7 @@ struct NodePreview {
     /// Echoed back so a console that fired several previews can tell the answers apart.
     node: String,
     /// The version the diff is computed against, or `null` when the store has no tree yet.
+    #[schema(required = true)]
     from_version_id: Option<String>,
     /// The RFC 7386 merge patch the publish would apply to the store's effective document, with its
     /// staff and prices redacted for the caller's role ([`admin_preview_config_node`]).

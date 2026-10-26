@@ -37,6 +37,7 @@ struct AlertState<Al, A, C> {
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 struct AlertView {
     id: String,
+    #[schema(required = true)]
     tenant_id: Option<String>,
     kind: &'static str,
     dedup_key: String,
@@ -45,7 +46,9 @@ struct AlertView {
     detail: serde_json::Value,
     first_seen_at_ms: i64,
     last_seen_at_ms: i64,
+    #[schema(required = true)]
     resolved_at_ms: Option<i64>,
+    #[schema(required = true)]
     acknowledged_at_ms: Option<i64>,
 }
 

@@ -123,6 +123,7 @@ pub(super) struct SettingPublishResult {
     /// `SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`.
     outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     config_version_id: Option<String>,
 }
 

@@ -96,9 +96,11 @@ struct PermissionsReadiness {
     /// The scope of the value the store runs, a `SETTING_SCOPE_*` token, absent when it runs the
     /// default.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     enforced_scope: Option<&'static str>,
     /// The tenant, brand, store group or store that value was written for, beside `enforced_scope`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     enforced_scope_id: Option<String>,
     roles: Vec<crate::people_readiness::RoleReadiness>,
     people_without_role: usize,

@@ -106,6 +106,7 @@ struct FleetPrintAgent {
     /// How long the oldest still-unacknowledged job has waited, or `null` when nothing is waiting.
     /// `null` is the healthy answer and is deliberately not zero.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     oldest_unacknowledged_secs: Option<u64>,
 }
 

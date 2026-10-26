@@ -1785,7 +1785,16 @@
           "kind",
           "name",
           "address",
+          "connection",
+          "station_id",
+          "agent_device_id",
           "drawer_attached",
+          "paper_width",
+          "cuts_paper",
+          "receipt_printer_id",
+          "receipt_language",
+          "receipt_second_language",
+          "opening_float_minor",
           "status",
           "version"
         ],
@@ -2410,7 +2419,8 @@
         "description": "One line of a [`QueuedOrderPayload`].",
         "required": [
           "menu_item_id",
-          "quantity_milli"
+          "quantity_milli",
+          "modifier_menu_item_ids"
         ],
         "properties": {
           "menu_item_id": {
@@ -2425,10 +2435,7 @@
             "description": "Chosen modifiers."
           },
           "note": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The guest's free-text note; stays at the store, never the event log."
           },
           "quantity_milli": {
@@ -2437,15 +2444,8 @@
             "description": "How many, in thousandths."
           },
           "quoted_unit_price": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPayload",
-                "description": "The price the caller quoted, advisory only."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/MoneyPayload",
+            "description": "The price the caller quoted, advisory only."
           }
         }
       },
@@ -2485,17 +2485,11 @@
             "description": "The store to make it."
           },
           "subject_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The recipient side-table id, when there is one."
           },
           "table_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The table, for a QR order."
           }
         }

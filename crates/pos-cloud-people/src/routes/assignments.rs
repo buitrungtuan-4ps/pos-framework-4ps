@@ -43,6 +43,7 @@ pub(super) struct AssignmentCreated {
     id: String,
     /// One result per store the assignment reached, absent when it reached none.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     stores: Option<Vec<PermissionsPublishResult>>,
 }
 

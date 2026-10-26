@@ -51,8 +51,10 @@ struct ConfigNodeView {
     /// `null` is *not* "never published": the node is in the effective document, so it was. It means
     /// the version that put it there predates this field, or was a whole-layer replace that named
     /// nothing. The console says "published, when is not recorded" rather than inventing a date.
+    #[schema(required = true)]
     version_id: Option<String>,
     /// When that version was published (from its ULID's own timestamp, Unix ms), or `null` with it.
+    #[schema(required = true)]
     at_ms: Option<i64>,
 }
 
@@ -64,6 +66,7 @@ struct ConfigNodeView {
 /// happens where both numbers already are.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodesView {
+    #[schema(required = true)]
     current_version_id: Option<String>,
     nodes: Vec<ConfigNodeView>,
 }

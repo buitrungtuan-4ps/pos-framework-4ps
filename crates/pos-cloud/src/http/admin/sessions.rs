@@ -26,8 +26,10 @@ struct AdminSessionView {
     /// The opaque handle the console revokes this session by.
     id: String,
     /// The client IP the session was minted for, if it was known.
+    #[schema(required = true)]
     ip: Option<String>,
     /// The client user-agent the session was minted for, if it was known.
+    #[schema(required = true)]
     user_agent: Option<String>,
     /// When the session was minted (Unix ms).
     created_at_ms: i64,

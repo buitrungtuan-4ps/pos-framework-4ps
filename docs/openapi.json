@@ -352,10 +352,7 @@
             "type": "string"
           },
           "queue_number": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "minimum": 0
           },

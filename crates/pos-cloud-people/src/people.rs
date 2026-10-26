@@ -452,6 +452,7 @@ pub struct RoleTemplate {
     /// `None` and `Some(0)` land in the same place and are not the same statement. The first is an
     /// absence; the second is a tenant saying this role discounts nothing. Never negative — the
     /// column refuses it, and so does the route.
+    #[schema(required = true)]
     pub discount_ceiling_minor: Option<i64>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -719,8 +720,10 @@ pub struct Assignment {
     /// The role it grants wherever it reaches.
     pub role_template_id: RoleTemplateId,
     /// The assigned person's name, or `None` if no employee row matches `employee_id`.
+    #[schema(required = true)]
     pub employee_name: Option<String>,
     /// The assigned person's staff code, `None` on the same terms as the name.
+    #[schema(required = true)]
     pub employee_code: Option<String>,
 }
 

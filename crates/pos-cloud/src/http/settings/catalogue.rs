@@ -35,19 +35,25 @@ pub(in crate::http) struct SettingCatalogueEntry {
     field: &'static str,
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     values: Option<Vec<&'static str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     min: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     unit: Option<&'static str>,
     default: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     preset: Option<serde_json::Value>,
     scopes: Vec<&'static str>,
     since: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     confirm: Option<settings_confirm::CatalogueConfirm>,
 }
 

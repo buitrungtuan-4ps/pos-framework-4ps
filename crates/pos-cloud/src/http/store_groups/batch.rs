@@ -38,9 +38,11 @@ pub(super) struct BatchResultView {
     /// write left something behind: a menu whose store's fees did not go with it says so, with the
     /// fee publish's outcome and reason tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) detail: Option<String>,
     /// The config version the publish produced, for `applied`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) config_version_id: Option<String>,
     pub(super) at_ms: i64,
 }
@@ -56,6 +58,7 @@ pub(super) struct BatchReport {
     pub(super) started_at_ms: i64,
     /// Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) finished_at_ms: Option<i64>,
     pub(super) applied: usize,
     pub(super) skipped: usize,
