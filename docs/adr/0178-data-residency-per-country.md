@@ -149,7 +149,7 @@ Nothing is implemented by this record. Each item below is a later slice with its
      **warned and needs an audited acknowledgement**. It is not refused.
    - This is ADR-0114's posture for hosted edge placements: mechanism, never policy, and the
      operator stays the controller.
-   - Whether a refusal would be better is the owner's call.
+   - The owner decided on 2026-10-22 that this stays a warning, never a refusal (D-R1 below).
 2. **Each backup destination is recorded.** `RCLONE_REMOTE` gets a recorded country beside it.
    This closes the gap ADR-0114 names.
 3. **Each vendor connection records where the vendor processes data**, as the admin states it. The
@@ -157,6 +157,22 @@ Nothing is implemented by this record. Each item below is a later slice with its
 4. **A transfer register.** A document under `docs/` lists every flow in the table above, each
    with its lawful basis and agreement. Legal and the Data Protection contact fill it in, not code.
    Gate L3 points to it.
+
+## Owner decisions 2026-10-22
+
+The owner settled the two framework questions this record left open. They settle how the framework
+behaves. They settle no legal point: every **[to confirm by legal]** above stays open, and so do
+gates L1, L2, L3, L6 and X3.
+
+- **D-R1.** A store whose country differs from its cell's gets a warning and an audited
+  acknowledgement, as ADR-0114 does for a hosted edge placement. It is never refused. This answers
+  decision 1's open line.
+- **D-R2.** Every cell keeps all country modules: the `default` feature list of `pos-cloud` stays
+  as it is. A cell is not built for one country.
+
+How a store reaches its cell, and how a cell is named, is decided separately in ADR 0179, *Cells,
+the directory and the front door*. This record stays Proposed until legal and the Data Protection
+contact have reviewed it.
 
 ## Consequences
 
