@@ -132,7 +132,7 @@ struct ConfigPreviewState<Cfg, A, C> {
 
 /// A `POST /admin/config/preview` body — the same `(node, arguments)` pair a batch publish takes,
 /// aimed at one store instead of a cohort.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PreviewNodeRequest {
     tenant_id: String,
     store_id: String,
@@ -145,7 +145,7 @@ struct PreviewNodeRequest {
 }
 
 /// What a preview answers with: the node it compiled, and the diff a publish of it would apply.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct NodePreview {
     /// Echoed back so a console that fired several previews can tell the answers apart.
     node: String,
@@ -164,13 +164,13 @@ struct NodePreview {
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
+        content = PreviewNodeRequest, description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
                        compile), and `arguments`, that node's own publish body without the tenant \
                        and store. Nothing is written",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "What publishing the node would change: `node`; \
+        (status = 200, body = NodePreview, description = "What publishing the node would change: `node`; \
                                       `from_version_id`, the version the diff is against, or `null` \
                                       for a store never published to; `diff`, the merge patch \
                                       (RFC 7386) the publish would apply; and `unchanged`. The node \

@@ -39,8 +39,9 @@ use crate::store_groups::{
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     params(("group_id" = String, Path, description = "The cohort to publish to (a 26-character ULID)")),
+    request_body(content = PublishToStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The batch ran and every member has an outcome — `applied`, \
+        (status = 200, body = BatchReport, description = "The batch ran and every member has an outcome — `applied`, \
                                       `skipped` or `failed`. A `200` does **not** mean every store \
                                       succeeded: a batch is deliberately not atomic (ADR-0122 §5), \
                                       and the per-store report is the answer"),
