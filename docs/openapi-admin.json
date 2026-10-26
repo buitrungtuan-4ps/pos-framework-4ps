@@ -175,7 +175,17 @@
         "operationId": "admin_list_admins",
         "responses": {
           "200": {
-            "description": "Every console administrator, as an array: `id`, `email`, `name`, `role` and `status`. Never a password hash or a TOTP secret"
+            "description": "Every console administrator, as an array: `id`, `email`, `name`, `role` and `status`. Never a password hash or a TOTP secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUser"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -237,8 +247,13 @@
         "requestBody": {
           "description": "`role`: `owner`, `admin`, `ops` or `viewer`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminRoleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -334,8 +349,13 @@
         "requestBody": {
           "description": "`status`: `active` or `suspended`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAdminStatusRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -624,7 +644,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's keys, as an array: each with `id`, `store_id` (absent for a tenant-wide key), `scopes`, `revoked` and `expires_at_ms`. Never a token or a secret"
+            "description": "The tenant's keys, as an array: each with `id`, `store_id` (absent for a tenant-wide key), `scopes`, `revoked` and `expires_at_ms`. Never a token or a secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeySummary"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -684,12 +714,24 @@
         "requestBody": {
           "description": "`tenant_id`; `store_id` to bind the key to one store, or absent for a tenant-wide key (a store's own sync credential must name its store); `scopes`, the only things the key may do: `read_rollups`, `read_config`, `manage_devices`, `place_orders`, `relay_orders` or `publish_events`; and `expires_at_ms`, or absent for a key that never expires",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Provisioned. The body carries the key's `id` and its `token`, `pos_<id>_<secret>`. The token is returned exactly once — only a hash of the secret is stored. The audit entry records the scopes and the expiry, never the token"
+            "description": "Provisioned. The body carries the key's `id` and its `token`, `pos_<id>_<secret>`. The token is returned exactly once — only a hash of the secret is stored. The audit entry records the scopes and the expiry, never the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateApiKeyResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, a scope is unknown, or expires_at_ms is out of range",
@@ -1212,7 +1254,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Without `offset`, the newest matching entries as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each entry has `id`, `tenant_id`, the acting administrator's id, email and role, `action`, `entity_type`, `entity_id`, `before`, `after`, `request_id` and `at_ms`. An entry about an employee carries the person's staff code only for a role holding console.people.read (ADR-0158 decision 9)"
+            "description": "Without `offset`, the newest matching entries as an array; with it, a page: `items`, `total`, `limit` and `offset`. Each entry has `id`, `tenant_id`, the acting administrator's id, email and role, `action`, `entity_type`, `entity_id`, `before`, `after`, `request_id` and `at_ms`. An entry about an employee carries the person's staff code only for a role holding console.people.read (ADR-0158 decision 9)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOrPage_AuditEntryView"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID; limit or offset is not an integer in range; or order is sent without offset or is not one the route accepts",
@@ -1283,7 +1332,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's brands, as an array: `brand_id`, `tenant_id`, `name` and `status`, each with its `etag`"
+            "description": "The tenant's brands, as an array: `brand_id`, `tenant_id`, `name` and `status`, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_BrandRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -1342,12 +1401,24 @@
         "requestBody": {
           "description": "The `tenant_id` the brand belongs to and its `name`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBrandRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_BrandRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID",
@@ -1428,12 +1499,24 @@
         "requestBody": {
           "description": "The `tenant_id` that owns the brand, and its `name` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBrandRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_BrandRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "brand_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -15221,7 +15304,17 @@
         "operationId": "admin_list_invites",
         "responses": {
           "200": {
-            "description": "The invitations not yet accepted and not expired, as an array: each with `id`, `email`, `name`, `role`, `invited_by` and `accepted`. Never the token, which is stored only as a hash"
+            "description": "The invitations not yet accepted and not expired, as an array: each with `id`, `email`, `name`, `role`, `invited_by` and `accepted`. Never the token, which is stored only as a hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminInvite"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -15270,12 +15363,24 @@
         "requestBody": {
           "description": "The invitee's `email`, the address they will sign in with; their `name`; and the `role` they are granted on acceptance: `owner`, `admin`, `ops` or `viewer`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteAdminRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Invited. The body carries `invite_id`, the single-use `token` and `expires_at_ms`. The token is returned exactly once — only its hash is stored — and the inviter hands the link carrying it to the invitee themselves. The audit entry records the role, never the email or the token"
+            "description": "Invited. The body carries `invite_id`, the single-use `token` and `expires_at_ms`. The token is returned exactly once — only its hash is stored — and the inviter hands the link carrying it to the invitee themselves. The audit entry records the role, never the email or the token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteAdminResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "role is not one of the four, or email is not an address",
@@ -15346,12 +15451,24 @@
         "requestBody": {
           "description": "The single-use `token` from the invite link and the `password` the invitee chooses, at least 12 characters. No session: the token is the authorisation",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInviteRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Enrolled. The invitation is used up, and the body carries the new administrator's one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again. Sign in with `POST /admin/login`"
+            "description": "Enrolled. The invitation is used up, and the body carries the new administrator's one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again. Sign in with `POST /admin/login`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "400": {
             "description": "The password is shorter than the minimum",
@@ -16124,8 +16241,13 @@
         "requestBody": {
           "description": "Email, password, and the six-digit TOTP code",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -17803,7 +17925,14 @@
         "operationId": "admin_recovery_codes_status",
         "responses": {
           "200": {
-            "description": "How many unused recovery codes remain — never the codes themselves — so a console can prompt a regeneration before the supply runs out"
+            "description": "How many unused recovery codes remain — never the codes themselves — so a console can prompt a regeneration before the supply runs out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesStatus"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -17841,7 +17970,14 @@
         "operationId": "admin_generate_recovery_codes",
         "responses": {
           "200": {
-            "description": "A fresh set of one-time recovery codes, returned exactly once. Only their hashes are stored, and any previous set is replaced"
+            "description": "A fresh set of one-time recovery codes, returned exactly once. Only their hashes are stored, and any previous set is replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodesResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -18280,7 +18416,17 @@
         "operationId": "admin_list_sessions",
         "responses": {
           "200": {
-            "description": "The acting administrator's own live sessions, newest first, as an array: each with `id`, an opaque revocation handle (never the session token, and not reversible to it), the `ip` and `user_agent` it was signed in from where known, `created_at_ms`, `expires_at_ms`, and `current` for the session making this request. Any signed-in administrator, whatever their role"
+            "description": "The acting administrator's own live sessions, newest first, as an array: each with `id`, an opaque revocation handle (never the session token, and not reversible to it), the `ip` and `user_agent` it was signed in from where known, `created_at_ms`, `expires_at_ms`, and `current` for the session making this request. Any signed-in administrator, whatever their role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminSessionView"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -18990,12 +19136,24 @@
         "requestBody": {
           "description": "The enrolment token from the server's environment, and the first administrator's chosen email and password",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Enrolled. The body carries the one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again"
+            "description": "Enrolled. The body carries the one-time TOTP enrolment (QR payload and base32 secret) — returned exactly once, never readable again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "400": {
             "description": "The password is shorter than the minimum",
@@ -19773,7 +19931,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's stores, as an array: `store_id`, `tenant_id`, `brand_id` (absent for a store under no brand), `name` and `status`, each with its `etag`"
+            "description": "The tenant's stores, as an array: `store_id`, `tenant_id`, `brand_id` (absent for a store under no brand), `name` and `status`, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_StoreRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -19832,12 +20000,24 @@
         "requestBody": {
           "description": "The `tenant_id` the store belongs to, its `name`, and optionally the `brand_id` it trades under. A new store has no configuration until one is published to it",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or brand_id is not a ULID",
@@ -19918,12 +20098,24 @@
         "requestBody": {
           "description": "The `tenant_id` that owns the store, and its `name`, `brand_id` (absent clears it) and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_StoreRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id, tenant_id or brand_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -20753,7 +20945,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's device slots, as an array: `device_id`, `tenant_id`, `store_id`, `name`, `kind` and `status`, each with its `etag`. These are the slots a box is activated or claimed into; their ids are not the ids of the devices a store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)"
+            "description": "The store's device slots, as an array: `device_id`, `tenant_id`, `store_id`, `name`, `kind` and `status`, each with its `etag`. These are the slots a box is activated or claimed into; their ids are not the ids of the devices a store admits itself (`GET /admin/stores/{store_id}/devices/admitted`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -20823,12 +21025,24 @@
         "requestBody": {
           "description": "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, `kds` or `tablet`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID",
@@ -21108,12 +21322,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the record and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_DeviceRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -22574,7 +22800,17 @@
         "operationId": "admin_list_tenants",
         "responses": {
           "200": {
-            "description": "Every tenant, as an array: `tenant_id`, `name` and `status`, each with the `etag` its version is at"
+            "description": "Every tenant, as an array: `tenant_id`, `name` and `status`, each with the `etag` its version is at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_TenantRecord"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -22624,12 +22860,24 @@
         "requestBody": {
           "description": "The tenant's `name`, and optionally `language`, a language tag such as `vi` that the tenant's starting roles are named in. Absent, or one the console's language packs do not carry, names them in English",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTenantRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. The tenant is given its six starting roles (ADR-0158); if that fails the tenant still stands, with fewer roles"
+            "description": "Created, active, with the id minted here. The body is the record and the ETag carries its version. The tenant is given its six starting roles (ADR-0158); if that fails the tenant still stands, with fewer roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_TenantRecord"
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -22700,12 +22948,24 @@
         "requestBody": {
           "description": "The `name` and `status` (`active` or `archived`) as they should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntityRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the record and the ETag carries its new version"
+            "description": "Updated. The body is the record and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_TenantRecord"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is absent, malformed, or a wildcard",
@@ -22787,12 +23047,24 @@
         "requestBody": {
           "description": "The acting administrator's current password — re-asked so a session-only attacker cannot rotate the second factor and lock the owner out",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReenrolTotpRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Re-enrolled. The new one-time enrolment (QR payload and base32 secret) is returned once; existing sessions stay valid and the next sign-in uses the new authenticator"
+            "description": "Re-enrolled. The new one-time enrolment (QR payload and base32 secret) is returned once; existing sessions stay valid and the next sign-in uses the new authenticator",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolment"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session, or the password is wrong",
@@ -23618,7 +23890,14 @@
         "operationId": "admin_whoami",
         "responses": {
           "200": {
-            "description": "The acting administrator — id, email, role, status — never a password hash or a TOTP secret. Role gating in a console is a convenience only: the server re-checks every route's required permission regardless"
+            "description": "The acting administrator — id, email, role, status — never a password hash or a TOTP secret. Role gating in a console is a convenience only: the server re-checks every route's required permission regardless",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUser"
+                }
+              }
+            }
           },
           "401": {
             "description": "No live session",
@@ -23651,6 +23930,198 @@
   },
   "components": {
     "schemas": {
+      "AcceptInviteRequest": {
+        "type": "object",
+        "description": "A self-enrolment request: the single-use invite token and the password the invitee chooses.\n\n[`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.",
+        "required": [
+          "token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The password the invitee is choosing."
+          },
+          "token": {
+            "type": "string",
+            "description": "The single-use invite token from the invite link."
+          }
+        }
+      },
+      "AdminInvite": {
+        "type": "object",
+        "description": "A pending or accepted invitation, as listed ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).\nCarries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "invited_by",
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Whether the invite has been accepted (its self-enrolment completed)."
+          },
+          "email": {
+            "type": "string",
+            "description": "The address the invitee will sign in with once they accept."
+          },
+          "id": {
+            "type": "string",
+            "description": "The invite's ULID id."
+          },
+          "invited_by": {
+            "type": "string",
+            "description": "The id of the admin who issued the invite."
+          },
+          "name": {
+            "type": "string",
+            "description": "The display name the accepted admin will carry."
+          },
+          "role": {
+            "$ref": "#/components/schemas/AdminRole",
+            "description": "The role the accepted admin will be granted."
+          }
+        }
+      },
+      "AdminRole": {
+        "type": "string",
+        "description": "A console admin's role — the least-privilege tier its session is granted\n([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the\nschema and seam store; the role→permission templates (the compile-forced §9-style registry) land\nin a later G1 slice and are built on top of these variants.",
+        "enum": [
+          "owner",
+          "admin",
+          "ops",
+          "viewer"
+        ]
+      },
+      "AdminSessionView": {
+        "type": "object",
+        "description": "One of the acting admin's live sessions, as the console lists it. `id` is the opaque revocation\nhandle (hex of `SHA-256(token)` — never the token, and not reversible to it); `current` marks the\nsession making this very request, which the console protects from accidental self-revocation.",
+        "required": [
+          "id",
+          "created_at_ms",
+          "expires_at_ms",
+          "current"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the session was minted (Unix ms)."
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether this is the session making the current request."
+          },
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the session currently expires (Unix ms), after any sliding."
+          },
+          "id": {
+            "type": "string",
+            "description": "The opaque handle the console revokes this session by."
+          },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client IP the session was minted for, if it was known."
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The client user-agent the session was minted for, if it was known."
+          }
+        }
+      },
+      "AdminStatus": {
+        "type": "string",
+        "description": "Whether an admin can sign in. `Suspended` keeps the row and its history but refuses new sessions —\nthe off-boarding path that does not destroy the audit trail.",
+        "enum": [
+          "active",
+          "suspended"
+        ]
+      },
+      "AdminUser": {
+        "type": "object",
+        "description": "A console admin as listed — identity and role, never the credential. Safe to serialise to the\nconsole: it carries no password hash and no TOTP secret.",
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "status"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The login identity. Unique case-insensitively across admins."
+          },
+          "id": {
+            "type": "string",
+            "description": "The admin's ULID id (a string; minted at the HTTP edge)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The display name."
+          },
+          "role": {
+            "$ref": "#/components/schemas/AdminRole",
+            "description": "The role that decides the session's permissions."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AdminStatus",
+            "description": "Whether the admin can sign in."
+          }
+        }
+      },
+      "ApiKeySummary": {
+        "type": "object",
+        "description": "A key's metadata for a listing — everything but the secret and its hash, which never leave the\nstore. Serialises to the `/admin/api-keys` list response.",
+        "required": [
+          "id",
+          "scopes",
+          "revoked"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the key expires, in milliseconds since the Unix epoch, if ever."
+          },
+          "id": {
+            "type": "string",
+            "description": "The public id (the ULID half of the token)."
+          },
+          "revoked": {
+            "type": "boolean",
+            "description": "Whether the key has been revoked."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The granted scopes, as their wire names, sorted."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store this key is bound to, or `None` for a tenant-wide key (S1)."
+          }
+        }
+      },
       "Area": {
         "type": "object",
         "description": "An area as the console reads it: a named region of one store's floor.",
@@ -23800,6 +24271,61 @@
         ],
         "description": "Where an assignment grants its role: `scope_kind`, with `store_id` for one store, `store_group_id` for a group, and neither for every store of the tenant"
       },
+      "AuditEntryView": {
+        "type": "object",
+        "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+        "required": [
+          "id",
+          "actor_admin_id",
+          "actor_email",
+          "actor_role",
+          "action",
+          "entity_type",
+          "entity_id",
+          "at_ms"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_admin_id": {
+            "type": "string"
+          },
+          "actor_email": {
+            "type": "string"
+          },
+          "actor_role": {
+            "type": "string"
+          },
+          "after": {},
+          "at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "before": {},
+          "entity_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tenant_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "BatchReport": {
         "type": "object",
         "description": "A batch and what it did at every member — the response body, and the read routes' shape.",
@@ -23922,6 +24448,38 @@
           },
           "user_code": {
             "type": "string"
+          }
+        }
+      },
+      "BrandId": {
+        "$ref": "#/components/schemas/Ulid",
+        "description": "A brand's public identifier — a ULID minted at creation. The other three entities already have id\ntypes in [`pos_proto::ids`]; a brand is new here, so its id is defined alongside the seam."
+      },
+      "BrandRecord": {
+        "type": "object",
+        "description": "A brand — grouped under a tenant.",
+        "required": [
+          "brand_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "$ref": "#/components/schemas/BrandId",
+            "description": "The brand id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -24287,6 +24845,60 @@
         "description": "A `CourseId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "CreateApiKeyRequest": {
+        "type": "object",
+        "description": "A super-admin request to provision a new API key for a tenant.",
+        "required": [
+          "tenant_id",
+          "scopes"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "An optional expiry, in milliseconds since the Unix epoch. Omit for a key that never expires."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The scopes to grant, as their wire names (`read_rollups`, …). Deny-by-default: only these."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The one store the key will act for (a ULID), or absent for a tenant-wide key.\n\nA store's own credential — the key its edge presents on `/sync/stores/{store_id}/…` — must\nname its store here: those routes serve one store's configuration, including its employee\nroster and PIN hashes, and refuse a key that is not bound to the store in the path (S1). A\ntenant-wide key stays right for an integration reading a whole tenant's rollups."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the key will act for (a 26-character ULID)."
+          }
+        }
+      },
+      "CreateApiKeyResponse": {
+        "type": "object",
+        "description": "The one-time response to a provisioning request: the id, and the token shown exactly once.",
+        "required": [
+          "id",
+          "token"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The key's public id (the ULID half of the token)."
+          },
+          "token": {
+            "type": "string",
+            "description": "The full `pos_<id>_<secret>` token. **Shown once** — only its hash is stored, so it cannot be\nrecovered later."
+          }
+        }
+      },
       "CreateAreaRequest": {
         "type": "object",
         "description": "Create a floor area.",
@@ -24348,6 +24960,21 @@
           }
         }
       },
+      "CreateBrandRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateCourseRequest": {
         "type": "object",
         "description": "Create a course — a named point in the service sequence (ADR-0130).",
@@ -24363,6 +24990,25 @@
             "type": "integer",
             "format": "int32",
             "description": "Where it falls in the sequence, ascending. Absent is `0`, which puts a first course first\nand leaves the id to break the tie with any other unpositioned one."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateDeviceRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           },
           "tenant_id": {
             "type": "string"
@@ -24886,6 +25532,27 @@
           }
         }
       },
+      "CreateStoreRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "brand_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateTableRequest": {
         "type": "object",
         "description": "Create a floor table.",
@@ -24942,6 +25609,24 @@
             "type": "string"
           },
           "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateTenantRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language the tenant's starting roles are named in, a language tag such as `vi`. The\nconsole sends the one it is shown in. Absent, or one the console's language packs do not\ncarry, names them in English. Nothing about the tenant records it."
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -25186,6 +25871,11 @@
           }
         }
       },
+      "DeviceId": {
+        "type": "string",
+        "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "DeviceProposalSummary": {
         "type": "object",
         "description": "A proposal as listed — the durable facts plus its status.",
@@ -25295,6 +25985,44 @@
           "version": {
             "type": "string",
             "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
+          }
+        }
+      },
+      "DeviceRecord": {
+        "type": "object",
+        "description": "A device — the canonical device identity, grouped under a store. Shares its `device_id` with\n`device_proposals` / `device_credentials`.",
+        "required": [
+          "device_id",
+          "tenant_id",
+          "store_id",
+          "name",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "The device id."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`pos`, `printer`, `kds`, `tablet`, `unknown`, …"
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The owning store."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -25414,6 +26142,24 @@
       "EmployeeId": {
         "$ref": "#/components/schemas/Ulid",
         "description": "An employee's identifier — a ULID minted at creation. Defined here beside the seam, like\n[`BrandId`](crate::registry::BrandId): an employee is a cloud-only concept, so it needs no\n`pos-proto` id type."
+      },
+      "Enrolment": {
+        "type": "object",
+        "description": "The TOTP enrolment returned once on a successful first-boot: the `otpauth://` URI an authenticator\napp imports (as a QR or by paste) and the raw base32 secret for manual entry.\n\nBoth fields carry the shared secret, so [`fmt::Debug`] redacts them — the value reaches the\noperator through the HTTP response body, never a log.",
+        "required": [
+          "otpauth_uri",
+          "secret_base32"
+        ],
+        "properties": {
+          "otpauth_uri": {
+            "type": "string",
+            "description": "The `otpauth://totp/…` provisioning URI (SHA1, 6 digits, 30-second period)."
+          },
+          "secret_base32": {
+            "type": "string",
+            "description": "The base32-encoded shared secret, for an authenticator that takes a typed key."
+          }
+        }
       },
       "EntityStatus": {
         "type": "string",
@@ -25791,6 +26537,53 @@
           }
         }
       },
+      "InviteAdminRequest": {
+        "type": "object",
+        "description": "A request to invite a new console admin.",
+        "required": [
+          "email",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The invitee's email — the address they will sign in with (normalised server-side)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The invitee's display name."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role to grant on acceptance: `owner`/`admin`/`ops`/`viewer`."
+          }
+        }
+      },
+      "InviteAdminResponse": {
+        "type": "object",
+        "description": "The one-time response to an invitation: the id, the single-use token (shown once) the inviter\ncopies into the invite link, and the expiry. Only the token's hash is stored.",
+        "required": [
+          "invite_id",
+          "token",
+          "expires_at_ms"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the invite stops being acceptable (Unix milliseconds)."
+          },
+          "invite_id": {
+            "type": "string",
+            "description": "The invite's id (a ULID)."
+          },
+          "token": {
+            "type": "string",
+            "description": "The single-use invite token. **Shown once** — only its hash is stored, so it cannot be\nrecovered later; the inviter hands the link carrying it to the invitee out-of-band."
+          }
+        }
+      },
       "IssueActivationRequest": {
         "type": "object",
         "description": "A super-admin issues an activation code for a device slot.",
@@ -25981,6 +26774,74 @@
             "description": "The owning tenant."
           }
         }
+      },
+      "ListOrPage_AuditEntryView": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+              "required": [
+                "id",
+                "actor_admin_id",
+                "actor_email",
+                "actor_role",
+                "action",
+                "entity_type",
+                "entity_id",
+                "at_ms"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor_admin_id": {
+                  "type": "string"
+                },
+                "actor_email": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "after": {},
+                "at_ms": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "before": {},
+                "entity_id": {
+                  "type": "string"
+                },
+                "entity_type": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tenant_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "The whole set, when the caller named no `limit`."
+          },
+          {
+            "$ref": "#/components/schemas/PagedBody_AuditEntryView",
+            "description": "One page, when it did."
+          }
+        ],
+        "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
       },
       "ListOrPage_MediaSummaryView": {
         "oneOf": [
@@ -26223,6 +27084,37 @@
           }
         ],
         "description": "What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array\nwithout `limit`, or a [`PagedBody`] with one (ADR-0098).\n\nThe handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type\nonly describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the\nbytes the handler's own answer serialises to."
+      },
+      "LoginRequest": {
+        "type": "object",
+        "description": "An admin sign-in request: who is signing in, their password, and the current TOTP code.\n\n`email` is **optional**, and that is the one load-bearing choice in\n[ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md). Migration 0018 gave the\nonly admin every existing installation has a synthetic, non-routable address\n([`IMPLICIT_OWNER_EMAIL`]) that nobody has seen and no route can change, so requiring the field\nwould lock out every installation on the day this deployed. Absent, it resolves to the single\nadmin when there is exactly one — which is every installation today — and is refused once there\nare two, which is exactly when guessing would start being wrong.\n\n[`fmt::Debug`] redacts the password and any recovery code, so a logged request cannot leak either.\nThe email is not redacted: it is the identity, and it is what the log needs to attribute a failed\nattempt.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who is signing in. Absent resolves to the single admin; see the type's own note."
+          },
+          "password": {
+            "type": "string",
+            "description": "The admin's password."
+          },
+          "recovery_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A one-time recovery code, used in place of the TOTP second factor when the authenticator is\nlost ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Absent for an\nordinary password + TOTP sign-in."
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "The current 6-digit TOTP code. Ignored when a `recovery_code` is present."
+          }
+        }
       },
       "MediaId": {
         "type": "string",
@@ -26551,6 +27443,91 @@
       "OpenVendorAvailability_VendorAvailability": {
         "type": "string",
         "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
+      },
+      "PagedBody_AuditEntryView": {
+        "type": "object",
+        "description": "A page on the wire: the rows, the size of the whole set, and the bounds that produced them.\n\nThe bounds are echoed because a pager needs them to render \"1–25 of 812\" and to build the next\nrequest, and because the alternative — the client tracking what it sent — breaks the moment a\nlink is shared or a page is reloaded.",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw\nULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.",
+              "required": [
+                "id",
+                "actor_admin_id",
+                "actor_email",
+                "actor_role",
+                "action",
+                "entity_type",
+                "entity_id",
+                "at_ms"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor_admin_id": {
+                  "type": "string"
+                },
+                "actor_email": {
+                  "type": "string"
+                },
+                "actor_role": {
+                  "type": "string"
+                },
+                "after": {},
+                "at_ms": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "before": {},
+                "entity_id": {
+                  "type": "string"
+                },
+                "entity_type": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "tenant_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
       },
       "PagedBody_MediaSummaryView": {
         "type": "object",
@@ -27545,6 +28522,56 @@
           }
         }
       },
+      "RecoveryCodesResponse": {
+        "type": "object",
+        "description": "The freshly-generated recovery codes, returned exactly once. [`fmt::Debug`] redacts the codes so\nthey cannot reach a log — they exist in the response body and nowhere else.",
+        "required": [
+          "codes",
+          "remaining"
+        ],
+        "properties": {
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The plaintext codes, shown this once; only their hashes are stored."
+          },
+          "remaining": {
+            "type": "integer",
+            "description": "How many codes are now available (the count just generated).",
+            "minimum": 0
+          }
+        }
+      },
+      "RecoveryCodesStatus": {
+        "type": "object",
+        "description": "How many unused recovery codes the acting admin has left — the codes themselves are never listed.",
+        "required": [
+          "remaining"
+        ],
+        "properties": {
+          "remaining": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of unused recovery codes.",
+            "minimum": 0
+          }
+        }
+      },
+      "ReenrolTotpRequest": {
+        "type": "object",
+        "description": "A request to re-enrol TOTP: the current password, re-confirming the knowledge factor before the\npossession factor is rotated. [`fmt::Debug`] redacts it.",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The current super-admin password."
+          }
+        }
+      },
       "ReleaseNodeRequest": {
         "type": "object",
         "description": "One node of a release, and the arguments its plan needs — the same pair a batch publish takes.",
@@ -28476,6 +29503,24 @@
           }
         }
       },
+      "SetupRequest": {
+        "type": "object",
+        "description": "A first-boot enrolment request: the authorising setup token and the password the operator chooses.\n\n[`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.",
+        "required": [
+          "setup_token",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The password the operator is choosing for the super-admin."
+          },
+          "setup_token": {
+            "type": "string",
+            "description": "The one-time setup token (`bootstrap.sh` minted it into `cloud.toml`)."
+          }
+        }
+      },
       "Station": {
         "type": "object",
         "description": "A kitchen station as the console reads it: a station on one store's line, with an optional backup\n(the printer failover) and a catch-all `is_default` flag.",
@@ -28617,6 +29662,45 @@
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StoreRecord": {
+        "type": "object",
+        "description": "A store — grouped under a tenant and, optionally, a brand. Shares its `store_id` with its\n`config_trees` row.",
+        "required": [
+          "store_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BrandId",
+                "description": "The owning brand, or `None` until an operator assigns one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "The human name (a placeholder until renamed)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store id."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
       },
       "SupplierId": {
         "type": "string",
@@ -28886,6 +29970,29 @@
         "description": "A `TenantId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "TenantRecord": {
+        "type": "object",
+        "description": "A tenant — the root of the tree.",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The human name."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The tenant id."
+          }
+        }
+      },
       "TranslationGrid": {
         "type": "object",
         "description": "A tenant's translation grid: content key → (locale → rendered string).",
@@ -28907,9 +30014,54 @@
         "description": "A ULID: 26 Crockford base-32 characters, ordered by the time it was minted",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "UpdateAdminRoleRequest": {
+        "type": "object",
+        "description": "A request to change an admin's role.",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "The new role: `owner`/`admin`/`ops`/`viewer`."
+          }
+        }
+      },
+      "UpdateAdminStatusRequest": {
+        "type": "object",
+        "description": "A request to change an admin's status.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "The new status: `active` or `suspended`."
+          }
+        }
+      },
       "UpdateAreaRequest": {
         "type": "object",
         "description": "Rename an area and/or set its status.",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateBrandRequest": {
+        "type": "object",
         "required": [
           "tenant_id",
           "name",
@@ -28942,6 +30094,29 @@
           "sort": {
             "type": "integer",
             "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateDeviceRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "kind",
+          "status"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           },
           "status": {
             "type": "string"
@@ -29009,6 +30184,21 @@
             "type": "string"
           },
           "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateEntityRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         }
@@ -29311,6 +30501,31 @@
           }
         }
       },
+      "UpdateStoreRequest": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "brand_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateTableRequest": {
         "type": "object",
         "description": "Update a table's area, label, seats, position, and status.",
@@ -29425,6 +30640,59 @@
               "store_id": {
                 "$ref": "#/components/schemas/StoreId",
                 "description": "The store this area belongs to."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_BrandRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A brand — grouped under a tenant.",
+            "required": [
+              "brand_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "brand_id": {
+                "$ref": "#/components/schemas/BrandId",
+                "description": "The brand id."
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
@@ -29597,6 +30865,69 @@
               "status": {
                 "$ref": "#/components/schemas/EntityStatus",
                 "description": "Active or archived. An archived course is not published, the same posture an archived item\nand an archived modifier group already get."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_DeviceRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A device — the canonical device identity, grouped under a store. Shares its `device_id` with\n`device_proposals` / `device_credentials`.",
+            "required": [
+              "device_id",
+              "tenant_id",
+              "store_id",
+              "name",
+              "kind",
+              "status"
+            ],
+            "properties": {
+              "device_id": {
+                "$ref": "#/components/schemas/DeviceId",
+                "description": "The device id."
+              },
+              "kind": {
+                "type": "string",
+                "description": "`pos`, `printer`, `kds`, `tablet`, `unknown`, …"
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "store_id": {
+                "$ref": "#/components/schemas/StoreId",
+                "description": "The owning store."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
@@ -30642,6 +31973,70 @@
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
       },
+      "Versioned_StoreRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A store — grouped under a tenant and, optionally, a brand. Shares its `store_id` with its\n`config_trees` row.",
+            "required": [
+              "store_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "brand_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BrandId",
+                    "description": "The owning brand, or `None` until an operator assigns one."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name (a placeholder until renamed)."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "store_id": {
+                "$ref": "#/components/schemas/StoreId",
+                "description": "The store id."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
       "Versioned_Table": {
         "allOf": [
           {
@@ -30750,6 +32145,54 @@
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
                 "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_TenantRecord": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A tenant — the root of the tree.",
+            "required": [
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The human name."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The tenant id."
               }
             }
           },

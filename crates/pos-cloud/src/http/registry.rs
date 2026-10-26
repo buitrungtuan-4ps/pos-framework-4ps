@@ -123,7 +123,7 @@ where
         })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateTenantRequest {
     name: String,
     /// The language the tenant's starting roles are named in, a language tag such as `vi`. The
@@ -133,33 +133,33 @@ struct CreateTenantRequest {
     language: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateEntityRequest {
     name: String,
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateBrandRequest {
     tenant_id: String,
     name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateBrandRequest {
     tenant_id: String,
     name: String,
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateStoreRequest {
     tenant_id: String,
     brand_id: Option<String>,
     name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateStoreRequest {
     tenant_id: String,
     brand_id: Option<String>,
@@ -167,14 +167,14 @@ struct UpdateStoreRequest {
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateDeviceRequest {
     tenant_id: String,
     name: String,
     kind: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateDeviceRequest {
     tenant_id: String,
     name: String,

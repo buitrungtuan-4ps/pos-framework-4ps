@@ -25,7 +25,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// A brand's public identifier — a ULID minted at creation. The other three entities already have id
 /// types in [`pos_proto::ids`]; a brand is new here, so its id is defined alongside the seam.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 pub struct BrandId(Ulid);
 
 impl BrandId {
@@ -86,7 +86,7 @@ impl EntityStatus {
 }
 
 /// A tenant — the root of the tree.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TenantRecord {
     /// The tenant id.
     pub tenant_id: TenantId,
@@ -97,7 +97,7 @@ pub struct TenantRecord {
 }
 
 /// A brand — grouped under a tenant.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct BrandRecord {
     /// The brand id.
     pub brand_id: BrandId,
@@ -111,7 +111,7 @@ pub struct BrandRecord {
 
 /// A store — grouped under a tenant and, optionally, a brand. Shares its `store_id` with its
 /// `config_trees` row.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoreRecord {
     /// The store id.
     pub store_id: StoreId,
@@ -127,7 +127,7 @@ pub struct StoreRecord {
 
 /// A device — the canonical device identity, grouped under a store. Shares its `device_id` with
 /// `device_proposals` / `device_credentials`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DeviceRecord {
     /// The device id.
     pub device_id: DeviceId,

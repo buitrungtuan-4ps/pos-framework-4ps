@@ -23,6 +23,7 @@ use crate::http::{
 };
 use crate::registry::{DeviceRecord, EntityStatus, RegistryStore};
 use crate::version::UpdateOutcome;
+use crate::version::Versioned;
 
 #[utoipa::path(
     get,
@@ -34,7 +35,7 @@ use crate::version::UpdateOutcome;
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's device slots, as an array: `device_id`, \
+        (status = 200, body = [Versioned<DeviceRecord>], description = "The store's device slots, as an array: `device_id`, \
                                       `tenant_id`, `store_id`, `name`, `kind` and `status`, each \
                                       with its `etag`. These are the slots a box is activated or \
                                       claimed into; their ids are not the ids of the devices a \
@@ -88,12 +89,12 @@ where
         ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
     ),
     request_body(
-        description = "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, \
+        content = CreateDeviceRequest, description = "`tenant_id`, the slot's `name`, and its `kind`, such as `pos`, `printer`, \
                        `kds` or `tablet`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<DeviceRecord>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -176,12 +177,12 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or \
+        content = UpdateDeviceRequest, description = "`tenant_id`, and the slot's `name`, `kind` and `status` (`active` or \
                        `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<DeviceRecord>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "An id is not a ULID, status is not `active` or `archived`, or \
                                       If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
