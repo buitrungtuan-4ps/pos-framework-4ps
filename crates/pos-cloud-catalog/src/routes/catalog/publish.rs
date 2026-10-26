@@ -30,7 +30,7 @@ use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::fees::FeeRuleStore;
 use crate::registry::RegistryStore;
-use crate::routes::fees::{FeePublishResult, TenantFeeRules};
+use crate::routes::fees::{FeePublishOutcome, FeePublishResult, TenantFeeRules};
 use crate::routes::publish_config_nodes_with;
 use crate::version::records;
 
@@ -385,7 +385,7 @@ where
     )
     .await?;
     let fees = composed.map_or_else(
-        || FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+        || FeePublishResult::of(store_id, FeePublishOutcome::Failed),
         |on_tree| on_tree.result(store_id, Some(id)),
     );
     Ok((id, fees))

@@ -32,8 +32,8 @@ pub(super) struct PublishToStoreGroupRequest {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct BatchResultView {
     pub(super) store_id: String,
-    /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
-    pub(super) outcome: String,
+    /// `applied`, `skipped` or `failed`: exactly the three of ADR-0122 §6.
+    pub(super) outcome: BatchOutcome,
     /// The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the
     /// write left something behind: a menu whose store's fees did not go with it says so, with the
     /// fee publish's outcome and reason tokens.

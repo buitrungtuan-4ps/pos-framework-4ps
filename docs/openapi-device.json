@@ -1776,6 +1776,15 @@
         "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "DeviceProposalStatus": {
+        "type": "string",
+        "description": "Where a proposal sits in the approval workflow.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
       "DeviceProposalSummary": {
         "type": "object",
         "description": "A proposal as listed — the durable facts plus its status.",
@@ -2381,7 +2390,7 @@
             "description": "The proposal's id (a ULID)."
           },
           "status": {
-            "type": "string",
+            "$ref": "#/components/schemas/DeviceProposalStatus",
             "description": "The status — `pending` until an operator resolves it."
           }
         }

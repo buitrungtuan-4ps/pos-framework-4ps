@@ -45,7 +45,7 @@ pub use delete::__path_admin_delete_fee;
 pub use preview::__path_admin_preview_fees;
 pub use publish::__path_admin_publish_fees;
 pub(super) use publish::FeePublishResult;
-pub use publish::{TenantFeeRules, fees_left_behind};
+pub use publish::{FeePublishOutcome, TenantFeeRules, fees_left_behind};
 pub use reads::{__path_admin_effective_fees, __path_admin_list_fees};
 pub use write::{__path_admin_create_fee, __path_admin_put_fee};
 
@@ -138,6 +138,7 @@ struct FeesTenantQuery {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct FeeRuleView {
     /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
+    #[schema(value_type = FeeScope)]
     scope: &'static str,
     /// The tenant, brand or store it was written for.
     scope_id: String,
@@ -163,7 +164,7 @@ impl FeeRuleView {
 /// What the trail keeps of a fee write or publish: how many stores it reached and how each went.
 /// Counts only — never a rule's code, name, rate or amount, which the rule store keeps.
 fn fee_publish_counts(results: &[FeePublishResult]) -> serde_json::Value {
-    let count = |outcome: &str| {
+    let count = |outcome: FeePublishOutcome| {
         results
             .iter()
             .filter(|result| result.outcome == outcome)
@@ -171,10 +172,10 @@ fn fee_publish_counts(results: &[FeePublishResult]) -> serde_json::Value {
     };
     serde_json::json!({
         "stores": results.len(),
-        "applied": count("FEE_PUBLISH_APPLIED"),
-        "unchanged": count("FEE_PUBLISH_UNCHANGED"),
-        "refused": count("FEE_PUBLISH_REFUSED"),
-        "failed": count("FEE_PUBLISH_FAILED"),
+        "applied": count(FeePublishOutcome::Applied),
+        "unchanged": count(FeePublishOutcome::Unchanged),
+        "refused": count(FeePublishOutcome::Refused),
+        "failed": count(FeePublishOutcome::Failed),
     })
 }
 

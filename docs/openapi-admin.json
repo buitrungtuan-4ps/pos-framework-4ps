@@ -25108,6 +25108,14 @@
         "description": "A `AreaId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "ArtifactFetchOutcome": {
+        "type": "string",
+        "description": "What a fetch did with one artifact: `recorded` for a new one, `already_hosted` for one the cloud\nalready held with these exact bytes, so a re-run reads as a no-op rather than as work.",
+        "enum": [
+          "recorded",
+          "already_hosted"
+        ]
+      },
       "ArtifactUploaded": {
         "type": "object",
         "description": "What an artifact upload answers: the artifact it recorded.",
@@ -25353,6 +25361,15 @@
           "type": "string"
         }
       },
+      "BatchOutcome": {
+        "type": "string",
+        "description": "What a batch publish did at one store.\n\nThree variants, because there are three real answers to \"what happened at this shop\", and the\ndistinction between the first two is the whole reason the report exists.",
+        "enum": [
+          "applied",
+          "skipped",
+          "failed"
+        ]
+      },
       "BatchReport": {
         "type": "object",
         "description": "A batch and what it did at every member — the response body, and the read routes' shape.",
@@ -25433,8 +25450,8 @@
             "description": "The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the\nwrite left something behind: a menu whose store's fees did not go with it says so, with the\nfee publish's outcome and reason tokens."
           },
           "outcome": {
-            "type": "string",
-            "description": "`applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6."
+            "$ref": "#/components/schemas/BatchOutcome",
+            "description": "`applied`, `skipped` or `failed`: exactly the three of ADR-0122 §6."
           },
           "store_id": {
             "type": "string"
@@ -27139,7 +27156,7 @@
             "description": "The terminal's device id (a ULID) — what a printer names to make it its agent."
           },
           "status": {
-            "type": "string",
+            "$ref": "#/components/schemas/DeviceProposalStatus",
             "description": "`approved`, always: a terminal is created resolved, because the console write *is* the\ndecision."
           }
         }
@@ -27361,6 +27378,15 @@
         "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "DeviceProposalStatus": {
+        "type": "string",
+        "description": "Where a proposal sits in the approval workflow.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
       "DeviceProposalSummary": {
         "type": "object",
         "description": "A proposal as listed — the durable facts plus its status.",
@@ -27559,6 +27585,15 @@
         "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "EdgePlacement": {
+        "type": "string",
+        "enum": [
+          "EDGE_PLACEMENT_UNSPECIFIED",
+          "EDGE_PLACEMENT_IN_STORE",
+          "EDGE_PLACEMENT_HOSTED_BY_OPERATOR",
+          "EDGE_PLACEMENT_HOSTED_BY_PLATFORM"
+        ]
+      },
       "EffectiveFee": {
         "type": "object",
         "description": "One fee as one store runs it, and where its rule comes from.",
@@ -27588,7 +27623,7 @@
             "description": "The rule as written: the wire rule's fields, and the categories it names."
           },
           "scope": {
-            "type": "string",
+            "$ref": "#/components/schemas/FeeScope",
             "description": "The scope of the rule in force, and what it was written for."
           },
           "scope_id": {
@@ -27818,6 +27853,16 @@
         "description": "A `FeeId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "FeePublishOutcome": {
+        "type": "string",
+        "description": "How one store's fee publish went, as its token.",
+        "enum": [
+          "FEE_PUBLISH_APPLIED",
+          "FEE_PUBLISH_UNCHANGED",
+          "FEE_PUBLISH_REFUSED",
+          "FEE_PUBLISH_FAILED"
+        ]
+      },
       "FeePublishResult": {
         "type": "object",
         "description": "How one store's fee publish went.",
@@ -27837,8 +27882,8 @@
             "description": "For a refused store: each rule it cannot apply, and why."
           },
           "outcome": {
-            "type": "string",
-            "description": "`FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or\n`FEE_PUBLISH_FAILED`."
+            "$ref": "#/components/schemas/FeePublishOutcome",
+            "description": "How it went."
           },
           "store_id": {
             "type": "string"
@@ -27983,7 +28028,7 @@
             "description": "The rule as written: the wire rule's fields, and the categories it names."
           },
           "scope": {
-            "type": "string",
+            "$ref": "#/components/schemas/FeeScope",
             "description": "`FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`."
           },
           "scope_id": {
@@ -28014,6 +28059,15 @@
             "description": "The rules, each with its scope and who last wrote it."
           }
         }
+      },
+      "FeeScope": {
+        "type": "string",
+        "enum": [
+          "FEE_SCOPE_UNSPECIFIED",
+          "FEE_SCOPE_TENANT",
+          "FEE_SCOPE_BRAND",
+          "FEE_SCOPE_STORE"
+        ]
       },
       "FeeTotal": {
         "type": "object",
@@ -28099,8 +28153,8 @@
             "description": "The asset the bytes came from, so the console can say what it took."
           },
           "outcome": {
-            "type": "string",
-            "description": "`recorded` for a new artifact, `already_hosted` for one the cloud already held with these\nexact bytes — so a re-run reads as a no-op rather than as work."
+            "$ref": "#/components/schemas/ArtifactFetchOutcome",
+            "description": "Whether the cloud stored it now or already held these exact bytes."
           },
           "sha256": {
             "type": "string"
@@ -28228,10 +28282,7 @@
             ]
           },
           "edge_placement": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "$ref": "#/components/schemas/EdgePlacement",
             "description": "Where the machine holding the authoritative generation runs — the `EDGE_PLACEMENT_*` token,\nor `null` ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).\n\n`null` covers two different things on purpose, and the console must not read it as a mode:\nthe cloud has never bumped this store, or the stored token is one this build cannot decode.\nNeither is `EDGE_PLACEMENT_UNSPECIFIED` — on the wire that token means *this message did not\nsay*, and a server that emitted it would be saying something. A field that is simply absent\nis the honest shape for both.\n\nWhat the two absences mean for *urgency* is deliberately not on this view, because the\nconsole does not decide it: the alert engine reads the same `FleetRow` and scores an\nundecodable token with the hosted case rather than the in-store one."
           },
           "handover": {
@@ -29848,6 +29899,14 @@
           }
         }
       },
+      "PermissionsPublishOutcome": {
+        "type": "string",
+        "description": "How one store's `permissions` publish went, as its token.",
+        "enum": [
+          "PERMISSIONS_PUBLISH_APPLIED",
+          "PERMISSIONS_PUBLISH_FAILED"
+        ]
+      },
       "PermissionsPublishResult": {
         "type": "object",
         "description": "How one store's `permissions` publish went, as a write that publishes at once reports it.",
@@ -29860,8 +29919,8 @@
             "type": "string"
           },
           "outcome": {
-            "type": "string",
-            "description": "`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`."
+            "$ref": "#/components/schemas/PermissionsPublishOutcome",
+            "description": "How it went."
           },
           "store_id": {
             "type": "string"
@@ -32090,6 +32149,17 @@
         ],
         "description": "What an import would do to one row. Serialises with an `action` tag and, for a rejection, a\n`reason` — the shape the dashboard renders row-by-row."
       },
+      "SalesChannel": {
+        "type": "string",
+        "enum": [
+          "SALES_CHANNEL_UNSPECIFIED",
+          "SALES_CHANNEL_DINE_IN",
+          "SALES_CHANNEL_TAKEAWAY",
+          "SALES_CHANNEL_DELIVERY",
+          "SALES_CHANNEL_QR",
+          "SALES_CHANNEL_API"
+        ]
+      },
       "SampleBillView": {
         "type": "object",
         "description": "A sample bill as the console draws it: each line, each fee with its tax, the tax per class, and\nwhat the guest would pay.",
@@ -32122,7 +32192,7 @@
             "$ref": "#/components/schemas/Money"
           },
           "sales_channel": {
-            "type": "string"
+            "$ref": "#/components/schemas/SalesChannel"
           },
           "service_charge": {
             "$ref": "#/components/schemas/Money",
@@ -32643,7 +32713,7 @@
             "type": "string"
           },
           "kind": {
-            "type": "string"
+            "$ref": "#/components/schemas/SettingKind"
           },
           "max": {
             "type": "integer",
@@ -32680,6 +32750,24 @@
           }
         }
       },
+      "SettingKind": {
+        "type": "string",
+        "enum": [
+          "SETTING_KIND_UNSPECIFIED",
+          "SETTING_KIND_CHOICE",
+          "SETTING_KIND_INT",
+          "SETTING_KIND_BOOL"
+        ]
+      },
+      "SettingPublishOutcome": {
+        "type": "string",
+        "description": "How one store's settings publish went, as its token.",
+        "enum": [
+          "SETTING_PUBLISH_APPLIED",
+          "SETTING_PUBLISH_UNCHANGED",
+          "SETTING_PUBLISH_FAILED"
+        ]
+      },
       "SettingPublishResult": {
         "type": "object",
         "description": "How one store's settings publish went.",
@@ -32692,8 +32780,8 @@
             "type": "string"
           },
           "outcome": {
-            "type": "string",
-            "description": "`SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`."
+            "$ref": "#/components/schemas/SettingPublishOutcome",
+            "description": "How it went."
           },
           "store_id": {
             "type": "string"
@@ -33079,8 +33167,8 @@
                   "description": "For a refused store: each rule it cannot apply, and why."
                 },
                 "outcome": {
-                  "type": "string",
-                  "description": "`FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or\n`FEE_PUBLISH_FAILED`."
+                  "$ref": "#/components/schemas/FeePublishOutcome",
+                  "description": "How it went."
                 },
                 "store_id": {
                   "type": "string"
@@ -33112,8 +33200,8 @@
                   "type": "string"
                 },
                 "outcome": {
-                  "type": "string",
-                  "description": "`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`."
+                  "$ref": "#/components/schemas/PermissionsPublishOutcome",
+                  "description": "How it went."
                 },
                 "store_id": {
                   "type": "string"
@@ -33145,8 +33233,8 @@
                   "type": "string"
                 },
                 "outcome": {
-                  "type": "string",
-                  "description": "`SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`."
+                  "$ref": "#/components/schemas/SettingPublishOutcome",
+                  "description": "How it went."
                 },
                 "store_id": {
                   "type": "string"
@@ -33548,7 +33636,7 @@
             "minimum": 0
           },
           "sales_channel": {
-            "type": "string"
+            "$ref": "#/components/schemas/SalesChannel"
           },
           "tax_class_id": {
             "type": "string"

@@ -33,6 +33,7 @@ pub(in crate::http) struct SettingCatalogueEntry {
     setting_key: String,
     node: &'static str,
     field: &'static str,
+    #[schema(value_type = pos_proto::settings::SettingKind)]
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]

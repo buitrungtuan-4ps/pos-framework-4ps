@@ -80,6 +80,7 @@ struct SampleLineRequest {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleBillView {
     store_id: String,
+    #[schema(value_type = SalesChannel)]
     sales_channel: &'static str,
     lines: Vec<SampleLineView>,
     subtotal: Money,
