@@ -35,7 +35,7 @@ pub(super) struct SettingsTenantQuery {
 }
 
 /// A `PUT /admin/settings` body: one value, at one scope.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PutSettingRequest {
     tenant_id: String,
     setting_key: String,
@@ -55,7 +55,7 @@ pub(super) struct PutSettingRequest {
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
+        content = PutSettingRequest, description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
                        _STORE_GROUP or _STORE), the id it is for, the value, and \
                        notice_confirmed (default false), true when the person confirmed the \
                        notice of a value its catalogue entry's confirm names",

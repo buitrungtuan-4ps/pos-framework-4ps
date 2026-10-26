@@ -16,7 +16,7 @@ use crate::registry::EntityStatus;
 use crate::store_groups::BatchOutcome;
 
 /// A `POST /admin/store-groups/{group_id}/publish` body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishToStoreGroupRequest {
     pub(super) tenant_id: String,
     /// Which node kind to publish — one of the thirteen batchable ones (ADR-0122 §4).
@@ -29,7 +29,7 @@ pub(super) struct PublishToStoreGroupRequest {
 }
 
 /// What a batch did at one store.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct BatchResultView {
     pub(super) store_id: String,
     /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
@@ -46,7 +46,7 @@ pub(super) struct BatchResultView {
 }
 
 /// A batch and what it did at every member — the response body, and the read routes' shape.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct BatchReport {
     pub(super) batch_id: String,
     pub(super) group_id: String,

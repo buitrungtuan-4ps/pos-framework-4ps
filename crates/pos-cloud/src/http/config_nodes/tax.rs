@@ -38,7 +38,7 @@ struct ConfigTaxState<Tax, Cfg, A, C> {
 
 /// A super-admin publishes a tenant's authored tax rates to one of its stores: the `(tenant, store)`.
 /// The rates come from the authored table, not the body — publishing is "push what is authored".
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishTaxRequest {
     tenant_id: String,
     store_id: String,
@@ -108,12 +108,12 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is \
+        content = PublishTaxRequest, description = "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is \
                        compiled into the node",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `tax` node on its \
+        (status = 200, body = PublishedConfig, description = "Published as the store's `tax` node on its \
                                       Store layer. The body carries `config_version_id`, which the \
                                       store pulls on its next sync. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs \

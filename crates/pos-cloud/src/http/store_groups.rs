@@ -167,7 +167,7 @@ where
 /// Members ride along with the list rather than needing a read per group: the console's first
 /// question about a cohort is how big it is, and a screen that had to fetch each one would show a
 /// list of names with the counts arriving afterwards.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct StoreGroupView {
     group_id: String,
     tenant_id: String,
@@ -178,14 +178,14 @@ struct StoreGroupView {
 }
 
 /// A `POST /admin/store-groups` body. The id is server-minted.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateStoreGroupRequest {
     tenant_id: String,
     name: String,
 }
 
 /// A `PATCH /admin/store-groups/{group_id}` body: rename and/or set the status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateStoreGroupRequest {
     tenant_id: String,
     name: String,
@@ -197,7 +197,7 @@ struct UpdateStoreGroupRequest {
 /// Wholesale rather than add/remove because the operator's mental model is a *set* — "these are the
 /// airport shops" — and a delta API makes two admins' concurrent edits merge into a cohort neither
 /// of them chose. Under `If-Match` (ADR-0095 shape C) the second one is refused instead.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct SetStoreGroupMembersRequest {
     tenant_id: String,
     store_ids: Vec<String>,

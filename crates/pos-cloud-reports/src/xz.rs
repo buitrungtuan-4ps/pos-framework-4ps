@@ -18,6 +18,7 @@ use crate::dashboard::{RollupStore, xz_report};
 use crate::refusal::rollup_error_response;
 use crate::state::ReportsState;
 use crate::till_names::TillNames;
+use crate::types::XzReport;
 use pos_cloud_api::auth::admin::AdminStore;
 use pos_cloud_api::auth::console_rbac::ConsolePermission;
 use pos_cloud_api::console::require_permission;
@@ -35,7 +36,7 @@ use pos_cloud_api::response::parse_ulid_fields;
                                                                Absent, the store's latest day"),
     ),
     responses(
-        (status = 200, description = "The day's report: `kind`, `X` for the current day (interim) \
+        (status = 200, body = XzReport, description = "The day's report: `kind`, `X` for the current day (interim) \
                                       or `Z` for a past one (final); `business_date`; `activity`, the \
                                       day's event counts; `revenue`, its takings and mix; `cash`, its \
                                       drawers; and `till_names`, each till's name from the store's \

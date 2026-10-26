@@ -38,13 +38,13 @@ use crate::http::{
                                                      published to (ADR-0095). Required"),
     ),
     request_body(
-        description = "The whole document for that layer, as JSON. It replaces the layer, every key \
+        content = serde_json::Value, description = "The whole document for that layer, as JSON. It replaces the layer, every key \
                        of it, and the four layers are composed and validated into the store's new \
                        configuration (ADR-0033)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body carries `config_version_id`, the new \
+        (status = 200, body = PublishedConfig, description = "Published. The body carries `config_version_id`, the new \
                                       version, which the store pulls on its next sync. Audited with \
                                       the level and the version, never the document"),
         (status = 400, description = "tenant_id or store_id is not a ULID; level is not one of the \

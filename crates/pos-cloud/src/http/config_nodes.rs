@@ -84,7 +84,7 @@ struct ConfigNodeQuery {
 }
 
 /// A `PUT /admin/config/channels` body: the `(tenant, store)` and the enabled sales-channel tokens.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishChannelsRequest {
     tenant_id: String,
     store_id: String,
@@ -93,7 +93,7 @@ struct PublishChannelsRequest {
 }
 
 /// A `PUT /admin/config/tender` body: the `(tenant, store)` and the accepted payment-method tokens.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishTenderRequest {
     tenant_id: String,
     store_id: String,
@@ -107,7 +107,7 @@ struct PublishTenderRequest {
 ///
 /// The serving origin is never listed here and never needs to be: the edge compares it against the
 /// request's own `Host`, so a store that publishes nothing keeps serving its own UI.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishOriginsRequest {
     tenant_id: String,
     store_id: String,

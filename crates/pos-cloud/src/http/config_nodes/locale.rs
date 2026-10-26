@@ -102,7 +102,7 @@ pub(in crate::http) fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
 /// A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA
 /// timezone, and business-date cutoff hour. These drive money display and business-date derivation on
 /// the edge (ADR-0014); until M4 they were hardcoded to VND/UTC/04:00 in the edge bootstrap.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct PublishLocaleRequest {
     pub(in crate::http) tenant_id: String,
     pub(in crate::http) store_id: String,
@@ -288,7 +288,7 @@ pub(in crate::http) fn checked_locale_node(
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), \
+        content = PublishLocaleRequest, description = "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), \
                        `cutoff_hour` (0 to 23, where a business day ends), and optionally \
                        `display_language`, `prices_include_tax`, `cash_rounding_increment` and \
                        `cash_denominations`, both in the currency's minor units (ADR-0074, \
@@ -296,7 +296,7 @@ pub(in crate::http) fn checked_locale_node(
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `locale` node on its \
+        (status = 200, body = PublishedConfig, description = "Published as the store's `locale` node on its \
                                       Store layer. The body carries `config_version_id`, which the \
                                       store pulls on its next sync. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID, country_code is absent or not a country, a currency, timezone or hour does not parse, or a \
