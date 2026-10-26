@@ -49,7 +49,7 @@ use pos_cloud_api::refusal::{enum_refusal, not_found};
                                                             assignments that reach every store"),
     ),
     responses(
-        (status = 200, description = "The assignments, as an array. Each says its scope and names \
+        (status = 200, body = [Assignment], description = "The assignments, as an array. Each says its scope and names \
                                       the person it grants, by name and staff code"),
         (status = 400, description = "tenant_id is absent or not a ULID; not exactly one of \
                                       store_id, employee_id, store_group_id and scope_kind is sent; \
@@ -170,7 +170,7 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
-        description = "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: \
+        content = CreateAssignmentRequest, description = "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: \
                        a `store_id` for one store, a `store_group_id` for every store the group holds, \
                        or `scope_kind` `ASSIGNMENT_SCOPE_TENANT` for every store of the tenant \
                        (ADR-0158 decision 3)",

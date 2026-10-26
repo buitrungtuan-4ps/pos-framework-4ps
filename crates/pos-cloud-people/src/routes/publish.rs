@@ -78,7 +78,7 @@ where
 }
 
 /// A super-admin selects the (tenant, store) whose `permissions` node to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishPermissionsRequest {
     tenant_id: String,
     store_id: String,
@@ -155,12 +155,12 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
+        content = PublishPermissionsRequest, description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
                        compile into its `permissions` node",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body is `{ \"config_version_id\": … }`, the \
+        (status = 200, body = PublishedConfig, description = "Published. The body is `{ \"config_version_id\": … }`, the \
                                       configuration version the store syncs. The node carries each \
                                       assigned person's PIN hash for the store to verify against; \
                                       the audit entry records only the version and the staff count"),

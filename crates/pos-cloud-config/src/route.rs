@@ -35,7 +35,7 @@ pub struct RegistryTenantQuery {
 }
 
 /// The version id a successful publish produced.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PublishedConfig {
     /// The new config version id (a ULID).
     pub config_version_id: String,
