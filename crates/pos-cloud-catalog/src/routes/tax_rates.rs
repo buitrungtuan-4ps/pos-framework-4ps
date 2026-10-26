@@ -50,7 +50,7 @@ struct TaxRateState<Tax, Cat, A, C> {
 
 /// One authored tax-rate row on the wire: the class id, the channel's wire token, the rate in basis
 /// points (10% is `1000`), and how that rate is broken out on the invoice.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TaxRateView {
     tax_class_id: String,
     sales_channel: String,
@@ -73,7 +73,7 @@ struct TaxRateView {
 }
 
 /// One named part of a rate, on the wire.
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, utoipa::ToSchema)]
 struct TaxComponentView {
     /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
     name: String,
@@ -82,14 +82,14 @@ struct TaxComponentView {
 }
 
 /// A `PUT /admin/catalog/tax-rates` body: the tenant and its whole rate table (a wholesale replace).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct SetTaxRatesRequest {
     tenant_id: String,
     rates: Vec<TaxRateRowRequest>,
 }
 
 /// One row of a [`SetTaxRatesRequest`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct TaxRateRowRequest {
     tax_class_id: String,
     sales_channel: String,
@@ -304,7 +304,7 @@ fn checked_entries(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's whole rate table, as an array: for each tax class \
+        (status = 200, body = Vec<TaxRateView>, description = "The tenant's whole rate table, as an array: for each tax class \
                                       and sales channel, `rate_bps` in basis points and its \
                                       `components`, the named parts an invoice prints, which sum to \
                                       the rate (ADR-0104). The table is one entity: its version is \
@@ -370,7 +370,7 @@ where
                                                      tenant that has never saved rates (ADR-0095)"),
     ),
     request_body(
-        description = "`tenant_id` and `rates`, the whole table: for each row, a `tax_class_id` the \
+        content = SetTaxRatesRequest, description = "`tenant_id` and `rates`, the whole table: for each row, a `tax_class_id` the \
                        tenant has, a `sales_channel` token, `rate_bps` in basis points (at most \
                        100%), and optionally `components`, each a `name` of two to eight \
                        upper-case letters and digits starting with a letter and its `rate_bps`, \
@@ -378,7 +378,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Replaced. The body is the table as stored and the ETag carries \
+        (status = 200, body = Vec<TaxRateView>, description = "Replaced. The body is the table as stored and the ETag carries \
                                       its new version. Audited"),
         (status = 400, description = "tenant_id or a tax_class_id is not a ULID; a row names a class \
                                       the tenant does not have or an unknown channel; a rate is over \

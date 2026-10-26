@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{TaxClassId, TenantId};
 
@@ -33,7 +34,7 @@ use crate::version::UpdateOutcome;
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's tax classes, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<TaxClass>], description = "The tenant's tax classes, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -78,11 +79,11 @@ where
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and the class's `name`",
+        content = CreateTaxClassRequest, description = "`tenant_id` and the class's `name`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<TaxClass>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited. A store \
                                       refuses to price an item in it on a channel with no rate"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -204,12 +205,12 @@ pub(super) fn still_referenced(kind: &str, count: usize) -> Response {
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the class's `name` and `status` (`active` or `archived`) as \
+        content = UpdateTaxClassRequest, description = "`tenant_id`, and the class's `name` and `status` (`active` or `archived`) as \
                        they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<TaxClass>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "tax_class_id or tenant_id is not a ULID, status is not \
                                       `active` or `archived`, or If-Match is absent, malformed, or a \

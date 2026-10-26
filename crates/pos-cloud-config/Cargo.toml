@@ -27,6 +27,9 @@ tracing    = "0.1"
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
+# `utoipa::ToSchema` on the records the console reads, as the other cloud area crates have it
+# (ADR-0180 D-T1).
+utoipa     = "6"
 
 [dev-dependencies]
 tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }
@@ -58,5 +61,5 @@ allow_attributes_without_reason = "deny"
 [package.metadata.pos]
 layer = "app"
 purpose = "The cloud's configuration base: the config tree and its store, the publish every area's routes write through, the org registry, settings, and QR ordering's switch."
-adrs = [33, 65, 95, 122, 160, 169, 170]
+adrs = [33, 65, 95, 122, 160, 169, 170, 180]
 owners = ["@maintainers-cloud"]

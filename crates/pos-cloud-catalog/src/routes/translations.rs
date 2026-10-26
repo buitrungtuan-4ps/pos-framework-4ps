@@ -100,7 +100,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's grid: each content key to its strings by locale, \
+        (status = 200, body = TranslationGrid, description = "The tenant's grid: each content key to its strings by locale, \
                                       every key carrying `en`, the fallback. The grid is one entity: \
                                       its version is the response's ETag. A tenant with no grid yet \
                                       gets an empty one and no ETag"),
@@ -159,7 +159,7 @@ where
                                                      tenant with no grid yet (ADR-0095)"),
     ),
     request_body(
-        description = "The whole grid, as the read returns it: each content key to its strings by \
+        content = TranslationGrid, description = "The whole grid, as the read returns it: each content key to its strings by \
                        locale. It replaces the stored grid",
         content_type = "application/json",
     ),
@@ -275,7 +275,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`translations.csv`, as a `text/csv` attachment: a `key` \
+        (status = 200, body = String, content_type = "text/csv", description = "`translations.csv`, as a `text/csv` attachment: a `key` \
                                       column, then one column per locale present, sorted, and a row \
                                       per content key. A cell a spreadsheet would read as a formula \
                                       is escaped. Audited by row count, never the contents"),
@@ -351,13 +351,13 @@ const MAX_CSV_IMPORT_BYTES: usize = 4 * 1024 * 1024;
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     request_body(
-        description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
+        content = String, description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
                        `key` column, then one column per locale, at most 4 MB. Rows are merged \
                        onto the grid: the keys in the file are set and every other key is kept",
         content_type = "text/csv",
     ),
     responses(
-        (status = 200, description = "What the file would do, writing nothing: `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A row \
+        (status = 200, body = import::ImportReport, description = "What the file would do, writing nothing: `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A row \
                                       with no `en` string is rejected. Not audited"),
         (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV of \
                                       the export's shape", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -420,13 +420,13 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     request_body(
-        description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
+        content = String, description = "The CSV `GET /admin/translations/export` writes, as the raw request body: a \
                        `key` column, then one column per locale, at most 4 MB. Rows are merged \
                        onto the grid: the keys in the file are set and every other key is kept",
         content_type = "text/csv",
     ),
     responses(
-        (status = 200, description = "Applied: the valid rows are merged onto the grid and saved, \
+        (status = 200, body = import::ImportReport, description = "Applied: the valid rows are merged onto the grid and saved, \
                                       and the report is `rows`, one per data row with its `key` and its `action` (`create`, `update`, or `reject` with a `reason`), and `create_count`, `update_count` and `reject_count`. A merge needs no If-Match: the \
                                       server re-reads and retries when another writer got there \
                                       first. The ETag carries the grid's new version. Audited by \

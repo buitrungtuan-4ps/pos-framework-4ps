@@ -35,7 +35,7 @@ use crate::version::{Version, Versioned};
 
 /// What an import would do to one row. Serialises with an `action` tag and, for a rejection, a
 /// `reason` — the shape the dashboard renders row-by-row.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum RowAction {
     /// The key is new — the import would add it.
@@ -50,7 +50,7 @@ pub enum RowAction {
 }
 
 /// One row's key and what would happen to it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct ImportRow {
     /// The content key the row is for (may be empty for a rejected blank-key row).
     pub key: String,
@@ -60,7 +60,7 @@ pub struct ImportRow {
 }
 
 /// The dry-run (and post-apply) report: every row's fate plus the totals the UI headlines.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct ImportReport {
     /// One entry per data row, in file order.
     pub rows: Vec<ImportRow>,

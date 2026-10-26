@@ -22,7 +22,7 @@ use crate::fees::FeeScope;
 use crate::routes::{FieldRefusal, clean_name_translations, enum_refusal};
 
 /// A `POST` or `PUT /admin/fees` body: one rule, at one scope.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct FeeRuleRequest {
     pub(super) tenant_id: String,
     /// `FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`.
@@ -41,7 +41,7 @@ pub(super) struct FeeRuleRequest {
     reason = "the wire rule's four independent flags, each named on the wire and each with its own \
               default; deserialised by name and never built from positional booleans"
 )]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct FeeRuleBody {
     /// The fee: absent on a `POST`, which mints its id, and the fee written on a `PUT`.
     #[serde(default)]

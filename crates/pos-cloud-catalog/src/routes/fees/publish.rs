@@ -27,7 +27,7 @@ use crate::routes::{layer_with_nodes, not_found, publish_config_nodes_with};
 use crate::version::records;
 
 /// A `POST /admin/fees/publish` body: the tenant, and one store or, without one, every store.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishFeesRequest {
     tenant_id: String,
     #[serde(default)]
@@ -40,7 +40,7 @@ pub(super) struct PublishFeesRequest {
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, and optionally one store. Without a store, every store of the \
+        content = PublishFeesRequest, description = "The tenant, and optionally one store. Without a store, every store of the \
                        tenant is republished",
         content_type = "application/json",
     ),
@@ -132,7 +132,7 @@ where
 }
 
 /// How one store's fee publish went.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::routes) struct FeePublishResult {
     store_id: String,
     /// `FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or
@@ -158,7 +158,7 @@ impl FeePublishResult {
 }
 
 /// One rule a store cannot apply, as a refused publish reports it: by id, never by name.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct FeeFaultView {
     fee_id: String,
     /// `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`.

@@ -92,6 +92,8 @@ pub mod lease;
 pub mod metrics;
 mod openapi;
 mod openapi_admin;
+#[cfg(test)]
+mod openapi_bodies;
 mod openapi_device;
 #[cfg(test)]
 mod openapi_security;
