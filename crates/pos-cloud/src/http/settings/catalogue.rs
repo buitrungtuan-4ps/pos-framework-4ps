@@ -18,6 +18,7 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{Json, settings_confirm};
 use crate::settings::SettingValue;
+use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 
 /// One setting as the console's settings screen draws it: the register entry, without its
@@ -47,9 +48,10 @@ pub(in crate::http) struct SettingCatalogueEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     unit: Option<&'static str>,
+    #[schema(value_type = SettingValueSchema)]
     default: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(nullable = false)]
+    #[schema(nullable = false, value_type = Option<SettingValueSchema>)]
     preset: Option<serde_json::Value>,
     scopes: Vec<&'static str>,
     since: &'static str,

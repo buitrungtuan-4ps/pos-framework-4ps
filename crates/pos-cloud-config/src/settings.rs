@@ -42,6 +42,41 @@ use pos_proto::settings::{Setting, SettingScope, ValueRefusal, register};
 use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
 
+/// The schema of a setting's value: one of the shapes a [`SettingKind`] allows — a `CHOICE`'s
+/// token, an `INT`'s whole number or a `BOOL`'s `true` or `false` (ADR-0180 D-T3). A schema only;
+/// the values themselves stay `serde_json::Value`, and `setting_value_schema_tests` holds every
+/// register default to it.
+///
+/// [`SettingKind`]: pos_proto::settings::SettingKind
+#[derive(Debug)]
+pub struct SettingValueSchema;
+
+impl utoipa::PartialSchema for SettingValueSchema {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::{ObjectBuilder, OneOfBuilder, Type};
+        OneOfBuilder::new()
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::String)
+                    .description(Some("A `CHOICE`'s token")),
+            )
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::Integer)
+                    .description(Some("An `INT`'s whole number")),
+            )
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::Boolean)
+                    .description(Some("A `BOOL`")),
+            )
+            .description(Some("A setting's value, in the shape its kind gives it"))
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for SettingValueSchema {}
+
 /// One value written at one scope.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[schema(as = StoredSettingValue)]
@@ -53,6 +88,7 @@ pub struct SettingValue {
     /// The tenant, brand, store group or store it was written for.
     pub scope_id: String,
     /// The value, as the node carries it.
+    #[schema(value_type = SettingValueSchema)]
     pub value: serde_json::Value,
     /// When it was written. Decides between two store groups that disagree.
     pub update_time: Timestamp,
@@ -699,5 +735,42 @@ mod tests {
                 "deleting what is not there is no error"
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod setting_value_schema_tests {
+    //! Every value the register can answer fits [`SettingValueSchema`].
+
+    use utoipa::PartialSchema as _;
+
+    use super::SettingValueSchema;
+
+    #[test]
+    fn every_default_and_preset_is_one_of_the_shapes() {
+        let schema = serde_json::to_value(SettingValueSchema::schema()).expect("schema");
+        let shapes: Vec<&str> = schema["oneOf"]
+            .as_array()
+            .expect("a oneOf")
+            .iter()
+            .filter_map(|shape| shape["type"].as_str())
+            .collect();
+        assert_eq!(shapes, ["string", "integer", "boolean"]);
+        for setting in pos_proto::settings::register() {
+            let values = std::iter::once(setting.default_value()).chain(setting.preset_value());
+            for value in values {
+                let shape = match value {
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Number(ref n) if n.is_i64() => "integer",
+                    serde_json::Value::Bool(_) => "boolean",
+                    _ => "none",
+                };
+                assert!(
+                    shapes.contains(&shape),
+                    "{}: {value} fits no shape",
+                    setting.key()
+                );
+            }
+        }
     }
 }

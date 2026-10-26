@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use super::layout::{FeeCatalog, FeeLayout};
 use super::write::fee_store_facts;
-use super::{FeeRuleView, FeesState, FeesTenantQuery, fee_store_error_response};
+use super::{AuthoredFeeRule, FeeRuleView, FeesState, FeesTenantQuery, fee_store_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
@@ -75,7 +75,7 @@ where
     };
     match state.fees.list(tenant_id).await {
         Ok(rules) => {
-            let views: Vec<FeeRuleView> = rules.iter().filter_map(FeeRuleView::of).collect();
+            let views: Vec<FeeRuleView> = rules.iter().map(FeeRuleView::of).collect();
             (StatusCode::OK, Json(FeeRules { rules: views })).into_response()
         }
         Err(error) => fee_store_error_response(&error),
@@ -117,12 +117,12 @@ struct EffectiveFee {
     scope: &'static str,
     scope_id: String,
     /// The rule as written: the wire rule's fields, and the categories it names.
-    rule: serde_json::Value,
+    rule: AuthoredFeeRule,
     /// The rule as the store is sent it, its categories compiled into items.
     published: PublishedFee,
     /// Why the store cannot apply it, if it cannot.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    faults: Vec<&'static str>,
+    faults: Vec<StoreFault>,
 }
 
 #[utoipa::path(
@@ -202,19 +202,16 @@ where
     };
     let fees: Vec<EffectiveFee> = crate::fees::resolve_for_store(&rules, &placement)
         .into_iter()
-        .filter_map(|rule| {
+        .map(|rule| {
             let published = crate::fees::compile(rule, &catalog.categories);
-            Some(EffectiveFee {
+            EffectiveFee {
                 fee_id: published.fee_id.to_string(),
                 scope: rule.scope.as_wire(),
                 scope_id: rule.scope_id.clone(),
-                rule: crate::fees::authored_json(rule).ok()?,
-                faults: crate::fees::faults_at(&published, &facts)
-                    .into_iter()
-                    .map(StoreFault::as_wire)
-                    .collect(),
+                rule: AuthoredFeeRule::of(rule),
+                faults: crate::fees::faults_at(&published, &facts),
                 published,
-            })
+            }
         })
         .collect();
     let publishable = fees.iter().all(|fee| fee.faults.is_empty());

@@ -19,6 +19,7 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{Json, not_found};
 use crate::registry::RegistryStore;
+use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 
@@ -33,6 +34,7 @@ pub(super) struct EffectiveSettingsQuery {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct EffectiveSetting {
     setting_key: String,
+    #[schema(value_type = SettingValueSchema)]
     value: serde_json::Value,
     /// The scope that set it, or absent when the store runs the default.
     #[serde(skip_serializing_if = "Option::is_none")]

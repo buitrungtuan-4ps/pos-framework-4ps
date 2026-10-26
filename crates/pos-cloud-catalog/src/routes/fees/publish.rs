@@ -22,7 +22,7 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
 use crate::config_tree::merge::merge_layers;
 use crate::config_tree::{ConfigLevel, ConfigTreeState, ConfigTreeStore};
-use crate::fees::{CategoryItems, FeePlacement, FeeRule, FeeRuleStore, StoreFacts};
+use crate::fees::{CategoryItems, FeePlacement, FeeRule, FeeRuleStore, StoreFacts, StoreFault};
 use crate::registry::RegistryStore;
 use crate::routes::{layer_with_nodes, not_found, publish_config_nodes_with};
 use crate::version::records;
@@ -189,7 +189,7 @@ impl FeePublishResult {
 pub struct FeeFaultView {
     fee_id: String,
     /// `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`.
-    reason: &'static str,
+    reason: StoreFault,
 }
 
 /// Republishes each store's resolved rules as the `fees` node on its Store layer.
@@ -312,7 +312,7 @@ impl TenantFeeRules {
 pub fn fees_left_behind(outcome: FeePublishOutcome, faults: &[FeeFaultView]) -> String {
     let named: Vec<String> = faults
         .iter()
-        .map(|fault| format!("{} {}", fault.fee_id, fault.reason))
+        .map(|fault| format!("{} {}", fault.fee_id, fault.reason.as_wire()))
         .collect();
     let why = if named.is_empty() {
         String::new()
@@ -365,7 +365,7 @@ impl StoreFeeRules<'_> {
                     .iter()
                     .map(|(fee_id, fault)| FeeFaultView {
                         fee_id: fee_id.to_string(),
-                        reason: fault.as_wire(),
+                        reason: *fault,
                     })
                     .collect(),
             );
@@ -506,7 +506,15 @@ where
 mod outcome_tests {
     //! The outcome serialises as the token it replaced.
 
-    use super::FeePublishOutcome;
+    use super::{FeePublishOutcome, StoreFault};
+
+    #[test]
+    fn each_fault_is_its_token() {
+        for fault in [StoreFault::CurrencyMismatch, StoreFault::TaxClassNotRated] {
+            let sent = serde_json::to_value(fault).expect("json");
+            assert_eq!(sent, serde_json::json!(fault.as_wire()));
+        }
+    }
 
     #[test]
     fn each_outcome_is_its_token() {

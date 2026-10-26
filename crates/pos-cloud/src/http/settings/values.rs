@@ -26,6 +26,7 @@ use crate::config_tree::ConfigTreeStore;
 use crate::http::setting_refusal::setting_refusal_response;
 use crate::http::{not_found, settings_confirm};
 use crate::registry::RegistryStore;
+use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 use pos_cloud_api::response::StoresPublished;
@@ -45,6 +46,7 @@ pub(super) struct PutSettingRequest {
     scope: String,
     /// The tenant, brand, store group or store the value is for.
     scope_id: String,
+    #[schema(value_type = SettingValueSchema)]
     value: serde_json::Value,
     /// Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2).
     #[serde(default)]
