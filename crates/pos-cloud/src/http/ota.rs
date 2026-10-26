@@ -76,7 +76,7 @@ struct OtaReportRequest {
 /// path. That is the entire point of the move — the `/internal` shape took both in the body, so it
 /// trusted the caller's claim about which store it was, and a shared secret could change *who could
 /// reach* the route without making a report attributable.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct StoreReportRequest {
     /// The release the store is now running.
     installed: String,
@@ -143,7 +143,7 @@ struct ArtifactState<K, C, B, L> {
 /// Correction 2 added. R1's workflow cross-compiles two targets, so a request without one cannot say
 /// which binary it means — and guessing would hand an `aarch64` box an `x86_64` executable that fails
 /// its self-test after the install, which is the expensive place to find out.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ArtifactRequest {
     release: String,
     arch: String,

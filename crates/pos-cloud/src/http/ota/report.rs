@@ -26,7 +26,7 @@ use crate::http::internal_guard;
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        description = "`installed`, the release the store now runs, and `self_test_passed` where it has run \
+        content = StoreReportRequest, description = "`installed`, the release the store now runs, and `self_test_passed` where it has run \
                        its post-install self-test (ADR-0078)",
         content_type = "application/json",
     ),

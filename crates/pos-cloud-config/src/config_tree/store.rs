@@ -27,7 +27,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 ///
 /// Carries no personal data by construction: two opaque identifiers and a duration. Nothing a ticket
 /// *says* helps diagnose a stalled agent, so nothing a ticket says is here.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct PrintAgentStanding {
     /// The terminal a console admin created and a manager bound at the till.
     pub agent_device_id: String,
