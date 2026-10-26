@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{CourseId, TenantId};
@@ -33,7 +34,7 @@ use crate::version::UpdateOutcome;
         ("tenant_id" = String, Query, description = "The tenant whose courses to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's courses, as an array, each with its `etag`, in service order: by `sort` ascending, then by id (ADR-0130)"),
+        (status = 200, body = [Versioned<Course>], description = "The tenant's courses, as an array, each with its `etag`, in service order: by `sort` ascending, then by id (ADR-0130)"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -79,11 +80,11 @@ where
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, the course's `name`, and `sort`, where it falls in the service sequence, ascending (absent is 0)",
+        content = CreateCourseRequest, description = "`tenant_id`, the course's `name`, and `sort`, where it falls in the service sequence, ascending (absent is 0)",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<Course>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -168,11 +169,11 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the course's `name`, `sort` and `status` (`active` or `archived`) as they should now stand",
+        content = UpdateCourseRequest, description = "`tenant_id`, and the course's `name`, `sort` and `status` (`active` or `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<Course>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "course_id or tenant_id is not a ULID, name is blank, status is not `active` or `archived`, or If-Match is \
                                       absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),

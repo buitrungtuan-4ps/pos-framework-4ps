@@ -36,7 +36,7 @@ pub mod translations;
 use catalog::{catalog_error_response, clean_name_translations};
 
 /// Create a course — a named point in the service sequence (ADR-0130).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateCourseRequest {
     tenant_id: String,
     name: String,
@@ -47,7 +47,7 @@ struct CreateCourseRequest {
 }
 
 /// Update a course's name, position and/or status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateCourseRequest {
     tenant_id: String,
     name: String,

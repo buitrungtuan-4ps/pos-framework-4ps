@@ -34,7 +34,7 @@ use crate::routes::{FieldRefusal, load_tree_for_write};
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
+        content = FeeRuleRequest, description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
                        for, and the rule without a fee_id: code, display_name and its \
                        translations, kind (FEE_KIND_PERCENT with a rate, or FEE_KIND_AMOUNT_PER_BILL \
                        or _PER_UNIT with an amount), channels, item_scope with menu_item_ids and \
@@ -117,7 +117,7 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
+        content = FeeRuleRequest, description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
                        where it is, the rule replaces it; written at a narrower scope, it \
                        overrides the broader one for the stores that scope reaches",
         content_type = "application/json",

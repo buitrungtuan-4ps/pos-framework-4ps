@@ -23,7 +23,10 @@ use crate::paging::{Page, PageRequest};
 /// (`image_ref`), but it never crosses the edge wire, so it lives beside the seam like
 /// [`MenuId`](crate::catalog::Menu) rather than in `pos-proto`. Serializes as its bare ULID string, so
 /// an item's/brand's `image_ref` is a plain id (or `null`) on the admin API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, utoipa::ToSchema,
+)]
+#[schema(value_type = String)]
 pub struct MediaId(Ulid);
 
 impl MediaId {

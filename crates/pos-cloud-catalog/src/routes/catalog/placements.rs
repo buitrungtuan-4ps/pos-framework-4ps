@@ -33,7 +33,7 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The items on the menu, as an array: each with its section, \
+        (status = 200, body = [Versioned<MenuPlacement>], description = "The items on the menu, as an array: each with its section, \
                                       its price on every sales channel in minor units, whether it is \
                                       available, and its `etag`. Prices are T2, so this read needs \
                                       `console.reports.revenue` rather than the catalog's plain read"),
@@ -134,13 +134,13 @@ fn build_placement(
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
     ),
     request_body(
-        description = "`menu_id`, `menu_item_id` and `tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` \
+        content = CreatePlacementRequest, description = "`menu_id`, `menu_item_id` and `tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` \
                        token and a `unit_price` in the currency's minor units, and `available`. An item is on a menu \
                        at most once",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Placed. The body is the placement and the ETag carries its \
+        (status = 201, body = Versioned<MenuPlacement>, description = "Placed. The body is the placement and the ETag carries its \
                                       version. Audited with its prices, the price-change journal \
                                       (ADR-0069)"),
         (status = 400, description = "An id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -217,12 +217,12 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` \
+        content = SetPlacementRequest, description = "`tenant_id`, then `menu_section_id` (optional), `prices`, one per sales channel, each a `sales_channel` \
                        token and a `unit_price` in the currency's minor units, and `available`, as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the placement and the ETag carries its \
+        (status = 200, body = Versioned<MenuPlacement>, description = "Updated. The body is the placement and the ETag carries its \
                                       new version. Audited with its prices"),
         (status = 400, description = "An id is not a ULID, or If-Match is absent, malformed, or a \
                                       wildcard", body = pos_cloud_api::error_schema::ErrorResponse),

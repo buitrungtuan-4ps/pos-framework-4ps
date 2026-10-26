@@ -4,6 +4,7 @@
 //! Media (`/admin/media`): upload, serve, list and delete image renditions
 //! ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md)).
 
+use pos_cloud_api::paged::ListOrPage;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -42,7 +43,7 @@ struct MediaState<M, A, C> {
 }
 
 /// One media asset as listed — id, content type, the detail rendition's size, and when it was stored.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct MediaSummaryView {
     media_id: String,
     content_type: String,
@@ -51,7 +52,7 @@ struct MediaSummaryView {
 }
 
 /// The `POST /admin/media` response: the id the caller references the new asset by, and its size.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct UploadedMedia {
     media_id: String,
     detail_bytes: u64,
@@ -110,7 +111,7 @@ where
                                                      with `limit`"),
     ),
     responses(
-        (status = 200, description = "Without `limit`, every asset as an array; with it, a page: \
+        (status = 200, body = ListOrPage<MediaSummaryView>, description = "Without `limit`, every asset as an array; with it, a page: \
                                       `items`, `total`, `limit` and `offset`. Each asset has \
                                       `media_id`, `content_type`, `detail_bytes` and \
                                       `created_at_ms`, and no image bytes"),
@@ -190,13 +191,13 @@ fn media_views(rows: Vec<crate::media::MediaSummary>) -> Vec<MediaSummaryView> {
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     request_body(
-        description = "The image as the raw request body, at most 8 MB. It is re-encoded into two \
+        content = pos_cloud_api::body_schema::Binary, description = "The image as the raw request body, at most 8 MB. It is re-encoded into two \
                        bounded JPEG renditions, a thumbnail and a detail image (ADR-0042, ADR-0075); \
                        the upload itself is never stored",
         content_type = "application/octet-stream",
     ),
     responses(
-        (status = 201, description = "Stored. The body carries `media_id`, what an item's \
+        (status = 201, body = UploadedMedia, description = "Stored. The body carries `media_id`, what an item's \
                                       `image_ref` names, and `detail_bytes`. Audited"),
         (status = 400, description = "tenant_id is absent or not a ULID, or the upload is not a \
                                       decodable image", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -395,7 +396,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The thumbnail rendition as `image/jpeg`. A rendition never \
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "image/jpeg", description = "The thumbnail rendition as `image/jpeg`. A rendition never \
                                       changes, since a new image is a new id, so it is cached \
                                       privately for a year"),
         (status = 400, description = "tenant_id or media_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -438,7 +439,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The detail rendition as `image/jpeg`. A rendition never \
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "image/jpeg", description = "The detail rendition as `image/jpeg`. A rendition never \
                                       changes, since a new image is a new id, so it is cached \
                                       privately for a year"),
         (status = 400, description = "tenant_id or media_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
