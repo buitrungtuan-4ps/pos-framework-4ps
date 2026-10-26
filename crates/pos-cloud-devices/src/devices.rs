@@ -121,7 +121,7 @@ pub struct PersistedDeviceProposal {
 }
 
 /// A proposal as listed — the durable facts plus its status.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct DeviceProposalSummary {
     /// The proposal id (a ULID string).
     pub id: String,

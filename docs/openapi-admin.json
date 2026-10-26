@@ -20,12 +20,24 @@
         "requestBody": {
           "description": "The device slot: `tenant_id`, `store_id` and `device_id`, the device registered under `/admin/stores/{store_id}/devices`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueActivationRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, for the setup sheet. It is returned exactly once, since only its hash is stored, and it is spent the first time a box exchanges it for a credential (ADR-0050)"
+            "description": "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, for the setup sheet. It is returned exactly once, since only its hash is stored, and it is spent the first time a box exchanges it for a credential (ADR-0050)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueActivationResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id or device_id is not a ULID",
@@ -86,12 +98,24 @@
         "requestBody": {
           "description": "The device slot: `tenant_id`, `store_id` and `device_id`, the device registered under `/admin/stores/{store_id}/devices`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeActivationRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Every code issued for the slot and not yet spent is cancelled, as for a setup sheet that went astray. The body carries `revoked`, how many were"
+            "description": "Every code issued for the slot and not yet spent is cancelled, as for a setup sheet that went astray. The body carries `revoked`, how many were",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeActivationResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id or device_id is not a ULID",
@@ -6459,8 +6483,13 @@
         "requestBody": {
           "description": "The `user_code` a box installed with no store shows on its screen, eight letters and digits, and the device slot to give it: `tenant_id`, `store_id` and `device_id` (ADR-0148). The box collects its credential on its next poll",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BindClaimRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -7515,12 +7544,24 @@
         "requestBody": {
           "description": "`tenant_id` and `store_id`. The tenant's authored ingredients, recipes and suppliers are what is published, never the body",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishInventoryRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Compiled into the store's `inventory` node and published on the Store layer, the store's other settings kept. The body carries `config_version_id`. Audited with how many of each kind went in, never the recipe amounts"
+            "description": "Compiled into the store's `inventory` node and published on the Store layer, the store's other settings kept. The body carries `config_version_id`. Audited with how many of each kind went in, never the recipe amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, or a value needs a recorded confirmation first",
@@ -9870,7 +9911,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The devices, as an array: each with `id`, `store_id`, `kind`, `name`, `address`, `status` and `version`, and once approved its `connection`, `station_id`, print agent, drawer mark, paper, and a till's receipt printer, receipt languages and opening float, where set"
+            "description": "The devices, as an array: each with `id`, `store_id`, `kind`, `name`, `address`, `status` and `version`, and once approved its `connection`, `station_id`, print agent, drawer mark, paper, and a till's receipt printer, receipt languages and opening float, where set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceProposalSummary"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, store_id is not a ULID, or status is not one of the three",
@@ -9952,8 +10003,13 @@
         "requestBody": {
           "description": "`tenant_id` and `agent_device_id`, the terminal whose print agent writes this printer's bytes (ADR-0112), or `null` for the store's edge to open the printer's address itself. Whether the id names a terminal is checked when the devices are published, since the terminal may be created after the pick",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPrintAgentRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -10157,8 +10213,13 @@
         "requestBody": {
           "description": "`tenant_id` and `drawer_attached`, whether a cash drawer is wired to the printer's kick port (ADR-0165 decision 4). It decides whether the till can open a drawer of cash",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDrawerRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -10264,8 +10325,13 @@
         "requestBody": {
           "description": "`tenant_id`; and `opening_float_minor`, a whole amount in the store currency's minor unit from `0` to `1000000000`, the bounds of `shift.opening_float_minor`, or `null` or absent for that setting's float. It is the till's whole float state, so a float left out is the store's again",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetFloatRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -10371,8 +10437,13 @@
         "requestBody": {
           "description": "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 characters a line and a 576-dot raster), `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, `false` for a printer with no cutter. A printer nobody has set prints as 80 mm paper with a cutter",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPaperRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -10478,8 +10549,13 @@
         "requestBody": {
           "description": "`tenant_id`; `receipt_printer_id`, an approved printer of the terminal's store that serves no station; `receipt_language`, one of `RECEIPT_LANGUAGE_DISPLAY`, `RECEIPT_LANGUAGE_COUNTRY`, `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN`; and `receipt_second_language`, one of `RECEIPT_SECOND_LANGUAGE_NONE`, `RECEIPT_SECOND_LANGUAGE_VI` and `RECEIPT_SECOND_LANGUAGE_EN`. Each is `null` or absent for the store's: its receipt printer, `printing.receipt_language` and `printing.receipt_second_language`. The three are the till's whole receipt state, so a field left out is the store's again",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetReceiptRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -10645,8 +10721,13 @@
         "requestBody": {
           "description": "`tenant_id` and the `store_id` whose approved devices to compile into its `devices` node (ADR-0100)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDevicesRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -10732,12 +10813,24 @@
         "requestBody": {
           "description": "`tenant_id`, the `store_id` the terminal stands in, and its `name`, what an operator recognises it by. A terminal is never discovered, so there is no proposal to approve: creating it is the decision (ADR-0112). It has no address, because nothing dials a terminal",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTerminalRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, approved. The body carries the terminal's `id`, what a printer names to make it its print agent, and `status`. Audited"
+            "description": "Created, approved. The body carries the terminal's `id`, what a printer names to make it its print agent, and `status`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTerminalResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID, or name is blank",
@@ -13556,7 +13649,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's ingredients, as an array, each with its `etag`"
+            "description": "The tenant's ingredients, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -13615,12 +13718,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the ingredient's `name`, which may not be blank, and `unit`, a `UNIT_OF_MEASURE_…` token",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngredientRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, with the id minted here. The body is the ingredient and the ETag carries its version. Audited"
+            "description": "Created, with the id minted here. The body is the ingredient and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or name is blank or unit is not a known unit",
@@ -13710,7 +13825,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The ingredient. The ETag carries the version it was read at"
+            "description": "The ingredient. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "ingredient_id or tenant_id is absent or not a ULID",
@@ -13799,12 +13921,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the ingredient's `name`, which may not be blank, and `unit`, a `UNIT_OF_MEASURE_…` token, as it should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngredientRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the ingredient and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the ingredient and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedIngredient"
+                }
+              }
+            }
           },
           "400": {
             "description": "ingredient_id or tenant_id is not a ULID, name is blank or unit is not a known unit, or If-Match is absent, malformed or a wildcard",
@@ -13983,7 +14117,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's recipes, as an array, each with its `etag`"
+            "description": "The tenant's recipes, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -14043,12 +14187,24 @@
         "requestBody": {
           "description": "`tenant_id` and `item_id`, the menu item or modifier the recipe makes, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the amount one unit consumes in thousandths of the ingredient's unit, which must be positive; and `auto_86_threshold`, which may not be negative",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecipeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created. The body is the recipe and the ETag carries its version. Audited with the item, its line count and its threshold, never the amounts"
+            "description": "Created. The body is the recipe and the ETag carries its version. Audited with the item, its line count and its threshold, never the amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or item_id is absent or not a ULID, auto_86_threshold is negative, or a line consumes nothing",
@@ -14138,7 +14294,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The recipe. The ETag carries the version it was read at"
+            "description": "The recipe. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "item_id or tenant_id is absent or not a ULID",
@@ -14227,12 +14390,24 @@
         "requestBody": {
           "description": "`tenant_id`, and `lines`, the bill of materials: each line an `ingredient` and `per_unit`, the amount one unit consumes in thousandths of the ingredient's unit, which must be positive; and `auto_86_threshold`, which may not be negative, as the recipe should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecipeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the recipe and the ETag carries its new version. Audited without the amounts"
+            "description": "Updated. The body is the recipe and the ETag carries its new version. Audited without the amounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedRecipe"
+                }
+              }
+            }
           },
           "400": {
             "description": "item_id or tenant_id is not a ULID, auto_86_threshold is negative, or a line consumes nothing, or If-Match is absent, malformed or a wildcard",
@@ -14411,7 +14586,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's suppliers, as an array, each with its `etag`"
+            "description": "The tenant's suppliers, as an array, each with its `etag`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -14470,12 +14655,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the supplier's `name`, which may not be blank",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Created, with the id minted here. The body is the supplier and the ETag carries its version. Audited"
+            "description": "Created, with the id minted here. The body is the supplier and the ETag carries its version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID, or name is blank",
@@ -14565,7 +14762,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The supplier. The ETag carries the version it was read at"
+            "description": "The supplier. The ETag carries the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "supplier_id or tenant_id is absent or not a ULID",
@@ -14654,12 +14858,24 @@
         "requestBody": {
           "description": "`tenant_id`, and the supplier's `name`, which may not be blank, as it should now stand",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Updated. The body is the supplier and the ETag carries its new version. Audited"
+            "description": "Updated. The body is the supplier and the ETag carries its new version. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_PublishedSupplier"
+                }
+              }
+            }
           },
           "400": {
             "description": "supplier_id or tenant_id is not a ULID, name is blank, or If-Match is absent, malformed or a wildcard",
@@ -20443,9 +20659,26 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeDeviceRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "The deny-list now names the device, as of the config version returned. The store carries it out on its next config pull — within thirty seconds for a store with a working link, and on its next boot otherwise — and the admitted-devices roster then shows the device retired. Re-revoking a device already on the list succeeds and adds nothing"
+            "description": "The deny-list now names the device, as of the config version returned. The store carries it out on its next config pull — within thirty seconds for a store with a working link, and on its next boot otherwise — and the admitted-devices roster then shows the device retired. Re-revoking a device already on the list succeeds and adds nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id, store_id or local_device_id is absent or not a ULID, or this store's deny-list is already at its cap",
@@ -23251,6 +23484,30 @@
         "type": "string",
         "format": "binary"
       },
+      "BindClaimRequest": {
+        "type": "object",
+        "description": "A console user binds the code a box shows to a device slot.",
+        "required": [
+          "user_code",
+          "tenant_id",
+          "store_id",
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "user_code": {
+            "type": "string"
+          }
+        }
+      },
       "CapabilityCatalogueView": {
         "type": "object",
         "description": "The whole capability catalogue the form editor needs: the flags, the presets, and the inter-flag\nrules — all §10 data, tenant-independent.",
@@ -23936,6 +24193,32 @@
           }
         }
       },
+      "CreateRecipeRequest": {
+        "type": "object",
+        "description": "A `POST /admin/inventory/recipes` body: a recipe plus the item it makes.\n\nThe item id is in the body here because the collection URI has no room for it, and the `PUT`\nkeeps taking it from the path. A struct of its own rather than an `Option` on `RecipeRequest`,\nso neither route carries a field the other requires — and flat rather than\n`#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].",
+        "required": [
+          "item_id",
+          "tenant_id"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "CreateRoleRequest": {
         "type": "object",
         "description": "Create a role template — a named subset of the `pos-core` permission catalogue (§9).",
@@ -24113,6 +24396,47 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "CreateTerminalRequest": {
+        "type": "object",
+        "description": "An operator names a POS terminal that exists because somebody carried it into the shop.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What to call it on screen when it is the machine that went quiet."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the terminal stands in (a ULID)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the store belongs to (a 26-character ULID)."
+          }
+        }
+      },
+      "CreateTerminalResponse": {
+        "type": "object",
+        "description": "The id a freshly created terminal was given.",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The terminal's device id (a ULID) — what a printer names to make it its agent."
+          },
+          "status": {
+            "type": "string",
+            "description": "`approved`, always: a terminal is created resolved, because the console write *is* the\ndecision."
           }
         }
       },
@@ -24312,6 +24636,118 @@
             "format": "int64",
             "description": "Every event recorded on that day.",
             "minimum": 0
+          }
+        }
+      },
+      "DeviceProposalSummary": {
+        "type": "object",
+        "description": "A proposal as listed — the durable facts plus its status.",
+        "required": [
+          "id",
+          "store_id",
+          "kind",
+          "name",
+          "address",
+          "drawer_attached",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The device's network address."
+          },
+          "agent_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `terminal` device whose transport reaches this printer, if an operator has picked one\n([ADR-0112](../../../docs/adr/0112-print-agents.md)). `None` — the ordinary case — means the\nedge opens the address itself, exactly as it always has."
+          },
+          "connection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the device is attached (`usb`/`network`/`serial`), as approval recorded it — `None` while\npending, because discovery cannot find this out ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md))."
+          },
+          "cuts_paper": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "drawer_attached": {
+            "type": "boolean",
+            "description": "Whether an operator has marked a cash drawer as wired to this printer\n([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).\n`false` until somebody does, which is what every store assumed before the mark existed."
+          },
+          "id": {
+            "type": "string",
+            "description": "The proposal id (a ULID string)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`printer` or `kds`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The device's name."
+          },
+          "opening_float_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On a `terminal`, the float an operator says this till's drawer opens with by default, in the\nstore currency's minor unit\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). `None`\nuntil somebody says, which is the store's `shift.opening_float_minor`."
+          },
+          "paper_width": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The paper an operator says this printer takes, as its wire token (`PAPER_WIDTH_…`,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every\nstore assumed before the field existed."
+          },
+          "receipt_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the language an operator says this till's receipts print in, as its wire\ntoken (`RECEIPT_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "receipt_printer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the printer an operator says this till's receipts, receipt copies and\npre-bills go to (a ULID string,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 4). `None` until somebody says, which is the store's receipt printer."
+          },
+          "receipt_second_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the second language an operator says this till's receipts print in, as its\nwire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kitchen station this device serves, as approval recorded it. `None` for the counter's\nreceipt printer, which serves the bill rather than a station — and `None` while pending."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `approved`, or `rejected`."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the device belongs to (a ULID string)."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
           }
         }
       },
@@ -24782,6 +25218,67 @@
           }
         ],
         "description": "One row's key and what would happen to it."
+      },
+      "IngredientId": {
+        "type": "string",
+        "description": "A `IngredientId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "IngredientRequest": {
+        "type": "object",
+        "description": "A create/update body for an ingredient. The id is **server-owned** — minted on create, the path id\non update — so a client never supplies or forges it. `name` and `unit` are the wire ingredient's own\nfields, reused rather than re-declared.",
+        "required": [
+          "tenant_id",
+          "name",
+          "unit"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure"
+          }
+        }
+      },
+      "IssueActivationRequest": {
+        "type": "object",
+        "description": "A super-admin issues an activation code for a device slot.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "The device slot to activate (a ULID)."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the device belongs to (a ULID)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the device belongs to (a 26-character ULID)."
+          }
+        }
+      },
+      "IssueActivationResponse": {
+        "type": "object",
+        "description": "The freshly-issued code, shown once for the operator to put on the setup sheet.",
+        "required": [
+          "activation_code"
+        ],
+        "properties": {
+          "activation_code": {
+            "type": "string",
+            "description": "The `XXXX-XXXX-XXXX` code — the only time it is visible; only its hash is stored."
+          }
+        }
       },
       "ItemCategory": {
         "type": "object",
@@ -25471,6 +25968,10 @@
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenUnitOfMeasure_UnitOfMeasure": {
+        "type": "string",
+        "description": "A `UnitOfMeasure` token: UNIT_OF_MEASURE_UNSPECIFIED, UNIT_OF_MEASURE_GRAM, UNIT_OF_MEASURE_KILOGRAM, UNIT_OF_MEASURE_MILLILITER, UNIT_OF_MEASURE_LITER, UNIT_OF_MEASURE_PIECE, or one a newer build sent, which is kept as it arrived"
+      },
       "PagedBody_MediaSummaryView": {
         "type": "object",
         "description": "A page on the wire: the rows, the size of the whole set, and the bounds that produced them.\n\nThe bounds are echoed because a pager needs them to render \"1–25 of 812\" and to build the next\nrequest, and because the alternative — the client tracking what it sent — breaks the moment a\nlink is shared or a page is reloaded.",
@@ -25752,6 +26253,24 @@
           }
         }
       },
+      "PublishDevicesRequest": {
+        "type": "object",
+        "description": "A super-admin selects the (tenant, store) whose `devices` node to compile and publish.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string",
+            "description": "The store whose approved devices to publish (a 26-character ULID)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant that owns the store (a 26-character ULID)."
+          }
+        }
+      },
       "PublishFeesRequest": {
         "type": "object",
         "description": "A `POST /admin/fees/publish` body: the tenant, and one store or, without one, every store.",
@@ -25773,6 +26292,22 @@
       "PublishFloorRequest": {
         "type": "object",
         "description": "A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PublishInventoryRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/inventory` body: the `(tenant, store)` to push the tenant's authored inventory\nto. Like every other node publish, the ingredients/recipes/suppliers come from what is authored, not\nthe body.",
         "required": [
           "tenant_id",
           "store_id"
@@ -25838,6 +26373,29 @@
           }
         }
       },
+      "PublishedIngredient": {
+        "type": "object",
+        "description": "One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.",
+        "required": [
+          "id",
+          "name",
+          "unit"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/IngredientId",
+            "description": "Its stable id."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The operator-facing name, shown in the console and the recipe editor."
+          },
+          "unit": {
+            "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure",
+            "description": "The unit it is stocked and consumed in. Wrapped in [`Open`] so a unit token from a newer cloud\nround-trips rather than failing the whole node."
+          }
+        }
+      },
       "PublishedMenu": {
         "type": "object",
         "description": "What a menu publish answers: the version it produced, and how the store's fees went with it.",
@@ -25855,6 +26413,82 @@
             "description": "The store's `fees` node, composed on the tree the menu was written onto, with a fee\npublish's outcomes: applied in the same version, unchanged, refused with each rule the store\ncannot apply and why, or failed. Only an applied one wrote anything."
           }
         }
+      },
+      "PublishedRecipe": {
+        "type": "object",
+        "description": "The bill of materials for one makeable thing — a menu item or a modifier — plus its auto-86\nthreshold. A modifier carries its own [`MenuItemId`] and its own recipe (the \"large\" size adds its\nextra dough), so it is a recipe like any other.",
+        "required": [
+          "item"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The auto-86 threshold (§8): the item is sold while strictly more than this many can be made,\nand marked unavailable at or below it. Defaults to `0` — 86 only when nothing can be made."
+          },
+          "item": {
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "The item or modifier this recipe makes."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            },
+            "description": "The ingredients and per-unit amounts. Empty means the item consumes nothing tracked and is\nnever limited by stock."
+          }
+        }
+      },
+      "PublishedRecipeLine": {
+        "type": "object",
+        "description": "One line of a recipe: an ingredient and how much of it one unit of the item (or modifier) consumes,\nin that ingredient's own unit. Wire mirror of `pos_core::inventory::RecipeLine`.",
+        "required": [
+          "ingredient",
+          "per_unit"
+        ],
+        "properties": {
+          "ingredient": {
+            "$ref": "#/components/schemas/IngredientId",
+            "description": "The ingredient consumed."
+          },
+          "per_unit": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "How much of it one unit of the item consumes (a [`Quantity`] in thousandths of the unit)."
+          }
+        }
+      },
+      "PublishedSupplier": {
+        "type": "object",
+        "description": "A supplier a store receives goods from — a lightweight reference only (id + name). The full\npurchasing relationship lives in the ERP (§19).",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SupplierId",
+            "description": "Its stable id."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The operator-facing name."
+          }
+        }
+      },
+      "Quantity": {
+        "type": "object",
+        "description": "A quantity, counted in thousandths of a unit.\n\nThe wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it\n`milli` rather than `value` keeps the scale visible at every use site.",
+        "required": [
+          "milli"
+        ],
+        "properties": {
+          "milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Thousandths of a unit."
+          }
+        },
+        "additionalProperties": false
       },
       "Ratio": {
         "type": "object",
@@ -25875,6 +26509,82 @@
           }
         },
         "additionalProperties": false
+      },
+      "RecipeRequest": {
+        "type": "object",
+        "description": "The body of a recipe write. The item it makes is the URL key on the `PUT` — a recipe references\nan existing menu item or modifier, so its id is client-owned, unlike an ingredient's\nserver-minted id. `lines` (the bill of materials) and `auto_86_threshold` are the wire recipe's\nown fields.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "auto_86_threshold": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedRecipeLine"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RevokeActivationRequest": {
+        "type": "object",
+        "description": "A super-admin cancels the pending activation for a device slot (a leaked setup sheet).",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "The device slot whose issued codes to cancel (a ULID)."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the device belongs to (a ULID)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the device belongs to (a ULID)."
+          }
+        }
+      },
+      "RevokeActivationResponse": {
+        "type": "object",
+        "description": "How many still-issued codes were cancelled.",
+        "required": [
+          "revoked"
+        ],
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of codes moved from `issued` to `revoked`.",
+            "minimum": 0
+          }
+        }
+      },
+      "RevokeDeviceRequest": {
+        "type": "object",
+        "description": "Retire one till on a store: the tenant it belongs to and the store-minted local device id.\n\n`local_device_id` is the id from `GET /admin/stores/{id}/devices/admitted` — the store's own,\n**not** a console `Device.device_id`. Nothing joins those two identity spaces, so an id taken\nfrom the wrong list names a device the store has never had, and the store records it as done\nwithout retiring anything.",
+        "required": [
+          "tenant_id",
+          "local_device_id"
+        ],
+        "properties": {
+          "local_device_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
       },
       "RoleReadiness": {
         "type": "object",
@@ -26270,6 +26980,45 @@
           }
         }
       },
+      "SetDrawerRequest": {
+        "type": "object",
+        "description": "An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.",
+        "required": [
+          "tenant_id",
+          "drawer_attached"
+        ],
+        "properties": {
+          "drawer_attached": {
+            "type": "boolean",
+            "description": "Whether a cash drawer is on this printer's kick port."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the device belongs to (a 26-character ULID)."
+          }
+        }
+      },
+      "SetFloatRequest": {
+        "type": "object",
+        "description": "An operator says what an approved terminal's drawer opens with by default.\n\nThe float is the till's whole float state, as the receipt fields are its receipt state: an absent\nor `null` float is the store's again.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "opening_float_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The float, a whole amount in the store currency's minor unit, or `null` for the store's\n`shift.opening_float_minor`."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the terminal belongs to (a 26-character ULID)."
+          }
+        }
+      },
       "SetLayoutButtonRequest": {
         "type": "object",
         "required": [
@@ -26315,6 +27064,29 @@
           }
         }
       },
+      "SetPaperRequest": {
+        "type": "object",
+        "description": "An operator says what paper an approved printer takes and whether it cuts it.",
+        "required": [
+          "tenant_id",
+          "paper_width",
+          "cuts_paper"
+        ],
+        "properties": {
+          "cuts_paper": {
+            "type": "boolean",
+            "description": "Whether the printer cuts its paper: `false` for one with no cutter."
+          },
+          "paper_width": {
+            "type": "string",
+            "description": "The paper the printer takes, as its `PAPER_WIDTH_…` token."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the device belongs to (a 26-character ULID)."
+          }
+        }
+      },
       "SetPinRequest": {
         "type": "object",
         "description": "Set or reset an employee's sign-in PIN. The digits are hashed here and never stored or logged in\nthe clear (ADR-0070); the request body is the only place they appear, and it is never audited.",
@@ -26356,6 +27128,60 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "SetPrintAgentRequest": {
+        "type": "object",
+        "description": "An operator points an approved device at the terminal that holds its transport, or clears it.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "agent_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The terminal whose agent will write this printer's bytes (a ULID), or `null` to go back to\nthe edge opening the address itself."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the device belongs to (a 26-character ULID)."
+          }
+        }
+      },
+      "SetReceiptRequest": {
+        "type": "object",
+        "description": "An operator says where an approved terminal's receipts go and the languages they print in.\n\nThe three fields are the till's whole receipt state, as a station's update is its whole state: an\nabsent or `null` field is the store's again.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "receipt_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The language they print in, as a `RECEIPT_LANGUAGE_…` token, or `null` for the store's."
+          },
+          "receipt_printer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The printer this till's receipts, receipt copies and pre-bills go to (a ULID), or `null` for\nthe store's receipt printer."
+          },
+          "receipt_second_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The second language they print in, as a `RECEIPT_SECOND_LANGUAGE_…` token, or `null` for the\nstore's."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the terminal belongs to (a 26-character ULID)."
           }
         }
       },
@@ -26452,6 +27278,27 @@
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "SupplierId": {
+        "type": "string",
+        "description": "A `SupplierId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "SupplierRequest": {
+        "type": "object",
+        "description": "A create/update body for a supplier. The id is **server-owned**, exactly like an ingredient's.",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
       },
       "Table": {
         "type": "object",
@@ -28049,6 +28896,147 @@
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
                 "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedIngredient": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.",
+            "required": [
+              "id",
+              "name",
+              "unit"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/IngredientId",
+                "description": "Its stable id."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DisplayName",
+                "description": "The operator-facing name, shown in the console and the recipe editor."
+              },
+              "unit": {
+                "$ref": "#/components/schemas/OpenUnitOfMeasure_UnitOfMeasure",
+                "description": "The unit it is stocked and consumed in. Wrapped in [`Open`] so a unit token from a newer cloud\nround-trips rather than failing the whole node."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedRecipe": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "The bill of materials for one makeable thing — a menu item or a modifier — plus its auto-86\nthreshold. A modifier carries its own [`MenuItemId`] and its own recipe (the \"large\" size adds its\nextra dough), so it is a recipe like any other.",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "auto_86_threshold": {
+                "type": "integer",
+                "format": "int64",
+                "description": "The auto-86 threshold (§8): the item is sold while strictly more than this many can be made,\nand marked unavailable at or below it. Defaults to `0` — 86 only when nothing can be made."
+              },
+              "item": {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "The item or modifier this recipe makes."
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PublishedRecipeLine"
+                },
+                "description": "The ingredients and per-unit amounts. Empty means the item consumes nothing tracked and is\nnever limited by stock."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_PublishedSupplier": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A supplier a store receives goods from — a lightweight reference only (id + name). The full\npurchasing relationship lives in the ERP (§19).",
+            "required": [
+              "id",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/SupplierId",
+                "description": "Its stable id."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DisplayName",
+                "description": "The operator-facing name."
               }
             }
           },

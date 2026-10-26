@@ -43,7 +43,7 @@ struct DevicePublishState<D, Cfg, A, C> {
 }
 
 /// A super-admin selects the (tenant, store) whose `devices` node to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishDevicesRequest {
     /// The tenant that owns the store (a 26-character ULID).
     tenant_id: String,
@@ -89,7 +89,7 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
+        content = PublishDevicesRequest, description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
                        `devices` node (ADR-0100)",
         content_type = "application/json",
     ),

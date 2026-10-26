@@ -20,12 +20,24 @@
         "requestBody": {
           "description": "`code`, the activation code from the store's setup sheet, and optionally the `store_id` the box expects to belong to",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Activated: the `device_id`, and the device `credential`, returned this once; the cloud keeps only its hash (ADR-0050)"
+            "description": "Activated: the `device_id`, and the device `credential`, returned this once; the cloud keeps only its hash (ADR-0050)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExchangeResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The code or the store id is malformed",
@@ -81,7 +93,14 @@
         "operationId": "open_claim",
         "responses": {
           "201": {
-            "description": "A claim: its `claim_id`, the `user_code` the box shows, the `secret` it keeps to collect with, when it expires, and how often to poll (ADR-0148)"
+            "description": "A claim: its `claim_id`, the `user_code` the box shows, the `secret` it keeps to collect with, when it expires, and how often to poll (ADR-0148)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedClaim"
+                }
+              }
+            }
           },
           "429": {
             "description": "Too many activation attempts from this client: `Retry-After` says when to try again",
@@ -129,12 +148,24 @@
         "requestBody": {
           "description": "`secret`, the one the claim was opened with",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectClaimRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its device `credential`, returned this once"
+            "description": "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its device `credential`, returned this once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectedClaim"
+                }
+              }
+            }
           },
           "202": {
             "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again"
@@ -637,7 +668,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's approved devices, never a raw discovery"
+            "description": "The store's approved devices, never a raw discovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceProposalSummary"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID",
@@ -718,12 +759,24 @@
         "requestBody": {
           "description": "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` (ADR-0041)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Proposed: its `id`, and `status` pending until an operator approves it at the console"
+            "description": "Proposed: its `id`, and `status` pending until an operator approves it at the console",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposeDeviceResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, kind is not a known device kind, or name or address is blank",
@@ -1440,6 +1493,155 @@
   },
   "components": {
     "schemas": {
+      "CollectClaimRequest": {
+        "type": "object",
+        "description": "A box presents its secret to collect.",
+        "required": [
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
+      "CollectedClaim": {
+        "type": "object",
+        "description": "What a collection answers once: the box's slot and its device credential.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "device_id",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The `posdev_<id>_<secret>` token, shown this once; only its hash is kept."
+          },
+          "device_id": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DeviceProposalSummary": {
+        "type": "object",
+        "description": "A proposal as listed — the durable facts plus its status.",
+        "required": [
+          "id",
+          "store_id",
+          "kind",
+          "name",
+          "address",
+          "drawer_attached",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The device's network address."
+          },
+          "agent_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `terminal` device whose transport reaches this printer, if an operator has picked one\n([ADR-0112](../../../docs/adr/0112-print-agents.md)). `None` — the ordinary case — means the\nedge opens the address itself, exactly as it always has."
+          },
+          "connection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the device is attached (`usb`/`network`/`serial`), as approval recorded it — `None` while\npending, because discovery cannot find this out ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md))."
+          },
+          "cuts_paper": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "drawer_attached": {
+            "type": "boolean",
+            "description": "Whether an operator has marked a cash drawer as wired to this printer\n([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).\n`false` until somebody does, which is what every store assumed before the mark existed."
+          },
+          "id": {
+            "type": "string",
+            "description": "The proposal id (a ULID string)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`printer` or `kds`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The device's name."
+          },
+          "opening_float_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On a `terminal`, the float an operator says this till's drawer opens with by default, in the\nstore currency's minor unit\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). `None`\nuntil somebody says, which is the store's `shift.opening_float_minor`."
+          },
+          "paper_width": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The paper an operator says this printer takes, as its wire token (`PAPER_WIDTH_…`,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every\nstore assumed before the field existed."
+          },
+          "receipt_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the language an operator says this till's receipts print in, as its wire\ntoken (`RECEIPT_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "receipt_printer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the printer an operator says this till's receipts, receipt copies and\npre-bills go to (a ULID string,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 4). `None` until somebody says, which is the store's receipt printer."
+          },
+          "receipt_second_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the second language an operator says this till's receipts print in, as its\nwire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kitchen station this device serves, as approval recorded it. `None` for the counter's\nreceipt printer, which serves the bill rather than a station — and `None` while pending."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `approved`, or `rejected`."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the device belongs to (a ULID string)."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The error body — the schema mirror of [`pos_proto::error::ErrorBody`].",
@@ -1501,6 +1703,118 @@
           "error": {
             "$ref": "#/components/schemas/ErrorBody",
             "description": "The error."
+          }
+        }
+      },
+      "ExchangeRequest": {
+        "type": "object",
+        "description": "A device presents its activation code. Unauthenticated: the code is the credential.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store the box was installed for, from its `config.toml`. A code issued for another store\nis refused before it is spent. Optional, because an edge older than the field sends none."
+          }
+        }
+      },
+      "ExchangeResponse": {
+        "type": "object",
+        "description": "The device's minted credential and the device id it was activated as — shown once.",
+        "required": [
+          "device_id",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The `posdev_<id>_<secret>` bearer token the device stores in its `KeyVault`."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "The device id the credential authenticates as."
+          }
+        }
+      },
+      "OpenedClaim": {
+        "type": "object",
+        "description": "What `POST /claim` answers. The box shows `user_code` and keeps `secret` to itself.",
+        "required": [
+          "claim_id",
+          "user_code",
+          "secret",
+          "expires_in_secs",
+          "poll_interval_secs"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "expires_in_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "poll_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "secret": {
+            "type": "string",
+            "description": "256 bits, as hex. Shown nowhere; presented only to collect."
+          },
+          "user_code": {
+            "type": "string",
+            "description": "The code to show, as `XXXX-XXXX`."
+          }
+        }
+      },
+      "ProposeDeviceRequest": {
+        "type": "object",
+        "description": "A store's proposal of a discovered device.",
+        "required": [
+          "kind",
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The device's network address, as discovered (e.g. `192.168.1.50:9100`)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`printer` or `kds`."
+          },
+          "name": {
+            "type": "string",
+            "description": "A human-readable name for the device."
+          }
+        }
+      },
+      "ProposeDeviceResponse": {
+        "type": "object",
+        "description": "The id and status of a freshly-proposed device (always `pending`).",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The proposal's id (a ULID)."
+          },
+          "status": {
+            "type": "string",
+            "description": "The status — `pending` until an operator resolves it."
           }
         }
       }
