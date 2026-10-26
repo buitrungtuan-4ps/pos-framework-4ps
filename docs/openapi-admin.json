@@ -12000,7 +12000,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Every rule the tenant has written, at every scope: the scope and the id it was written for, the rule with the item categories it names, and who last wrote it when"
+            "description": "Every rule the tenant has written, at every scope: the scope and the id it was written for, the rule with the item categories it names, and who last wrote it when",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeRules"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -12069,7 +12076,14 @@
         },
         "responses": {
           "200": {
-            "description": "Written, and every store it reaches republished, with the same per-store outcomes as a POST"
+            "description": "Written, and every store it reaches republished, with the same per-store outcomes as a POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeWritten"
+                }
+              }
+            }
           },
           "400": {
             "description": "As a POST, or the fee_id is absent",
@@ -12158,7 +12172,14 @@
         },
         "responses": {
           "201": {
-            "description": "Created with a minted fee_id, and every store it reaches republished. The body names the fee_id and lists each store with FEE_PUBLISH_APPLIED and the new config version, FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it cannot apply, or FEE_PUBLISH_FAILED"
+            "description": "Created with a minted fee_id, and every store it reaches republished. The body names the fee_id and lists each store with FEE_PUBLISH_APPLIED and the new config version, FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it cannot apply, or FEE_PUBLISH_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeeWritten"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, the scope is not a scope, a field the rule needs is absent or out of range, a token is not one the field takes, a fee_id was sent, the rule names an item, category or tax class the catalog does not have, or a tenant-scope rule names another tenant",
@@ -12274,7 +12295,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Removed, and every store it reached republished, with the same per-store outcomes as a write. A store that ran it runs the fee's broader rule if there is one, and otherwise no longer charges it"
+            "description": "Removed, and every store it reached republished, with the same per-store outcomes as a write. A store that ran it runs the fee's broader rule if there is one, and otherwise no longer charges it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_FeePublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID or the scope is not a scope",
@@ -12374,7 +12402,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Every fee the store runs, in the order it is sent them: the scope and id its rule was written at, the rule as written, the rule as the store is sent it with its categories compiled into items, and any reason the store cannot apply it. publishable is false when one cannot be applied, in which case a publish leaves the store as it is"
+            "description": "Every fee the store runs, in the order it is sent them: the scope and id its rule was written at, the rule as written, the rule as the store is sent it with its categories compiled into items, and any reason the store cannot apply it. publishable is false when one cannot be applied, in which case a publish leaves the store as it is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveFees"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -12555,7 +12590,14 @@
         },
         "responses": {
           "200": {
-            "description": "Each store's rules resolved, compiled and republished, with the same per-store outcomes as a write"
+            "description": "Each store's rules resolved, compiled and republished, with the same per-store outcomes as a write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_FeePublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID",
@@ -27272,6 +27314,69 @@
         "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "EffectiveFee": {
+        "type": "object",
+        "description": "One fee as one store runs it, and where its rule comes from.",
+        "required": [
+          "fee_id",
+          "scope",
+          "scope_id",
+          "rule",
+          "published"
+        ],
+        "properties": {
+          "faults": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why the store cannot apply it, if it cannot."
+          },
+          "fee_id": {
+            "type": "string"
+          },
+          "published": {
+            "$ref": "#/components/schemas/PublishedFee",
+            "description": "The rule as the store is sent it, its categories compiled into items."
+          },
+          "rule": {
+            "description": "The rule as written: the wire rule's fields, and the categories it names."
+          },
+          "scope": {
+            "type": "string",
+            "description": "The scope of the rule in force, and what it was written for."
+          },
+          "scope_id": {
+            "type": "string"
+          }
+        }
+      },
+      "EffectiveFees": {
+        "type": "object",
+        "description": "What one store's effective fees answer: each fee it runs, and whether all of them can be\npublished to it.",
+        "required": [
+          "store_id",
+          "fees",
+          "publishable"
+        ],
+        "properties": {
+          "fees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EffectiveFee"
+            },
+            "description": "Each fee in force at the store."
+          },
+          "publishable": {
+            "type": "boolean",
+            "description": "Whether no fee has a fault, so a publish would apply them all."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store, a ULID."
+          }
+        }
+      },
       "Employee": {
         "type": "object",
         "description": "An employee as the console reads them. Note what is **absent**: no PIN and no PIN hash — a read\nexposes only `has_pin`, whether a PIN is set, so the directory never becomes a way to exfiltrate\ncredentials. Serializes for the `/admin` read (a later slice).",
@@ -27404,6 +27509,10 @@
           }
         }
       },
+      "FeeCode": {
+        "type": "string",
+        "description": "A short, stable, language-independent handle for a fee, such as `\"SERVICE\"` or `\"PACKAGING\"`.\n\nWhat a report groups fees by and a CSV export prints, so an operator reads a handle they chose\nrather than a ULID. Unlike [`crate::reason_codes::ReasonCode`], which no event carries, it is\nadmissible in an event payload ([`crate::pii`]): ADR-0159 has a bill record the code of every\nfee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It\nnames a charge, as a [`DisplayName`] names a product, and never a person."
+      },
       "FeeFaultView": {
         "type": "object",
         "description": "One rule a store cannot apply, as a refused publish reports it: by id, never by name.",
@@ -27420,6 +27529,11 @@
             "description": "`CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`."
           }
         }
+      },
+      "FeeId": {
+        "type": "string",
+        "description": "A `FeeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "FeePublishResult": {
         "type": "object",
@@ -27574,6 +27688,53 @@
           }
         }
       },
+      "FeeRuleView": {
+        "type": "object",
+        "description": "One rule as the console lists it.",
+        "required": [
+          "scope",
+          "scope_id",
+          "rule",
+          "update_time",
+          "updated_by"
+        ],
+        "properties": {
+          "rule": {
+            "description": "The rule as written: the wire rule's fields, and the categories it names."
+          },
+          "scope": {
+            "type": "string",
+            "description": "`FEE_SCOPE_TENANT`, `_BRAND` or `_STORE`."
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "The tenant, brand or store it was written for."
+          },
+          "update_time": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "updated_by": {
+            "type": "string",
+            "description": "The console admin who last wrote it, by id."
+          }
+        }
+      },
+      "FeeRules": {
+        "type": "object",
+        "description": "What the fee list answers: every rule the tenant wrote.",
+        "required": [
+          "rules"
+        ],
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeRuleView"
+            },
+            "description": "The rules, each with its scope and who last wrote it."
+          }
+        }
+      },
       "FeeTotal": {
         "type": "object",
         "description": "One fee's total on a trading day, under its code (part of [`DailyRevenue`]).",
@@ -27603,6 +27764,27 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of the tax on it, minor units."
+          }
+        }
+      },
+      "FeeWritten": {
+        "type": "object",
+        "description": "What a fee write answers: the fee it wrote, and how publishing to each store it reached went.",
+        "required": [
+          "fee_id",
+          "stores"
+        ],
+        "properties": {
+          "fee_id": {
+            "type": "string",
+            "description": "The fee's id, a ULID: the one sent, or the one minted for a new fee."
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeePublishResult"
+            },
+            "description": "One result per store the write reached."
           }
         }
       },
@@ -30172,6 +30354,114 @@
           }
         }
       },
+      "PublishedFee": {
+        "type": "object",
+        "description": "One fee rule: what it is called, what it charges, on which channels and items, and how it is\ntaxed.\n\nNo `deny_unknown_fields`, as for every published node: an edge on an older release applies a\nrule that carries a field it does not know, rather than refusing the whole node. Read the enum\nfields through [`kind`](Self::kind()), [`item_scope`](Self::item_scope()) and\n[`tax`](Self::tax()), which give an absent value its default and refuse an unknown one where a\nguess would be a price. [`violations`](Self::violations) is the shape check ADR-0159 has the\ncloud make before it publishes a rule.",
+        "required": [
+          "fee_id",
+          "code",
+          "display_name"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether the rule applies at all. Absent means `true`: a rule the cloud publishes applies\nunless it is paused."
+          },
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "For [`FeeKind::AmountPerBill`] and [`FeeKind::AmountPerUnit`]: the charge, an integer in the\ncurrency's minor unit. Ignored for a percentage."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_discounted": {
+            "type": "boolean",
+            "description": "For a percentage: whether the base is discounted, that is taken after discounts and comps\n(`true`), or before them (`false`). Absent means `true`, as the owner confirmed."
+          },
+          "base_tax_inclusive": {
+            "type": "boolean",
+            "description": "For a percentage: whether the base is tax-inclusive (`true`), for a market that quotes a\ncharge on the tax-inclusive price, or net of tax (`false`). Absent means `false`, as the\nowner confirmed."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
+            },
+            "description": "The sales channels the fee applies on. Empty, which is what an absent field reads as, means\nevery channel. Each is wrapped in [`Open`] so a channel from a newer cloud round-trips; one\nthis build does not recognise matches no channel. Read through\n[`applies_on`](Self::applies_on)."
+          },
+          "code": {
+            "$ref": "#/components/schemas/FeeCode",
+            "description": "The short handle a report groups by."
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name the bill prints the fee under. Always present, and the fallback for any locale\n[`display_name_translations`](Self::display_name_translations) does not carry\n(`docs/pos-spec.md` §12: English is always present and is the fallback)."
+          },
+          "display_name_translations": {
+            "type": "object",
+            "description": "The name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"ja\"`, …), as\n[`crate::reason_codes::PublishedReasonCode::display_name_translations`] does for a reason.\nRead through [`localized_name`](Self::localized_name).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DisplayName"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "fee_id": {
+            "$ref": "#/components/schemas/FeeId",
+            "description": "Its stable id: the same fee across a rename, and the key ADR-0159 merges a tenant's, a\nbrand's and a store's rules by."
+          },
+          "item_scope": {
+            "$ref": "#/components/schemas/OpenFeeItems_FeeItems",
+            "description": "Which lines the fee counts, together with [`menu_item_ids`](Self::menu_item_ids). Read\nthrough [`item_scope`](Self::item_scope()) and [`counts_item`](Self::counts_item); absent\nmeans every line."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpenFeeKind_FeeKind",
+            "description": "How the fee is charged. Read it through [`kind`](Self::kind()): an absent or unknown kind is\nno kind, and a rule of no kind applies to nothing. Absent parses, so one such rule does not\nstop a store applying the rest of the node."
+          },
+          "menu_item_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemId"
+            },
+            "description": "The items a [`FeeItems::Include`] or [`FeeItems::Exclude`] scope lists, by id rather than by\ncategory (the module documentation says why). Ignored for [`FeeItems::All`]."
+          },
+          "rate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ratio",
+                "description": "For [`FeeKind::Percent`]: the share of the base, as an exact ratio. 5 % is\n`Ratio::percent(5)` and 2.5 % is `Ratio::basis_points(250)`; never a float. Ignored for the\namount kinds."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tax": {
+            "$ref": "#/components/schemas/OpenFeeTax_FeeTax",
+            "description": "How the fee is taxed. Read it through [`tax`](Self::tax()), which reads an absent or unknown\ntreatment as [`FeeTax::FollowLines`]."
+          },
+          "tax_class_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaxClassId",
+                "description": "For [`FeeTax::TaxClass`]: the class the fee is taxed at. Ignored otherwise."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waivable": {
+            "type": "boolean",
+            "description": "Whether staff may take the fee off one bill. Absent means `false`, as the owner confirmed.\nWaiving is an act on a bill, under its own permission and with a reason\n(ADR-0159 decision 5), never an edit of this rule."
+          }
+        }
+      },
       "PublishedIngredient": {
         "type": "object",
         "description": "One ingredient held in stock, in wire form: its id, a display name, and the unit it is counted in.",
@@ -32085,6 +32375,49 @@
           }
         }
       },
+      "StoresPublished_FeePublishResult": {
+        "type": "object",
+        "description": "What a write that publishes to several stores at once answers: one result per store it reached,\nin the order it reached them.",
+        "required": [
+          "stores"
+        ],
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "How one store's fee publish went.",
+              "required": [
+                "store_id",
+                "outcome"
+              ],
+              "properties": {
+                "config_version_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "faults": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeeFaultView"
+                  },
+                  "description": "For a refused store: each rule it cannot apply, and why."
+                },
+                "outcome": {
+                  "type": "string",
+                  "description": "`FEE_PUBLISH_APPLIED`, `FEE_PUBLISH_UNCHANGED`, `FEE_PUBLISH_REFUSED` or\n`FEE_PUBLISH_FAILED`."
+                },
+                "store_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One result per store."
+          }
+        }
+      },
       "StoresPublished_PermissionsPublishResult": {
         "type": "object",
         "description": "What a write that publishes to several stores at once answers: one result per store it reached,\nin the order it reached them.",
@@ -32525,6 +32858,11 @@
             "description": "The tenant id."
           }
         }
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "An instant in UTC, as RFC 3339"
       },
       "TranslationGrid": {
         "type": "object",

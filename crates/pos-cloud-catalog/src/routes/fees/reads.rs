@@ -35,7 +35,7 @@ use crate::routes::not_found;
         ("tenant_id" = String, Query, description = "The tenant whose rules to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every rule the tenant has written, at every scope: the scope \
+        (status = 200, body = FeeRules, description = "Every rule the tenant has written, at every scope: the scope \
                                       and the id it was written for, the rule with the item \
                                       categories it names, and who last wrote it when"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -76,7 +76,7 @@ where
     match state.fees.list(tenant_id).await {
         Ok(rules) => {
             let views: Vec<FeeRuleView> = rules.iter().filter_map(FeeRuleView::of).collect();
-            (StatusCode::OK, Json(serde_json::json!({ "rules": views }))).into_response()
+            (StatusCode::OK, Json(FeeRules { rules: views })).into_response()
         }
         Err(error) => fee_store_error_response(&error),
     }
@@ -89,8 +89,27 @@ pub(super) struct EffectiveFeesQuery {
     store_id: String,
 }
 
+/// What the fee list answers: every rule the tenant wrote.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct FeeRules {
+    /// The rules, each with its scope and who last wrote it.
+    rules: Vec<FeeRuleView>,
+}
+
+/// What one store's effective fees answer: each fee it runs, and whether all of them can be
+/// published to it.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct EffectiveFees {
+    /// The store, a ULID.
+    store_id: String,
+    /// Each fee in force at the store.
+    fees: Vec<EffectiveFee>,
+    /// Whether no fee has a fault, so a publish would apply them all.
+    publishable: bool,
+}
+
 /// One fee as one store runs it, and where its rule comes from.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct EffectiveFee {
     fee_id: String,
     /// The scope of the rule in force, and what it was written for.
@@ -115,7 +134,7 @@ struct EffectiveFee {
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every fee the store runs, in the order it is sent them: the \
+        (status = 200, body = EffectiveFees, description = "Every fee the store runs, in the order it is sent them: the \
                                       scope and id its rule was written at, the rule as written, \
                                       the rule as the store is sent it with its categories \
                                       compiled into items, and any reason the store cannot apply \
@@ -200,11 +219,41 @@ where
     let publishable = fees.iter().all(|fee| fee.faults.is_empty());
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "store_id": store_id.to_string(),
-            "fees": fees,
-            "publishable": publishable,
-        })),
+        Json(EffectiveFees {
+            store_id: store_id.to_string(),
+            fees,
+            publishable,
+        }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::{EffectiveFees, FeeRules};
+
+    #[test]
+    fn the_fee_list_is_its_rules() {
+        let answer = serde_json::to_value(FeeRules { rules: Vec::new() }).expect("json");
+        assert_eq!(answer, serde_json::json!({ "rules": [] }));
+    }
+
+    #[test]
+    fn the_effective_fees_are_the_store_its_fees_and_whether_they_publish() {
+        let answer = EffectiveFees {
+            store_id: "01J0000000000000000000000S".to_owned(),
+            fees: Vec::new(),
+            publishable: true,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "store_id": "01J0000000000000000000000S",
+                "fees": [],
+                "publishable": true,
+            })
+        );
+    }
 }
