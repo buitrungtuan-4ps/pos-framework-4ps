@@ -21098,7 +21098,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The day's report: `kind`, `X` for the current day (interim) or `Z` for a past one (final); `business_date`; `activity`, the day's event counts; `revenue`, its takings and mix; `cash`, its drawers; and `till_names`, each till's name from the store's published devices, which are device names, never a person"
+            "description": "The day's report: `kind`, `X` for the current day (interim) or `Z` for a past one (final); `business_date`; `activity`, the day's event counts; `revenue`, its takings and mix; `cash`, its drawers; and `till_names`, each till's name from the store's published devices, which are device names, never a person",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XzReport"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -21207,7 +21214,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's takings for each trading day in the window, oldest first, as an array: `business_date`, `currency_code`, `bills`, `gross`, `reductions`, `service_charge`, `tax`, `net`, and the day's product mix, fees by code and tax by component. Amounts are integers in the currency's minor units. No customer or employee identifier"
+            "description": "The store's takings for each trading day in the window, oldest first, as an array: `business_date`, `currency_code`, `bills`, `gross`, `reductions`, `service_charge`, `tax`, `net`, and the day's product mix, fees by code and tax by component. Amounts are integers in the currency's minor units. No customer or employee identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailyRevenue"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21315,7 +21332,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue.csv`, as a `text/csv` attachment: the header `business_date,currency_code,bills,gross,reductions,service_charge,tax,net`, then one row per trading day, oldest first, in the currency's minor units. The audit entry records how many rows, never what they held"
+            "description": "`revenue.csv`, as a `text/csv` attachment: the header `business_date,currency_code,bills,gross,reductions,service_charge,tax,net`, then one row per trading day, oldest first, in the currency's minor units. The audit entry records how many rows, never what they held",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21434,7 +21458,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue-fees.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,fee_code,fee_name,bills,amount,tax`, then one row per trading day per fee code the day's settled bills charged, oldest day first and then by code: the fee's name, the bills that charged it, what it charged and the tax on it, in the store's currency's minor units. A day that charged no fee has no row, and neither has a bill settled by an edge from before fee lines, whose charge is only in `revenue.csv`'s `service_charge`. Only the header for a window with no fees, and for a store whose rollup has not been projected yet"
+            "description": "`revenue-fees.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,fee_code,fee_name,bills,amount,tax`, then one row per trading day per fee code the day's settled bills charged, oldest day first and then by code: the fee's name, the bills that charged it, what it charged and the tax on it, in the store's currency's minor units. A day that charged no fee has no row, and neither has a bill settled by an edge from before fee lines, whose charge is only in `revenue.csv`'s `service_charge`. Only the header for a window with no fees, and for a store whose rollup has not been projected yet",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21553,7 +21584,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`revenue-tax.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,component_name,rate_basis_points,tax`, then one row per trading day per tax component name and rate the day's settled bills recorded, oldest day first and then by name and rate: the tax their tax lines recorded under it, in the store's currency's minor units. A fee's tax is inside its tax line, so it adds no row of its own. Nothing is invented: a bill that recorded no components, settled before its store recorded them or taxed at rates with none, is in `revenue.csv`'s `tax` and in no row here, so a day's rows can sum to less than its tax and no row stands for the difference. Only the header for a window with no components, as for a store whose tax table names none, and for a store whose rollup has not been projected yet"
+            "description": "`revenue-tax.csv`, as a `text/csv` attachment. The header is `business_date,currency_code,component_name,rate_basis_points,tax`, then one row per trading day per tax component name and rate the day's settled bills recorded, oldest day first and then by name and rate: the tax their tax lines recorded under it, in the store's currency's minor units. A fee's tax is inside its tax line, so it adds no row of its own. Nothing is invented: a bill that recorded no components, settled before its store recorded them or taxed at rates with none, is in `revenue.csv`'s `tax` and in no row here, so a day's rows can sum to less than its tax and no row stands for the difference. Only the header for a window with no components, as for a store whose tax table names none, and for a store whose rollup has not been projected yet",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21671,7 +21709,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's activity for each trading day in the window, oldest first, as an array: `business_date`, `total_events` and `by_type`, the count of each kind of event. Counts only, no amounts and no person. Read from the materialised rollup; a store not yet projected reads back empty"
+            "description": "The store's activity for each trading day in the window, oldest first, as an array: `business_date`, `total_events` and `by_type`, the count of each kind of event. Counts only, no amounts and no person. Read from the materialised rollup; a store not yet projected reads back empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DailyRollup"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -21779,7 +21827,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`rollups.csv`, as a `text/csv` attachment: the header `business_date,total_events`, then one row per trading day, oldest first. The audit entry records how many rows, never what they held"
+            "description": "`rollups.csv`, as a `text/csv` attachment: the header `business_date,total_events`, then one row per trading day, oldest first. The audit entry records how many rows, never what they held",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID, a date is not `YYYY-MM-DD`, `from` is after `to`, or `limit` is zero",
@@ -23542,6 +23597,64 @@
           }
         }
       },
+      "CashTotals": {
+        "type": "object",
+        "description": "A day's cash figures for one drawer (part of [`DailyCash`]), the same as the store's.\n\nThe store's stay inline on [`DailyCash`] rather than in one of these under\n`#[serde(flatten)]`, which would keep the wire as it is and does not pass the lints: the\nflatten buffer carries `f32` and `f64`, which `clippy.toml` bans (money is never a float).",
+        "required": [
+          "opening_float",
+          "paid_in",
+          "paid_out",
+          "shifts_opened",
+          "shifts_closed",
+          "expected",
+          "counted",
+          "variance"
+        ],
+        "properties": {
+          "counted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of counted amounts across closes (the blind counts)."
+          },
+          "expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of expected drawer amounts across closes. Only a close carries one: the edge works out\nwhat a drawer should hold at its close, so a shift still open adds nothing here."
+          },
+          "opening_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of opening floats across shifts opened on the day."
+          },
+          "paid_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-in movements."
+          },
+          "paid_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-out movements."
+          },
+          "shifts_closed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts closed on the day.",
+            "minimum": 0
+          },
+          "shifts_opened": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts opened on the day.",
+            "minimum": 0
+          },
+          "variance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of variance (counted − expected) across closes; negative is short."
+          }
+        }
+      },
       "CatalogItem": {
         "type": "object",
         "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
@@ -24332,6 +24445,200 @@
         "description": "An ISO 4217 currency code: three upper-case letters",
         "pattern": "^[A-Z]{3}$"
       },
+      "DailyCash": {
+        "type": "object",
+        "description": "A day's **cash-drawer** summary for one store, folded from the shift and drawer events\n([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4). Amounts are the store's\nsingle currency's minor units. Part of an X/Z report; T2 (it exposes money).",
+        "required": [
+          "business_date",
+          "currency_code",
+          "opening_float",
+          "paid_in",
+          "paid_out",
+          "shifts_opened",
+          "shifts_closed",
+          "expected",
+          "counted",
+          "variance"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "by_drawer": {
+            "type": "object",
+            "description": "The same figures for each drawer, keyed by the till's `terminal_device_id`, or by\n[`STORE_DRAWER`] for the store's one drawer\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).\nEach drawer's are the sums of its own events, which are the events the store's figures sum,\nso the drawers add up to the store.\n\n`#[serde(default)]`, so a day stored before this field loads with no drawers and gains them\nfrom the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay\nlever) folds every cash event on the log into it.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CashTotals"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "counted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of counted amounts across closes (the blind counts)."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 code, or empty until a cash event on the day sets it."
+          },
+          "expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of expected drawer amounts across closes."
+          },
+          "opening_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of opening floats across shifts opened on the day."
+          },
+          "paid_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-in movements."
+          },
+          "paid_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of paid-out movements."
+          },
+          "shifts_closed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts closed on the day.",
+            "minimum": 0
+          },
+          "shifts_opened": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shifts opened on the day.",
+            "minimum": 0
+          },
+          "variance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of variance (counted − expected) across closes; negative is short."
+          }
+        }
+      },
+      "DailyRevenue": {
+        "type": "object",
+        "description": "A day's **revenue** for one store, folded from the settlement and line events\n([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4).\n\nRevenue is recognised from `billing.bill.settled` (the settled totals); the product mix is the\n**gross ordered** mix from `sales.order_line.added` — units and value as ordered, **before** voids\nand comps are netted (which the line events do not carry back to a menu item), so it reads menu\npopularity, not per-item recognised revenue. All amounts are the store's single currency's minor\nunits (`docs/pos-spec.md` §19). Prices are **T2**: this rollup, and every route that serves it, is\ngated behind `console.reports.revenue`. It carries no customer or employee identifier.",
+        "required": [
+          "business_date",
+          "currency_code",
+          "bills",
+          "gross",
+          "reductions",
+          "service_charge",
+          "tax",
+          "net",
+          "by_item"
+        ],
+        "properties": {
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled bills on the day.",
+            "minimum": 0
+          },
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "by_fee": {
+            "type": "object",
+            "description": "The fees the day's settled bills charged, keyed by the fee's `code` and ordered by it\n([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).\n\nFolded from each `billing.bill.settled`'s `fee_lines`, whose amounts sum to that bill's\n`service_charge`. So on a day whose every bill recorded its fee lines, these amounts sum to\n[`service_charge`](Self::service_charge). A bill settled by an edge from before fee lines\nrecords none, and adds to `service_charge` alone. There is no entry for that difference: a\nbucket for it would read as a fee nobody wrote, so the gap is left as the gap between the\ntwo figures.\n\nBounded by the store's fee rules, not by its trade: one entry per code a rule charged that\nday, and the cloud refuses a second active fee under a code a store already runs\n(`pos_cloud::fees::shares_code_with`).\n\n`#[serde(default)]`, so a day stored before this field loads with no fees and gains them\nfrom the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay\nlever) folds every settled bill on the log into it.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FeeTotal"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "by_item": {
+            "type": "object",
+            "description": "Gross ordered mix, keyed by `menu_item_id`, ordered by key for determinism.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ItemMix"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "by_tax_component": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaxComponentTotal"
+            },
+            "description": "The tax the day's settled bills recorded by tax component, one entry per component name and\nrate, in order of name and then rate\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5).\n\nFolded from each `billing.bill.settled`'s tax lines' `components` alone, never from its fee\nlines' `tax_components`, because a fee's tax is already inside the tax lines as its share of\nits class's tax, and folding both would count it twice.\n\nSo on a day whose every bill recorded its components, these sum to [`tax`](Self::tax). A\nbill that recorded none adds to `tax` alone: one settled before its edge recorded them, one\ntaxed at rates with no components, as every Vietnamese and Japanese bill is, and one whose\nnames are not tokens, which reads as not split. There is no entry for that difference: a\nbucket for it would read as a component no bill named, so the gap is left as the gap between\nthe two figures, as it is for [`by_fee`](Self::by_fee).\n\nBounded by the tenant's tax table, not by the store's trade: one entry per component name and\nrate a row of the table in force named that day.\n\nLeft out when empty, so a day with none serialises byte for byte as before this field, and\n`#[serde(default)]`, so a day stored before it loads with none and gains them from the\nrollup's cursor forward. Resetting the rollup re-folds every settled bill on the log into it."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 code of the store's currency, or empty until the first settled bill sets it."
+          },
+          "gross": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of settled subtotals (before reductions), minor units."
+          },
+          "net": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of `total_due` — what guests owed — minor units. The headline \"revenue\" figure."
+          },
+          "reductions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of reductions (discounts + comps), minor units."
+          },
+          "service_charge": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of service charge, minor units."
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of tax, minor units."
+          }
+        }
+      },
+      "DailyRollup": {
+        "type": "object",
+        "description": "A day's activity for one store, derived from the event log.\n\nThe cloud's dashboards answer from rollups rather than by scanning the raw log\n(`docs/roadmap.md` P7). This first rollup counts events per store trading day and per event\ntype — enough for an activity dashboard, and it uses only envelope fields (`business_date`,\n`event_type`), so it needs no per-event-type decoding. Money- and order-shaped rollups, and the\nmaterialised tables that make the <10 ms dashboard query real, land with the dashboard slice.",
+        "required": [
+          "business_date",
+          "total_events",
+          "by_type"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD` ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md))."
+          },
+          "by_type": {
+            "type": "object",
+            "description": "Per-event-type counts, ordered by type so the output is deterministic.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "total_events": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Every event recorded on that day.",
+            "minimum": 0
+          }
+        }
+      },
       "DeviceProposalSummary": {
         "type": "object",
         "description": "A proposal as listed — the durable facts plus its status.",
@@ -24803,6 +25110,38 @@
           }
         }
       },
+      "FeeTotal": {
+        "type": "object",
+        "description": "One fee's total on a trading day, under its code (part of [`DailyRevenue`]).",
+        "required": [
+          "name",
+          "bills",
+          "amount",
+          "tax"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of what the fee charged, minor units."
+          },
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled bills that charged the fee.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The most recent name a settled bill recorded for the fee, for a human-readable report."
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the tax on it, minor units."
+          }
+        }
+      },
       "GridPosition": {
         "type": "object",
         "description": "Where a button sits on a POS terminal's fixed grid: zero-based `column` and `row`.",
@@ -24972,6 +25311,31 @@
       "ItemCategoryId": {
         "type": "string",
         "description": "An item category's identifier — a ULID minted at creation. The operational taxonomy is a\ncloud-authoring concept (reporting/tax-default/kitchen grouping); like [`MenuId`], its id is\ndefined beside the seam rather than in [`pos_proto::ids`]."
+      },
+      "ItemMix": {
+        "type": "object",
+        "description": "One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).",
+        "required": [
+          "name",
+          "ordered_qty_milli",
+          "ordered_value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The most recent display name seen for the item, for a human-readable report."
+          },
+          "ordered_qty_milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of ordered quantity, in thousandths of a unit (`Quantity::milli`)."
+          },
+          "ordered_value": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of ordered line totals, minor units — gross, before voids/comps."
+          }
+        }
       },
       "ItemSubcategory": {
         "type": "object",
@@ -27069,6 +27433,32 @@
         "description": "A `TaxClassId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "TaxComponentTotal": {
+        "type": "object",
+        "description": "One tax component's tax on a trading day, at one rate (part of [`DailyRevenue`]).",
+        "required": [
+          "component_name",
+          "rate_basis_points",
+          "tax"
+        ],
+        "properties": {
+          "component_name": {
+            "type": "string",
+            "description": "The component's name as the bills recorded it, such as `CGST`: a\n[`TaxComponentName`](pos_proto::locale::TaxComponentName) when it was folded. Text here, so\na stored day loads whatever a later release lets a name be."
+          },
+          "rate_basis_points": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its part of the rate, in basis points: CGST at 2.5 % and at 9 % are two entries.",
+            "minimum": 0
+          },
+          "tax": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the tax the day's tax lines recorded under it, minor units."
+          }
+        }
+      },
       "TaxComponentView": {
         "type": "object",
         "description": "One named part of a rate, on the wire.",
@@ -28973,6 +29363,49 @@
           }
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "XzReport": {
+        "type": "object",
+        "description": "An **X or Z report** for one store's trading day (ADR-0081, Track O4, resolving spec gap D10).\n\nAn **X** report is the current (open) day's running totals — non-resetting, recomputed each call.\nA **Z** report is a closed day's totals — a day that no longer receives events, so the same read\nreturns the same figures verbatim thereafter. `kind` is `\"X\"` for the latest day present and\n`\"Z\"` for any earlier (closed) day. It bundles the day's activity counts, revenue, and cash\nsummary; T2, so it is served only behind `console.reports.revenue`. Not a legal fiscal document —\nthat stays with the country module's invoice range.",
+        "required": [
+          "kind",
+          "business_date",
+          "activity",
+          "revenue",
+          "cash"
+        ],
+        "properties": {
+          "activity": {
+            "$ref": "#/components/schemas/DailyRollup",
+            "description": "The day's event-activity counts."
+          },
+          "business_date": {
+            "type": "string",
+            "description": "The trading day, `YYYY-MM-DD`."
+          },
+          "cash": {
+            "$ref": "#/components/schemas/DailyCash",
+            "description": "The day's cash-drawer summary."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`\"X\"` (current, interim) or `\"Z\"` (closed, final)."
+          },
+          "revenue": {
+            "$ref": "#/components/schemas/DailyRevenue",
+            "description": "The day's recognised revenue and product mix."
+          },
+          "till_names": {
+            "type": "object",
+            "description": "The name of each till among the day's drawers, keyed as [`DailyCash::by_drawer`] is, from the\nstore's published `devices` node when the report is served (ADR-0167 decision 13). The\nstore's drawer, and a till the node no longer lists, have none. Device names, never a person.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       }
     },
     "securitySchemes": {

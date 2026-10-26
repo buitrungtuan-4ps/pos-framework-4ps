@@ -43,7 +43,7 @@ use pos_cloud_api::response::{api_error, csv_download_response};
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "The store's takings for each trading day in the window, \
+        (status = 200, body = [DailyRevenue], description = "The store's takings for each trading day in the window, \
                                       oldest first, as an array: `business_date`, \
                                       `currency_code`, `bills`, `gross`, `reductions`, \
                                       `service_charge`, `tax`, `net`, and the day's product mix, \
@@ -195,7 +195,7 @@ where
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`revenue.csv`, as a `text/csv` attachment: the header \
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue.csv`, as a `text/csv` attachment: the header \
                                       `business_date,currency_code,bills,gross,reductions,\
                                       service_charge,tax,net`, then one row per trading day, \
                                       oldest first, in the currency's minor units. The audit entry \
@@ -250,7 +250,7 @@ where
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
                                       is `business_date,currency_code,fee_code,fee_name,bills,\
                                       amount,tax`, then one row per trading day per fee code the \
                                       day's settled bills charged, oldest day first and then by \
@@ -316,7 +316,7 @@ where
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
                                       is `business_date,currency_code,component_name,\
                                       rate_basis_points,tax`, then one row per trading day per \
                                       tax component name and rate the day's settled bills \
