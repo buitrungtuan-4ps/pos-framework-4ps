@@ -152,17 +152,11 @@ Served at `api.<domain>`, versioned `/v1`, documented by generated OpenAPI.
 
 Creating a cell is not new engineering — it is the existing fork-and-deploy flow pointed at a new environment: add a GitHub Environment, add a VPS, run the workflow.
 
-**Naming rule: redirect, never proxy.** The country label lives in the **hostname**, not the path.
+**Naming rule: redirect, never proxy.** A cell is named by a **cell id** (`vn1`, `jp1`), not a country ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md), which supersedes [ADR-0011](adr/0011-country-in-hostname.md)'s country label and its 301 in part). Every cell holds the same minisign-signed, PII-free **directory** (`tenant_slug → cell_id`, `country → default cell` with a `*` fallback, `cell_id → base URL`), so any cell can answer "where is this tenant" and **redirect** there: `302` for a browser, `307` or `308` for an API, never `301`, and never a proxy. A device resolves its cell once, from its activation-code prefix or `/.well-known/pos-cell`, and stores its `cloud_url`. A tenant's home cell follows its country, never the visitor's location; GeoDNS, where a fork adds it, only shortens the path.
 
-```
-tenant.<domain>          → home country (the first country deployed; unlabelled)
-tenant.jp.<domain>       → Japan cell
-api.jp.<domain>          → Japan API
-```
+**Decided, not built.** Today one deployment is the only cell, which is level 0 of ADR-0179: a one-entry directory that answers for itself. The `[cell]` section, the directory, `/.well-known/pos-cell` and the redirects are that record's plan, C1–C10. A path-based scheme (`/jp`) stays rejected: it forces every Japanese request to terminate TLS in another country — destroying the legal reason for cells — adds a round trip, creates a global single point of failure, and breaks session isolation because browsers do not treat paths as security boundaries.
 
-A tiny slug→country directory (no PII) lets the home cell issue a **301 redirect** so users can type one domain. A path-based scheme (`/jp`) was rejected: it forces every Japanese request to terminate TLS in another country — destroying the legal reason for cells — adds a round trip, creates a global single point of failure, and breaks session isolation because browsers do not treat paths as security boundaries.
-
-**Four disciplines are paid for on day one** even with a single country, because they cannot be retrofitted cheaply: internationalisation of every string; locale packs as first-class configuration (currency, timezone, date and number formats, receipt templates); host parsing that already understands a country label; and a timezone on every store.
+**Four disciplines are paid for on day one** even with a single country, because they cannot be retrofitted cheaply: internationalisation of every string; locale packs as first-class configuration (currency, timezone, date and number formats, receipt templates); host parsing that already understands a hostname label (now a cell id); and a timezone on every store.
 
 ## 8. Operations
 
