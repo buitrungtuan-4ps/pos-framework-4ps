@@ -33,7 +33,7 @@ use pos_cloud_catalog::routes::catalog::catalog_error_response;
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's routing rules, as an array: each names its station, the menu item or the \
+        (status = 200, body = [RoutingRule], description = "The store's routing rules, as an array: each names its station, the menu item or the \
                                       course it matches, and its sort"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -80,7 +80,7 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
+        content = CreateRoutingRuleRequest, description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
                        what the rule matches; and optionally `sort`",
         content_type = "application/json",
     ),

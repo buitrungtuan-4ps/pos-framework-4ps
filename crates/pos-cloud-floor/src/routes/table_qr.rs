@@ -35,7 +35,7 @@ struct TableQrState<F, A, C> {
 /// One table's printable QR: its id, the label a host reads, and the signed token the guest's QR
 /// carries. The token binds `(tenant, store, table)` — no personal data — and is the same value
 /// `verify_table_token` checks on a guest order (ADR-0057).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TableQrEntry {
     table_id: String,
     label: String,
@@ -43,7 +43,7 @@ struct TableQrEntry {
 }
 
 /// The store's table QR tokens, for the console's printable sheet.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TableQrView {
     store_id: String,
     tokens: Vec<TableQrEntry>,
@@ -82,7 +82,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`store_id` and `tokens`: for each active table, `table_id`, \
+        (status = 200, body = TableQrView, description = "`store_id` and `tokens`: for each active table, `table_id`, \
                                       `label`, and `token`, the signed value its printed QR code \
                                       carries, binding the tenant, store and table and no personal \
                                       data. Served only where a table-token secret is configured"),
