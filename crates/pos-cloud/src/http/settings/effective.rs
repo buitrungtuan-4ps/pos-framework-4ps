@@ -30,7 +30,7 @@ pub(super) struct EffectiveSettingsQuery {
 }
 
 /// One setting as one store runs it, and where its value comes from.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct EffectiveSetting {
     setting_key: String,
     value: serde_json::Value,
@@ -40,6 +40,13 @@ struct EffectiveSetting {
     /// The tenant, brand, store group or store that set it.
     #[serde(skip_serializing_if = "Option::is_none")]
     scope_id: Option<String>,
+}
+
+/// What a store's effective settings answer: each setting as the store runs it.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct EffectiveSettings {
+    /// One per setting, with the scope its value came from.
+    settings: Vec<EffectiveSetting>,
 }
 
 #[utoipa::path(
@@ -52,7 +59,7 @@ struct EffectiveSetting {
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every setting as the store runs it: the value, and the scope \
+        (status = 200, body = EffectiveSettings, description = "Every setting as the store runs it: the value, and the scope \
                                       and id it comes from, which are absent for a default"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -131,7 +138,24 @@ where
         .collect();
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "settings": effective })),
+        Json(EffectiveSettings {
+            settings: effective,
+        }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::EffectiveSettings;
+
+    #[test]
+    fn the_effective_settings_are_their_list() {
+        let answer = serde_json::to_value(EffectiveSettings {
+            settings: Vec::new(),
+        });
+        assert_eq!(answer.expect("json"), serde_json::json!({ "settings": [] }));
+    }
 }

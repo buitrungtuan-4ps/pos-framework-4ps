@@ -22,6 +22,7 @@ use crate::http::{load_tree_for_write, not_found, publish_nodes};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::response::StoresPublished;
 // Moved to pos-cloud-config; imported here, so the settings routes keep reaching it.
 pub(in crate::http) use pos_cloud_config::route::TenantLayout;
 
@@ -36,7 +37,7 @@ pub(in crate::http) use pos_cloud_config::route::TenantLayout;
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each store's resolved settings republished, with the same \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Each store's resolved settings republished, with the same \
                                       per-store outcomes as a write"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -116,7 +117,7 @@ where
 }
 
 /// How one store's settings publish went.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct SettingPublishResult {
     store_id: String,
     /// `SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`.

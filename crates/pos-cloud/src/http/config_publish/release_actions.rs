@@ -26,6 +26,13 @@ use crate::releases::{ReleaseStatus, ReleaseStore};
 use crate::scheduling::{ScheduledPublishStatus, ScheduledPublishStore};
 use crate::store_groups::StoreGroupStore;
 
+/// What the release list answers: the tenant's releases, newest first.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReleaseList {
+    /// Each release, as its own read reports it.
+    releases: Vec<ReleaseView>,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/config-releases/{release_id}/schedule",
@@ -256,7 +263,7 @@ where
     extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's releases, newest first, each with its stored \
+        (status = 200, body = ReleaseList, description = "The tenant's releases, newest first, each with its stored \
                                       roll-up state"),
         (status = 400, description = "tenant_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -297,7 +304,7 @@ where
     match state.releases.list_for_tenant(tenant_id).await {
         Ok(rows) => {
             let views: Vec<ReleaseView> = rows.iter().map(ReleaseView::of).collect();
-            Json(serde_json::json!({ "releases": views })).into_response()
+            Json(ReleaseList { releases: views }).into_response()
         }
         Err(error) => release_error_response(&error),
     }
@@ -402,4 +409,19 @@ where
             .collect(),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::ReleaseList;
+
+    #[test]
+    fn the_release_list_is_its_releases() {
+        let answer = serde_json::to_value(ReleaseList {
+            releases: Vec::new(),
+        });
+        assert_eq!(answer.expect("json"), serde_json::json!({ "releases": [] }));
+    }
 }

@@ -2639,7 +2639,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                    "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                   }
                 }
               }
@@ -2716,7 +2716,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                 }
               }
             }
@@ -2814,7 +2814,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplayCategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplayCategory"
                 }
               }
             }
@@ -2914,7 +2914,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                    "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                   }
                 }
               }
@@ -2991,7 +2991,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                 }
               }
             }
@@ -3089,7 +3089,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Versioned_DisplaySubcategory"
+                  "$ref": "#/components/schemas/Versioned_CatalogDisplaySubcategory"
                 }
               }
             }
@@ -6767,7 +6767,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The tenant's releases, newest first, each with its stored roll-up state"
+            "description": "The tenant's releases, newest first, each with its stored roll-up state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseList"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is not a ULID",
@@ -16068,7 +16075,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RoutingRule"
+                    "$ref": "#/components/schemas/FloorRoutingRule"
                   }
                 }
               }
@@ -19150,7 +19157,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Every value the tenant has written: the setting, the scope and the id it was written for, the value and when"
+            "description": "Every value the tenant has written: the setting, the scope and the id it was written for, the value and when",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingValues"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id is absent or not a ULID",
@@ -19219,7 +19233,14 @@
         },
         "responses": {
           "200": {
-            "description": "Written, and every store it reaches republished. The body lists each store with SETTING_PUBLISH_APPLIED and the new config version, SETTING_PUBLISH_UNCHANGED, or SETTING_PUBLISH_FAILED"
+            "description": "Written, and every store it reaches republished. The body lists each store with SETTING_PUBLISH_APPLIED and the new config version, SETTING_PUBLISH_UNCHANGED, or SETTING_PUBLISH_FAILED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_SettingPublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, the value needs its notice confirmed and notice_confirmed is not true, or a tenant-scope value names another tenant",
@@ -19335,7 +19356,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Cleared, and every store it reached republished, with the same per-store outcomes as a write"
+            "description": "Cleared, and every store it reached republished, with the same per-store outcomes as a write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_SettingPublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID or the scope is not a scope",
@@ -19405,7 +19433,14 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)"
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsCatalogue"
+                }
+              }
+            }
           },
           "401": {
             "description": "No session",
@@ -19465,7 +19500,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Every setting as the store runs it: the value, and the scope and id it comes from, which are absent for a default"
+            "description": "Every setting as the store runs it: the value, and the scope and id it comes from, which are absent for a default",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EffectiveSettings"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -19547,7 +19589,14 @@
         },
         "responses": {
           "200": {
-            "description": "Each setting with a new-store value that the store did not already set is written at the store's own scope, and the store republished. The body lists the settings written and the store's publish outcome"
+            "description": "Each setting with a new-store value that the store did not already set is written at the store's own scope, and the store republished. The body lists the settings written and the store's publish outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresetsApplied"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -19629,7 +19678,14 @@
         },
         "responses": {
           "200": {
-            "description": "Each store's resolved settings republished, with the same per-store outcomes as a write"
+            "description": "Each store's resolved settings republished, with the same per-store outcomes as a write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_SettingPublishResult"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is not a ULID",
@@ -20286,7 +20342,14 @@
         },
         "responses": {
           "200": {
-            "description": "The membership as stored, deduplicated, with the group's new ETag, and `stores`: when an assignment names the group, how the `permissions` publish went at each open store that joined or left it (ADR-0158), and empty otherwise"
+            "description": "The membership as stored, deduplicated, with the group's new ETag, and `stores`: when an assignment names the group, how the `permissions` publish went at each open store that joined or left it (ADR-0158), and empty otherwise",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreGroupMembership"
+                }
+              }
+            }
           },
           "400": {
             "description": "group_id, tenant_id or a store id is not a ULID",
@@ -25576,6 +25639,67 @@
           }
         }
       },
+      "CatalogDisplayCategory": {
+        "type": "object",
+        "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
+        "required": [
+          "display_category_id",
+          "tenant_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "display_category_id": {
+            "$ref": "#/components/schemas/DisplayCategoryId",
+            "description": "The display-category id — carried into the compiled `DisplayPlan`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a screen shows as a tab or section."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
+      "CatalogDisplaySubcategory": {
+        "type": "object",
+        "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
+        "required": [
+          "display_subcategory_id",
+          "tenant_id",
+          "display_category_id",
+          "name",
+          "status"
+        ],
+        "properties": {
+          "display_category_id": {
+            "$ref": "#/components/schemas/DisplayCategoryId",
+            "description": "The parent display category."
+          },
+          "display_subcategory_id": {
+            "$ref": "#/components/schemas/DisplaySubcategoryId",
+            "description": "The display-sub-category id — carried into the compiled plan."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name a screen shows."
+          },
+          "status": {
+            "$ref": "#/components/schemas/EntityStatus",
+            "description": "Active or archived."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
+          }
+        }
+      },
       "CatalogItem": {
         "type": "object",
         "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
@@ -25661,6 +25785,22 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "CatalogueConfirm": {
+        "type": "object",
+        "description": "A catalogue entry's `confirm`: the value that needs confirming, and the translation key of the\nnotice the Settings screen shows beside it.",
+        "required": [
+          "value",
+          "notice"
+        ],
+        "properties": {
+          "notice": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },
@@ -27239,34 +27379,6 @@
           }
         }
       },
-      "DisplayCategory": {
-        "type": "object",
-        "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
-        "required": [
-          "display_category_id",
-          "tenant_id",
-          "name",
-          "status"
-        ],
-        "properties": {
-          "display_category_id": {
-            "$ref": "#/components/schemas/DisplayCategoryId",
-            "description": "The display-category id — carried into the compiled `DisplayPlan`."
-          },
-          "name": {
-            "type": "string",
-            "description": "The name a screen shows as a tab or section."
-          },
-          "status": {
-            "$ref": "#/components/schemas/EntityStatus",
-            "description": "Active or archived."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
-          }
-        }
-      },
       "DisplayCategoryId": {
         "type": "string",
         "description": "A `DisplayCategoryId`: a ULID, 26 Crockford base-32 characters",
@@ -27275,39 +27387,6 @@
       "DisplayName": {
         "type": "string",
         "description": "A human-readable name for a product, category, modifier or campaign.\n\nTenant content, resolved per language in the configuration tree. Admissible in an\nevent payload because a line snapshot must capture the name shown to the guest at\nthe moment the line was added — changing or deleting a menu item afterwards must\nnot alter an open order or a settled bill."
-      },
-      "DisplaySubcategory": {
-        "type": "object",
-        "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
-        "required": [
-          "display_subcategory_id",
-          "tenant_id",
-          "display_category_id",
-          "name",
-          "status"
-        ],
-        "properties": {
-          "display_category_id": {
-            "$ref": "#/components/schemas/DisplayCategoryId",
-            "description": "The parent display category."
-          },
-          "display_subcategory_id": {
-            "$ref": "#/components/schemas/DisplaySubcategoryId",
-            "description": "The display-sub-category id — carried into the compiled plan."
-          },
-          "name": {
-            "type": "string",
-            "description": "The name a screen shows."
-          },
-          "status": {
-            "$ref": "#/components/schemas/EntityStatus",
-            "description": "Active or archived."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
-          }
-        }
       },
       "DisplaySubcategoryId": {
         "type": "string",
@@ -27374,6 +27453,50 @@
           "store_id": {
             "type": "string",
             "description": "The store, a ULID."
+          }
+        }
+      },
+      "EffectiveSetting": {
+        "type": "object",
+        "description": "One setting as one store runs it, and where its value comes from.",
+        "required": [
+          "setting_key",
+          "value"
+        ],
+        "properties": {
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The scope that set it, or absent when the store runs the default."
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The tenant, brand, store group or store that set it."
+          },
+          "setting_key": {
+            "type": "string"
+          },
+          "value": {}
+        }
+      },
+      "EffectiveSettings": {
+        "type": "object",
+        "description": "What a store's effective settings answer: each setting as the store runs it.",
+        "required": [
+          "settings"
+        ],
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EffectiveSetting"
+            },
+            "description": "One per setting, with the scope its value came from."
           }
         }
       },
@@ -28110,6 +28233,63 @@
           },
           "store_id": {
             "type": "string"
+          }
+        }
+      },
+      "FloorRoutingRule": {
+        "type": "object",
+        "description": "An item→station routing rule as the console reads it. Matches a specific item or any line on a\ncourse (the route layer enforces exactly one); `sort` orders rules within their tier.",
+        "required": [
+          "rule_id",
+          "tenant_id",
+          "store_id",
+          "station_id",
+          "sort"
+        ],
+        "properties": {
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId",
+                "description": "The course this rule matches, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "menu_item_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "The item this rule matches, if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rule_id": {
+            "$ref": "#/components/schemas/RoutingRuleId",
+            "description": "The rule's id."
+          },
+          "sort": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The author-controlled order within its tier.",
+            "minimum": 0
+          },
+          "station_id": {
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a matching line routes to."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store this rule belongs to."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "The owning tenant."
           }
         }
       },
@@ -29163,6 +29343,10 @@
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenSettingScope_SettingScope": {
+        "type": "string",
+        "description": "A `SettingScope` token: SETTING_SCOPE_UNSPECIFIED, SETTING_SCOPE_TENANT, SETTING_SCOPE_BRAND, SETTING_SCOPE_STORE_GROUP, SETTING_SCOPE_STORE, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenTableOrder_TableOrder": {
         "type": "string",
         "description": "A `TableOrder` token: TABLE_ORDER_UNSPECIFIED, TABLE_ORDER_SEPARATE, TABLE_ORDER_JOIN, or one a newer build sent, which is kept as it arrived"
@@ -29472,6 +29656,30 @@
           },
           "store_id": {
             "type": "string"
+          }
+        }
+      },
+      "PresetsApplied": {
+        "type": "object",
+        "description": "What applying a preset answers: the settings it wrote, and how publishing to the store went.",
+        "required": [
+          "applied",
+          "stores"
+        ],
+        "properties": {
+          "applied": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The setting keys the preset wrote."
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingPublishResult"
+            },
+            "description": "One result per store the write reached."
           }
         }
       },
@@ -31132,6 +31340,22 @@
           }
         }
       },
+      "ReleaseList": {
+        "type": "object",
+        "description": "What the release list answers: the tenant's releases, newest first.",
+        "required": [
+          "releases"
+        ],
+        "properties": {
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReleaseView"
+            },
+            "description": "Each release, as its own read reports it."
+          }
+        }
+      },
       "ReleaseNodeRequest": {
         "type": "object",
         "description": "One node of a release, and the arguments its plan needs — the same pair a batch publish takes.",
@@ -31470,63 +31694,6 @@
           "version_id": {
             "type": "string",
             "description": "The version to restore (a ULID); its effective document becomes the new current version."
-          }
-        }
-      },
-      "RoutingRule": {
-        "type": "object",
-        "description": "An item→station routing rule as the console reads it. Matches a specific item or any line on a\ncourse (the route layer enforces exactly one); `sort` orders rules within their tier.",
-        "required": [
-          "rule_id",
-          "tenant_id",
-          "store_id",
-          "station_id",
-          "sort"
-        ],
-        "properties": {
-          "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "The course this rule matches, if any."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "menu_item_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MenuItemId",
-                "description": "The item this rule matches, if any."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "rule_id": {
-            "$ref": "#/components/schemas/RoutingRuleId",
-            "description": "The rule's id."
-          },
-          "sort": {
-            "type": "integer",
-            "format": "int32",
-            "description": "The author-controlled order within its tier.",
-            "minimum": 0
-          },
-          "station_id": {
-            "$ref": "#/components/schemas/StationId",
-            "description": "The station a matching line routes to."
-          },
-          "store_id": {
-            "$ref": "#/components/schemas/StoreId",
-            "description": "The store this rule belongs to."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
           }
         }
       },
@@ -32121,6 +32288,138 @@
           }
         }
       },
+      "SettingCatalogueEntry": {
+        "type": "object",
+        "description": "One setting as the console's settings screen draws it: the register entry, without its\nsummary. The screen labels a setting and each of its values from its own translations, keyed by\nthe setting's key, so no English sentence reaches it from here.\n\nWhat else it carries depends on the kind: a choice's `values`; a whole number's `min`, `max` and\n`unit`, which the screen bounds its input by and names in the operator's language; nothing more\nfor a switch. `default` and `preset` are the value as the node carries it — a token, a number or\na boolean. `confirm` is a value written only with a recorded confirmation (ADR-0169).",
+        "required": [
+          "setting_key",
+          "node",
+          "field",
+          "kind",
+          "default",
+          "scopes",
+          "since"
+        ],
+        "properties": {
+          "confirm": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CatalogueConfirm"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default": {},
+          "field": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "min": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "node": {
+            "type": "string"
+          },
+          "preset": {},
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "setting_key": {
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SettingPublishResult": {
+        "type": "object",
+        "description": "How one store's settings publish went.",
+        "required": [
+          "store_id",
+          "outcome"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`."
+          },
+          "store_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SettingValues": {
+        "type": "object",
+        "description": "What the settings list answers: every value the tenant has written, at every scope.",
+        "required": [
+          "values"
+        ],
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoredSettingValue"
+            },
+            "description": "The stored values."
+          }
+        }
+      },
+      "SettingsCatalogue": {
+        "type": "object",
+        "description": "What the settings catalogue answers: every setting the register declares.",
+        "required": [
+          "settings"
+        ],
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingCatalogueEntry"
+            },
+            "description": "One entry per setting, in register order."
+          }
+        }
+      },
       "SettingsStoreRequest": {
         "type": "object",
         "description": "A store to publish settings to, or every store of the tenant.",
@@ -32296,6 +32595,35 @@
         "$ref": "#/components/schemas/Ulid",
         "description": "A store group's identifier — a ULID minted when the group is created.\n\nLike `pos-cloud-catalog`'s `MenuId` it never crosses the store wire: a group is an authoring\nand delivery concept in the cloud, and what reaches a store is the same config node it would have\nreceived from a single publish."
       },
+      "StoreGroupMembership": {
+        "type": "object",
+        "description": "What a membership write answers: the members as stored, the group's new version, and how the\n`permissions` publish went at each store whose staff it moved.",
+        "required": [
+          "store_ids",
+          "etag",
+          "stores"
+        ],
+        "properties": {
+          "etag": {
+            "type": "string",
+            "description": "The group's new version, as the `ETag` header carries it."
+          },
+          "store_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The member stores, each a ULID, in the order first named."
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionsPublishResult"
+            },
+            "description": "One result per store whose staff the change moved."
+          }
+        }
+      },
       "StoreGroupView": {
         "type": "object",
         "description": "A store group on the wire, with its membership.\n\nMembers ride along with the list rather than needing a read per group: the console's first\nquestion about a cohort is how big it is, and a screen that had to fetch each one would show a\nlist of names with the counts arriving afterwards.",
@@ -32375,6 +32703,38 @@
           }
         }
       },
+      "StoredSettingValue": {
+        "type": "object",
+        "description": "One value written at one scope.",
+        "required": [
+          "setting_key",
+          "scope",
+          "scope_id",
+          "value",
+          "update_time"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/OpenSettingScope_SettingScope",
+            "description": "The scope the value was written at."
+          },
+          "scope_id": {
+            "type": "string",
+            "description": "The tenant, brand, store group or store it was written for."
+          },
+          "setting_key": {
+            "type": "string",
+            "description": "The setting's key, `node.field`."
+          },
+          "update_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was written. Decides between two store groups that disagree."
+          },
+          "value": {
+            "description": "The value, as the node carries it."
+          }
+        }
+      },
       "StoresPublished_FeePublishResult": {
         "type": "object",
         "description": "What a write that publishes to several stores at once answers: one result per store it reached,\nin the order it reached them.",
@@ -32444,6 +32804,42 @@
                 "outcome": {
                   "type": "string",
                   "description": "`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`."
+                },
+                "store_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One result per store."
+          }
+        }
+      },
+      "StoresPublished_SettingPublishResult": {
+        "type": "object",
+        "description": "What a write that publishes to several stores at once answers: one result per store it reached,\nin the order it reached them.",
+        "required": [
+          "stores"
+        ],
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "How one store's settings publish went.",
+              "required": [
+                "store_id",
+                "outcome"
+              ],
+              "properties": {
+                "config_version_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "outcome": {
+                  "type": "string",
+                  "description": "`SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`."
                 },
                 "store_id": {
                   "type": "string"
@@ -33594,6 +33990,117 @@
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
       },
+      "Versioned_CatalogDisplayCategory": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
+            "required": [
+              "display_category_id",
+              "tenant_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "display_category_id": {
+                "$ref": "#/components/schemas/DisplayCategoryId",
+                "description": "The display-category id — carried into the compiled `DisplayPlan`."
+              },
+              "name": {
+                "type": "string",
+                "description": "The name a screen shows as a tab or section."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_CatalogDisplaySubcategory": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
+            "required": [
+              "display_subcategory_id",
+              "tenant_id",
+              "display_category_id",
+              "name",
+              "status"
+            ],
+            "properties": {
+              "display_category_id": {
+                "$ref": "#/components/schemas/DisplayCategoryId",
+                "description": "The parent display category."
+              },
+              "display_subcategory_id": {
+                "$ref": "#/components/schemas/DisplaySubcategoryId",
+                "description": "The display-sub-category id — carried into the compiled plan."
+              },
+              "name": {
+                "type": "string",
+                "description": "The name a screen shows."
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
       "Versioned_CatalogItem": {
         "allOf": [
           {
@@ -33870,117 +34377,6 @@
               "store_id": {
                 "$ref": "#/components/schemas/StoreId",
                 "description": "The owning store."
-              },
-              "tenant_id": {
-                "$ref": "#/components/schemas/TenantId",
-                "description": "The owning tenant."
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "etag"
-            ],
-            "properties": {
-              "etag": {
-                "$ref": "#/components/schemas/Version",
-                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
-              },
-              "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int64",
-                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
-              }
-            }
-          }
-        ],
-        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
-      },
-      "Versioned_DisplayCategory": {
-        "allOf": [
-          {
-            "type": "object",
-            "description": "A display category — the **presentation** taxonomy a screen groups by (ADR-0066 entity 11).\n\nDeliberately distinct from an [`ItemCategory`] (the operational taxonomy): a screen may show a\n\"Summer specials\" tab whose items report under \"Pizza\". Its id is a [`DisplayCategoryId`] — the\nsame id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the\ncompiled `MenuEntry`.",
-            "required": [
-              "display_category_id",
-              "tenant_id",
-              "name",
-              "status"
-            ],
-            "properties": {
-              "display_category_id": {
-                "$ref": "#/components/schemas/DisplayCategoryId",
-                "description": "The display-category id — carried into the compiled `DisplayPlan`."
-              },
-              "name": {
-                "type": "string",
-                "description": "The name a screen shows as a tab or section."
-              },
-              "status": {
-                "$ref": "#/components/schemas/EntityStatus",
-                "description": "Active or archived."
-              },
-              "tenant_id": {
-                "$ref": "#/components/schemas/TenantId",
-                "description": "The owning tenant."
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "etag"
-            ],
-            "properties": {
-              "etag": {
-                "$ref": "#/components/schemas/Version",
-                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
-              },
-              "updated_at_ms": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int64",
-                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
-              }
-            }
-          }
-        ],
-        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
-      },
-      "Versioned_DisplaySubcategory": {
-        "allOf": [
-          {
-            "type": "object",
-            "description": "A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).",
-            "required": [
-              "display_subcategory_id",
-              "tenant_id",
-              "display_category_id",
-              "name",
-              "status"
-            ],
-            "properties": {
-              "display_category_id": {
-                "$ref": "#/components/schemas/DisplayCategoryId",
-                "description": "The parent display category."
-              },
-              "display_subcategory_id": {
-                "$ref": "#/components/schemas/DisplaySubcategoryId",
-                "description": "The display-sub-category id — carried into the compiled plan."
-              },
-              "name": {
-                "type": "string",
-                "description": "The name a screen shows."
-              },
-              "status": {
-                "$ref": "#/components/schemas/EntityStatus",
-                "description": "Active or archived."
               },
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",

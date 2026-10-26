@@ -43,7 +43,8 @@ use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
 
 /// One value written at one scope.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = StoredSettingValue)]
 pub struct SettingValue {
     /// The setting's key, `node.field`.
     pub setting_key: String,
