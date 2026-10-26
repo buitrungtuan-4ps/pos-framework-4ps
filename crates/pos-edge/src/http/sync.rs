@@ -29,6 +29,7 @@ use crate::sync_status::{OUTBOX_PLANNED_DEPTH, SyncReport};
 
 /// The cloud link and the outbox, as a device draws them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SyncResponse {
     /// Events committed on this box and not yet acknowledged by the cloud.
     outbox_depth: u64,
@@ -77,7 +78,7 @@ impl SyncResponse {
     path = "/api/sync",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "The outbox depth and its level against the planned depth, the cloud link, \
+        (status = 200, body = SyncResponse, description = "The outbox depth and its level against the planned depth, the cloud link, \
                                       when the outbox last reached the cloud, and the box's measured clock offset. \
                                       The store sells at any depth"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),

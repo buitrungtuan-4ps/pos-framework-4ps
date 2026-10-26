@@ -42,6 +42,7 @@ use crate::printing::{PrintOutcome, Printers};
 /// deserialise failure; [`Self::into_payment`] is the domain boundary that refuses an unspecified or
 /// unknown method.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PaymentRequest {
     method: Open<PaymentMethod>,
     tendered: Money,
@@ -76,6 +77,7 @@ impl PaymentRequest {
 /// No `Debug`: it can carry a buyer, and a derived one would put that person's name into any log
 /// line or rejection message that touched the request (`AGENTS.md` §2).
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SettleRequest {
     payments: Vec<PaymentRequest>,
     /// The corporate customer the invoice is issued to
@@ -98,6 +100,7 @@ pub(crate) struct SettleRequest {
 /// event — `Deserialize` only, with no `Debug`, because a derived one would put a buyer's name into
 /// the axum rejection message for a malformed body.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BuyerRequest {
     name: String,
     #[serde(default)]
@@ -135,6 +138,7 @@ impl BuyerRequest {
 
 /// A bill as returned to a device after a command.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BillResponse {
     bill_id: String,
     /// The bill's state (`BILL_STATE_OPEN`, `BILL_STATE_SETTLED`, …).
@@ -185,7 +189,7 @@ impl From<BillView> for BillResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
+        (status = 200, body = BillResponse, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
                                       the table moved to"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -223,7 +227,7 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
+        (status = 200, body = BillResponse, description = "The bill opened: its `bill_id`, `state`, `total_due`, and the state \
                                       its table moved to where the order has a table"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -267,14 +271,14 @@ where
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     request_body(
-        description = "`payments`, each with its `method`, `tendered`, `applied_to_bill` and optional `tip`; \
+        content = SettleRequest, description = "`payments`, each with its `method`, `tendered`, `applied_to_bill` and optional `tip`; \
                        an optional `buyer` for a corporate invoice, which is personal data and is never \
                        logged; and `approver_code` and `approver_pin` where cash goes into a drawer assigned \
                        to somebody else. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Settled: the bill with its receipt number and `total_due`, the state \
+        (status = 200, body = BillResponse, description = "Settled: the bill with its receipt number and `total_due`, the state \
                                       its table moved to, and what came of the receipt print \
                                       (`receipt_print`) and of opening the drawer (`drawer_open`) where \
                                       those were asked for"),
@@ -395,6 +399,7 @@ where
 
 /// What a copy's press reports back to the till (ADR-0164).
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct ReprintResponse {
     bill_id: BillId,
     receipt_number: u64,
@@ -413,7 +418,7 @@ struct ReprintResponse {
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "The copy, counted: the bill, its receipt number, which copy this was, \
+        (status = 200, body = ReprintResponse, description = "The copy, counted: the bill, its receipt number, which copy this was, \
                                       and what came of printing it (`receipt_print`)"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -537,6 +542,7 @@ fn respond(outcome: Result<BillView, crate::app::AppError>) -> Response {
 /// A bill void as a till asks for it: the reason from the store's managed list, plus the manager's
 /// badge and PIN — which, unlike a line's, are needed every time.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VoidBillRequest {
     reason_code_id: ReasonCodeId,
     #[serde(default)]
@@ -557,6 +563,7 @@ impl VoidBillRequest {
 /// and PIN of somebody who holds `billing.fee.waive` where the person acting needs one
 /// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct WaiveFeeRequest {
     reason_code_id: ReasonCodeId,
     #[serde(default)]
@@ -583,12 +590,12 @@ impl WaiveFeeRequest {
         ("fee_id" = String, Path, description = "The fee's id, a ULID"),
     ),
     request_body(
-        description = "`reason_code_id`, with `approver_code` and `approver_pin` of somebody who may waive \
+        content = WaiveFeeRequest, description = "`reason_code_id`, with `approver_code` and `approver_pin` of somebody who may waive \
                        the fee where the person acting may not. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
+        (status = 200, body = CheckResponse, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
                                       answers with, from the edge's own arithmetic"),
         (status = 400, description = "An id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -643,6 +650,7 @@ where
 
 /// The state a voided bill came to rest in, so the till can show it rather than re-reading.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VoidBillResponse {
     state: &'static str,
 }
@@ -655,6 +663,7 @@ pub(crate) struct VoidBillResponse {
 /// way, and the edge answers `403` when the manager is the missing piece. When a ceiling is
 /// published, a discount under it will start succeeding without one, with no change here.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct DiscountRequest {
     /// How much comes off, in minor units. Never a percentage: `billing.discount.applied` records
     /// an `amount`, so a percentage would have to be resolved somewhere, and resolving it at the
@@ -678,6 +687,7 @@ impl DiscountRequest {
 /// What the bill comes to once the discount is on it — the edge's own arithmetic, so the till never
 /// subtracts a discount from a total itself and arrives at a different tax.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct DiscountResponse {
     subtotal: Money,
     discount_total: Money,
@@ -698,13 +708,13 @@ pub(crate) struct DiscountResponse {
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     request_body(
-        description = "`amount`, in minor units and greater than zero, and `reason_code_id`, with \
+        content = DiscountRequest, description = "`amount`, in minor units and greater than zero, and `reason_code_id`, with \
                        `approver_code` and `approver_pin` where the discount needs a manager. Both are \
                        secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
+        (status = 200, body = DiscountResponse, description = "What the bill now owes, in the shape `GET /api/orders/{id}/check` \
                                       answers with, from the edge's own arithmetic"),
         (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -767,12 +777,14 @@ where
 
 /// The parts a split proposes, each the order lines one new bill will cover.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SplitRequest {
     parts: Vec<Vec<OrderLineId>>,
 }
 
 /// The bills a split produced, in the order the parts were given.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SplitResponse {
     bill_ids: Vec<String>,
 }
@@ -786,11 +798,11 @@ pub(crate) struct SplitResponse {
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     request_body(
-        description = "`parts`: two or more lists of the order line ids, each the lines one new bill covers",
+        content = SplitRequest, description = "`parts`: two or more lists of the order line ids, each the lines one new bill covers",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Split: the new `bill_ids`, in the order the parts were given"),
+        (status = 200, body = SplitResponse, description = "Split: the new `bill_ids`, in the order the parts were given"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
@@ -833,12 +845,14 @@ where
 
 /// The bills a merge folds into the target.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MergeRequest {
     absorbed_bill_ids: Vec<BillId>,
 }
 
 /// The surviving bill and everything it now covers.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MergeResponse {
     bill_id: String,
 }
@@ -852,12 +866,12 @@ pub(crate) struct MergeResponse {
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     request_body(
-        description = "`absorbed_bill_ids`: at least one open bill, on the same table and order, to fold \
+        content = MergeRequest, description = "`absorbed_bill_ids`: at least one open bill, on the same table and order, to fold \
                        into this one",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Merged: the `bill_id` of the bill that survives, the one the path \
+        (status = 200, body = MergeResponse, description = "Merged: the `bill_id` of the bill that survives, the one the path \
                                       names"),
         (status = 400, description = "The id is not a ULID, or no bill is named to fold in"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -918,12 +932,12 @@ where
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     request_body(
-        description = "`reason_code_id`, a void reason from the managed list, with `approver_code` and \
+        content = VoidBillRequest, description = "`reason_code_id`, a void reason from the managed list, with `approver_code` and \
                        `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Voided: the `state` the bill came to rest in"),
+        (status = 200, body = VoidBillResponse, description = "Voided: the `state` the bill came to rest in"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the void \

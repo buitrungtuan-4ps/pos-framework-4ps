@@ -92,6 +92,7 @@ const RESTART_AFTER_ACTIVATION: core::time::Duration = core::time::Duration::fro
 
 /// A device presenting its activation code.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ActivateRequest {
     /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
     code: String,
@@ -99,6 +100,7 @@ pub(crate) struct ActivateRequest {
 
 /// The identity a successful activation grants.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct ActivateAccepted {
     /// The device id the stored credential now authenticates as.
     device_id: String,
@@ -106,6 +108,7 @@ struct ActivateAccepted {
 
 /// This box's activation standing, for the boot gate and the UI.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct StandingResponse {
     /// `true` once a device credential is in the vault.
     activated: bool,
@@ -186,12 +189,12 @@ pub async fn boot_standing<V: KeyVault>(vault: &V) -> Result<ActivationStanding,
     security(),
     extensions(("x-public-reason" = json!("an activation code from the store's setup sheet (ADR-0050)"))),
     request_body(
-        description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
+        content = ActivateRequest, description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
                        spacing",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Activated: the `device_id` the stored credential authenticates as. The \
+        (status = 200, body = ActivateAccepted, description = "Activated: the `device_id` the stored credential authenticates as. The \
                                       edge restarts a moment later so its cloud loops start with the \
                                       credential"),
         (status = 400, description = "The code is malformed (`ACTIVATION_CODE_MALFORMED`)"),
@@ -306,7 +309,7 @@ async fn store_credential<V: KeyVault>(vault: &V, credential: &Secret) -> Result
     security(),
     extensions(("x-public-reason" = json!("nothing: it says only whether this box is activated yet"))),
     responses(
-        (status = 200, description = "`activated`: whether this box holds a device credential yet; and \
+        (status = 200, body = StandingResponse, description = "`activated`: whether this box holds a device credential yet; and \
                                       `state_access`, whether the store's state is closed to other local \
                                       accounts, where the edge reports it"),
         (status = 503, description = "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"),

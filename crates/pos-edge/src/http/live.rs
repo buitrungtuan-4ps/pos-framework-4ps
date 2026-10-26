@@ -42,6 +42,7 @@ use crate::app::Edge;
 
 /// One line of an open order, with everything a screen needs to draw it and act on it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LiveLineResponse {
     /// The id a fire, a void or a bump is addressed to.
     order_line_id: String,
@@ -95,6 +96,7 @@ struct LiveLineResponse {
 
 /// One open order.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LiveOrderResponse {
     order_id: String,
     /// The table it sits on. Absent for a counter order, which has none.
@@ -121,7 +123,7 @@ struct LiveOrderResponse {
     path = "/api/orders/live",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "Every open order, floor and counter, with its table, open bills and \
+        (status = 200, body = Vec<LiveOrderResponse>, description = "Every open order, floor and counter, with its table, open bills and \
                                       channel where it has them, and every line with the id a fire, a void \
                                       or a bump is addressed to"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -146,7 +148,7 @@ where
     path = "/api/orders/kitchen",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "Every open order, and each paid order without a table that the kitchen \
+        (status = 200, body = Vec<LiveOrderResponse>, description = "Every open order, and each paid order without a table that the kitchen \
                                       has not finished, fired on the current business day, in the shape `GET \
                                       /api/orders/live` answers with"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),

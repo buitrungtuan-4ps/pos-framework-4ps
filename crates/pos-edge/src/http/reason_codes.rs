@@ -46,6 +46,7 @@ use crate::app::Edge;
 /// One entry a picker may offer: the id an event carries, the code a report groups by, the name in
 /// the store's display language, and the actions it may be cited for.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ReasonCodeResponse {
     reason_code_id: String,
     code: String,
@@ -56,6 +57,7 @@ pub(crate) struct ReasonCodeResponse {
 
 /// The store's managed list, as the in-store UI reads it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ReasonCodesResponse {
     reasons: Vec<ReasonCodeResponse>,
 }
@@ -68,7 +70,7 @@ pub(crate) struct ReasonCodesResponse {
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),
     responses(
-        (status = 200, description = "The active entries of the store's managed reason list, each with its id, \
+        (status = 200, body = ReasonCodesResponse, description = "The active entries of the store's managed reason list, each with its id, \
                                       code, name in the store's display language and the actions it covers. \
                                       The framework's list until one is published. \
                                       The ETag tags this body"),

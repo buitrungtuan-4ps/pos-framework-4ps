@@ -36,6 +36,7 @@ use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
 /// What a table owes, as the till shows it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CheckResponse {
     /// The sum of the order's live line totals, before tax.
     subtotal: Money,
@@ -61,6 +62,7 @@ pub(crate) struct CheckResponse {
 
 /// One fee as the till shows it: the line the settle records, and whether staff may waive it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CheckFeeLine {
     #[serde(flatten)]
     line: BillFeeLine,
@@ -103,6 +105,7 @@ impl CheckResponse {
 
 /// What one bill owes, where it has got to, and which lines it covers.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BillCheckResponse {
     /// `BILL_STATE_OPEN` while it still owes. A settled, voided, split or merged bill owes nothing
     /// more, and the figures are then what its lines came to rather than a sum to collect.
@@ -124,7 +127,7 @@ pub(crate) struct BillCheckResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "What the table owes, in the shape `GET /api/orders/{id}/check` answers \
+        (status = 200, body = CheckResponse, description = "What the table owes, in the shape `GET /api/orders/{id}/check` answers \
                                       with, read through its open bills where it has any. Zero for a free \
                                       table"),
         (status = 400, description = "The id is not a ULID"),
@@ -166,7 +169,7 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "What the order owes: subtotal, discount and comp totals, tax, \
+        (status = 200, body = CheckResponse, description = "What the order owes: subtotal, discount and comp totals, tax, \
                                       `total_due`, and each fee charged. Zero for an order with nothing on \
                                       it"),
         (status = 400, description = "The id is not a ULID"),
@@ -212,7 +215,7 @@ where
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "What one bill owes, in the shape `GET /api/orders/{id}/check` answers \
+        (status = 200, body = BillCheckResponse, description = "What one bill owes, in the shape `GET /api/orders/{id}/check` answers \
                                       with, plus its `state` and the `order_line_ids` it covers"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -261,6 +264,7 @@ where
 /// A list because a split table prints one pre-bill per open part, and a printer can take the first
 /// and jam on the second; the till says which.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PrintResponse {
     prints: Vec<String>,
 }
@@ -274,7 +278,7 @@ pub(crate) struct PrintResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "`prints`: what came of printing each pre-bill, one per open part of a \
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing each pre-bill, one per open part of a \
                                       split table, in the order they were sent"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -327,7 +331,7 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "`prints`: what came of printing each pre-bill, in the order they were \
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing each pre-bill, in the order they were \
                                       sent"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -374,7 +378,7 @@ where
         ("id" = String, Path, description = "The bill's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "`prints`: what came of printing the bill's pre-bill, one outcome"),
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing the bill's pre-bill, one outcome"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),

@@ -26,6 +26,7 @@ use crate::app::Edge;
 
 /// The store's floor and kitchen plans, as the in-store UI reads them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct FloorResponse {
     /// The areas and their tables.
     floor: FloorPlan,
@@ -66,7 +67,7 @@ pub(crate) struct FloorResponse {
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),
     responses(
-        (status = 200, description = "`floor`, the published areas and tables; `stations`, the kitchen stations and \
+        (status = 200, body = FloorResponse, description = "`floor`, the published areas and tables; `stations`, the kitchen stations and \
                                       routing, each station with the threshold its board marks a ticket late \
                                       after; and each table's live state. Empty until a floor is published. \
                                       The ETag tags this body"),
