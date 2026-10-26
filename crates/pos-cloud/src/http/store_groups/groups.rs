@@ -287,7 +287,7 @@ where
     ),
     request_body(content = SetStoreGroupMembersRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
+        (status = 200, body = StoreGroupMembership, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
                                       when an assignment names the group, how the `permissions` publish went at each open store \
                                       that joined or left it (ADR-0158), and empty otherwise"),
         (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -395,6 +395,18 @@ async fn record_membership<Grp, Reg, Cfg, A, C>(
     .await;
 }
 
+/// What a membership write answers: the members as stored, the group's new version, and how the
+/// `permissions` publish went at each store whose staff it moved.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct StoreGroupMembership {
+    /// The member stores, each a ULID, in the order first named.
+    store_ids: Vec<String>,
+    /// The group's new version, as the `ETag` header carries it.
+    etag: String,
+    /// One result per store whose staff the change moved.
+    stores: Vec<PermissionsPublishResult>,
+}
+
 /// The membership as stored, with the group's new version in the header and the body, and how the
 /// `permissions` publish went at each store whose staff it moved.
 fn membership_answer(
@@ -405,11 +417,11 @@ fn membership_answer(
     (
         StatusCode::OK,
         [(ETAG, version.as_str().to_owned())],
-        Json(serde_json::json!({
-            "store_ids": membership,
-            "etag": version.as_str(),
-            "stores": stores,
-        })),
+        Json(StoreGroupMembership {
+            store_ids: membership.to_vec(),
+            etag: version.as_str().to_owned(),
+            stores: stores.to_vec(),
+        }),
     )
         .into_response()
 }
@@ -522,4 +534,28 @@ where
         .map(|row| row.record.store_id)
         .filter(|id| before.contains(id) != members.contains(id))
         .collect())
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::StoreGroupMembership;
+
+    #[test]
+    fn a_membership_answers_its_stores_version_and_publishes() {
+        let answer = StoreGroupMembership {
+            store_ids: vec!["01J0000000000000000000000S".to_owned()],
+            etag: "7".to_owned(),
+            stores: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "store_ids": ["01J0000000000000000000000S"],
+                "etag": "7",
+                "stores": [],
+            })
+        );
+    }
 }

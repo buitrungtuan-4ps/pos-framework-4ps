@@ -14,6 +14,7 @@ use pos_proto::ids::TenantId;
 use pos_proto::wire_enum::Open;
 use serde::Deserialize;
 
+use super::publish::SettingPublishResult;
 use super::publish::{TenantLayout, publish_settings_to};
 use super::{
     SettingsState, parse_setting_scope, publish_results_response, setting_audit_id,
@@ -27,6 +28,7 @@ use crate::http::{not_found, settings_confirm};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::response::StoresPublished;
 
 /// The tenant a settings read is for.
 #[derive(Debug, Clone, Deserialize)]
@@ -62,7 +64,7 @@ pub(super) struct PutSettingRequest {
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Written, and every store it reaches republished. The body \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Written, and every store it reaches republished. The body \
                                       lists each store with SETTING_PUBLISH_APPLIED and the new \
                                       config version, SETTING_PUBLISH_UNCHANGED, or \
                                       SETTING_PUBLISH_FAILED"),
@@ -192,7 +194,7 @@ pub(super) struct ClearSettingQuery {
         ("scope_id" = String, Query, description = "The tenant, brand, store group or store the value was written for"),
     ),
     responses(
-        (status = 200, description = "Cleared, and every store it reached republished, with the \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Cleared, and every store it reached republished, with the \
                                       same per-store outcomes as a write"),
         (status = 400, description = "An id is not a ULID or the scope is not a scope", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
