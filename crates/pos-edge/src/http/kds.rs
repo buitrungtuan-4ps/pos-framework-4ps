@@ -24,6 +24,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A bump as a KDS asks for it: the order, the station, and the lines it made.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BumpRequest {
     order_id: String,
     station_id: String,
@@ -32,6 +33,7 @@ pub(crate) struct BumpRequest {
 
 /// What a bump returns: the order, station, and the lines now marked prepared.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BumpResponse {
     order_id: String,
     station_id: String,
@@ -58,11 +60,11 @@ impl From<BumpView> for BumpResponse {
     security(("till_session" = [])),
     extensions(("x-permission" = json!("sales.ticket.bump"))),
     request_body(
-        description = "`order_id`, `station_id`, and the `order_line_ids` the station made",
+        content = BumpRequest, description = "`order_id`, `station_id`, and the `order_line_ids` the station made",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Bumped: the order, the station, and the lines now marked prepared"),
+        (status = 200, body = BumpResponse, description = "Bumped: the order, the station, and the lines now marked prepared"),
         (status = 400, description = "An id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \

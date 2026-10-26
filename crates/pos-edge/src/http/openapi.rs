@@ -349,6 +349,39 @@ mod tests {
         }
     }
 
+    /// The success answers that carry no schema yet, `METHOD /path`. It only shrinks: a route
+    /// leaves it when its handler's annotation names its body, and the list goes when it is empty.
+    /// `GET /api/print/jobs` answers with the printer port's job, which waits for `pos-ports`'
+    /// `openapi` feature (ADR-0180).
+    const NO_SCHEMA_YET: &[&str] = &["GET /api/print/jobs"];
+
+    /// Every success answer with a body names its schema, except those [`NO_SCHEMA_YET`] lists,
+    /// and every request body names its schema (ADR-0177 decision 3).
+    #[test]
+    fn every_edge_body_has_a_schema() {
+        let mut missing = BTreeSet::new();
+        for (route, operation) in operations() {
+            for (status, response) in operation["responses"].as_object().into_iter().flatten() {
+                let body = status.starts_with('2') && status != "204";
+                if body && response.get("content").is_none() {
+                    missing.insert(route.clone());
+                }
+            }
+            if let Some(request) = operation.get("requestBody") {
+                assert!(
+                    request["content"]["application/json"]["schema"].is_object(),
+                    "{route}'s request body names no schema: add `content = …` to request_body"
+                );
+            }
+        }
+        let listed: BTreeSet<String> = NO_SCHEMA_YET.iter().map(|&r| r.to_owned()).collect();
+        assert_eq!(
+            missing, listed,
+            "a success answer without a schema must be in NO_SCHEMA_YET, and a route that has one \
+             now must leave it"
+        );
+    }
+
     /// Each `operationId` is its handler's name, so two handlers may not share one (ADR-0177
     /// decision 4).
     #[test]

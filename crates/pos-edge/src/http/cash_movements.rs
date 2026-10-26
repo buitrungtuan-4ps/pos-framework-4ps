@@ -29,6 +29,7 @@ use crate::printing::{DrawerOutcome, Printers};
 /// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the
 /// approver for a drawer assigned to somebody else.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MovementRequest {
     amount_minor: i64,
     reason_code_id: ReasonCodeId,
@@ -40,6 +41,7 @@ pub(crate) struct MovementRequest {
 
 /// Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct OpenDrawerRequest {
     reason_code_id: ReasonCodeId,
     #[serde(default)]
@@ -56,6 +58,7 @@ impl OpenDrawerRequest {
 
 /// What a no-sale opening reports: the opening is recorded, and this is whether the drawer sprang.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct OpenDrawerResponse {
     /// `OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`.
     drawer_open: &'static str,
@@ -70,13 +73,13 @@ struct OpenDrawerResponse {
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
     request_body(
-        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+        content = MovementRequest, description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
                        `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
                        logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+        (status = 200, body = ShiftResponse, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
                                       opened for the cash"),
         (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -115,13 +118,13 @@ where
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
     request_body(
-        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+        content = MovementRequest, description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
                        `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
                        logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+        (status = 200, body = ShiftResponse, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
                                       opened for the cash"),
         (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -208,12 +211,12 @@ where
     security(("till_session" = [])),
     extensions(("x-permission" = json!(["cash.drawer.open_no_sale", "cash.drawer.override_assignment"]))),
     request_body(
-        description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
+        content = OpenDrawerRequest, description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
                        opening. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, \
+        (status = 200, body = OpenDrawerResponse, description = "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, \
                                       `NO_DRAWER` or `DRAWER_UNAVAILABLE`)"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a no-sale \

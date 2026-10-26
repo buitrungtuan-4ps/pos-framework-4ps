@@ -34,6 +34,7 @@ use crate::http::{ERROR_REASON_HEADER, error_response};
 
 /// What the store has taken today, as the Today screen's tile shows it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TakingsResponse {
     /// The business day the figure is for.
     business_date: BusinessDate,
@@ -49,7 +50,7 @@ pub(crate) struct TakingsResponse {
     security(("till_session" = [])),
     extensions(("x-permission" = json!("reports.takings.view"))),
     responses(
-        (status = 200, description = "The current business day, what its settled bills came to, and how many \
+        (status = 200, body = TakingsResponse, description = "The current business day, what its settled bills came to, and how many \
                                       there were. The store's figure only: no person, till or shift"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in, or the person's own role lacks \

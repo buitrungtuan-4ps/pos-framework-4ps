@@ -48,6 +48,7 @@ use crate::app::Edge;
 
 /// The store's presentation plan for this channel, as the in-store UI reads it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LayoutResponse {
     /// The display categories, in the order the console arranged them. Empty when nothing has been
     /// laid out, which the till reads as "draw the flat price book".
@@ -56,6 +57,7 @@ pub(crate) struct LayoutResponse {
 
 /// One display category: a tab or section on the till.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CategoryResponse {
     display_category_id: DisplayCategoryId,
     /// The name to show on the tab.
@@ -68,6 +70,7 @@ pub(crate) struct CategoryResponse {
 
 /// One display sub-category: a second grouping level with its own buttons.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SubcategoryResponse {
     display_subcategory_id: DisplaySubcategoryId,
     name: DisplayName,
@@ -76,6 +79,7 @@ pub(crate) struct SubcategoryResponse {
 
 /// One item's button.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ButtonResponse {
     /// The item this button orders — the id the price book from `GET /api/menu` carries. Layout
     /// names the item; the price book prices it; the two meet only here.
@@ -144,7 +148,7 @@ fn respond_with(plan: &DisplayPlan) -> LayoutResponse {
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),
     responses(
-        (status = 200, description = "How the till groups and orders its buttons: the display categories, their \
+        (status = 200, body = LayoutResponse, description = "How the till groups and orders its buttons: the display categories, their \
                                       sub-categories, and each item's caption and grid slot. No prices. An \
                                       empty plan means the till draws the flat price book. \
                                       The ETag tags this body"),

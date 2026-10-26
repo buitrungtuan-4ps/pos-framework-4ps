@@ -41,6 +41,7 @@ use crate::printing::{PrintOutcome, Printers};
 
 /// A line as a device asks for it to be added — the amounts captured from the menu it holds.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LineRequest {
     menu_item_id: MenuItemId,
     display_name: DisplayName,
@@ -89,6 +90,7 @@ impl From<LineRequest> for LineDraft {
 /// (ADR-0072), and this is only the fallback for a store with no station plan yet — an absent field
 /// lets the plan decide entirely.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct FireRequest {
     #[serde(default)]
     station_id: Option<StationId>,
@@ -96,6 +98,7 @@ pub(crate) struct FireRequest {
 
 /// A line as returned to a device after a command.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LineResponse {
     order_id: String,
     order_line_id: String,
@@ -134,14 +137,14 @@ impl From<LineView> for LineResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     request_body(
-        description = "The line as the till captured it from the menu it holds: `menu_item_id`, \
+        content = LineRequest, description = "The line as the till captured it from the menu it holds: `menu_item_id`, \
                        `display_name`, `quantity` (in thousandths), `unit_price`, `line_total`, \
                        `tax_class_id` and `tax_rate`, with optional `seat`, `course_id`, \
                        `modifier_menu_item_ids` and `note`",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
                                       once fired"),
         (status = 400, description = "The id is not a ULID, or a note longer than 200 characters or with a \
                                       control character"),
@@ -188,12 +191,12 @@ where
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),
     request_body(
-        description = "Optional `station_id`, to send the food to that station rather than the one the line \
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
                        routes to. `{}` routes as published",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The line, as a line command answers, with `ticket_print`: what came of \
+        (status = 200, body = LineResponse, description = "The line, as a line command answers, with `ticket_print`: what came of \
                                       printing its station's ticket"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -245,6 +248,7 @@ where
 /// being told what the line comes to. One less number a caller can get wrong, and one less way for a
 /// guest to be charged a total that does not follow from the price they were quoted.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct QuantityRequest {
     quantity: Quantity,
 }
@@ -258,11 +262,11 @@ pub(crate) struct QuantityRequest {
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),
     request_body(
-        description = "`quantity`, in thousandths, greater than zero",
+        content = QuantityRequest, description = "`quantity`, in thousandths, greater than zero",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
                                       once fired"),
         (status = 400, description = "The id is not a ULID, or the quantity is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -313,12 +317,12 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     request_body(
-        description = "Optional `station_id`, to send the food to that station rather than the one the line \
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
                        routes to. `{}` routes as published",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each line fired, as a line command answers, with `ticket_print`: what \
+        (status = 200, body = Vec<LineResponse>, description = "Each line fired, as a line command answers, with `ticket_print`: what \
                                       came of printing its station's ticket"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -397,12 +401,12 @@ where
         ("course_id" = String, Path, description = "The course's id, a ULID"),
     ),
     request_body(
-        description = "Optional `station_id`, to send the food to that station rather than the one the line \
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
                        routes to. `{}` routes as published",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each line fired, as a line command answers, with `ticket_print`: what \
+        (status = 200, body = Vec<LineResponse>, description = "Each line fired, as a line command answers, with `ticket_print`: what \
                                       came of printing its station's ticket"),
         (status = 400, description = "An id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -502,6 +506,7 @@ fn respond(outcome: Result<LineView, crate::app::AppError>) -> Response {
 /// know the fired/unfired rule, and the edge, which does, answers `403` when the PIN is the missing
 /// piece.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VoidLineRequest {
     reason_code_id: ReasonCodeId,
     /// The approving manager's badge code, when one is needed.
@@ -531,12 +536,12 @@ impl VoidLineRequest {
         ("id" = String, Path, description = "The order line's id, a ULID"),
     ),
     request_body(
-        description = "`reason_code_id`, a void reason from the managed list, and, where the void needs a \
+        content = VoidLineRequest, description = "`reason_code_id`, a void reason from the managed list, and, where the void needs a \
                        manager, `approver_code` and `approver_pin`. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
                                       once fired"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),

@@ -48,6 +48,7 @@ use crate::state::AppState;
 
 /// A device presenting a pairing code.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairRequest {
     /// The six-digit code the operator read from the edge.
     code: String,
@@ -55,6 +56,7 @@ pub(crate) struct PairRequest {
 
 /// The token issued to a successfully paired device.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairAccepted {
     /// The opaque bearer token the device presents on later requests.
     device_token: String,
@@ -66,11 +68,11 @@ pub(crate) struct PairAccepted {
     security(),
     extensions(("x-public-reason" = json!("a pairing code a manager minted, spent once (ADR-0030)"))),
     request_body(
-        description = "`code`, the six-digit pairing code a manager minted",
+        content = PairRequest, description = "`code`, the six-digit pairing code a manager minted",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Paired: the body carries `device_token`, the bearer token the device presents \
+        (status = 200, body = PairAccepted, description = "Paired: the body carries `device_token`, the bearer token the device presents \
                                       from now on"),
         (status = 400, description = "The code is not six digits"),
         (status = 403, description = "The code is unknown or has expired"),
@@ -132,6 +134,7 @@ pub(crate) async fn pair(
 
 /// The state of this store's device pairing, for the operator console.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairingState {
     /// How many devices the store has admitted.
     devices: usize,
@@ -144,6 +147,7 @@ pub(crate) struct PairingState {
 
 /// One paired device as the console sees it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairedDeviceView {
     /// The device id — what `POST /api/pair/revoke` takes back.
     device_id: String,
@@ -160,7 +164,7 @@ pub(crate) struct PairedDeviceView {
     path = "/api/pair/devices",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "How many devices are paired, whether pairings survive a restart, and each \
+        (status = 200, body = PairingState, description = "How many devices are paired, whether pairings survive a restart, and each \
                                       device's id, when it paired and whether it is the caller. No token digest"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
     ),
@@ -205,6 +209,7 @@ pub(crate) async fn paired_devices(
 
 /// The calling device, as [`this_device`] answers for it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ThisDevice {
     /// Always `true`. A token the edge does not accept never gets this far: it is refused `401`.
     /// Carried so the answer says what it means, and so a caller can tell it apart from the
@@ -221,7 +226,7 @@ pub(crate) struct ThisDevice {
     path = "/api/pair/this_device",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"),
+        (status = 200, body = ThisDevice, description = "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
     ),
     tag = "pairing",
@@ -265,7 +270,7 @@ pub(crate) async fn this_device(
     security(("till_session" = [])),
     extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
-        description = "Optional `device_id`, the device to retire. Absent retires every paired device",
+        content = RevokeRequest, description = "Optional `device_id`, the device to retire. Absent retires every paired device",
         content_type = "application/json",
     ),
     responses(
@@ -333,6 +338,7 @@ where
 
 /// Which device to retire. An absent `device_id` means every device.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct RevokeRequest {
     /// The device to retire, or `None` for all of them.
     #[serde(default)]
@@ -389,6 +395,7 @@ where
 
 /// The minted code, and when it stops working.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MintedCode {
     /// The six digits the next device presents. **This response body is the only place it exists** —
     /// it is not written to a file and not logged, so a caller that loses this reply mints another.
@@ -404,7 +411,7 @@ pub(crate) struct MintedCode {
     security(("till_session" = [])),
     extensions(("x-permission" = json!("admin.device.manage"))),
     responses(
-        (status = 200, description = "The six-digit `code` the next device presents, replacing any live one, \
+        (status = 200, body = MintedCode, description = "The six-digit `code` the next device presents, replacing any live one, \
                                       and `expires_at_ms`. This reply is the only place the code exists: it \
                                       is neither written to a file nor logged"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),

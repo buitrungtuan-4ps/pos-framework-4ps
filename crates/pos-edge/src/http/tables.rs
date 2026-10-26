@@ -25,6 +25,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A table as returned to a device.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TableResponse {
     /// The table id, as a ULID string.
     table_id: String,
@@ -46,6 +47,7 @@ impl From<TableView> for TableResponse {
 /// Reporting data (average check per cover), never a gate: a seat with no body at all is the
 /// request every device sent before B1.2 and still means "seat the table, count unknown".
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SeatRequest {
     #[serde(default)]
     guest_count: Option<u16>,
@@ -60,11 +62,11 @@ pub(crate) struct SeatRequest {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     request_body(
-        description = "Optional `guest_count`. An empty body seats the table with the count unknown",
+        content = SeatRequest, description = "Optional `guest_count`. An empty body seats the table with the count unknown",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Seated, with an order opened: its id and its new `state`, a \
+        (status = 200, body = TableResponse, description = "Seated, with an order opened: its id and its new `state`, a \
                                       `TABLE_STATE_*` token"),
         (status = 400, description = "The id is not a ULID, or a body is present that is not `guest_count`"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -123,7 +125,7 @@ where
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "The table: its id and its new `state`, a `TABLE_STATE_*` token"),
+        (status = 200, body = TableResponse, description = "The table: its id and its new `state`, a `TABLE_STATE_*` token"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
@@ -160,7 +162,7 @@ where
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "Released while nothing is sold on it: its id and its new `state`, a \
+        (status = 200, body = TableResponse, description = "Released while nothing is sold on it: its id and its new `state`, a \
                                       `TABLE_STATE_*` token"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -193,6 +195,7 @@ where
 
 /// Where the guests are moving to.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TransferRequest {
     /// The free table they move to, as a ULID string.
     to_table_id: String,
@@ -200,6 +203,7 @@ pub(crate) struct TransferRequest {
 
 /// What a move did, as returned to a device: the order that moved, and both tables after it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TransferResponse {
     /// The order that moved, as a ULID string.
     order_id: String,
@@ -218,11 +222,11 @@ pub(crate) struct TransferResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     request_body(
-        description = "`to_table_id`, the free table the guests and their order move to",
+        content = TransferRequest, description = "`to_table_id`, the free table the guests and their order move to",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Moved: the `order_id` that moved, and both tables after it, \
+        (status = 200, body = TransferResponse, description = "Moved: the `order_id` that moved, and both tables after it, \
                                       `from_table` and `to_table`"),
         (status = 400, description = "An id is not a ULID, or the body has no `to_table_id`"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -280,7 +284,7 @@ impl From<TransferView> for TransferResponse {
         ("id" = String, Path, description = "The table's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "The table's id and its projected `state`, a `TABLE_STATE_*` token"),
+        (status = 200, body = TableResponse, description = "The table's id and its projected `state`, a `TABLE_STATE_*` token"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),

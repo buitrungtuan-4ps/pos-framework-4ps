@@ -208,6 +208,7 @@ impl<S> Clone for SignInDeps<S> {
 
 /// A sign-in: the badge `code` a person types and their `pin`. Both are secrets and never logged.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SignInRequest {
     code: String,
     pin: String,
@@ -215,6 +216,7 @@ pub(crate) struct SignInRequest {
 
 /// A successful sign-in: the employee the device now acts as.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SignedIn {
     employee_id: String,
 }
@@ -233,6 +235,7 @@ pub(crate) struct SignInRefused {
 
 /// The current sign-in on a device, for the UI to restore its state after a reload.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SessionState {
     signed_in: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -293,11 +296,11 @@ fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
     path = "/api/session/sign-in",
     security(("till_session" = [])),
     request_body(
-        description = "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
+        content = SignInRequest, description = "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Signed in: the body carries the `employee_id` the device now acts as"),
+        (status = 200, body = SignedIn, description = "Signed in: the body carries the `employee_id` the device now acts as"),
         (status = 401, description = "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or \
                                       `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired \
                                       device also gets 401"),
@@ -418,7 +421,7 @@ where
     path = "/api/session",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "Whether anyone is signed in on this device and who; the box's lease \
+        (status = 200, body = SessionState, description = "Whether anyone is signed in on this device and who; the box's lease \
                                       standing; whether anyone can sign in; the person's permissions, held \
                                       directly and with approval; the till's idle lock; and the opening float"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),

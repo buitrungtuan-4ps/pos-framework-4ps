@@ -20,12 +20,24 @@
         "requestBody": {
           "description": "`code`, the activation code printed on the store's setup sheet, in any casing or spacing",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Activated: the `device_id` the stored credential authenticates as. The edge restarts a moment later so its cloud loops start with the credential"
+            "description": "Activated: the `device_id` the stored credential authenticates as. The edge restarts a moment later so its cloud loops start with the credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivateAccepted"
+                }
+              }
+            }
           },
           "400": {
             "description": "The code is malformed (`ACTIVATION_CODE_MALFORMED`)"
@@ -62,7 +74,14 @@
         "operationId": "activation_standing",
         "responses": {
           "200": {
-            "description": "`activated`: whether this box holds a device credential yet; and `state_access`, whether the store's state is closed to other local accounts, where the edge reports it"
+            "description": "`activated`: whether this box holds a device credential yet; and `state_access`, whether the store's state is closed to other local accounts, where the edge reports it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StandingResponse"
+                }
+              }
+            }
           },
           "503": {
             "description": "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"
@@ -81,7 +100,17 @@
         "operationId": "settled_bills",
         "responses": {
           "200": {
-            "description": "Today's settled bills, newest first and capped: each with its order, table or queue number, receipt number, total, settle time and the shop's clock at it, and how many copies were printed"
+            "description": "Today's settled bills, newest first and capped: each with its order, table or queue number, receipt number, total, settle time and the shop's clock at it, and how many copies were printed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SettledBillResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -121,7 +150,14 @@
         ],
         "responses": {
           "200": {
-            "description": "What one bill owes, in the shape `GET /api/orders/{id}/check` answers with, plus its `state` and the `order_line_ids` it covers"
+            "description": "What one bill owes, in the shape `GET /api/orders/{id}/check` answers with, plus its `state` and the `order_line_ids` it covers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillCheckResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -163,7 +199,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`prints`: what came of printing the bill's pre-bill, one outcome"
+            "description": "`prints`: what came of printing the bill's pre-bill, one outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -207,12 +250,24 @@
         "requestBody": {
           "description": "`amount`, in minor units and greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` where the discount needs a manager. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscountRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic"
+            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscountResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or the amount is not greater than zero"
@@ -275,12 +330,24 @@
         "requestBody": {
           "description": "`reason_code_id`, with `approver_code` and `approver_pin` of somebody who may waive the fee where the person acting may not. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaiveFeeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic"
+            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID"
@@ -331,12 +398,24 @@
         "requestBody": {
           "description": "`absorbed_bill_ids`: at least one open bill, on the same table and order, to fold into this one",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Merged: the `bill_id` of the bill that survives, the one the path names"
+            "description": "Merged: the `bill_id` of the bill that survives, the one the path names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or no bill is named to fold in"
@@ -386,7 +465,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The copy, counted: the bill, its receipt number, which copy this was, and what came of printing it (`receipt_print`)"
+            "description": "The copy, counted: the bill, its receipt number, which copy this was, and what came of printing it (`receipt_print`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReprintResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -436,12 +522,24 @@
         "requestBody": {
           "description": "`payments`, each with its `method`, `tendered`, `applied_to_bill` and optional `tip`; an optional `buyer` for a corporate invoice, which is personal data and is never logged; and `approver_code` and `approver_pin` where cash goes into a drawer assigned to somebody else. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettleRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Settled: the bill with its receipt number and `total_due`, the state its table moved to, and what came of the receipt print (`receipt_print`) and of opening the drawer (`drawer_open`) where those were asked for"
+            "description": "Settled: the bill with its receipt number and `total_due`, the state its table moved to, and what came of the receipt print (`receipt_print`) and of opening the drawer (`drawer_open`) where those were asked for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, a payment method is unknown or not accepted as tender here, or the buyer's tax code is not well formed for this country"
@@ -495,12 +593,24 @@
         "requestBody": {
           "description": "`parts`: two or more lists of the order line ids, each the lines one new bill covers",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Split: the new `bill_ids`, in the order the parts were given"
+            "description": "Split: the new `bill_ids`, in the order the parts were given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SplitResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -551,12 +661,24 @@
         "requestBody": {
           "description": "`reason_code_id`, a void reason from the managed list, with `approver_code` and `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidBillRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Voided: the `state` the bill came to rest in"
+            "description": "Voided: the `state` the bill came to rest in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoidBillResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -593,7 +715,14 @@
         "operationId": "claim_status",
         "responses": {
           "200": {
-            "description": "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; `WAITING` with the `user_code` a person binds at the console, its `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the claim page of a box that belongs to no store yet"
+            "description": "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; `WAITING` with the `user_code` a person binds at the console, its `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the claim page of a box that belongs to no store yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimStatus"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -610,12 +739,24 @@
         "requestBody": {
           "description": "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the opening. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenDrawerRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`)"
+            "description": "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenDrawerResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -667,7 +808,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`floor`, the published areas and tables; `stations`, the kitchen stations and routing, each station with the threshold its board marks a ticket late after; and each table's live state. Empty until a floor is published. The ETag tags this body"
+            "description": "`floor`, the published areas and tables; `stations`, the kitchen stations and routing, each station with the threshold its board marks a ticket late after; and each table's live state. Empty until a floor is published. The ETag tags this body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FloorResponse"
+                }
+              }
+            }
           },
           "304": {
             "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
@@ -695,7 +843,17 @@
         "operationId": "list_integrations",
         "responses": {
           "200": {
-            "description": "The vendor connections that serve this store, most specific first: each one's family, provider and name. No setting is returned"
+            "description": "The vendor connections that serve this store, most specific first: each one's family, provider and name. No setting is returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IntegrationResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -721,12 +879,24 @@
         "requestBody": {
           "description": "`order_id`, `station_id`, and the `order_line_ids` the station made",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BumpRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Bumped: the order, the station, and the lines now marked prepared"
+            "description": "Bumped: the order, the station, and the lines now marked prepared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BumpResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID"
@@ -778,7 +948,14 @@
         ],
         "responses": {
           "200": {
-            "description": "How the till groups and orders its buttons: the display categories, their sub-categories, and each item's caption and grid slot. No prices. An empty plan means the till draws the flat price book. The ETag tags this body"
+            "description": "How the till groups and orders its buttons: the display categories, their sub-categories, and each item's caption and grid slot. No prices. An empty plan means the till draws the flat price book. The ETag tags this body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LayoutResponse"
+                }
+              }
+            }
           },
           "304": {
             "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
@@ -818,12 +995,24 @@
         "requestBody": {
           "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FireRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The line, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+            "description": "The line, as a line command answers, with `ticket_print`: what came of printing its station's ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -874,12 +1063,24 @@
         "requestBody": {
           "description": "`quantity`, in thousandths, greater than zero",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuantityRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or the quantity is not greater than zero"
@@ -930,12 +1131,24 @@
         "requestBody": {
           "description": "`reason_code_id`, a void reason from the managed list, and, where the void needs a manager, `approver_code` and `approver_pin`. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidLineRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -990,7 +1203,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The money facts the pay screen needs: the currency, the notes a guest can hand over, and what a total rounds to in cash. Empty until a `locale` node is published. The ETag tags this body"
+            "description": "The money facts the pay screen needs: the currency, the notes a guest can hand over, and what a total rounds to in cash. Empty until a `locale` node is published. The ETag tags this body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocaleResponse"
+                }
+              }
+            }
           },
           "304": {
             "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
@@ -1041,7 +1261,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The published price book for the channel: its currency, and each item with its price, tax and whether it is sold out. The ETag tags this body"
+            "description": "The published price book for the channel: its currency, and each item with its price, tax and whether it is sold out. The ETag tags this body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuResponse"
+                }
+              }
+            }
           },
           "304": {
             "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
@@ -1083,7 +1310,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Back on sale: the `menu_item_id`, and `sold_out` false"
+            "description": "Back on sale: the `menu_item_id`, and `sold_out` false",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoldOutResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1133,7 +1367,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Sold out at this store: the `menu_item_id`, and `sold_out` true. Marking an item already sold out writes nothing"
+            "description": "Sold out at this store: the `menu_item_id`, and `sold_out` true. Marking an item already sold out writes nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SoldOutResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1173,12 +1414,24 @@
         "requestBody": {
           "description": "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the store's walk-in channel. The body may be left out",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenOrderRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Opened: the `order_id`, the day's `queue_number` it is called by, and its `business_date`"
+            "description": "Opened: the `order_id`, the day's `queue_number` it is called by, and its `business_date`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedOrderResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The channel is not a sales channel this edge knows"
@@ -1216,7 +1469,14 @@
         "operationId": "awaiting_confirmation",
         "responses": {
           "200": {
-            "description": "The guest orders waiting for staff, each with its table, lines and total, and `reject_reasons`: the reasons a refusal may cite, in the store's display language"
+            "description": "The guest orders waiting for staff, each with its table, lines and total, and `reject_reasons`: the reasons a refusal may cite, in the store's display language",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitingResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1242,7 +1502,17 @@
         "operationId": "kitchen_orders",
         "responses": {
           "200": {
-            "description": "Every open order, and each paid order without a table that the kitchen has not finished, fired on the current business day, in the shape `GET /api/orders/live` answers with"
+            "description": "Every open order, and each paid order without a table that the kitchen has not finished, fired on the current business day, in the shape `GET /api/orders/live` answers with",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LiveOrderResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1268,7 +1538,17 @@
         "operationId": "live_orders",
         "responses": {
           "200": {
-            "description": "Every open order, floor and counter, with its table, open bills and channel where it has them, and every line with the id a fire, a void or a bump is addressed to"
+            "description": "Every open order, floor and counter, with its table, open bills and channel where it has them, and every line with the id a fire, a void or a bump is addressed to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LiveOrderResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1293,7 +1573,17 @@
         "operationId": "open_orders",
         "responses": {
           "200": {
-            "description": "Every counter order still owing money, with its queue number where it was given one, its lines, `total_due`, and any bill open on it"
+            "description": "Every counter order still owing money, with its queue number where it was given one, its lines, `total_due`, and any bill open on it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CounterOrderResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1336,7 +1626,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state its table moved to where the order has a table"
+            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state its table moved to where the order has a table",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1386,7 +1683,14 @@
         ],
         "responses": {
           "200": {
-            "description": "What the order owes: subtotal, discount and comp totals, tax, `total_due`, and each fee charged. Zero for an order with nothing on it"
+            "description": "What the order owes: subtotal, discount and comp totals, tax, `total_due`, and each fee charged. Zero for an order with nothing on it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1428,7 +1732,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`prints`: what came of printing each pre-bill, in the order they were sent"
+            "description": "`prints`: what came of printing each pre-bill, in the order they were sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1522,12 +1833,27 @@
         "requestBody": {
           "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FireRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LineResponse"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -1587,12 +1913,27 @@
         "requestBody": {
           "description": "Optional `station_id`, to send the food to that station rather than the one the line routes to. `{}` routes as published",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FireRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket"
+            "description": "Each line fired, as a line command answers, with `ticket_print`: what came of printing its station's ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LineResponse"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID"
@@ -1642,12 +1983,24 @@
         "requestBody": {
           "description": "What the guest chose: `menu_item_id` and `quantity` (in thousandths), with optional `modifier_menu_item_ids`, `seat`, `course_id` and `note`. No price: the edge prices the line at the order's channel",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderLineRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or a note longer than 200 characters or with a control character"
@@ -1697,8 +2050,13 @@
         "requestBody": {
           "description": "`reason_code_id`, a reason the managed list offers for refusing an order",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -1741,12 +2099,24 @@
         "requestBody": {
           "description": "`code`, the six-digit pairing code a manager minted",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Paired: the body carries `device_token`, the bearer token the device presents from now on"
+            "description": "Paired: the body carries `device_token`, the bearer token the device presents from now on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairAccepted"
+                }
+              }
+            }
           },
           "400": {
             "description": "The code is not six digits"
@@ -1775,7 +2145,14 @@
         "operationId": "mint_pairing_code",
         "responses": {
           "200": {
-            "description": "The six-digit `code` the next device presents, replacing any live one, and `expires_at_ms`. This reply is the only place the code exists: it is neither written to a file nor logged"
+            "description": "The six-digit `code` the next device presents, replacing any live one, and `expires_at_ms`. This reply is the only place the code exists: it is neither written to a file nor logged",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintedCode"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1805,7 +2182,14 @@
         "operationId": "paired_devices",
         "responses": {
           "200": {
-            "description": "How many devices are paired, whether pairings survive a restart, and each device's id, when it paired and whether it is the caller. No token digest"
+            "description": "How many devices are paired, whether pairings survive a restart, and each device's id, when it paired and whether it is the caller. No token digest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingState"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1829,8 +2213,13 @@
         "requestBody": {
           "description": "Optional `device_id`, the device to retire. Absent retires every paired device",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -1867,7 +2256,14 @@
         "operationId": "this_device",
         "responses": {
           "200": {
-            "description": "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"
+            "description": "The calling token is accepted: `accepted`, its `device_id` and `pair_time`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThisDevice"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1890,7 +2286,14 @@
         "operationId": "list_terminals",
         "responses": {
           "200": {
-            "description": "The store's published terminals, each held by this device, another device or nobody, never naming which other device; and the terminal this device holds that the `devices` node does not list, if any"
+            "description": "The store's published terminals, each held by this device, another device or nobody, never naming which other device; and the terminal this device holds that the `devices` node does not list, if any",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalsResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -1918,12 +2321,24 @@
         "requestBody": {
           "description": "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`"
+            "description": "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "`agent_device_id` is not a ULID"
@@ -1956,8 +2371,13 @@
         "requestBody": {
           "description": "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -2074,7 +2494,17 @@
         "operationId": "list_printers",
         "responses": {
           "200": {
-            "description": "The printers this store published, in publication order"
+            "description": "The printers this store published, in publication order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PrinterResponse"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2110,7 +2540,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`print`: what came of printing a page that names the printer"
+            "description": "`print`: what came of printing a page that names the printer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestPrintResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2153,7 +2590,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The active entries of the store's managed reason list, each with its id, code, name in the store's display language and the actions it covers. The framework's list until one is published. The ETag tags this body"
+            "description": "The active entries of the store's managed reason list, each with its id, code, name in the store's display language and the actions it covers. The framework's list until one is published. The ETag tags this body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReasonCodesResponse"
+                }
+              }
+            }
           },
           "304": {
             "description": "If-None-Match names the current ETag: nothing changed, and no body is sent"
@@ -2182,7 +2626,14 @@
         "operationId": "takings",
         "responses": {
           "200": {
-            "description": "The current business day, what its settled bills came to, and how many there were. The store's figure only: no person, till or shift"
+            "description": "The current business day, what its settled bills came to, and how many there were. The store's figure only: no person, till or shift",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakingsResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2208,7 +2659,14 @@
         "operationId": "current_session",
         "responses": {
           "200": {
-            "description": "Whether anyone is signed in on this device and who; the box's lease standing; whether anyone can sign in; the person's permissions, held directly and with approval; the till's idle lock; and the opening float"
+            "description": "Whether anyone is signed in on this device and who; the box's lease standing; whether anyone can sign in; the person's permissions, held directly and with approval; the till's idle lock; and the opening float",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2231,12 +2689,24 @@
         "requestBody": {
           "description": "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Signed in: the body carries the `employee_id` the device now acts as"
+            "description": "Signed in: the body carries the `employee_id` the device now acts as",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
           },
           "401": {
             "description": "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired device also gets 401"
@@ -2283,7 +2753,14 @@
         "operationId": "list_drawers",
         "responses": {
           "200": {
-            "description": "Every drawer the store keeps, each with its till, default float and open shift; the drawer model the edge runs and any the store has published while shifts are open; and the till this device is"
+            "description": "Every drawer the store keeps, each with its till, default float and open shift; the drawer model the edge runs and any the store has published while shifts are open; and the till this device is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrawersResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2310,12 +2787,24 @@
         "requestBody": {
           "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Opened: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind"
+            "description": "Opened: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2354,7 +2843,21 @@
         "operationId": "current_shift",
         "responses": {
           "200": {
-            "description": "The shift trading now on this device's drawer, or `null` when none is open. Blind: no expectation or variance, unless the store turned the blind count off"
+            "description": "The shift trading now on this device's drawer, or `null` when none is open. Blind: no expectation or variance, unless the store turned the blind count off",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ShiftResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2395,12 +2898,24 @@
         "requestBody": {
           "description": "Optional: `approver_code` and `approver_pin` for another till's drawer, and `reason_code_id` for an over or short the store asks a reason for. The body may be empty",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Closed: the shift with its expectation, count and variance, and `shift_report_print` where a report was printed"
+            "description": "Closed: the shift with its expectation, count and variance, and `shift_report_print` where a report was printed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or the body is not an approver and a reason"
@@ -2454,12 +2969,24 @@
         "requestBody": {
           "description": "`counted_minor`, the cash counted in minor units, with `approver_code` and `approver_pin` for another till's drawer. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CountRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Counted: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind"
+            "description": "Counted: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2513,12 +3040,24 @@
         "requestBody": {
           "description": "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MovementRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash"
+            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or the amount is not greater than zero"
@@ -2571,12 +3110,24 @@
         "requestBody": {
           "description": "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MovementRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash"
+            "description": "Recorded: the shift, with `drawer_open` saying whether the drawer opened for the cash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or the amount is not greater than zero"
@@ -2618,12 +3169,24 @@
         "requestBody": {
           "description": "`shift_ids` to close, every one or none, with optional `variance_reasons` (each a `shift_id` and `reason_code_id`) and one `approver_code` and `approver_pin` for the other tills' drawers. Both are secrets and are never logged",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchCloseRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Closed: each shift as its own close answers, and `shift_report_print` where the store prints one slip for them all"
+            "description": "Closed: each shift as its own close answers, and `shift_report_print` where the store prints one slip for them all",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchCloseResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "No shift is named"
@@ -2665,7 +3228,14 @@
         "operationId": "sync_status",
         "responses": {
           "200": {
-            "description": "The outbox depth and its level against the planned depth, the cloud link, when the outbox last reached the cloud, and the box's measured clock offset. The store sells at any depth"
+            "description": "The outbox depth and its level against the planned depth, the cloud link, when the outbox last reached the cloud, and the box's measured clock offset. The store sells at any depth",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -2701,7 +3271,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The table's id and its projected `state`, a `TABLE_STATE_*` token"
+            "description": "The table's id and its projected `state`, a `TABLE_STATE_*` token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2740,7 +3317,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state the table moved to"
+            "description": "The bill opened: its `bill_id`, `state`, `total_due`, and the state the table moved to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2789,7 +3373,14 @@
         ],
         "responses": {
           "200": {
-            "description": "What the table owes, in the shape `GET /api/orders/{id}/check` answers with, read through its open bills where it has any. Zero for a free table"
+            "description": "What the table owes, in the shape `GET /api/orders/{id}/check` answers with, read through its open bills where it has any. Zero for a free table",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2832,7 +3423,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`prints`: what came of printing each pre-bill, one per open part of a split table, in the order they were sent"
+            "description": "`prints`: what came of printing each pre-bill, one per open part of a split table, in the order they were sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2875,7 +3473,14 @@
         ],
         "responses": {
           "200": {
-            "description": "The table: its id and its new `state`, a `TABLE_STATE_*` token"
+            "description": "The table: its id and its new `state`, a `TABLE_STATE_*` token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -2925,12 +3530,24 @@
         "requestBody": {
           "description": "The line as the till captured it from the menu it holds: `menu_item_id`, `display_name`, `quantity` (in thousandths), `unit_price`, `line_total`, `tax_class_id` and `tax_rate`, with optional `seat`, `course_id`, `modifier_menu_item_ids` and `note`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LineRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired"
+            "description": "The line: `order_id`, `order_line_id`, its `state`, and `station_id` once fired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or a note longer than 200 characters or with a control character"
@@ -2979,7 +3596,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Released while nothing is sold on it: its id and its new `state`, a `TABLE_STATE_*` token"
+            "description": "Released while nothing is sold on it: its id and its new `state`, a `TABLE_STATE_*` token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID"
@@ -3030,12 +3654,24 @@
         "requestBody": {
           "description": "Optional `guest_count`. An empty body seats the table with the count unknown",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Seated, with an order opened: its id and its new `state`, a `TABLE_STATE_*` token"
+            "description": "Seated, with an order opened: its id and its new `state`, a `TABLE_STATE_*` token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The id is not a ULID, or a body is present that is not `guest_count`"
@@ -3085,12 +3721,24 @@
         "requestBody": {
           "description": "`to_table_id`, the free table the guests and their order move to",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Moved: the `order_id` that moved, and both tables after it, `from_table` and `to_table`"
+            "description": "Moved: the `order_id` that moved, and both tables after it, `from_table` and `to_table`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "An id is not a ULID, or the body has no `to_table_id`"
@@ -3131,7 +3779,14 @@
         "operationId": "healthz",
         "responses": {
           "200": {
-            "description": "`status` `ok`, the binary's name and version, the protocol version it speaks, and the store it serves. No credential is needed"
+            "description": "`status` `ok`, the binary's name and version, the protocol version it speaks, and the store it serves. No credential is needed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
           }
         },
         "security": [],
@@ -3198,6 +3853,3243 @@
     }
   },
   "components": {
+    "schemas": {
+      "ActivateAccepted": {
+        "type": "object",
+        "description": "The identity a successful activation grants.",
+        "required": [
+          "device_id"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "The device id the stored credential now authenticates as."
+          }
+        }
+      },
+      "ActivateRequest": {
+        "type": "object",
+        "description": "A device presenting its activation code.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing."
+          }
+        }
+      },
+      "AgentRequest": {
+        "type": "object",
+        "description": "The terminal a device is claiming or releasing, named by its cloud-approved device id.",
+        "required": [
+          "agent_device_id"
+        ],
+        "properties": {
+          "agent_device_id": {
+            "type": "string",
+            "description": "The `TERMINAL` entry's id, as it appears in the published `devices` node."
+          }
+        }
+      },
+      "AgentResponse": {
+        "type": "object",
+        "description": "What the claim did, in the vocabulary the till renders.",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "`BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`."
+          }
+        }
+      },
+      "AreaId": {
+        "type": "string",
+        "description": "A `AreaId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "BatchCloseRequest": {
+        "type": "object",
+        "description": "Closing several counted drawers at once: their shifts, one approver for those that are other\ntills' (ADR-0167 decision 10), and a reason for each drawer whose over or short the store asks\none of (decision 12).",
+        "required": [
+          "shift_ids"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shift_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShiftId"
+            }
+          },
+          "variance_reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VarianceReason"
+            }
+          }
+        }
+      },
+      "BatchCloseResponse": {
+        "type": "object",
+        "description": "What a batch close answers: each drawer closed, and what came of the one slip for all of them\nwhere the store combines its close report.",
+        "required": [
+          "shifts"
+        ],
+        "properties": {
+          "shift_report_print": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shifts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShiftResponse"
+            }
+          }
+        }
+      },
+      "BillCheckResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CheckResponse",
+            "description": "The same figures and fee lines the table and order reads answer with, so a till draws all\nthree the same way."
+          },
+          {
+            "type": "object",
+            "required": [
+              "state",
+              "order_line_ids"
+            ],
+            "properties": {
+              "order_line_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The order lines it covers ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)\ndecision 1), so a till can show a guest what their part of a split table is for."
+              },
+              "state": {
+                "type": "string",
+                "description": "`BILL_STATE_OPEN` while it still owes. A settled, voided, split or merged bill owes nothing\nmore, and the figures are then what its lines came to rather than a sum to collect."
+              }
+            }
+          }
+        ],
+        "description": "What one bill owes, where it has got to, and which lines it covers."
+      },
+      "BillFeeLine": {
+        "type": "object",
+        "description": "One fee as a settled bill records it\n([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): which fee, under\nwhich code and name, what it charged, and the tax on it.\n\nThe name is the rule's own as the bill froze it, so a copy of the receipt prints what the\noriginal did after the fee is renamed, as a line's name does (ADR-0129, ADR-0144). No event\ncarries a translation.",
+        "required": [
+          "fee_id",
+          "code",
+          "display_name",
+          "amount",
+          "tax"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it charged."
+          },
+          "code": {
+            "$ref": "#/components/schemas/FeeCode",
+            "description": "The rule's code, what a report groups fees by."
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The rule's own name, as the bill froze it."
+          },
+          "fee_id": {
+            "$ref": "#/components/schemas/FeeId",
+            "description": "The fee rule that charged it."
+          },
+          "tax": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The tax on it: its part of the tax of every class it is taxed at. Zero for a fee that is\nnot taxed."
+          },
+          "tax_components": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillTaxComponent"
+            },
+            "description": "That tax by component\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\nthe tax on each of its class shares split as that class's tax line is, then summed by name\nand rate, so they sum to `tax`.\n\nLeft out when empty, and absent is not zero: it reads as *not split*, which is every fee\ncharged before this field existed and every fee taxed at rates with no components. A\nreader that meets a name it cannot read takes the fee as not split too, and still reads the\nbill."
+          }
+        }
+      },
+      "BillId": {
+        "type": "string",
+        "description": "A `BillId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "BillResponse": {
+        "type": "object",
+        "description": "A bill as returned to a device after a command.",
+        "required": [
+          "bill_id",
+          "state",
+          "print_receipt"
+        ],
+        "properties": {
+          "bill_id": {
+            "type": "string"
+          },
+          "drawer_open": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing\nwas asked of the drawer."
+          },
+          "print_receipt": {
+            "type": "boolean"
+          },
+          "receipt_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The gapless receipt number, once settled. Never a legal invoice number.",
+            "minimum": 0
+          },
+          "receipt_print": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What came of that print: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE`, `UNPRINTABLE_TEXT`,\nor absent when the settle asked for no receipt (ADR-0100). Until this field existed the till\nrendered \"Printing receipt…\" over a store with no printer wired at all."
+          },
+          "state": {
+            "type": "string",
+            "description": "The bill's state (`BILL_STATE_OPEN`, `BILL_STATE_SETTLED`, …)."
+          },
+          "table_state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The state the bill's table moved to, absent for a counter order that has no table\n(ADR-0093). The UI already treated this as optional."
+          },
+          "total_due": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "BillTaxComponent": {
+        "type": "object",
+        "description": "One named part of a settled tax line's tax, or of a fee's\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\n`CGST` at 9 % and the tax it accounts for.",
+        "required": [
+          "name",
+          "rate_basis_points",
+          "tax"
+        ],
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/TaxComponentName",
+            "description": "The component, as the `tax` node names it."
+          },
+          "rate_basis_points": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its part of the rate, in basis points.",
+            "minimum": 0
+          },
+          "tax": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Its part of the tax."
+          }
+        }
+      },
+      "BumpRequest": {
+        "type": "object",
+        "description": "A bump as a KDS asks for it: the order, the station, and the lines it made.",
+        "required": [
+          "order_id",
+          "station_id",
+          "order_line_ids"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "order_line_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "station_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BumpResponse": {
+        "type": "object",
+        "description": "What a bump returns: the order, station, and the lines now marked prepared.",
+        "required": [
+          "order_id",
+          "station_id",
+          "order_line_ids"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "order_line_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "station_id": {
+            "type": "string"
+          }
+        }
+      },
+      "BusinessDate": {
+        "type": "string",
+        "description": "A business date, YYYY-MM-DD, by the store's own cutoff",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "ButtonResponse": {
+        "type": "object",
+        "description": "One item's button.",
+        "required": [
+          "menu_item_id",
+          "label"
+        ],
+        "properties": {
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The button's zero-based column on a fixed grid, absent for a flowing layout where order alone\nplaces it.",
+            "minimum": 0
+          },
+          "label": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The caption to show, which may be shorter than the item's catalog name."
+          },
+          "menu_item_id": {
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "The item this button orders — the id the price book from `GET /api/menu` carries. Layout\nnames the item; the price book prices it; the two meet only here."
+          },
+          "row": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The button's zero-based row, absent for the same reason as `column`.",
+            "minimum": 0
+          }
+        }
+      },
+      "BuyerRequest": {
+        "type": "object",
+        "description": "The buyer a till captured for a corporate invoice.\n\nPersonal data, every field of it, so it goes to the store's subject store and never into an\nevent — `Deserialize` only, with no `Debug`, because a derived one would put a buyer's name into\nthe axum rejection message for a malformed body.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tax_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CategoryResponse": {
+        "type": "object",
+        "description": "One display category: a tab or section on the till.",
+        "required": [
+          "display_category_id",
+          "name",
+          "buttons",
+          "subcategories"
+        ],
+        "properties": {
+          "buttons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ButtonResponse"
+            },
+            "description": "Buttons placed directly under the category — a flat category has only these."
+          },
+          "display_category_id": {
+            "$ref": "#/components/schemas/DisplayCategoryId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show on the tab."
+          },
+          "subcategories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubcategoryResponse"
+            },
+            "description": "Nested sub-categories, in display order."
+          }
+        }
+      },
+      "CheckFeeLine": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BillFeeLine"
+          },
+          {
+            "type": "object",
+            "required": [
+              "waivable"
+            ],
+            "properties": {
+              "waivable": {
+                "type": "boolean",
+                "description": "Whether the fee's rule, as the bill froze it, lets staff waive it on one bill\n([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers\n**Waive** only on an open bill's waivable fee, and the edge refuses any other."
+              }
+            }
+          }
+        ],
+        "description": "One fee as the till shows it: the line the settle records, and whether staff may waive it."
+      },
+      "CheckResponse": {
+        "type": "object",
+        "description": "What a table owes, as the till shows it.",
+        "required": [
+          "subtotal",
+          "discount_total",
+          "comp_total",
+          "tax_total",
+          "total_due",
+          "fee_lines"
+        ],
+        "properties": {
+          "comp_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "discount_total": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What has been taken off, once a bill is open to take it off. Two figures rather than one,\nbecause the receipt prints them on two lines and for two different reasons — a discount is\na price decision, a comp is food given away. Zero until something is applied, which is every\nbill until somebody reduces one."
+          },
+          "fee_lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckFeeLine"
+            },
+            "description": "Each fee charged ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),\nin rule order: the rule, its code and its name, what it charged and the tax on it, as the\nsettle records them, except that the name is the store's display language where the\ncurrent rule translates it. Part by part for a table whose bill is split, as each part\ncomputes its own. Empty where no fee applies, which is every bill at a store with no\n`fees` node. The till shows each line, and its total is still `total_due`. A fee waived on\nthe bill charges nothing and is not listed (decision 5)."
+          },
+          "subtotal": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The sum of the order's live line totals, before tax."
+          },
+          "tax_total": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The tax on those lines, each class rounded once by the domain."
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the guest owes — the figure the bill will settle against."
+          }
+        }
+      },
+      "ClaimStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Asking the cloud for a claim.",
+            "required": [
+              "cloud",
+              "state"
+            ],
+            "properties": {
+              "cloud": {
+                "type": "string",
+                "description": "The cloud this box will belong to."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "CONNECTING"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Showing a code for a person to bind at the console.",
+            "required": [
+              "user_code",
+              "expires_at_ms",
+              "cloud",
+              "state"
+            ],
+            "properties": {
+              "cloud": {
+                "type": "string",
+                "description": "The cloud whose console binds it."
+              },
+              "expires_at_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "When it stops working, in milliseconds since the Unix epoch."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "WAITING"
+                ]
+              },
+              "user_code": {
+                "type": "string",
+                "description": "The code, `XXXX-XXXX`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The cloud could not be reached; asking again shortly.",
+            "required": [
+              "cloud",
+              "state"
+            ],
+            "properties": {
+              "cloud": {
+                "type": "string",
+                "description": "The cloud being asked."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "UNREACHABLE"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Claimed: the box is this store now, and the store server starts next.",
+            "required": [
+              "store_id",
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "CLAIMED"
+                ]
+              },
+              "store_id": {
+                "type": "string",
+                "description": "The store it was claimed for."
+              }
+            }
+          }
+        ],
+        "description": "What the claim page shows, as `GET /api/claim` answers it."
+      },
+      "CloseRequest": {
+        "type": "object",
+        "description": "A close's optional body: the approver for another till's drawer, and the reason for an over or\nshort the store asks one of (ADR-0167 decision 12).",
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCodeId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CountRequest": {
+        "type": "object",
+        "description": "The blind count: the physical cash counted, in minor units. Nothing about what was expected.",
+        "required": [
+          "counted_minor"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "counted_minor": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CounterLineResponse": {
+        "type": "object",
+        "description": "One line of an order, for a cashier to recognise what they are charging for.",
+        "required": [
+          "display_name",
+          "quantity"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        }
+      },
+      "CounterOrderResponse": {
+        "type": "object",
+        "description": "One counter order awaiting payment.",
+        "required": [
+          "order_id",
+          "items",
+          "total_due"
+        ],
+        "properties": {
+          "bill_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A bill already open on this order. The screen settles **this** bill rather than opening a\nsecond one, which the domain refuses."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CounterLineResponse"
+            }
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "queue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The daily number staff shouted. Absent for an order that was never given one, which is why\nthe route reads the number rather than allocating it.",
+            "minimum": 0
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "CourseId": {
+        "type": "string",
+        "description": "A `CourseId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "CourseResponse": {
+        "type": "object",
+        "description": "One course, as the till offers it.",
+        "required": [
+          "course_id",
+          "display_name",
+          "sort"
+        ],
+        "properties": {
+          "course_id": {
+            "$ref": "#/components/schemas/CourseId",
+            "description": "The course's identifier, which an item above names and a fire-by-course sends."
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show, already in the store's display language — the same resolution the item's\nand the group's names get ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md))."
+          },
+          "sort": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Where it falls in the service sequence, ascending.\n\nCarried as well as pre-sorted, because a screen that filters the list still needs to know the\ngaps, and rebuilding the order from position in a filtered list is how one screen disagrees\nwith another about what comes first."
+          }
+        }
+      },
+      "CurrencyCode": {
+        "type": "string",
+        "description": "An ISO 4217 currency code: three upper-case letters",
+        "pattern": "^[A-Z]{3}$"
+      },
+      "DeviceId": {
+        "type": "string",
+        "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "DiscountRequest": {
+        "type": "object",
+        "description": "A discount as a till asks for it: how much, why, and the manager standing at the till for it.\n\nThe approval is optional in the shape and required by the act today, exactly as a line void's\nis. No store publishes a discount ceiling, so the domain reads the ceiling as zero and every\ndiscount needs `billing.discount.override_ceiling` — but the till sends the same request either\nway, and the edge answers `403` when the manager is the missing piece. When a ceiling is\npublished, a discount under it will start succeeding without one, with no change here.",
+        "required": [
+          "amount",
+          "reason_code_id"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "How much comes off, in minor units. Never a percentage: `billing.discount.applied` records\nan `amount`, so a percentage would have to be resolved somewhere, and resolving it at the\ntill would put the arithmetic on the device that does not own the price book (§14.2)."
+          },
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "DiscountResponse": {
+        "type": "object",
+        "description": "What the bill comes to once the discount is on it — the edge's own arithmetic, so the till never\nsubtracts a discount from a total itself and arrives at a different tax.",
+        "required": [
+          "subtotal",
+          "discount_total",
+          "comp_total",
+          "tax_total",
+          "total_due",
+          "fee_lines"
+        ],
+        "properties": {
+          "comp_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "discount_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "fee_lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckFeeLine"
+            },
+            "description": "Each fee on the bill once the discount is on it, as the check reads list them: a\npercentage taken after discounts moves with the discount (ADR-0159)."
+          },
+          "subtotal": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "tax_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "DisplayCategoryId": {
+        "type": "string",
+        "description": "A `DisplayCategoryId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "DisplayName": {
+        "type": "string",
+        "description": "A human-readable name for a product, category, modifier or campaign.\n\nTenant content, resolved per language in the configuration tree. Admissible in an\nevent payload because a line snapshot must capture the name shown to the guest at\nthe moment the line was added — changing or deleting a menu item afterwards must\nnot alter an open order or a settled bill."
+      },
+      "DisplaySubcategoryId": {
+        "type": "string",
+        "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "DrawerResponse": {
+        "type": "object",
+        "description": "One drawer: absent `terminal_device_id` and `name` for the store's one drawer.",
+        "required": [
+          "default_float"
+        ],
+        "properties": {
+          "default_float": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "name": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DisplayName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "opened_clock": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, for the till to\nshow as it is: a till's own clock may keep another zone. Absent while the drawer is closed."
+          },
+          "opened_time": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shift": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShiftResponse",
+                "description": "Its shift, `null` while the drawer is closed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_device_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "DrawersResponse": {
+        "type": "object",
+        "description": "What `GET /api/shifts` answers.",
+        "required": [
+          "drawer_model",
+          "drawers"
+        ],
+        "properties": {
+          "drawer_access": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167\ndecision 9), so the till asks whom another till's drawer is for and tells a person's own\ndrawer by `assigned_employee_id`. Absent where drawers are shared, as before."
+          },
+          "drawer_model": {
+            "type": "string",
+            "description": "The model the edge runs: `DRAWER_MODEL_PER_STORE` or `DRAWER_MODEL_PER_TERMINAL`."
+          },
+          "drawers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DrawerResponse"
+            }
+          },
+          "terminal_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The till this device is, whose drawer is its own, where the store keeps a drawer per till.\nAbsent for a device that is no till, and where the store keeps one drawer."
+          },
+          "waiting_drawer_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model the store has published, while open shifts keep the edge on the other."
+          }
+        }
+      },
+      "EmployeeId": {
+        "type": "string",
+        "description": "A `EmployeeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "FeeCode": {
+        "type": "string",
+        "description": "A short, stable, language-independent handle for a fee, such as `\"SERVICE\"` or `\"PACKAGING\"`.\n\nWhat a report groups fees by and a CSV export prints, so an operator reads a handle they chose\nrather than a ULID. Unlike [`crate::reason_codes::ReasonCode`], which no event carries, it is\nadmissible in an event payload ([`crate::pii`]): ADR-0159 has a bill record the code of every\nfee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It\nnames a charge, as a [`DisplayName`] names a product, and never a person."
+      },
+      "FeeId": {
+        "type": "string",
+        "description": "A `FeeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "FireRequest": {
+        "type": "object",
+        "description": "Which station a fire goes to. Optional: the edge derives the station from the published routing\n(ADR-0072), and this is only the fallback for a store with no station plan yet — an absent field\nlets the plan decide entirely.",
+        "properties": {
+          "station_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "FloorArea": {
+        "type": "object",
+        "description": "A named region of the floor — a terrace, the main hall — with the tables it contains, in order.",
+        "required": [
+          "area_id",
+          "name"
+        ],
+        "properties": {
+          "area_id": {
+            "$ref": "#/components/schemas/AreaId",
+            "description": "The area's identity."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show: \"Terrace\", \"Main hall\"."
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FloorTable"
+            },
+            "description": "The tables in this area, in display order."
+          }
+        }
+      },
+      "FloorPlan": {
+        "type": "object",
+        "description": "The store's floor plan: its areas and the tables in each.\n\nAn empty plan is a store whose floor has not been published yet — the edge keeps whatever it holds\nrather than blanking the room (the never-blank config contract, ADR-0072).",
+        "properties": {
+          "areas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FloorArea"
+            }
+          }
+        }
+      },
+      "FloorResponse": {
+        "type": "object",
+        "description": "The store's floor and kitchen plans, as the in-store UI reads them.",
+        "required": [
+          "floor",
+          "stations",
+          "table_states",
+          "seated_times"
+        ],
+        "properties": {
+          "floor": {
+            "$ref": "#/components/schemas/FloorPlan",
+            "description": "The areas and their tables."
+          },
+          "seated_times": {
+            "type": "object",
+            "description": "When the guests at each seated table sat down, keyed by table id, for the tables somebody is\nsitting at — how a floor plan says \"seated 25 min\", which a host reads to know who is due a\ncheck and who is about to leave.\n\nHere rather than on the live orders, because it is a fact about the table and a table is\nseated before anything is ordered: the live read lists orders with lines, so a till that\nreloaded over a table sat down a minute ago would have had no time for it. Read from the\ntable's order id ([`Edge::seated_since`]), so every device shows the same figure however long\nit has been running.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Timestamp"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "stations": {
+            "$ref": "#/components/schemas/StationPlan",
+            "description": "The kitchen stations and item→station routing, each station with the threshold its board\nmarks a ticket late after ([`resolved_thresholds`])."
+          },
+          "table_states": {
+            "type": "object",
+            "description": "What each table is doing right now, keyed by table id: free, occupied, awaiting payment,\nneeds cleaning.\n\nBeside the plan rather than inside it, because the two are different kinds of fact. The plan\nis *configuration* — what the console published, the same for every device, changing when\nsomebody edits the floor. A table's state is *live*, changes every time a guest sits down,\nand belongs to this store's projection. Folding it into `FloorPlan` would have put a running\nvalue into `pos-proto`'s published shape and made a device's reload rewrite config.\n\nSent because a device that has just started has **no other way to learn it**. The states\nreach a running till on the fan-out, and a till that was not running when the guests sat down\nnever saw those events — so before this, a reload drew every occupied table as free, on the\nhome screen, and a server could seat a table that already had people at it.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "FloorTable": {
+        "type": "object",
+        "description": "One table on a floor plan: its identity, the label a host reads, how many it seats, and where it\nsits in the visual editor's grid.",
+        "required": [
+          "table_id",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The label a host and guest read: \"T1\", \"Bar 3\". Presentation text, carried here so the UI\nnever re-reads anything to draw the floor."
+          },
+          "position": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GridPosition",
+                "description": "Where the table sits in the floor editor's grid. `None` for a table not yet placed — it exists\nand can be seated, it just has no pinned position. Omitted from the wire when absent, the same\noptional-field shape [`crate::display::DisplayButton`] uses."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seats": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many covers the table seats. Zero means unspecified — a table still seats guests, the\ncapacity is just not recorded.",
+            "minimum": 0
+          },
+          "table_id": {
+            "$ref": "#/components/schemas/TableId",
+            "description": "The table's identity — the id a `sales.order.opened` event carries and a QR token binds."
+          }
+        }
+      },
+      "GridPosition": {
+        "type": "object",
+        "description": "Where a button sits on a POS terminal's fixed grid: zero-based `column` and `row`.",
+        "required": [
+          "column",
+          "row"
+        ],
+        "properties": {
+          "column": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based column from the left.",
+            "minimum": 0
+          },
+          "row": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Zero-based row from the top.",
+            "minimum": 0
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "description": "The health payload. Every field is either compile-time constant or a store identifier — no PII.",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "protocol_version",
+          "store_id"
+        ],
+        "properties": {
+          "protocol_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The cloud–edge wire protocol this binary speaks.",
+            "minimum": 0
+          },
+          "service": {
+            "type": "string",
+            "description": "The binary's package name."
+          },
+          "status": {
+            "type": "string",
+            "description": "Always `\"ok\"` when the process can answer at all."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "Which store this machine serves."
+          },
+          "version": {
+            "type": "string",
+            "description": "The binary's version."
+          }
+        }
+      },
+      "IntegrationResponse": {
+        "type": "object",
+        "description": "One connection, as the Devices screen lists it.",
+        "required": [
+          "connection_id",
+          "family",
+          "provider_id",
+          "display_name"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "family": {
+            "type": "string",
+            "description": "The family's wire token; `INTEGRATION_FAMILY_UNSPECIFIED` for one this build does not know."
+          },
+          "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "KitchenStation": {
+        "type": "object",
+        "description": "One kitchen station a fired line can route to.",
+        "required": [
+          "station_id",
+          "name"
+        ],
+        "properties": {
+          "backup_station_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationId",
+                "description": "The station a ticket falls to when this station's printer is down — the backup-printer failover\ntarget a dispatcher consults. `None` means no failover: a ticket for this station stays here.\nA backup must name a *different* station in the same plan (enforced by `pos_core::floor`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "late_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long a ticket at this station waits, in seconds, before the kitchen display marks it\nlate. Read it through [`KitchenStation::late_after_seconds`], which reads an absent value, or\none outside [`LATE_AFTER_SECONDS`], as [`DEFAULT_LATE_AFTER_SECONDS`]. Left off the wire\nwhile absent, so a station that sets none is written as before.",
+            "minimum": 0
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show: \"Oven\", \"Bar\", \"Cold line\"."
+          },
+          "station_id": {
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station's identity — the `station_id` a `sales.order_line.fired` event carries and a\nkitchen `PrintJob` is addressed by (`pos-ports`, ADR-0026)."
+          },
+          "ticket_language": {
+            "$ref": "#/components/schemas/OpenReceiptLanguage_ReceiptLanguage",
+            "description": "The language this station's kitchen tickets print in: their fixed labels, and each item's and\nmodifier's name where the menu translates it. The same choices as a receipt's. Read it through\n[`KitchenStation::ticket_language`], which reads an absent or unknown value as the store's\ndisplay language. Left off the wire while absent, so a station that sets none is written as\nbefore."
+          }
+        }
+      },
+      "LayoutResponse": {
+        "type": "object",
+        "description": "The store's presentation plan for this channel, as the in-store UI reads it.",
+        "required": [
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CategoryResponse"
+            },
+            "description": "The display categories, in the order the console arranged them. Empty when nothing has been\nlaid out, which the till reads as \"draw the flat price book\"."
+          }
+        }
+      },
+      "LineRequest": {
+        "type": "object",
+        "description": "A line as a device asks for it to be added — the amounts captured from the menu it holds.",
+        "required": [
+          "menu_item_id",
+          "display_name",
+          "quantity",
+          "unit_price",
+          "line_total",
+          "tax_class_id",
+          "tax_rate"
+        ],
+        "properties": {
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName"
+          },
+          "line_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "menu_item_id": {
+            "$ref": "#/components/schemas/MenuItemId"
+          },
+          "modifier_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemId"
+            },
+            "description": "The modifiers chosen for this line. Optional, so a device that sends none — or an older one\nthat does not know the field — adds a bare line exactly as before. What it changes is the\nkitchen: a fired line consumes the base recipe **plus** one recipe per modifier (§8), so a\nline that omits them is a line whose extras are never taken off the shelf."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The guest's note for the kitchen: at most 200 characters, one line (ADR-0157)."
+          },
+          "note_present": {
+            "type": "boolean",
+            "description": "Deprecated by `note`: a device that sends only the flag still records that a note exists."
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "seat": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "tax_class_id": {
+            "$ref": "#/components/schemas/TaxClassId"
+          },
+          "tax_rate": {
+            "$ref": "#/components/schemas/Ratio"
+          },
+          "unit_price": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "LineResponse": {
+        "type": "object",
+        "description": "A line as returned to a device after a command.",
+        "required": [
+          "order_id",
+          "order_line_id",
+          "state"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "order_line_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The line's state (`ORDER_LINE_STATE_ADDED`, `ORDER_LINE_STATE_FIRED`, …)."
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The station the published routing sent this fire to, absent on an add (ADR-0072)."
+          },
+          "ticket_print": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What came of the kitchen ticket: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or\n`UNPRINTABLE_TEXT`. Absent on an add, which prints nothing (ADR-0100)."
+          }
+        }
+      },
+      "LiveLineResponse": {
+        "type": "object",
+        "description": "One line of an open order, with everything a screen needs to draw it and act on it.",
+        "required": [
+          "order_line_id",
+          "display_name",
+          "quantity",
+          "line_total",
+          "state",
+          "bumped",
+          "modifier_menu_item_ids",
+          "note_present"
+        ],
+        "properties": {
+          "bumped": {
+            "type": "boolean",
+            "description": "Whether a station has marked it prepared. Orthogonal to `state`: a fired line is still fired\nonce it is made, and this is what stops a kitchen display re-showing a ticket it has bumped."
+          },
+          "course_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The course the line goes out on, absent for a line on none (ADR-0130). Omitted when absent,\nfor the reason `seat` is.\n\nWithout it a till that reloaded mid-service drew every line uncoursed, so the course controls\noffered to send starters the screen no longer knew were starters — the same loss `seat` was\nadded here to stop, one field over."
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "fired_time": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When the line went to the kitchen. Absent while it is still on the pad, and omitted from the\nwire when absent, the way every other optional field on this route is.\n\nThe one number a kitchen board is for: which of eight tickets has been waiting longest. Taken\nfrom the firing event's envelope rather than from any clock a screen owns, so a board that\nreloads mid-service still counts from when the food was actually ordered — and two boards\nside by side agree."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line_total": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The extended total captured when the line was added — the figure the guest was quoted."
+          },
+          "modifier_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The modifiers chosen for the line (ADR-0127), as ids — the caller names them from the price\nbook it already holds. Always present, empty for a line that carries none, so a reader never\nhas to tell \"no modifiers\" apart from \"an older edge that did not say\"."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The guest's note while the edge holds it. Omitted when absent, for the reason `seat` is."
+          },
+          "note_present": {
+            "type": "boolean",
+            "description": "Whether a guest note was written for the line. Always present, because `true` with no `note`\nis a note the edge lost to a restart, which a screen must say rather than hide (ADR-0157)."
+          },
+          "order_line_id": {
+            "type": "string",
+            "description": "The id a fire, a void or a bump is addressed to."
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "seat": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The seat the line was ordered for, absent for the table's. Omitted from the wire when absent,\nthe way every other optional field on this route is: a `seat` of zero is not \"no seat\", and a\nnull would be a second spelling of the same nothing.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "`ORDER_LINE_STATE_ADDED`, `_FIRED`, `_VOIDED`."
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The station the line was fired to, absent while it is still on the pad. Omitted when absent,\nfor the reason `seat` is. What a kitchen board filters on, so a bar screen that reloads shows\nthe bar's tickets and not the grill's."
+          }
+        }
+      },
+      "LiveOrderResponse": {
+        "type": "object",
+        "description": "One open order.",
+        "required": [
+          "order_id",
+          "open_bill_ids",
+          "lines"
+        ],
+        "properties": {
+          "bill_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A bill already open on it, so a device that reloads on the payment screen settles **that**\nbill rather than asking for a second one the domain would refuse."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveLineResponse"
+            }
+          },
+          "open_bill_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part\nonce its bill has been split (ADR-0128). `bill_id` names only the newest, so a device that\nreloads mid-split finds the other parts here. Always present, empty when nothing is open."
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "sales_channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book\nof its channel, and whether the guest eats in or takes away (ADR-0160 decision 2). Absent for\nan order the edge cannot name a channel for."
+          },
+          "table_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The table it sits on. Absent for a counter order, which has none."
+          }
+        }
+      },
+      "LocaleResponse": {
+        "type": "object",
+        "description": "The store's money settings, as the in-store UI reads them.",
+        "required": [
+          "currency_code",
+          "currency_exponent",
+          "cash_denominations",
+          "prices_include_tax",
+          "number_format"
+        ],
+        "properties": {
+          "cash_denominations": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The notes a guest hands over, ascending, in minor units. Empty means the exact amount only."
+          },
+          "cash_rounding_increment": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "What the grand total is rounded to in cash, in minor units, or `null` for no rounding.\n\nThe till does not apply this — `pos_core::billing` does, and the rounding is already inside\nthe total the check reports. It is here so the screen can *show* the adjustment as its own\nline, which is what makes a rounded bill reconcile for the guest reading it."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "The currency every figure on this till is denominated in."
+          },
+          "currency_exponent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many decimal places that currency has: `0` for the đồng and the yen, `2` for the paisa\nand the cent ([ADR-0134](../../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).\n\nSent because a till cannot work it out. Every figure it draws and every figure a cashier\ntypes is an integer in the minor unit, and without this the screen has to guess where the\ndecimal point goes — which it did, from a three-row table that had no row for the rupee.",
+            "minimum": 0
+          },
+          "display_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store's display language (a BCP 47 tag from the `locale` node), absent when it has set\nnone. A till that has never been told otherwise starts in it, so a Vietnamese shop does not\nopen every reload in English."
+          },
+          "number_format": {
+            "$ref": "#/components/schemas/NumberFormat",
+            "description": "How this store writes a number\n([ADR-0136](../../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)): the decimal\nmark, the group mark, and how many digits go in a group.\n\nSent for the reason `currency_exponent` is — a till cannot work it out, and the one it\ninvented was `en-US` for every store in every country. Nothing on the screen reads it yet;\nthe till follows in its own change, because it alters a figure a cashier is looking at."
+          },
+          "prices_include_tax": {
+            "type": "boolean",
+            "description": "Whether the prices on this store's menu already contain their tax\n([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md))."
+          }
+        }
+      },
+      "MenuItemId": {
+        "type": "string",
+        "description": "A `MenuItemId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "MenuItemResponse": {
+        "type": "object",
+        "description": "One sellable item, priced and taxed as this store sells it.",
+        "required": [
+          "menu_item_id",
+          "display_name",
+          "unit_price",
+          "tax_class_id",
+          "modifier_group_ids",
+          "available",
+          "sold_out"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether the item can be sold right now. An item present but 86'd is shown and refused, not\nhidden, so staff can see why it cannot be ordered."
+          },
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId",
+                "description": "The course this item goes out on, or absent for an item on none (ADR-0130).\n\nAn id, not a name: the courses are listed once on the response below, for the reason the\nmodifier groups are. The till reads it to group an order into starters, mains and desserts,\nand to know which lines a fire-by-course will send."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show the guest, already in the store's display language."
+          },
+          "menu_item_id": {
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "The item's identifier, which a line names."
+          },
+          "modifier_group_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModifierGroupId"
+            },
+            "description": "The modifier groups the till must ask about before this item is sold\n([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).\n\nIds, not copies: the groups themselves are listed once on the response below, because one\n\"Size\" group attached to forty pizzas would otherwise be forty copies of the same rule on\nevery menu read."
+          },
+          "sold_out": {
+            "type": "boolean",
+            "description": "Whether staff marked it sold out at this store, which `available` already accounts for.\nCarried apart so a till can offer to restore it: an item the console published as\nunavailable is not the till's to bring back."
+          },
+          "tax_class_id": {
+            "$ref": "#/components/schemas/TaxClassId",
+            "description": "The tax class, carried onto the line."
+          },
+          "tax_rate": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ratio",
+                "description": "The rate for that class on this channel, or `None` when the store's table has no row —\na configuration error the till surfaces rather than papers over with zero."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit_price": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The store's price per unit."
+          }
+        }
+      },
+      "MenuResponse": {
+        "type": "object",
+        "description": "The store's price book, as the in-store UI reads it.\n\nThe capability flags are flat and stay flat. `struct_excessive_bools` is a good lint about\n*arguments* — four positional bools at a call site is a bug waiting to happen — and this struct\nis never constructed positionally: it is serialized, and each flag is named on the wire by a\nfield a till reads by name. Grouping them under a `capabilities` object is the shape B5.3 will\nwant when the rest arrive, and it is **not available now**: `tips_enabled` and `seats_enabled`\nare already published, and `AGENTS.md` §2 forbids removing or renaming a published field —\nnesting them would do exactly that to every till that has not updated yet (ADR-0111's\none-directional version rule is what makes an old device safe, and only while this is additive).\nWhen a sixth flag needs a reader, the answer is a *new* nested object beside these, with these\ndeprecated rather than moved.",
+        "required": [
+          "currency",
+          "items",
+          "tips_enabled",
+          "seats_enabled",
+          "tables_enabled",
+          "kds_enabled",
+          "tip_percents",
+          "split_ways_max",
+          "walk_in_channel",
+          "modifier_groups",
+          "courses_enabled",
+          "courses"
+        ],
+        "properties": {
+          "accepted_tender": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The payment methods this store accepts, as their wire names, or `None` when the store\nrestricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).\n\n`None` rather than \"all seven listed\" so the till can tell \"no restriction published\" from \"a\nrestriction that happens to allow everything\" — and so a method added to the enum later is\naccepted by an unrestricted store without a config change."
+          },
+          "courses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CourseResponse"
+            },
+            "description": "The courses any item above goes out on, **in service order**\n([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).\n\nJoins this response in the change that consumes it, which is the rule this module's header\nsets: the course picker that fires \"starters away\" is in this change, and the compiled book\nhas carried these only since the change before it.\n\nAlready sorted, ties broken by id, by the cloud compiler. A till must render them in the\norder given and must not sort them again: the sequence is the entity's whole meaning, and a\nscreen that rebuilt it from a filtered list is how \"main\" ends up before \"starter\".\n\nEmpty on a store that has published none, which is every store until the console authors\none — and the till then offers no course control, exactly as it did before this field."
+          },
+          "courses_enabled": {
+            "type": "boolean",
+            "description": "Whether this store groups its lines into courses (§10 `Capability::Courses`, on by default).\n\nThe flag that decides whether the till offers a course control at all. A counter that fires\neverything at once has no starters to send, and `POST /api/orders/{id}/fire/{course_id}`\nrefuses a store with this off — so offering the control there would be an action the edge\nwill not honour, the same failure `tips_enabled` was added to stop."
+          },
+          "currency": {
+            "$ref": "#/components/schemas/CurrencyCode",
+            "description": "The store's currency — every amount below is in it."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemResponse"
+            },
+            "description": "The items, in the order the store published them. Each rate is already resolved for the\nchannel a walk-in sale arrives on, so the till never picks a channel of its own."
+          },
+          "kds_enabled": {
+            "type": "boolean",
+            "description": "Whether fired lines reach a kitchen display (§10 `Capability::Kds`, on by default).\n\nRides with `tables_enabled` because it answers the same question about the same screen: a\ndestination in the status bar that leads to a board this store does not run is an offer the\nstore cannot honour, which is the same failure `tips_enabled` was added to stop."
+          },
+          "modifier_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModifierGroupResponse"
+            },
+            "description": "Every modifier group any item above attaches, listed once\n([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).\n\nEmpty on a store that has published none, which is every store until the console attaches\none — and the till then asks nothing, exactly as it did before this field existed."
+          },
+          "seats_enabled": {
+            "type": "boolean",
+            "description": "Whether this store assigns items to seats (§10 `Capability::Seats`, authored on the\n`capabilities` node, and **off by default** — most counters have no seats to speak of).\n\nJoins this response in the change that consumes it, which is the rule this module's header\nsets: `seat` has ridden `sales.order_line.added` and `LineDraft` since they were written, the\nadd route has accepted it all along, and nothing has ever set it — because the till had no way\nto know whether the store wanted to be asked."
+          },
+          "split_ways_max": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The most guests the pay screen's even split offers, from the store's `tender_keys` node\n(ADR-0160 decision 2): it offers every number from two up to this one. `6` until a store sets\nits own, at most `12`. A till reading an edge older than the field offers two to six.",
+            "minimum": 0
+          },
+          "tables_enabled": {
+            "type": "boolean",
+            "description": "Whether this store runs table service (§10 `Capability::Tables`, **on** by default).\n\nThe one flag that decides what the till's home screen is. A counter cafe has no floor plan,\nand `Capability::PayFirst` is declared incompatible with this one in the capability model's\nown validity rules — so a store with it off being shown a room full of tables it does not\nhave is not a cosmetic problem, it is the till describing a different shop."
+          },
+          "tip_percents": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "The tip keys the pay screen offers, each a whole percentage of the bill, in the order the\nstore's `tender_keys` node names them: a key set to `0`, or to a percentage an earlier key\noffers, is left out\n([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 2). `[5, 10, 15]` until a store sets its own, and empty when no key is left, which\nthe till takes as no tip row at all.\n\nBeside `tips_enabled`, which still decides whether the till asks for a tip at all. A till\nolder than the field ignores it, and a till reading an edge older than the field offers the\nthree keys it always did."
+          },
+          "tips_enabled": {
+            "type": "boolean",
+            "description": "Whether this store takes tips (§10 `Capability::Tips`, authored on the `capabilities` node).\n\nThe till shows no tip entry when this is false, which is the difference between a guest being\noffered something the edge will refuse and the action simply not being there."
+          },
+          "walk_in_channel": {
+            "type": "string",
+            "description": "The channel the counter opens a walk-in on, from the store's `counter` node (ADR-0160\ndecision 2): `WALK_IN_CHANNEL_TAKEAWAY` until a store sets its own, `WALK_IN_CHANNEL_DINE_IN`,\nor `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. A value the edge cannot read is\nsent as takeaway, the channel it opens such a store's walk-ins on.\n\nThe counter shows a walk-in the book of the channel it opens on. A till older than the field\nignores it, and a till reading an edge older than the field shows the takeaway book, the\nchannel that edge opens every walk-in on."
+          }
+        }
+      },
+      "MergeRequest": {
+        "type": "object",
+        "description": "The bills a merge folds into the target.",
+        "required": [
+          "absorbed_bill_ids"
+        ],
+        "properties": {
+          "absorbed_bill_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BillId"
+            }
+          }
+        }
+      },
+      "MergeResponse": {
+        "type": "object",
+        "description": "The surviving bill and everything it now covers.",
+        "required": [
+          "bill_id"
+        ],
+        "properties": {
+          "bill_id": {
+            "type": "string"
+          }
+        }
+      },
+      "MintedCode": {
+        "type": "object",
+        "description": "The minted code, and when it stops working.",
+        "required": [
+          "code",
+          "expires_at_ms"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The six digits the next device presents. **This response body is the only place it exists** —\nit is not written to a file and not logged, so a caller that loses this reply mints another."
+          },
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the code expires, Unix ms. Returned rather than a duration so a till can show a\ncountdown without assuming this box's `CODE_TTL`, which is a constant a fork may change."
+          }
+        }
+      },
+      "ModifierGroupId": {
+        "type": "string",
+        "description": "A `ModifierGroupId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "ModifierGroupResponse": {
+        "type": "object",
+        "description": "One modifier group, as the till asks it.",
+        "required": [
+          "modifier_group_id",
+          "display_name",
+          "min_select",
+          "max_select",
+          "member_menu_item_ids"
+        ],
+        "properties": {
+          "display_name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "The name to show, already in the store's display language — the same resolution the item's\nown name gets ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md))."
+          },
+          "max_select": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many choices a guest may make at most.",
+            "minimum": 0
+          },
+          "member_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemId"
+            },
+            "description": "The items offered as choices. Each is an ordinary item in `items` above, with its own price\n— which is how a large pizza costs more than a small one without a second pricing concept."
+          },
+          "min_select": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many choices a guest must make. **Zero means optional**; the till has no separate\n`required` flag to disagree with this number, and neither does the book.",
+            "minimum": 0
+          },
+          "modifier_group_id": {
+            "$ref": "#/components/schemas/ModifierGroupId",
+            "description": "The group's identifier, which an item above names."
+          }
+        }
+      },
+      "Money": {
+        "type": "object",
+        "description": "An amount of money: an integer count of the currency's minor unit.\n\nThe wire form is `{\"currency_code\": \"VND\", \"amount_minor\": 150000}`, and the\ndatabase form is `char(3)` plus `bigint`. Both halves travel together always —\nan amount without its currency is not money, it is a number.",
+        "required": [
+          "currency_code",
+          "amount_minor"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Whole minor units: đồng for VND, yen for JPY, cents for USD."
+          },
+          "currency_code": {
+            "$ref": "#/components/schemas/CurrencyCode",
+            "description": "ISO 4217 code."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MovementRequest": {
+        "type": "object",
+        "description": "A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the\napprover for a drawer assigned to somebody else.",
+        "required": [
+          "amount_minor",
+          "reason_code_id"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "NumberFormat": {
+        "type": "object",
+        "description": "How a country writes numbers.\n\nHeld as separators rather than as a format string, because a format string is a small language\nand every small language eventually needs an escape rule. Grouping is *digits per group* so that\nIndia's 2-2-3 lakh grouping is expressible later by widening this field rather than by replacing\nthe type.",
+        "required": [
+          "decimal_separator",
+          "group_separator",
+          "digits_per_group"
+        ],
+        "properties": {
+          "decimal_separator": {
+            "type": "string",
+            "description": "Between the integer and fractional parts. `.` in Vietnam and Japan, `,` in much of Europe."
+          },
+          "digits_per_group": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Digits per group, counting from the decimal separator.",
+            "minimum": 0
+          },
+          "group_separator": {
+            "type": "string",
+            "description": "Between groups of digits. `.` in Vietnam, `,` in Japan."
+          }
+        }
+      },
+      "OpenDrawerRequest": {
+        "type": "object",
+        "description": "Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).",
+        "required": [
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "OpenDrawerResponse": {
+        "type": "object",
+        "description": "What a no-sale opening reports: the opening is recorded, and this is whether the drawer sprang.",
+        "required": [
+          "drawer_open"
+        ],
+        "properties": {
+          "drawer_open": {
+            "type": "string",
+            "description": "`OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`."
+          }
+        }
+      },
+      "OpenOrderRequest": {
+        "type": "object",
+        "description": "A walk-in order as the counter asks for it (ADR-0146). Without a channel it takes the store's\nwalk-in channel, `counter.walk_in_channel`: takeaway, the ordinary counter order, unless the store\nsets its walk-ins to be eaten in (ADR-0160 decision 2).",
+        "properties": {
+          "channel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OpenPaymentMethod_PaymentMethod": {
+        "type": "string",
+        "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenReceiptLanguage_ReceiptLanguage": {
+        "type": "string",
+        "description": "A `ReceiptLanguage` token: RECEIPT_LANGUAGE_UNSPECIFIED, RECEIPT_LANGUAGE_DISPLAY, RECEIPT_LANGUAGE_COUNTRY, RECEIPT_LANGUAGE_VI, RECEIPT_LANGUAGE_EN, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenRequest": {
+        "type": "object",
+        "description": "Opening a shift with a starting float, on the device's own till's drawer or the one it names.\nAnother till's also takes an approver where the person holds that only with approval\n(ADR-0167 decision 3).",
+        "required": [
+          "opening_float"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assigned_employee_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EmployeeId",
+                "description": "The person another till's drawer is for, where the store assigns drawers: somebody on its\nroster. A drawer started at its own till is the starter's, and this is ignored there."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assigned_staff_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The same person by their staff code, which is what a till types. Read only where\n`assigned_employee_id` is absent; a code nobody on the roster has names nobody."
+          },
+          "opening_float": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "terminal_device_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DeviceId",
+                "description": "Another till's drawer to open, where the store keeps one per till. Absent is the device's\nown, and where the store keeps one drawer it is ignored."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "OpenSalesChannel_SalesChannel": {
+        "type": "string",
+        "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenedOrderResponse": {
+        "type": "object",
+        "description": "A walk-in order the counter has just opened, with the number the guest will be called by.",
+        "required": [
+          "order_id",
+          "queue_number",
+          "business_date"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "queue_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "OrderId": {
+        "type": "string",
+        "description": "A `OrderId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "OrderLineId": {
+        "type": "string",
+        "description": "A `OrderLineId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "OrderLineRequest": {
+        "type": "object",
+        "description": "A line as the counter adds it to an order by id: what the guest chose, and no price — the\nedge prices it at the order's own channel (ADR-0146).",
+        "required": [
+          "menu_item_id",
+          "quantity"
+        ],
+        "properties": {
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "menu_item_id": {
+            "$ref": "#/components/schemas/MenuItemId"
+          },
+          "modifier_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItemId"
+            }
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The guest's note for the kitchen, held in memory and never logged (ADR-0157)."
+          },
+          "note_present": {
+            "type": "boolean",
+            "description": "Deprecated by `note`: a device that sends only the flag still records that a note exists."
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "seat": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "PairAccepted": {
+        "type": "object",
+        "description": "The token issued to a successfully paired device.",
+        "required": [
+          "device_token"
+        ],
+        "properties": {
+          "device_token": {
+            "type": "string",
+            "description": "The opaque bearer token the device presents on later requests."
+          }
+        }
+      },
+      "PairRequest": {
+        "type": "object",
+        "description": "A device presenting a pairing code.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The six-digit code the operator read from the edge."
+          }
+        }
+      },
+      "PairedDeviceView": {
+        "type": "object",
+        "description": "One paired device as the console sees it.",
+        "required": [
+          "device_id",
+          "paired_at_ms",
+          "this_device"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "The device id — what `POST /api/pair/revoke` takes back."
+          },
+          "paired_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it paired, Unix ms."
+          },
+          "this_device": {
+            "type": "boolean",
+            "description": "Whether this is the device making the request. The one fact that lets an operator tell their\nown tablet from the others, and the row they must **not** retire by accident: doing so signs\nthis browser out mid-service."
+          }
+        }
+      },
+      "PairingState": {
+        "type": "object",
+        "description": "The state of this store's device pairing, for the operator console.",
+        "required": [
+          "devices",
+          "durable",
+          "paired"
+        ],
+        "properties": {
+          "devices": {
+            "type": "integer",
+            "description": "How many devices the store has admitted.",
+            "minimum": 0
+          },
+          "durable": {
+            "type": "boolean",
+            "description": "Whether those survive a restart (ADR-0091). Reported because an operator planning a reboot\nmid-service needs to know whether it will cost them the fleet."
+          },
+          "paired": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PairedDeviceView"
+            },
+            "description": "Each paired device, newest first — what the operator picks from to retire a lost till."
+          }
+        }
+      },
+      "PaymentRequest": {
+        "type": "object",
+        "description": "One payment a device applies to a bill: how it was paid, what the guest handed over, what was put\nagainst the total, and what they left. Change is what is left of `tendered` once\n`applied_to_bill` and `tip` are taken out of it.\n\n`method` arrives as an [`Open`] enum so an unrecognised token is a clean rejection rather than a\ndeserialise failure; [`Self::into_payment`] is the domain boundary that refuses an unspecified or\nunknown method.",
+        "required": [
+          "method",
+          "tendered",
+          "applied_to_bill"
+        ],
+        "properties": {
+          "applied_to_bill": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "method": {
+            "$ref": "#/components/schemas/OpenPaymentMethod_PaymentMethod"
+          },
+          "tendered": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "tip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "The tip on this tender. Optional, so a device that takes no tips — or one built before the\nfield existed — settles exactly as before. It replaces the request's `tips` list, which\ncarried tips beside the payments with no correspondence to them (roadmap **B1.3**)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PrintResponse": {
+        "type": "object",
+        "description": "What printing pre-bills came to: one outcome per document, in the order they were sent.\n\nA list because a split table prints one pre-bill per open part, and a printer can take the first\nand jam on the second; the till says which.",
+        "required": [
+          "prints"
+        ],
+        "properties": {
+          "prints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PrinterResponse": {
+        "type": "object",
+        "description": "One published printer, as the Devices screen lists it.",
+        "required": [
+          "device_id",
+          "name"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The station it serves, absent for the receipt printer."
+          }
+        }
+      },
+      "Quantity": {
+        "type": "object",
+        "description": "A quantity, counted in thousandths of a unit.\n\nThe wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it\n`milli` rather than `value` keeps the scale visible at every use site.",
+        "required": [
+          "milli"
+        ],
+        "properties": {
+          "milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Thousandths of a unit."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuantityRequest": {
+        "type": "object",
+        "description": "How many a line should now be.\n\nA quantity and nothing else. Unlike an add, no money crosses this boundary: the edge holds the\nunit price the device captured when the line was added, so it extends the line itself rather than\nbeing told what the line comes to. One less number a caller can get wrong, and one less way for a\nguest to be charged a total that does not follow from the price they were quoted.",
+        "required": [
+          "quantity"
+        ],
+        "properties": {
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        }
+      },
+      "Ratio": {
+        "type": "object",
+        "description": "An exact rational rate: a tax rate, a service charge, a percentage discount.\n\nA rate is never a float. 10% is `Ratio::percent(10)`, which is 10/100 exactly,\nand 8.25% is `Ratio::basis_points(825)`.\n\nOn the wire it is two integers, `{\"numerator\": 10, \"denominator\": 100}`. It has to\ncross a boundary because a line snapshot captures **the tax rate in force at the\nmoment the line was added** (`docs/pos-spec.md` §14.2) — sending a decimal string\nor a float instead would reintroduce exactly the imprecision the integer discipline\nexists to prevent. `NonZeroI64` means a zero denominator is unrepresentable, so a\nmalformed rate is rejected at the edge rather than dividing by zero later.",
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "properties": {
+          "denominator": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Never zero."
+          },
+          "numerator": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReasonCodeId": {
+        "type": "string",
+        "description": "A `ReasonCodeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "ReasonCodeResponse": {
+        "type": "object",
+        "description": "One entry a picker may offer: the id an event carries, the code a report groups by, the name in\nthe store's display language, and the actions it may be cited for.",
+        "required": [
+          "reason_code_id",
+          "code",
+          "display_name",
+          "applies_to"
+        ],
+        "properties": {
+          "applies_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The `REASON_ACTION_*` tokens this entry declares, so one read serves every picker."
+          },
+          "code": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "reason_code_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ReasonCodesResponse": {
+        "type": "object",
+        "description": "The store's managed list, as the in-store UI reads it.",
+        "required": [
+          "reasons"
+        ],
+        "properties": {
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReasonCodeResponse"
+            }
+          }
+        }
+      },
+      "RejectReasonResponse": {
+        "type": "object",
+        "description": "One reason the till may offer for a refusal — id to send back, name to show.",
+        "required": [
+          "reason_code_id",
+          "code",
+          "display_name"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "reason_code_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RejectRequest": {
+        "type": "object",
+        "description": "The reason a refusal cites.",
+        "required": [
+          "reason_code_id"
+        ],
+        "properties": {
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "ReprintResponse": {
+        "type": "object",
+        "description": "What a copy's press reports back to the till (ADR-0164).",
+        "required": [
+          "bill_id",
+          "receipt_number",
+          "copy_number",
+          "receipt_print"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "copy_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which copy this was, counting from 1.",
+            "minimum": 0
+          },
+          "receipt_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "receipt_print": {
+            "type": "string",
+            "description": "What came of the printing, as the settle reports it: `PRINTED`, `NO_PRINTER`, and so on."
+          }
+        }
+      },
+      "RevokeRequest": {
+        "type": "object",
+        "description": "Which device to retire. An absent `device_id` means every device.",
+        "properties": {
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The device to retire, or `None` for all of them."
+          }
+        }
+      },
+      "RoutingRule": {
+        "type": "object",
+        "description": "One item→station routing rule: a fired line matching it routes to `station_id`.\n\nA rule matches by a specific item or by a course; an item match takes precedence over a course\nmatch (`pos_core::floor::route_station`). A rule that names neither is meaningless — the validator\nrejects it rather than let it sit as a silent no-op.",
+        "required": [
+          "station_id"
+        ],
+        "properties": {
+          "course_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CourseId",
+                "description": "Match any line on a course."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "menu_item_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "Match a specific item. Takes precedence over a course match."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "station_id": {
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a matching line routes to."
+          }
+        }
+      },
+      "SeatRequest": {
+        "type": "object",
+        "description": "How many guests were seated, if whoever seated them said.\n\nReporting data (average check per cover), never a gate: a seat with no body at all is the\nrequest every device sent before B1.2 and still means \"seat the table, count unknown\".",
+        "properties": {
+          "guest_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SessionState": {
+        "type": "object",
+        "description": "The current sign-in on a device, for the UI to restore its state after a reload.",
+        "required": [
+          "signed_in",
+          "lease_standing",
+          "sign_in_ready",
+          "permissions_enforced",
+          "permissions",
+          "permissions_with_approval",
+          "idle_lock_seconds",
+          "opening_float_minor"
+        ],
+        "properties": {
+          "employee_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idle_lock_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many seconds an attended till may sit untouched before it signs its person out and\nlocks, from the store's `session` node\n([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));\n`0` never locks. A fact about the store rather than the person, so it is sent whoever is\nsigned in. The till keeps the time, because what counts as a touch is what happens on its\nscreen.",
+            "minimum": 0
+          },
+          "lease_standing": {
+            "type": "string",
+            "description": "Whether a replacement machine has taken this store — `active`, `superseded` or `invalid`\n([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).\n\nOn this route rather than a new one because it is the call the app already makes before it\ndraws anything, and because the state is a fact about the *box*, not about who is signed in:\na superseded till should say so on its sign-in screen, before anybody tries to seat a table."
+          },
+          "opening_float_minor": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The float the Shift screen fills in when a shift opens, in the store currency's minor unit,\nfrom the store's `shift` node (ADR-0160 decision 2); `0` fills in nothing. A store fact like\nthe idle lock, sent whoever is signed in. The cashier may change it, and the shift opens with\nwhat they send."
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission ids the signed-in person holds directly, sorted. Empty when nobody is signed\nin. The till hides what is in neither list once the store enforces them; the edge stays the\nauthority and refuses it anyway."
+          },
+          "permissions_enforced": {
+            "type": "boolean",
+            "description": "Whether the store decides with each person's own set\n([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 6). `false`: every control works as before, and the two lists below are what the\nperson's roles say, not what the store enforces."
+          },
+          "permissions_with_approval": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permission ids the signed-in person holds only with approval, sorted: the till asks for\nan approver before sending the act."
+          },
+          "sign_in_ready": {
+            "type": "boolean",
+            "description": "Whether anyone can sign in on this box: at least one published member of staff has a PIN\n([`StaffRoster::sign_in_ready`](crate::app::StaffRoster::sign_in_ready)).\n\nIt says nothing about any one badge code. It lets the sign-in screen tell a store the\nconsole has not staffed yet from a mistyped PIN; the refusal alone answers both the same."
+          },
+          "signed_in": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SettleRequest": {
+        "type": "object",
+        "description": "A settle request: the payments applied, each carrying the tip taken on it (a separate ledger,\nnever part of the total), and — for a B2B sale — who the tax invoice is for.\n\nNo `Debug`: it can carry a buyer, and a derived one would put that person's name into any log\nline or rejection message that touched the request (`AGENTS.md` §2).",
+        "required": [
+          "payments"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The approver for cash into a drawer assigned to somebody else (ADR-0167 decision 9): a code\nand PIN, both or neither."
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "buyer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BuyerRequest",
+                "description": "The corporate customer the invoice is issued to\n([ADR-0107](../../../../docs/adr/0107-the-buyer-is-a-subject.md)). Absent on every ordinary\nretail sale, and `#[serde(default)]` so a till built before this field existed settles\nexactly as it did."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentRequest"
+            }
+          }
+        }
+      },
+      "SettledBillResponse": {
+        "type": "object",
+        "description": "One of today's settled bills, as the till lists it to print a copy from\n([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).",
+        "required": [
+          "bill_id",
+          "order_id",
+          "receipt_number",
+          "total_due",
+          "settle_time",
+          "copies"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "copies": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many copies have been printed.",
+            "minimum": 0
+          },
+          "order_id": {
+            "$ref": "#/components/schemas/OrderId"
+          },
+          "queue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "receipt_number": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "settle_clock": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shop's wall clock when it settled, `HH:MM` in the store's timezone, for the list to show\nas it is: a till's own clock may keep another zone, and the list is today's, so the date\nwould say nothing. Absent in the one case the calendar cannot read the instant."
+          },
+          "settle_time": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "table_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TableId",
+                "description": "The table it was paid at, which the till shows by the floor's label. Absent for a counter\norder, which shows its queue number instead."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "ShiftId": {
+        "type": "string",
+        "description": "A `ShiftId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "ShiftResponse": {
+        "type": "object",
+        "description": "A shift as returned to a device after a command.",
+        "required": [
+          "shift_id",
+          "state",
+          "paid_in_amount",
+          "paid_out_amount",
+          "print_shift_report"
+        ],
+        "properties": {
+          "assigned_employee_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person the drawer is assigned to for this session, where the store assigns drawers:\nan id, never a name. Absent where drawers are shared."
+          },
+          "counted_amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "day_ended": {
+            "type": "boolean",
+            "description": "`true` while the shift is still open past the business day it opened on, which a till and\nthe console flag (ADR-0167 decision 11). Absent otherwise."
+          },
+          "drawer_open": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What came of opening the drawer, on a paid in or a paid out: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE`. Absent on every other command."
+          },
+          "expected_amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "Revealed at close (§11.1), and before it only where the store's count is not blind."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paid_in_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Cash paid into the drawer outside a sale so far (ADR-0165)."
+          },
+          "paid_out_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Cash paid out of it outside a sale so far."
+          },
+          "print_shift_report": {
+            "type": "boolean"
+          },
+          "shift_id": {
+            "type": "string"
+          },
+          "shift_report_print": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What came of printing the shift report, on the close that asked for one — the same wire\ntokens a settle reports its receipt with. Absent on every other command."
+          },
+          "state": {
+            "type": "string",
+            "description": "The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`)."
+          },
+          "terminal_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The till whose drawer it is, absent for the store's one drawer (ADR-0167)."
+          },
+          "variance": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "Revealed only at close. Negative means short."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SignInRequest": {
+        "type": "object",
+        "description": "A sign-in: the badge `code` a person types and their `pin`. Both are secrets and never logged.",
+        "required": [
+          "code",
+          "pin"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "pin": {
+            "type": "string"
+          }
+        }
+      },
+      "SignedIn": {
+        "type": "object",
+        "description": "A successful sign-in: the employee the device now acts as.",
+        "required": [
+          "employee_id"
+        ],
+        "properties": {
+          "employee_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SoldOutResponse": {
+        "type": "object",
+        "description": "What marking an item sold out, or restoring it, answers: the item, and whether it is now sold out.",
+        "required": [
+          "menu_item_id",
+          "sold_out"
+        ],
+        "properties": {
+          "menu_item_id": {
+            "$ref": "#/components/schemas/MenuItemId"
+          },
+          "sold_out": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SplitRequest": {
+        "type": "object",
+        "description": "The parts a split proposes, each the order lines one new bill will cover.",
+        "required": [
+          "parts"
+        ],
+        "properties": {
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/OrderLineId"
+              }
+            }
+          }
+        }
+      },
+      "SplitResponse": {
+        "type": "object",
+        "description": "The bills a split produced, in the order the parts were given.",
+        "required": [
+          "bill_ids"
+        ],
+        "properties": {
+          "bill_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StandingResponse": {
+        "type": "object",
+        "description": "This box's activation standing, for the boot gate and the UI.",
+        "required": [
+          "activated"
+        ],
+        "properties": {
+          "activated": {
+            "type": "boolean",
+            "description": "`true` once a device credential is in the vault."
+          },
+          "state_access": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StateAccess",
+                "description": "Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent\nfrom a router that was given no state directory, and from an edge older than the field."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "StateAccess": {
+        "type": "string",
+        "description": "Whether the store's state is closed to other local accounts.",
+        "enum": [
+          "STATE_ACCESS_OK",
+          "STATE_ACCESS_TOO_OPEN",
+          "STATE_ACCESS_UNCHECKED"
+        ]
+      },
+      "StationId": {
+        "type": "string",
+        "description": "A `StationId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StationPlan": {
+        "type": "object",
+        "description": "The store's kitchen plan: its stations, the routing rules that place a fired line on one, and the\ndefault station a line with no matching rule falls to.\n\nAn empty plan is a store whose kitchen has not been published — the edge keeps whatever it holds.",
+        "properties": {
+          "default_station_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationId",
+                "description": "The station a fired line falls to when no routing rule matches. `None` means the store has no\ncatch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "routing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoutingRule"
+            }
+          },
+          "stations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KitchenStation"
+            }
+          }
+        }
+      },
+      "SubcategoryResponse": {
+        "type": "object",
+        "description": "One display sub-category: a second grouping level with its own buttons.",
+        "required": [
+          "display_subcategory_id",
+          "name",
+          "buttons"
+        ],
+        "properties": {
+          "buttons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ButtonResponse"
+            }
+          },
+          "display_subcategory_id": {
+            "$ref": "#/components/schemas/DisplaySubcategoryId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName"
+          }
+        }
+      },
+      "SyncResponse": {
+        "type": "object",
+        "description": "The cloud link and the outbox, as a device draws them.",
+        "required": [
+          "outbox_depth",
+          "outbox_planned_depth",
+          "outbox_level",
+          "cloud_link",
+          "clock_drift",
+          "clock_drift_alarm_ms"
+        ],
+        "properties": {
+          "clock_drift": {
+            "type": "string",
+            "description": "`CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM` past `clock_drift_alarm_ms`, or\n`CLOCK_DRIFT_UNSPECIFIED` when no probe has succeeded since the edge started."
+          },
+          "clock_drift_alarm_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The offset either way past which the clock alarms, in milliseconds.",
+            "minimum": 0
+          },
+          "clock_measure_time": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When that was measured, on this box's own clock; absent until measured."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "clock_offset_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "This box's clock minus the time server's, in milliseconds; absent until measured."
+          },
+          "cloud_link": {
+            "type": "string",
+            "description": "`CLOUD_LINK_ONLINE`, `CLOUD_LINK_OFFLINE`, or `CLOUD_LINK_UNSPECIFIED` when nothing has tried."
+          },
+          "last_sync_time": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Timestamp",
+                "description": "When the outbox drain last reached the cloud; absent if it has not since the edge started."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outbox_depth": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Events committed on this box and not yet acknowledged by the cloud.",
+            "minimum": 0
+          },
+          "outbox_level": {
+            "type": "string",
+            "description": "`OUTBOX_LEVEL_NORMAL`, `_ELEVATED` (half the plan), `_HIGH` (four fifths) or `_BEYOND`."
+          },
+          "outbox_planned_depth": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The depth the warnings are graded against. Not a limit: the store sells past it.",
+            "minimum": 0
+          }
+        }
+      },
+      "TableId": {
+        "type": "string",
+        "description": "A `TableId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "TableResponse": {
+        "type": "object",
+        "description": "A table as returned to a device.",
+        "required": [
+          "table_id",
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "The table's state (`TABLE_STATE_FREE`, `TABLE_STATE_OCCUPIED`, …)."
+          },
+          "table_id": {
+            "type": "string",
+            "description": "The table id, as a ULID string."
+          }
+        }
+      },
+      "TakingsResponse": {
+        "type": "object",
+        "description": "What the store has taken today, as the Today screen's tile shows it.",
+        "required": [
+          "business_date",
+          "takings_amount",
+          "bill_count"
+        ],
+        "properties": {
+          "bill_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many bills settled that day.",
+            "minimum": 0
+          },
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate",
+            "description": "The business day the figure is for."
+          },
+          "takings_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the day's settled bills came to: what their guests paid."
+          }
+        }
+      },
+      "TaxClassId": {
+        "type": "string",
+        "description": "A `TaxClassId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "TaxComponentName": {
+        "type": "string",
+        "description": "A tax component's name as a bill records it: two to eight upper-case ASCII letters and digits,\nstarting with a letter, such as `CGST`, `SGST`, `UTGST`, `IGST` or `CESS`\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 1).\n\nBuilt only through [`Self::new`], and refused on deserialise when it fails the check. A settled\nbill's line reads such a name as *not split* rather than refusing the bill\n([`crate::events::BillTaxLine::components`]). A country that prints other words maps the token\nto them in its pack.\n\nThe personal-data barrier admits it to an event payload ([`crate::pii`]): it names a tax, and\neight characters with no space, `@` or lower case cannot carry a person's name, an e-mail or a\nphone number. It comes from the `tax` node an operator authors, never from a till's input."
+      },
+      "TerminalResponse": {
+        "type": "object",
+        "description": "One published terminal, and whether a device holds it.",
+        "required": [
+          "agent_device_id",
+          "name",
+          "held"
+        ],
+        "properties": {
+          "agent_device_id": {
+            "type": "string",
+            "description": "The `TERMINAL` entry's id, which a claim and a release name."
+          },
+          "held": {
+            "type": "string",
+            "description": "`THIS_DEVICE`, `ANOTHER_DEVICE` or `NONE`: never which other device."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name the console gave the terminal."
+          }
+        }
+      },
+      "TerminalsResponse": {
+        "type": "object",
+        "description": "The store's terminals, as the till's **This device** card lists them.",
+        "required": [
+          "terminals"
+        ],
+        "properties": {
+          "terminals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TerminalResponse"
+            },
+            "description": "The published `TERMINAL` entries, in the order the `devices` node lists them."
+          },
+          "unlisted_agent_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The terminal **this** device holds when the `devices` node does not list it, which a release\nnames. Absent when this device holds a listed terminal or none.\n\nA claim does not look the terminal up in the node, so a device can be bound by hand to an id\nthe node does not list. Without this the card says the device is none of the store's tills, a\nbind answers that it is already another, and nothing on a screen can release it. Only ever\nthe caller's own binding: never another device's, and never a person."
+          }
+        }
+      },
+      "TestPrintResponse": {
+        "type": "object",
+        "description": "What came of a test page: the same token a receipt's print reports (`PRINTED`, `NO_PRINTER`,\n`PRINTER_UNAVAILABLE`, …).",
+        "required": [
+          "print"
+        ],
+        "properties": {
+          "print": {
+            "type": "string"
+          }
+        }
+      },
+      "ThisDevice": {
+        "type": "object",
+        "description": "The calling device, as [`this_device`] answers for it.",
+        "required": [
+          "accepted",
+          "device_id",
+          "pair_time"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Always `true`. A token the edge does not accept never gets this far: it is refused `401`.\nCarried so the answer says what it means, and so a caller can tell it apart from the\n`index.html` an edge older than this route answers for any path it does not know."
+          },
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "The calling device's own id."
+          },
+          "pair_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the calling device paired, RFC 3339 UTC."
+          }
+        }
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "An instant in UTC, as RFC 3339"
+      },
+      "TransferRequest": {
+        "type": "object",
+        "description": "Where the guests are moving to.",
+        "required": [
+          "to_table_id"
+        ],
+        "properties": {
+          "to_table_id": {
+            "type": "string",
+            "description": "The free table they move to, as a ULID string."
+          }
+        }
+      },
+      "TransferResponse": {
+        "type": "object",
+        "description": "What a move did, as returned to a device: the order that moved, and both tables after it.",
+        "required": [
+          "order_id",
+          "from_table",
+          "to_table"
+        ],
+        "properties": {
+          "from_table": {
+            "$ref": "#/components/schemas/TableResponse",
+            "description": "The table the guests left, now waiting to be cleared."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The order that moved, as a ULID string."
+          },
+          "to_table": {
+            "$ref": "#/components/schemas/TableResponse",
+            "description": "The table they moved to, now seated with their order."
+          }
+        }
+      },
+      "VarianceReason": {
+        "type": "object",
+        "description": "The reason for one drawer's over or short, in a batch close.",
+        "required": [
+          "shift_id",
+          "reason_code_id"
+        ],
+        "properties": {
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          },
+          "shift_id": {
+            "$ref": "#/components/schemas/ShiftId"
+          }
+        }
+      },
+      "VoidBillRequest": {
+        "type": "object",
+        "description": "A bill void as a till asks for it: the reason from the store's managed list, plus the manager's\nbadge and PIN — which, unlike a line's, are needed every time.",
+        "required": [
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "VoidBillResponse": {
+        "type": "object",
+        "description": "The state a voided bill came to rest in, so the till can show it rather than re-reading.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "VoidLineRequest": {
+        "type": "object",
+        "description": "A void as a till asks for it: the reason from the store's managed list, plus the manager's badge\nand PIN when the line has already fired.\n\nThe approval is optional in the shape and required by the act — a line that never fired needs\nnone, and one that has cannot proceed without it. Making it optional here rather than splitting\nthe route in two keeps the till's one control talking to one endpoint: the till does not have to\nknow the fired/unfired rule, and the edge, which does, answers `403` when the PIN is the missing\npiece.",
+        "required": [
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The approving manager's badge code, when one is needed."
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The approving manager's PIN. Never logged and never stored."
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "WaitingLineResponse": {
+        "type": "object",
+        "description": "One line of a waiting order, so staff can see what the guest asked for before agreeing to it.",
+        "required": [
+          "display_name",
+          "quantity",
+          "line_total"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "line_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity"
+          }
+        }
+      },
+      "WaitingOrderResponse": {
+        "type": "object",
+        "description": "One guest order waiting for a member of staff.",
+        "required": [
+          "order_id",
+          "table_id",
+          "items",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingLineResponse"
+            }
+          },
+          "order_id": {
+            "type": "string"
+          },
+          "table_id": {
+            "type": "string",
+            "description": "The table the guest scanned. Always present: a held order is a tabled QR order by\ndefinition (ADR-0116), and a screen that could not say which table would be useless."
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "WaitingResponse": {
+        "type": "object",
+        "description": "The queue, plus the reasons a refusal may cite.\n\nOne response rather than two reads: the picker is only ever opened from this screen, and a\ntill that had to fetch the reasons separately could show a refusal dialog with nothing in it.",
+        "required": [
+          "orders",
+          "reject_reasons"
+        ],
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WaitingOrderResponse"
+            }
+          },
+          "reject_reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RejectReasonResponse"
+            }
+          }
+        }
+      },
+      "WaiveFeeRequest": {
+        "type": "object",
+        "description": "A fee waive as a till asks for it: the reason from the store's managed list, plus the badge\nand PIN of somebody who holds `billing.fee.waive` where the person acting needs one\n([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).",
+        "required": [
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      }
+    },
     "securitySchemes": {
       "till_session": {
         "type": "http",

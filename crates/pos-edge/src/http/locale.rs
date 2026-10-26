@@ -32,6 +32,7 @@ use crate::app::Edge;
 
 /// The store's money settings, as the in-store UI reads them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LocaleResponse {
     /// The currency every figure on this till is denominated in.
     currency_code: String,
@@ -76,7 +77,7 @@ pub(crate) struct LocaleResponse {
         ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
     ),
     responses(
-        (status = 200, description = "The money facts the pay screen needs: the currency, the notes a guest can \
+        (status = 200, body = LocaleResponse, description = "The money facts the pay screen needs: the currency, the notes a guest can \
                                       hand over, and what a total rounds to in cash. Empty until a `locale` node \
                                       is published. \
                                       The ETag tags this body"),

@@ -36,6 +36,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
 
 /// One line of a waiting order, so staff can see what the guest asked for before agreeing to it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct WaitingLineResponse {
     display_name: String,
     quantity: Quantity,
@@ -44,6 +45,7 @@ struct WaitingLineResponse {
 
 /// One reason the till may offer for a refusal — id to send back, name to show.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct RejectReasonResponse {
     reason_code_id: String,
     code: String,
@@ -52,6 +54,7 @@ struct RejectReasonResponse {
 
 /// One guest order waiting for a member of staff.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct WaitingOrderResponse {
     order_id: String,
     /// The table the guest scanned. Always present: a held order is a tabled QR order by
@@ -66,6 +69,7 @@ struct WaitingOrderResponse {
 /// One response rather than two reads: the picker is only ever opened from this screen, and a
 /// till that had to fetch the reasons separately could show a refusal dialog with nothing in it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct WaitingResponse {
     orders: Vec<WaitingOrderResponse>,
     reject_reasons: Vec<RejectReasonResponse>,
@@ -73,6 +77,7 @@ struct WaitingResponse {
 
 /// The reason a refusal cites.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct RejectRequest {
     reason_code_id: ReasonCodeId,
 }
@@ -82,7 +87,7 @@ pub(crate) struct RejectRequest {
     path = "/api/orders/awaiting-confirmation",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "The guest orders waiting for staff, each with its table, lines and \
+        (status = 200, body = WaitingResponse, description = "The guest orders waiting for staff, each with its table, lines and \
                                       total, and `reject_reasons`: the reasons a refusal may cite, in the \
                                       store's display language"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -190,7 +195,7 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     request_body(
-        description = "`reason_code_id`, a reason the managed list offers for refusing an order",
+        content = RejectRequest, description = "`reason_code_id`, a reason the managed list offers for refusing an order",
         content_type = "application/json",
     ),
     responses(

@@ -104,6 +104,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
               cannot be regrouped without removing them — see above"
 )]
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MenuResponse {
     /// The store's currency — every amount below is in it.
     currency: CurrencyCode,
@@ -198,6 +199,7 @@ pub(crate) struct MenuResponse {
 
 /// One sellable item, priced and taxed as this store sells it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MenuItemResponse {
     /// The item's identifier, which a line names.
     menu_item_id: MenuItemId,
@@ -235,6 +237,7 @@ pub(crate) struct MenuItemResponse {
 
 /// One course, as the till offers it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CourseResponse {
     /// The course's identifier, which an item above names and a fire-by-course sends.
     course_id: CourseId,
@@ -251,6 +254,7 @@ pub(crate) struct CourseResponse {
 
 /// One modifier group, as the till asks it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ModifierGroupResponse {
     /// The group's identifier, which an item above names.
     modifier_group_id: ModifierGroupId,
@@ -335,7 +339,7 @@ pub(crate) struct MenuQuery {
         ("channel" = Option<String>, Query, description = "A sales channel's wire token. Absent means the store's own channel"),
     ),
     responses(
-        (status = 200, description = "The published price book for the channel: its currency, and each item with \
+        (status = 200, body = MenuResponse, description = "The published price book for the channel: its currency, and each item with \
                                       its price, tax and whether it is sold out. \
                                       The ETag tags this body"),
         (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
@@ -417,6 +421,7 @@ where
 
 /// What marking an item sold out, or restoring it, answers: the item, and whether it is now sold out.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SoldOutResponse {
     menu_item_id: MenuItemId,
     sold_out: bool,
@@ -431,7 +436,7 @@ pub(crate) struct SoldOutResponse {
         ("id" = String, Path, description = "The menu item's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "Sold out at this store: the `menu_item_id`, and `sold_out` true. \
+        (status = 200, body = SoldOutResponse, description = "Sold out at this store: the `menu_item_id`, and `sold_out` true. \
                                       Marking an item already sold out writes nothing"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -470,7 +475,7 @@ where
         ("id" = String, Path, description = "The menu item's id, a ULID"),
     ),
     responses(
-        (status = 200, description = "Back on sale: the `menu_item_id`, and `sold_out` false"),
+        (status = 200, body = SoldOutResponse, description = "Back on sale: the `menu_item_id`, and `sold_out` false"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \

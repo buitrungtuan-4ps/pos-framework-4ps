@@ -16,6 +16,7 @@ use crate::state::AppState;
 
 /// The health payload. Every field is either compile-time constant or a store identifier — no PII.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct Health {
     /// Always `"ok"` when the process can answer at all.
     status: &'static str,
@@ -35,7 +36,7 @@ pub(crate) struct Health {
     security(),
     extensions(("x-public-reason" = json!("nothing: a liveness probe"))),
     responses(
-        (status = 200, description = "`status` `ok`, the binary's name and version, the protocol version it speaks, \
+        (status = 200, body = Health, description = "`status` `ok`, the binary's name and version, the protocol version it speaks, \
                                       and the store it serves. No credential is needed"),
     ),
     tag = "status",
