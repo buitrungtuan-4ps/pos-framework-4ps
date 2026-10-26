@@ -11342,7 +11342,14 @@
         },
         "responses": {
           "200": {
-            "description": "Published. The body carries `config_version_id`, the version the store syncs, `device_count`, and `skipped_count`: approved devices held back because no connection was ever recorded for them, which are not published as a guess. Audited"
+            "description": "Published. The body carries `config_version_id`, the version the store syncs, `device_count`, and `skipped_count`: approved devices held back because no connection was ever recorded for them, which are not published as a guess. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicesPublished"
+                }
+              }
+            }
           },
           "400": {
             "description": "tenant_id or store_id is absent or not a ULID",
@@ -27492,6 +27499,31 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "DevicesPublished": {
+        "type": "object",
+        "description": "What a devices publish answers: the version it made, how many devices it carries, and how many\napproved proposals it left out.",
+        "required": [
+          "config_version_id",
+          "device_count",
+          "skipped_count"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The new config version, a ULID."
+          },
+          "device_count": {
+            "type": "integer",
+            "description": "How many devices the store's node now names.",
+            "minimum": 0
+          },
+          "skipped_count": {
+            "type": "integer",
+            "description": "How many it considered and left out.",
+            "minimum": 0
           }
         }
       },
