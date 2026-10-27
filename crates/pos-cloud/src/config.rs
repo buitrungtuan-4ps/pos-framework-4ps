@@ -450,6 +450,11 @@ pub struct CloudConfig {
     /// checked at boot by [`Self::cell`].
     #[serde(default)]
     pub cell: Option<crate::cell::CellSection>,
+    /// The other cells this one reads daily rollups from, for an HQ that spans cells (ADR-0179
+    /// C10). Absent is no federation. Each source names a cell the signed directory lists, an API
+    /// key that cell issued with the `read_rollups` scope, and the stores to read.
+    #[serde(default)]
+    pub federation: Option<crate::cell::federation::FederationSection>,
 }
 
 /// The forge the cloud fetches signed edge releases from
@@ -596,6 +601,9 @@ impl CloudConfig {
         self.validate_release_source()?;
         self.cell()?;
         crate::cell::directory_source(self.cell.as_ref())?;
+        if let Some(federation) = &self.federation {
+            federation.validate()?;
+        }
         Ok(())
     }
 
