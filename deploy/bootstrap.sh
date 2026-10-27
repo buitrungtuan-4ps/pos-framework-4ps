@@ -573,6 +573,44 @@ if [ -n "${RELEASE_SOURCE_REPOSITORY:-}" ]; then
   fi
 fi
 
+# 2d. Which cell this deployment is (ADR-0179 C1, C8). The deploy workflow reads the cell's
+#     non-secret values from deploy/cells/<cell>.env and passes them here as CELL_*; this writes a
+#     [cell] block from them, once. A block already in the file is kept exactly as it is: the
+#     operator may have added the directory keys (C2), and renaming a cell is a decision made by
+#     hand, never by a deploy. Nothing passed is level 0, the one default cell, and writes nothing.
+#     A value that would not pass the cloud's own check is refused here with a warning, because a
+#     block pos_cloud cannot read stops it from starting, and a cell with no block still serves.
+if [ -n "${CELL_ID:-}" ]; then
+  # `[cell]`, `[ cell ]`, `cell.cell_id = …` and an inline `cell = {…}` all define the table.
+  cell_state="$(cloud_toml_state '^[[:space:]]*\(\[[[:space:]]*cell[[:space:]]*\]\|cell[[:space:]]*[.=]\)')"
+  cell_problem=""
+  [[ "$CELL_ID" =~ ^[a-z][a-z0-9-]{1,30}[a-z0-9]$ ]] || cell_problem="CELL_ID is not a cell id (3-32 of a-z, 0-9, '-')"
+  [[ "${CELL_COUNTRY_ALIAS:-}" =~ ^([a-z]{2})?$ ]] || cell_problem="CELL_COUNTRY_ALIAS is not two lower-case letters"
+  [[ "${CELL_HOME_COUNTRY:-}" =~ ^[A-Z]{2}$ ]] || cell_problem="CELL_HOME_COUNTRY is not two upper-case letters"
+  [[ "${CELL_RUNS_IN:-}" =~ ^[A-Z]{2}$ ]] || cell_problem="CELL_RUNS_IN is not two upper-case letters"
+  [[ "${CELL_BASE_URL:-}" =~ ^https://[a-z0-9.-]+(:[0-9]+)?$ ]] || cell_problem="CELL_BASE_URL is not an https origin"
+  if [ "$cell_state" = present ]; then
+    echo "keep   cell (already in cloud.toml)"
+  elif [ "$cell_state" = unreadable ]; then
+    echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); [cell] not written"
+  elif [ -n "$cell_problem" ]; then
+    echo "warn   $cell_problem; [cell] not written"
+  else
+    {
+      echo ""
+      echo "# Which cell this deployment is (ADR-0179). Written by bootstrap.sh from deploy/cells/$CELL_ID.env."
+      echo "[cell]"
+      echo "cell_id = \"$CELL_ID\""
+      if [ -n "${CELL_COUNTRY_ALIAS:-}" ]; then echo "country_alias = \"$CELL_COUNTRY_ALIAS\""; fi
+      echo "home_country = \"$CELL_HOME_COUNTRY\""
+      echo "base_url = \"$CELL_BASE_URL\""
+      echo "runs_in = \"$CELL_RUNS_IN\""
+    } | cloud_toml_append &&
+      echo "set    cloud.toml [cell] cell_id = $CELL_ID" ||
+      echo "warn   could not write $SECRETS/cloud.toml (need root or passwordless sudo); [cell] not written"
+  fi
+fi
+
 # 3. NATS: JetStream, a token, and — once a certificate exists — TLS on a published client port
 #    (ADR-0089). The monitoring port (8222) stays internal for the healthcheck, no token.
 #
@@ -725,6 +763,10 @@ esac
   # the group exit non-zero and `set -e` would abort the bootstrap.
   if [ -n "${POS_CLOUD_IMAGE:-}" ]; then echo "POS_CLOUD_IMAGE=$POS_CLOUD_IMAGE"; fi
   if [ -n "${CADDY_IMAGE:-}" ]; then echo "CADDY_IMAGE=$CADDY_IMAGE"; fi
+  # The cell's home country and where its off-box backups rest (ADR-0179 C7/C8), for backup.sh to
+  # compare. Countries, not secrets.
+  if [[ "${CELL_HOME_COUNTRY:-}" =~ ^[A-Z]{2}$ ]]; then echo "CELL_HOME_COUNTRY=$CELL_HOME_COUNTRY"; fi
+  if [[ "${BACKUP_COUNTRY:-}" =~ ^[A-Z]{2}$ ]]; then echo "BACKUP_COUNTRY=$BACKUP_COUNTRY"; fi
 } > "$HERE/.env"
 chmod 644 "$HERE/.env"
 echo "write  .env (http=$CADDY_HTTP_PUBLISH https=$CADDY_HTTPS_PUBLISH)"

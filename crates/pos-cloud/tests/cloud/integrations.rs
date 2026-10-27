@@ -270,6 +270,7 @@ fn connection_app(
         admin,
         clock(),
         audit,
+        Some(pos_proto::locale::CountryCode::VN),
     ))
 }
 
@@ -650,6 +651,7 @@ fn seeded_integrations_publish_with(
             pos_providers::SettingValue::Text("192.0.2.40".to_owned()),
         )]),
         sealed_secrets: BTreeMap::from([("api_key".to_owned(), "c1phertext".to_owned())]),
+        processing_country: None,
     };
     let connections = FakeConnections::default();
     for row in [
@@ -888,4 +890,89 @@ async fn an_integrations_publish_refuses_a_role_and_a_bad_id_and_records_nothing
         "store_id"
     );
     assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// A connection records the country its vendor processes data in, normalised, and says when that is
+/// not the cell's home country; a malformed code is refused by name, and a difference never is
+/// (ADR-0179 C7).
+#[tokio::test]
+async fn a_connection_records_its_processing_country_and_flags_another_country() {
+    let store = FakeConnections::default();
+    let audit = FakeAudit::default();
+    let router = connection_app(
+        provisioned_admin(),
+        store.clone(),
+        Some(test_integration_secret()),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let create = |country: Option<&str>| {
+        let mut body = gateway_body(&tenant, Some("test-key"));
+        if let Some(country) = country {
+            body["processing_country"] = serde_json::json!(country);
+        }
+        post_with_cookie("/admin/integrations/connections", &body, &cookie)
+    };
+
+    let abroad = router
+        .clone()
+        .oneshot(create(Some(" sg ")))
+        .await
+        .expect("route the create");
+    assert_eq!(
+        abroad.status(),
+        StatusCode::CREATED,
+        "a difference is never refused"
+    );
+    let body = json_body(abroad).await;
+    assert_eq!(body["processing_country"], "SG");
+    assert_eq!(body["processing_outside_cell"], true);
+    let id = body["connection_id"].as_str().expect("an id").to_owned();
+    assert_eq!(
+        store
+            .stored(&id)
+            .expect("stored")
+            .processing_country
+            .as_deref(),
+        Some("SG")
+    );
+    assert!(
+        audit.entries.lock().expect("lock").iter().any(|entry| entry
+            .after
+            .as_ref()
+            .is_some_and(|after| after["processing_country"] == "SG")),
+        "the trail records where the vendor processes data"
+    );
+
+    let home = json_body(
+        router
+            .clone()
+            .oneshot(create(Some("VN")))
+            .await
+            .expect("route the create"),
+    )
+    .await;
+    assert_eq!(home["processing_outside_cell"], false);
+
+    let unknown = json_body(
+        router
+            .clone()
+            .oneshot(create(None))
+            .await
+            .expect("route the create"),
+    )
+    .await;
+    assert_eq!(unknown["processing_country"], serde_json::Value::Null);
+    assert_eq!(unknown["processing_outside_cell"], false);
+
+    let malformed = router
+        .oneshot(create(Some("Singapore")))
+        .await
+        .expect("route the create");
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(malformed).await["error"]["details"][0]["field"],
+        "processing_country"
+    );
 }
