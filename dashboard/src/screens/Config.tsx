@@ -28,7 +28,6 @@ import {
   type CapabilityFlag,
   type CapabilityPreset,
   type ConfigLevel,
-  type ConfigVersion,
   type Json,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
@@ -60,6 +59,7 @@ import { ConfirmDialog, EmptyState, PublishBar } from "../components/kit";
 import { describePublish, previewNode } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+import type { ConfigVersion } from "../api/schemas";
 
 // The three §10 presets the catalogue serves, each to a static i18n label (a template-literal key
 // would not be a MessageKey). An id the map does not cover falls back to its raw server id.

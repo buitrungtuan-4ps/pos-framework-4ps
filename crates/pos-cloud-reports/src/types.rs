@@ -72,6 +72,7 @@ pub struct DailyRevenue {
     /// from the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay
     /// lever) folds every settled bill on the log into it.
     #[serde(default)]
+    #[schema(required = true)]
     pub by_fee: BTreeMap<String, FeeTotal>,
     /// The tax the day's settled bills recorded by tax component, one entry per component name and
     /// rate, in order of name and then rate
@@ -170,6 +171,7 @@ pub struct DailyCash {
     /// from the rollup's cursor forward. Resetting the rollup (the ADR-0036 reset-cursor-and-replay
     /// lever) folds every cash event on the log into it.
     #[serde(default)]
+    #[schema(required = true)]
     pub by_drawer: BTreeMap<String, CashTotals>,
 }
 
@@ -268,5 +270,6 @@ pub struct XzReport {
     /// store's published `devices` node when the report is served (ADR-0167 decision 13). The
     /// store's drawer, and a till the node no longer lists, have none. Device names, never a person.
     #[serde(default)]
+    #[schema(required = true)]
     pub till_names: BTreeMap<String, String>,
 }

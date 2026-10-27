@@ -27213,7 +27213,8 @@
           "shifts_closed",
           "expected",
           "counted",
-          "variance"
+          "variance",
+          "by_drawer"
         ],
         "properties": {
           "business_date": {
@@ -27290,7 +27291,8 @@
           "service_charge",
           "tax",
           "net",
-          "by_item"
+          "by_item",
+          "by_fee"
         ],
         "properties": {
           "bills": {
@@ -36180,7 +36182,8 @@
           "business_date",
           "activity",
           "revenue",
-          "cash"
+          "cash",
+          "till_names"
         ],
         "properties": {
           "activity": {

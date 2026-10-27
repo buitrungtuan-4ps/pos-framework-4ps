@@ -3,6 +3,13 @@
 // config, a translation grid — it is typed as JSON rather than pinned, because the server treats it
 // that way too.
 
+import type {
+  DailyCash,
+  DailyRevenue,
+  DailyRollup,
+  TranslationImportReport,
+} from "./schemas";
+
 /** An arbitrary JSON document — a composed config, or one level of the config tree. */
 export type Json =
   | null
@@ -15,67 +22,6 @@ export type Json =
 /** The four levels of the config tree (ADR-0033), in inheritance order. */
 export type ConfigLevel = "tenant" | "brand" | "store" | "device";
 export const CONFIG_LEVELS: readonly ConfigLevel[] = ["tenant", "brand", "store", "device"];
-
-/** One published config version from `GET /admin/stores/{id}/config/versions` (ADR-0069 G2). `at_ms`
- *  is read from the version ULID itself; `current` marks the version the store is on now. */
-export interface ConfigVersion {
-  readonly version_id: string;
-  readonly at_ms: number;
-  readonly current: boolean;
-}
-
-/** One node of a store's published configuration, from `GET /admin/stores/{id}/config/nodes`
- *  (Wave 4 · PR-5a, finding F6). `version_id`/`at_ms` are null when the version that published this
- *  node does not record which nodes it wrote — "published, when is not recorded", never "never
- *  published": the node is in the effective document, so it was. */
-export interface ConfigNode {
-  readonly node: string;
-  readonly version_id: string | null;
-  readonly at_ms: number | null;
-}
-
-/** A store's configuration, per node. `current_version_id` is the tree's newest version — what the
- *  store *should* be holding; what it *is* holding is on the fleet read. */
-export interface ConfigNodes {
-  readonly current_version_id: string | null;
-  readonly nodes: readonly ConfigNode[];
-}
-
-/** The one-time TOTP enrolment returned by `POST /admin/setup` (ADR-0034). */
-export interface Enrolment {
-  readonly otpauth_uri: string;
-  readonly secret_base32: string;
-}
-
-/** A summary row from `GET /admin/api-keys` (the secret is never listed). */
-export interface ApiKeySummary {
-  readonly id: string;
-  /** The one store this key acts for, or `null` for a tenant-wide key (S1). */
-  readonly store_id: string | null;
-  readonly scopes: string[];
-  readonly revoked: boolean;
-  /**
-   * When the key stops working, in Unix milliseconds, or `null` if it never does. Served since the
-   * key store was written and dropped by this type, so an expired key rendered as "Active"
-   * (production-readiness **O4**).
-   */
-  readonly expires_at_ms: number | null;
-}
-
-/** The one-time response to `POST /admin/api-keys` — the token is shown once. */
-export interface CreateApiKeyResponse {
-  readonly id: string;
-  readonly token: string;
-}
-
-/** What `POST /admin/devices/publish` reports: the node's version and how many devices it holds. */
-export interface PublishDevicesResponse {
-  readonly config_version_id: string;
-  /** The devices the published node lists. */
-  readonly device_count: number;
-  /** Approved devices held back, because their connection was never recorded (ADR-0100). */
-  readonly skipped_count: number;
-}
 
 /**
  * The paper a printer takes (ADR-0160), as its wire token: 80 mm at 42 characters a line, 80 mm at
@@ -93,76 +39,6 @@ export const PAPER_WIDTHS: readonly PaperWidth[] = [
   "PAPER_WIDTH_MILLIMETRES_58",
 ];
 
-/** A pending printer/KDS proposal from `GET /admin/devices/proposals` (ADR-0041). */
-export interface DeviceProposalSummary {
-  readonly id: string;
-  readonly store_id: string;
-  readonly kind: string;
-  /**
-   * The name the box read off the device, and where it is on the LAN. Both are what identify the
-   * thing an operator is about to approve — the cloud has always served them, and this type dropped
-   * them, so the approval screen asked people to approve a kind and a ULID (production-readiness
-   * **O3**).
-   */
-  readonly name: string;
-  readonly address: string;
-  /** How it is attached, once approval recorded it; `null` while pending (ADR-0100). */
-  readonly connection: string | null;
-  /** The kitchen station it serves, once approval recorded it; `null` for a receipt printer. */
-  readonly station_id: string | null;
-  /**
-   * The `terminal` whose agent writes this printer's bytes, if an operator has picked one
-   * (ADR-0112). `null` — the ordinary case — means the edge opens the address itself.
-   */
-  readonly agent_device_id: string | null;
-  /**
-   * Whether an operator has marked a cash drawer as wired to this printer (ADR-0165). The till opens
-   * it only over USB, from the store's own box, and only once the devices are published.
-   */
-  readonly drawer_attached: boolean;
-  /**
-   * The paper an operator says this printer takes, as its `PAPER_WIDTH_…` token (ADR-0160).
-   * `null` until somebody says, which the till prints as 80 mm paper, as every store did before.
-   */
-  readonly paper_width: PaperWidth | null;
-  /** Whether an operator says this printer cuts its paper; `null` until somebody says (a cut). */
-  readonly cuts_paper: boolean | null;
-  /**
-   * On a terminal, the printer an operator says its receipts, receipt copies and pre-bills go to
-   * (ADR-0160 decision 4). `null` until somebody says, which the till prints as the store's
-   * receipt printer.
-   */
-  readonly receipt_printer_id: string | null;
-  /** On a terminal, the `RECEIPT_LANGUAGE_…` token its receipts print in; `null` is the store's. */
-  readonly receipt_language: string | null;
-  /**
-   * On a terminal, the `RECEIPT_SECOND_LANGUAGE_…` token its receipts print in second; `null` is
-   * the store's.
-   */
-  readonly receipt_second_language: string | null;
-  /**
-   * On a terminal, the float an operator says its drawer opens with by default, in the store
-   * currency's minor unit (ADR-0167 decision 4). `null` until somebody says, which is the store's
-   * `shift.opening_float_minor`.
-   */
-  readonly opening_float_minor: number | null;
-  /** `pending`, `approved` or `rejected`. */
-  readonly status: string;
-  /**
-   * The version this row was read at, for a conditional write (ADR-0094). Opaque: the server mints
-   * it and nothing here may reason about its shape — it is only ever echoed back in `If-Match`.
-   */
-  readonly version: string;
-}
-
-/** The id a freshly created terminal was given (ADR-0112). */
-export interface CreateTerminalResponse {
-  /** The terminal's device id (a ULID) — what a printer names to make it its agent. */
-  readonly id: string;
-  /** `approved`, always: a terminal is created resolved, because the console write *is* the decision. */
-  readonly status: string;
-}
-
 /** A webhook endpoint row from `GET /admin/webhooks` (ADR-0032). */
 export interface WebhookSummary {
   readonly id: string;
@@ -172,108 +48,8 @@ export interface WebhookSummary {
   readonly disabled: boolean;
 }
 
-/** The one-time response to `POST /admin/webhooks` — the signing secret is shown once. */
-export interface RegisterWebhookResponse {
-  readonly id: string;
-  readonly url: string;
-  readonly signing_secret: string;
-}
-
-/** The version id a successful config publish produced. */
-export interface PublishedConfig {
-  readonly config_version_id: string;
-}
-
-/** One day's rollup for a store (ADR-0022) — counts only, no PII. */
-export interface DailyRollup {
-  readonly business_date: string;
-  readonly total_events: number;
-  readonly by_type: Record<string, number>;
-}
-
-/** One menu item's gross ordered contribution on a trading day (part of `DailyRevenue`, ADR-0081). */
-export interface ItemMix {
-  readonly name: string;
-  /** Ordered quantity in thousandths of a unit. */
-  readonly ordered_qty_milli: number;
-  /** Ordered line total, minor units — gross, before voids/comps. */
-  readonly ordered_value: number;
-}
-
-/**
- * One day's revenue rollup for a store (ADR-0081, Track O4). Amounts are the store's single
- * currency's minor units. Revenue is **T2** — served only behind `console.reports.revenue`.
- */
-export interface DailyRevenue {
-  readonly business_date: string;
-  readonly currency_code: string;
-  readonly bills: number;
-  readonly gross: number;
-  readonly reductions: number;
-  readonly service_charge: number;
-  readonly tax: number;
-  /** `total_due` summed — the headline revenue figure. */
-  readonly net: number;
-  readonly by_item: Record<string, ItemMix>;
-  /**
-   * The fees the day's settled bills charged, by fee code (ADR-0159). A bill settled by an edge
-   * from before fee lines is in `service_charge` and under no code.
-   */
-  readonly by_fee: Record<string, FeeTotal>;
-  /**
-   * The tax the day's settled bills' tax lines recorded by tax component, one entry per name and
-   * rate, in order of name and then rate (ADR-0168). Absent on a day that recorded none, as every
-   * Vietnamese and Japanese day; a bill settled before its store recorded components is in `tax`
-   * and in no entry, so these can sum to less than it.
-   */
-  readonly by_tax_component?: readonly TaxComponentTotal[];
-}
-
-/** One tax component's tax on a trading day, at one rate (part of `DailyRevenue`). Minor units. */
-export interface TaxComponentTotal {
-  /** The component's code, such as `CGST`. */
-  readonly component_name: string;
-  readonly rate_basis_points: number;
-  readonly tax: number;
-}
-
-/** One fee's total on a trading day, under its code (part of `DailyRevenue`). Minor units. */
-export interface FeeTotal {
-  /** The last name a settled bill recorded for the fee. */
-  readonly name: string;
-  /** Settled bills that charged it. */
-  readonly bills: number;
-  readonly amount: number;
-  readonly tax: number;
-}
-
-/** A day's cash figures for one drawer, or for the store's every drawer together. Minor units. */
-export interface CashTotals {
-  readonly opening_float: number;
-  readonly paid_in: number;
-  readonly paid_out: number;
-  readonly shifts_opened: number;
-  readonly shifts_closed: number;
-  /** Summed from closes only: a drawer still open has no expected amount (`docs/pos-spec.md` §6). */
-  readonly expected: number;
-  readonly counted: number;
-  readonly variance: number;
-}
-
 /** The key `DailyCash.by_drawer` files the store's one drawer under (ADR-0167 decision 5). */
 export const STORE_DRAWER = "store";
-
-/** One day's cash-drawer summary for a store (ADR-0081). Amounts are minor units. T2. */
-export interface DailyCash extends CashTotals {
-  readonly business_date: string;
-  readonly currency_code: string;
-  /**
-   * The same figures for each drawer, keyed by the till's `terminal_device_id`, or `STORE_DRAWER`
-   * for the store's one drawer (ADR-0167 decisions 10 and 13). They add up to the store's. Empty
-   * for a day folded before the split, until the store's rollup is reset.
-   */
-  readonly by_drawer: Readonly<Record<string, CashTotals>>;
-}
 
 /**
  * An X or Z report for a store's trading day (ADR-0081, spec gap D10). `kind` is `"X"` (current,
@@ -296,28 +72,6 @@ export interface XzReport {
 /** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
 export interface ActivationCode {
   readonly activation_code: string;
-}
-
-/**
- * A translation grid: `key → { locale → message }`. `en` must be present and non-empty for every
- * key (the server rejects a grid that breaks the fallback rule, ADR-0020/0043).
- */
-export type TranslationGrid = Record<string, Record<string, string>>;
-
-/** One row's fate in a CSV import dry-run (ADR-0075): create a new key, update an existing one, or
- *  reject it with a reason (a missing `en`, an empty key). */
-export interface TranslationImportRow {
-  readonly key: string;
-  readonly action: "create" | "update" | "reject";
-  readonly reason?: string;
-}
-
-/** The dry-run (and post-apply) report for a translation-grid CSV import (ADR-0075). */
-export interface TranslationImportReport {
-  readonly rows: readonly TranslationImportRow[];
-  readonly create_count: number;
-  readonly update_count: number;
-  readonly reject_count: number;
 }
 
 /**

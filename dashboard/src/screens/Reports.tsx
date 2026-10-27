@@ -13,12 +13,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import { STORE_DRAWER } from "../api/types";
 import type {
-  CashTotals,
-  DailyRevenue,
-  DailyRollup,
-  FeeTotal,
   Store,
-  TaxComponentTotal,
   XzReport,
 } from "../api/types";
 import { t } from "../i18n";
@@ -31,6 +26,13 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { DateField, DateRange, Toolbar } from "../components/kit";
 import { apiMessage } from "../lib/errors";
+import type {
+  CashTotals,
+  DailyRevenue,
+  DailyRollup,
+  FeeTotal,
+  TaxComponentTotal,
+} from "../api/schemas";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {

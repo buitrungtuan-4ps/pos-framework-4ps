@@ -13,11 +13,12 @@
 import { cleanup, render, screen, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AdminRole, CashTotals, XzReport } from "../src/api/types";
+import type { AdminRole, XzReport } from "../src/api/types";
 import { setLocale } from "../src/i18n";
 import { Reports } from "../src/screens/Reports";
 import { formatAmount } from "../src/state/money";
 import { selectStore, selectTenant, setActingAdmin } from "../src/state/session";
+import type { CashTotals } from "../src/api/schemas";
 
 const TENANT = "01M22190WCY5PS7KCA7ET7H679";
 const STORE = "01STOREAAAAAAAAAAAAAAAAAAA";
