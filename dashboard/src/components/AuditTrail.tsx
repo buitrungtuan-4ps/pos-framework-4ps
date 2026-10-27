@@ -6,7 +6,7 @@
 import { createResource, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { AuditEntry } from "../api/types";
+import type { AuditEntry } from "../api/schemas";
 import { t } from "../i18n";
 import { formatInstant, formatRelativeAge } from "../lib/format";
 import { Skeleton, StatusBadge } from "./ui";

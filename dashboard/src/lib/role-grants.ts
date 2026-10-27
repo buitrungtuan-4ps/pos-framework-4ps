@@ -7,7 +7,7 @@
 // with approval, because that is the shape of the form: a checkbox per permission, and for a
 // PIN-flagged one a choice of how.
 
-import type { PermissionInfo, RoleTemplate } from "../api/types";
+import type { PermissionInfo, RoleTemplate } from "../api/schemas";
 
 /** Every permission a role grants, and which of them it grants only with approval. */
 export interface RoleGrants {
