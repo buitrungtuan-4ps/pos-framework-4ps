@@ -160,6 +160,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_delete_campaign,
         crate::http::campaigns::admin_list_vouchers,
         crate::http::campaigns::admin_generate_vouchers,
+        crate::http::cell::admin_get_cell,
         crate::http::countries::admin_list_countries,
         crate::http::countries::admin_list_locales,
         pos_cloud_catalog::routes::catalog::admin_list_display_categories,
@@ -507,6 +508,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            conditional on the version it was read at. An item category or \
                            sub-category that active items still use cannot be archived. Nothing \
                            reaches a store until its catalog is published."
+        ),
+        (
+            name = "cell",
+            description = "Which cell this cloud is (ADR-0179): its cell id, country alias, home \
+                           country, base URL and the country its servers run in, from the \
+                           `[cell]` section of `cloud.toml`. Read-only, and fixed when the server \
+                           starts; a cloud with no `[cell]` section is the one default cell."
         ),
         (
             name = "countries",

@@ -6566,6 +6566,53 @@
         "x-permission": "console.catalog.manage"
       }
     },
+    "/admin/cell": {
+      "get": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "A console admin reads which cell this cloud is.",
+        "operationId": "admin_get_cell",
+        "responses": {
+          "200": {
+            "description": "Which cell this cloud is (ADR-0179): `cell_id`, the optional `country_alias`, `home_country`, `base_url`, the country it `runs_in`, whether that differs from the home country (`runs_abroad`), and whether `cloud.toml` has a `[cell]` section at all (`configured`). Fixed when the server starts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CellView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -25988,6 +26035,61 @@
           }
         }
       },
+      "CellView": {
+        "type": "object",
+        "description": "This cell as the console reads it. Fixed when the server starts; the same for every tenant. It\nholds no personal data and no secret.",
+        "required": [
+          "cell_id",
+          "country_alias",
+          "home_country",
+          "base_url",
+          "runs_in",
+          "runs_abroad",
+          "configured"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The origin this cell answers on. Null when no `[cell]` section is configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "The cell id (`vn1`), or `default` when `cloud.toml` has no `[cell]` section."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether `cloud.toml` carries a `[cell]` section. False is level 0: the one and only cell."
+          },
+          "country_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country alias (`vn`), when one is configured."
+          },
+          "home_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's tenants are homed by (`VN`). Null when no `[cell]` section is\nconfigured."
+          },
+          "runs_abroad": {
+            "type": "boolean",
+            "description": "Whether the servers run in a different country from the home country. A warning, never a\nrefusal."
+          },
+          "runs_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's servers run in. Null when no `[cell]` section is configured."
+          }
+        }
+      },
       "ChainFindingView": {
         "type": "object",
         "description": "One refused chain claim on the wire.\n\nPositions, hashes and identifiers — no event contents and no customer identifier. A chain hash is\na digest of an envelope whose every payload field `pos_proto::pii` has already proven free of\npersonal data.",
@@ -36300,6 +36402,10 @@
     {
       "name": "catalog taxonomy",
       "description": "How a tenant's catalog is sorted (ADR-0066, ADR-0130): item categories and their sub-categories, which reporting groups an item under; display categories and their sub-categories, which a till's layout shows; and courses, the order a table's dishes are served in. Ids are minted by the server, records are archived rather than deleted, and every edit is conditional on the version it was read at. An item category or sub-category that active items still use cannot be archived. Nothing reaches a store until its catalog is published."
+    },
+    {
+      "name": "cell",
+      "description": "Which cell this cloud is (ADR-0179): its cell id, country alias, home country, base URL and the country its servers run in, from the `[cell]` section of `cloud.toml`. Read-only, and fixed when the server starts; a cloud with no `[cell]` section is the one default cell."
     },
     {
       "name": "countries",
