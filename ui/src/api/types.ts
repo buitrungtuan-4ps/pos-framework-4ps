@@ -1,8 +1,17 @@
-// The wire types the edge speaks (P5 routes in `crates/pos-edge/src/http`). Kept as a hand-written
-// mirror for the P6 foundation; a generated client from the OpenAPI surface is the P7 follow-up
-// (ADR-0019), at which point this file is replaced rather than maintained by hand.
+// The wire types the edge speaks that are still mirrored by hand (routes in
+// `crates/pos-edge/src/http`). Each moves to `schemas.ts`, an alias of the generated schema, once
+// the edge document says exactly what the till receives (ADR-0177); the file then goes.
 
-import type { Money, NumberFormat, Quantity, Ratio } from "../lib/money";
+import type {
+  BuyerRequest,
+  CounterLine,
+  CourseResponse,
+  MenuItemResponse,
+  ModifierGroup,
+  PaymentRequest,
+} from "./schemas";
+
+import type { Money, NumberFormat, Quantity } from "../lib/money";
 
 export interface TableResponse {
   table_id: string;
@@ -14,61 +23,6 @@ export interface TransferResponse {
   order_id: string;
   from_table: TableResponse;
   to_table: TableResponse;
-}
-
-export interface LineRequest {
-  menu_item_id: string;
-  display_name: string;
-  quantity: Quantity;
-  unit_price: Money;
-  line_total: Money;
-  tax_class_id: string;
-  tax_rate: Ratio;
-  seat?: number;
-  course_id?: string;
-  // The modifiers chosen for this line (ADR-0127). The edge validates them against the groups the
-  // item attaches before it writes anything, so an empty list on an item that requires a choice is
-  // a refusal rather than a silent sale.
-  modifier_menu_item_ids: string[];
-  note_present: boolean;
-  // The guest's note for the kitchen (ADR-0157): held in the edge's memory, printed on the ticket,
-  // and never written to the log. At most 200 characters, one line.
-  note?: string;
-}
-
-export interface LineResponse {
-  order_id: string;
-  order_line_id: string;
-  state: string;
-}
-
-// A line added to a counter order by its id (ADR-0146): what the guest chose and no price, because
-// the edge prices it at the order's own channel.
-export interface OrderLineRequest {
-  menu_item_id: string;
-  quantity: Quantity;
-  modifier_menu_item_ids: string[];
-  course_id?: string;
-  note_present: boolean;
-  note?: string;
-}
-
-// A counter order the till has just opened, with the number the guest will be called by.
-export interface OpenedOrder {
-  order_id: string;
-  queue_number: number;
-  business_date: string;
-}
-
-// How many a line should now be. A quantity and no money: the edge holds the unit price the device
-// captured when the line was added and extends the line itself, so a till cannot quote a total that
-// does not follow from the price it showed.
-export interface QuantityRequest {
-  quantity: Quantity;
-}
-
-export interface FireRequest {
-  station_id: string;
 }
 
 // One line of an open order, from `GET /api/orders/live`.
@@ -130,108 +84,6 @@ export interface LiveOrder {
   lines: LiveLine[];
 }
 
-// The store's published floor plan and kitchen stations from `GET /api/floor` (ADR-0072). The edge
-// serves the live `EdgeSession` plans; the shapes mirror `pos_proto::floor`, with the optional-field
-// keys (`position`, `default_station_id`, …) omitted from the wire when absent.
-export interface FloorGridPosition {
-  column: number;
-  row: number;
-}
-
-export interface FloorTable {
-  table_id: string;
-  label: string;
-  seats?: number;
-  position?: FloorGridPosition | null;
-}
-
-export interface FloorArea {
-  area_id: string;
-  name: string;
-  tables?: FloorTable[];
-}
-
-export interface FloorPlan {
-  areas?: FloorArea[];
-}
-
-export interface KitchenStation {
-  station_id: string;
-  name: string;
-  backup_station_id?: string | null;
-  // How long a ticket at this station waits, in seconds, before the board marks it late. The edge
-  // sends the threshold the station's board uses (ADR-0160 decision 2): the station's own, or ten
-  // minutes where it sets none. Absent from an edge that predates the field.
-  late_after_seconds?: number;
-}
-
-export interface StationRoutingRule {
-  station_id: string;
-  menu_item_id?: string | null;
-  course_id?: string | null;
-}
-
-export interface StationPlan {
-  stations?: KitchenStation[];
-  routing?: StationRoutingRule[];
-  default_station_id?: string | null;
-}
-
-export interface FloorResponse {
-  floor: FloorPlan;
-  stations: StationPlan;
-  // What each table is doing right now, keyed by table id. Absent from an edge that predates the
-  // field, which the till reads as "tell me nothing" and leaves its own map alone.
-  table_states?: Record<string, string>;
-  // When each seated table's guests sat down, keyed by table id, for the tables somebody is sitting
-  // at. Absent from an edge that predates the field.
-  seated_times?: Record<string, string>;
-}
-
-// The store's own price book from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Every amount is the
-// edge's, already in the store's currency — the app displays it and hands it straight back on a
-// line, and never computes one of its own.
-// A set of choices with a min/max rule, attached to items (ADR-0127). `min_select >= 1` is what
-// "required" means — there is no second flag, here or in the book.
-export interface ModifierGroup {
-  modifier_group_id: string;
-  display_name: string;
-  min_select: number;
-  max_select: number;
-  member_menu_item_ids: string[];
-}
-
-// A named point in the service sequence (ADR-0130). Already in service order, ties broken by id, by
-// the cloud compiler — a screen renders them in the order given and must never sort them again: the
-// sequence is the entity's whole meaning, and rebuilding it from a filtered list is how one screen
-// ends up disagreeing with another about what comes first.
-export interface CourseResponse {
-  course_id: string;
-  display_name: string;
-  sort: number;
-}
-
-export interface MenuItemResponse {
-  menu_item_id: string;
-  display_name: string;
-  unit_price: Money;
-  tax_class_id: string;
-  // Absent when the store's rate table has no row for this item's class. That is a configuration
-  // error, not a zero rate, so the edge also reports the item unavailable.
-  tax_rate?: Ratio | null;
-  // The groups the till must ask about before this item is sold. Ids, not copies: the groups
-  // themselves are listed once on the menu response.
-  modifier_group_ids: string[];
-  // The course this item goes out on, absent for an item on none (ADR-0130). The till stamps it
-  // onto the line it adds, which is what gives a fire-by-course something to match.
-  course_id?: string | null;
-  available: boolean;
-  // Whether staff marked it sold out at this store (86), which `available` already accounts for.
-  // Apart so the till can offer to bring it back: an item the console withdrew is not the till's
-  // to restore. Absent from an edge older than the field.
-  sold_out?: boolean;
-}
-
 export interface MenuResponse {
   currency: string;
   items: MenuItemResponse[];
@@ -287,74 +139,6 @@ export interface FeeLine {
   waivable?: boolean;
 }
 
-// What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the
-// edge from the order's live lines against the store's own tax table — the same calculation the bill
-// settles against, so the till displays a figure rather than deriving one.
-export interface CheckResponse {
-  subtotal: Money;
-  // What has come off, once a bill is open to take it off. Two figures because the receipt prints
-  // two lines: a discount is a price decision, a comp is food given away.
-  discount_total: Money;
-  comp_total: Money;
-  tax_total: Money;
-  total_due: Money;
-  // Each fee, in the order of its rules. Absent from an edge older than fees, and empty where no
-  // fee applies; `total_due` already includes every one.
-  fee_lines?: FeeLine[];
-}
-
-// One bill read back, from `GET /api/bills/{id}/check`: the five figures, where the bill has got to,
-// and the order lines it covers — which is how the pay screen shows a guest what their part of a split
-// table is for (ADR-0128).
-export interface BillCheckResponse extends CheckResponse {
-  // `BILL_STATE_OPEN` while it still owes.
-  state: string;
-  order_line_ids: string[];
-}
-
-// A split as the till asks for it: the order lines each new bill will cover. Every line the bill
-// covers goes in exactly one part, and the edge refuses anything else.
-export interface SplitRequest {
-  parts: string[][];
-}
-
-// The bills a split produced, in the order the parts were given.
-export interface SplitResponse {
-  bill_ids: string[];
-}
-
-// The bills a merge folds into the one the path names, which survives.
-export interface MergeRequest {
-  absorbed_bill_ids: string[];
-}
-
-// A discount as the till asks for it. The amount is money, never a percentage — the edge records an
-// amount, so a percentage would have to be resolved on the device that does not own the price book.
-export interface DiscountRequest {
-  amount: Money;
-  reason_code_id: string;
-  approver_code?: string;
-  approver_pin?: string;
-}
-
-// The bill once the discount is on it, straight from the edge's own arithmetic.
-export interface DiscountResponse {
-  subtotal: Money;
-  discount_total: Money;
-  comp_total: Money;
-  tax_total: Money;
-  total_due: Money;
-  // As on the check: a fee taken after discounts moves with the discount.
-  fee_lines?: FeeLine[];
-}
-
-// One line of a counter order, as the counter list shows it: what it is and how many, so a cashier
-// recognises the order a customer is collecting.
-export interface CounterLine {
-  display_name: string;
-  quantity: Quantity;
-}
-
 // A counter order awaiting payment (ADR-0093). A relayed or QR-counter order sits on no table, so it
 // appears on no floor plan — this list is the only way a cashier can find it.
 export interface CounterOrder {
@@ -367,62 +151,6 @@ export interface CounterOrder {
   // A bill already open on this order. The screen settles THIS bill rather than opening a second
   // one, which the edge refuses with a 409.
   bill_id?: string;
-}
-
-// One line of a guest's order waiting for staff confirmation (ADR-0116).
-export interface WaitingLine {
-  display_name: string;
-  quantity: Quantity;
-  line_total: Money;
-}
-
-// One reason the till may offer for refusing a guest's order. The id goes back to the edge, the
-// name is already resolved into the store's display language — the till never holds a reason list
-// of its own, because the store's published list replaces the framework's (ADR-0115).
-export interface RejectReason {
-  reason_code_id: string;
-  code: string;
-  display_name: string;
-}
-
-// One guest order waiting for a member of staff (ADR-0116).
-export interface WaitingOrder {
-  order_id: string;
-  table_id: string;
-  items: WaitingLine[];
-  total: Money;
-}
-
-// The confirmation queue, and the reasons a refusal may cite. One response so the refusal dialog
-// can never open with an empty picker.
-export interface WaitingResponse {
-  orders: WaitingOrder[];
-  reject_reasons: RejectReason[];
-}
-
-export interface BumpRequest {
-  order_id: string;
-  station_id: string;
-  order_line_ids: string[];
-}
-
-// One entry of the store's managed reason list, as `GET /api/reason-codes` serves it (ADR-0115).
-//
-// `applies_to` is what makes one read serve every picker: the till offers only the entries that
-// declare the act in hand, so a reason valid for rejecting a guest's order never appears on the
-// void picker. The edge validates the same way, so a picker that filtered differently would only
-// produce a refusal the operator cannot act on.
-export interface ReasonCodeEntry {
-  reason_code_id: string;
-  code: string;
-  display_name: string;
-  applies_to: string[];
-}
-
-// The store's managed list — the framework default until the console publishes one, and the
-// published set afterwards. Retired entries are already filtered out by the edge.
-export interface ReasonCodesResponse {
-  reasons: ReasonCodeEntry[];
 }
 
 // The manager who authorised an act that needs a second person (§11.4). Sent with the request and
@@ -440,47 +168,6 @@ export type VoidRequest = { reason_code_id: string } & Partial<ApproverRequest>;
 // A fee waived on one bill, as the till asks for it (ADR-0159 decision 5): the reason, and an
 // approver where the person needs one. The edge answers with the bill as it now stands.
 export type WaiveFeeRequest = { reason_code_id: string } & Partial<ApproverRequest>;
-
-// The state a voided bill came to rest in, so the screen can say so without re-reading.
-export interface VoidBillResponse {
-  state: string;
-}
-
-export interface BumpResponse {
-  order_id: string;
-  station_id: string;
-  order_line_ids: string[];
-}
-
-export interface PaymentRequest {
-  method: string;
-  tendered: Money;
-  applied_to_bill: Money;
-  // The tip taken on this tender, held apart from the sale and never part of the bill total. On the
-  // payment rather than beside it (roadmap B1.3): tips used to be a separate `tips` list on the
-  // settle request with no correspondence to the payments, so no captured payment could record its
-  // own tip and each one's change was over-reported by exactly the tip. Optional — omit it and the
-  // tender carries no tip, which is how every device behaved before the field existed.
-  tip?: Money;
-}
-
-/**
- * The corporate customer a tax invoice is issued to
- * ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
- *
- * Personal data, all of it. The edge files it in the store's subject store and the settled event
- * carries only a subject id, so erasing a buyer is scrubbing one row and the day's takings are
- * unchanged. Never logged by this app and never held after the settle returns.
- */
-export interface BuyerRequest {
-  name: string;
-  // Format-checked by the compiled-in country module (a 登録番号, a GSTIN, an MST) and never checked
-  // for existence — that is a call to the tax authority, and a cashier has to be able to take a
-  // corporate customer's number with the line down.
-  tax_code?: string;
-  address?: string;
-  email?: string;
-}
 
 export type SettleRequest = {
   payments: PaymentRequest[];
@@ -578,41 +265,6 @@ export interface SyncResponse {
   clock_offset_ms?: number;
   /** When that was measured, on the store server's clock. */
   clock_measure_time?: string;
-}
-
-/** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
-export interface LayoutButton {
-  /** The item this orders — the id the price book from `GET /api/menu` carries. */
-  menu_item_id: string;
-  /** The caption the console wrote, which may be shorter than the item's catalog name. */
-  label: string;
-  /** Zero-based grid column, absent for a flowing layout where order alone places the button. */
-  column?: number;
-  /** Zero-based grid row, absent for the same reason. */
-  row?: number;
-}
-
-/** A second grouping level under a category. */
-export interface LayoutSubcategory {
-  display_subcategory_id: string;
-  name: string;
-  buttons: LayoutButton[];
-}
-
-/** A display category: a tab or section on the till. */
-export interface LayoutCategory {
-  display_category_id: string;
-  name: string;
-  buttons: LayoutButton[];
-  subcategories: LayoutSubcategory[];
-}
-
-/**
- * The store's presentation plan for this channel. An empty `categories` means the console has laid
- * nothing out, and the till draws the flat price book instead.
- */
-export interface LayoutResponse {
-  categories: LayoutCategory[];
 }
 
 /**
