@@ -14,7 +14,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { AdminIdentity, AdminInvite, AdminRole } from "../api/types";
+import type { AdminIdentity, AdminRole } from "../api/types";
 import { ADMIN_ROLES } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { actingAdmin } from "../state/session";
@@ -41,6 +41,7 @@ import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
+import type { AdminInvite } from "../api/schemas";
 
 const ROLE_LABEL: Record<AdminRole, MessageKey> = {
   owner: "role.owner",

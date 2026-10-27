@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { PermissionInfo, RoleTemplate } from "../src/api/types";
+import type { PermissionInfo, RoleTemplate } from "../src/api/schemas";
 import { grantLists, grantsOf, NO_GRANTS, setApproval, toggleGrant } from "../src/lib/role-grants";
 
 function permission(id: string, pinRequired: boolean): PermissionInfo {
@@ -22,7 +22,8 @@ function role(permissions: string[], withApproval?: string[]): RoleTemplate {
     tenant_id: "01TENANT",
     name: "Cashier",
     permissions,
-    permissions_with_approval: withApproval,
+    permissions_with_approval: withApproval ?? [],
+    discount_ceiling_minor: null,
     status: "active",
     etag: "1",
   };

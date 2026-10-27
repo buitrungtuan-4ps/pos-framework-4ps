@@ -31,7 +31,7 @@ import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import { PAPER_WIDTHS } from "../api/types";
-import type { Json, PaperWidth, Station } from "../api/types";
+import type { Json, PaperWidth } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { storeCurrency } from "../lib/fees";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -61,7 +61,7 @@ import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
 import { apiMessage, withStaleReload } from "../lib/errors";
-import type { DeviceProposalSummary, Store } from "../api/schemas";
+import type { DeviceProposalSummary, Station, Store } from "../api/schemas";
 import { tokenLabel } from "../lib/tokens";
 
 // What each paper is called on screen (ADR-0160). 80 mm at 42 characters a line is what every

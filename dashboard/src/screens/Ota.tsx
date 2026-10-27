@@ -9,7 +9,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { FleetStore, HostedArtifact, OtaPlacement, OtaRollout } from "../api/types";
+import type { OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { onlineVerdict } from "../lib/posture";
@@ -36,6 +36,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import type { FleetStore, HostedArtifact } from "../api/schemas";
 
 /** How often the progress pane re-reads the fleet, so "installed" and "reported" stay current. */
 const POLL_MS = 15_000;

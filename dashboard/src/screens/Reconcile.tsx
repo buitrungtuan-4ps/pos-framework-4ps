@@ -9,7 +9,6 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { ReconcileRun } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -19,7 +18,7 @@ import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../comp
 import { type Column, ConfirmDialog, DataTable, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
-import type { Store } from "../api/schemas";
+import type { ReconcileRun, Store } from "../api/schemas";
 
 /** How often the history re-reads, so a fresh reconciliation shows without a manual refresh. */
 const POLL_MS = 30_000;

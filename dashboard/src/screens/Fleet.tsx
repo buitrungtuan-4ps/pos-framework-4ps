@@ -7,12 +7,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type {
-  AdmittedDevice,
-  FleetStore,
-  StoreArchive,
-  TaskHealthEntry,
-} from "../api/types";
+import type { AdmittedDevice, FleetStore, StoreArchive, TaskHealthEntry } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { configVerdict, onlineVerdict, type Tone } from "../lib/posture";
