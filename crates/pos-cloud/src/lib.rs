@@ -102,6 +102,7 @@ mod openapi_required;
 mod openapi_security;
 pub mod orders;
 pub mod ota;
+mod outbound;
 mod persistence;
 pub mod providers;
 pub mod qr_http;
