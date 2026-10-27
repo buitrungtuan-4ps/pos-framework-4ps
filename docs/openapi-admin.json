@@ -26563,6 +26563,13 @@
             "type": "boolean",
             "description": "Absent means enabled: a caller that omits it is setting up a connection to use."
           },
+          "processing_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country the vendor processes this connection's data in (`SG`), when known (ADR-0179\nC7). Recorded, compared with the cell's home country, and never a reason to refuse."
+          },
           "provider_id": {
             "type": "string"
           },
@@ -26602,7 +26609,9 @@
           "display_name",
           "enabled",
           "settings",
-          "secrets_set"
+          "secrets_set",
+          "processing_country",
+          "processing_outside_cell"
         ],
         "properties": {
           "connection_id": {
@@ -26613,6 +26622,17 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "processing_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country the vendor processes this connection's data in, when recorded."
+          },
+          "processing_outside_cell": {
+            "type": "boolean",
+            "description": "Whether that country is known and differs from the cell's home country. A warning, never a\nrefusal (ADR-0179 C7)."
           },
           "provider_id": {
             "type": "string"
@@ -35080,7 +35100,9 @@
               "display_name",
               "enabled",
               "settings",
-              "secrets_set"
+              "secrets_set",
+              "processing_country",
+              "processing_outside_cell"
             ],
             "properties": {
               "connection_id": {
@@ -35091,6 +35113,17 @@
               },
               "enabled": {
                 "type": "boolean"
+              },
+              "processing_country": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The country the vendor processes this connection's data in, when recorded."
+              },
+              "processing_outside_cell": {
+                "type": "boolean",
+                "description": "Whether that country is known and differs from the cell's home country. A warning, never a\nrefusal (ADR-0179 C7)."
               },
               "provider_id": {
                 "type": "string"
