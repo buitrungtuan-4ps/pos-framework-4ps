@@ -5,14 +5,7 @@ import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
-import type {
-  BillResponse,
-  BuyerRequest,
-  CheckResponse,
-  FeeLine,
-  PaymentRequest,
-  ReprintResponse,
-} from "../api/types";
+import type { BillResponse, FeeLine, ReprintResponse } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
 import {
@@ -51,6 +44,7 @@ import {
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, permissionsEnforced } from "../state/permissions";
+import type { BuyerRequest, CheckResponse, PaymentRequest } from "../api/schemas";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
 // store can hold reasons for one and not the other — and the picker here offers only the entries

@@ -8,13 +8,7 @@ import { WhyUnavailable, WritesPendingNote } from "../components/StoreData";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
-import type {
-  FeeLine,
-  LayoutButton,
-  LayoutCategory,
-  MenuItemResponse,
-  ModifierGroup,
-} from "../api/types";
+import type { FeeLine } from "../api/types";
 import {
   chooseSeat,
   groupsFor,
@@ -54,6 +48,7 @@ import { addItem, moveTable, setQuantity, writesPending } from "../state/optimis
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
+import type { LayoutButton, LayoutCategory, MenuItemResponse, ModifierGroup } from "../api/schemas";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
