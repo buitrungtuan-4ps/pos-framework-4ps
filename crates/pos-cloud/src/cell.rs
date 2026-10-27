@@ -25,6 +25,7 @@ use serde::Deserialize;
 pub mod directory;
 pub mod federation;
 pub mod front_door;
+pub mod hq;
 pub mod signed;
 #[cfg(test)]
 pub(crate) mod testkit;

@@ -765,6 +765,18 @@ fn config_node_routes(deps: &RouteDeps<'_>) -> Router {
         ))
 }
 
+/// The rollups of the stores this HQ reads in other cells (ADR-0179 C10), through their public
+/// `/v1` API: aggregates only, bounded, and only from cells the directory lists.
+fn hq_routes(deps: &RouteDeps<'_>) -> Router {
+    pos_cloud::cell::hq::hq_rollups_router(
+        Arc::clone(deps.cell),
+        deps.config.federation.clone(),
+        pos_cloud::cell::federation::https::HttpsRollupFetcher::new(),
+        deps.store.admin(),
+        SystemClock,
+    )
+}
+
 /// Countries, and the per-node configuration of locale, store profile and channels.
 fn locale_routes(deps: &RouteDeps<'_>) -> Router {
     let RouteDeps {
@@ -777,6 +789,7 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
         ))
+        .merge(hq_routes(deps))
         // Which cell this is and where a tenant is homed (ADR-0179 C3): public, answered from the
         // same directory holder, so it names the directory the reload last accepted.
         .merge(http::well_known::well_known_cell_router(Arc::clone(cell)))

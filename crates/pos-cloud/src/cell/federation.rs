@@ -30,6 +30,9 @@ use serde::Deserialize;
 use super::checked_cell_id;
 use super::signed::CellDirectory;
 
+/// The answer for a store the read did not reach in its time.
+pub const OUT_OF_TIME: &str = "not read: this read ran out of time before it reached this store";
+
 /// The most cells one HQ reads from.
 const MAX_SOURCES: usize = 64;
 /// The most stores read from one cell.
@@ -180,13 +183,15 @@ pub struct FederatedStore {
     pub error: Option<String>,
 }
 
-/// Reads every configured store's rollups, one cell after another. A cell the directory does not
-/// list, or a store that cannot be read, is an answer with an error; it never fails the others.
+/// Reads every configured store's rollups, one cell after another, until `deadline`. A cell the
+/// directory does not list, a store that cannot be read, and a store not reached by the deadline are
+/// each an answer with an error; none of them fails the others.
 pub async fn federate<F>(
     directory: &CellDirectory,
     federation: &FederationSection,
     fetcher: &F,
     window: &RollupWindow,
+    deadline: tokio::time::Instant,
 ) -> Vec<FederatedStore>
 where
     F: RollupFetcher + Sync,
@@ -204,7 +209,15 @@ where
                     "the cell directory this cell holds does not list the cell {}",
                     source.cell_id
                 )),
-                Some(base) => fetcher.fetch(base, store_id, &source.api_key, window).await,
+                // Checked before the call as well as around it: a timeout polls its future first,
+                // so a store would otherwise still be called after the deadline had passed.
+                Some(_) if tokio::time::Instant::now() >= deadline => Err(OUT_OF_TIME.to_owned()),
+                Some(base) => {
+                    let call = fetcher.fetch(base, store_id, &source.api_key, window);
+                    tokio::time::timeout_at(deadline, call)
+                        .await
+                        .unwrap_or_else(|_elapsed| Err(OUT_OF_TIME.to_owned()))
+                }
             };
             let (rollups, error) = match outcome {
                 Ok(rollups) => (Some(rollups), None),

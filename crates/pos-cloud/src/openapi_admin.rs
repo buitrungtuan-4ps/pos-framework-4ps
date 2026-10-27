@@ -161,6 +161,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_list_vouchers,
         crate::http::campaigns::admin_generate_vouchers,
         crate::http::cell::admin_get_cell,
+        crate::cell::hq::admin_hq_rollups,
         crate::http::cell_standing::admin_cell_standing,
         crate::http::cell_standing::admin_acknowledge_cell,
         crate::http::countries::admin_list_countries,
@@ -813,17 +814,17 @@ const ROUTE_CRATES: [&str; 5] = [
     "pos-cloud-people",
 ];
 
-/// The router sources: `http.rs` and every module under `http/`, where each business area's routes
-/// are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin` route is
-/// registered in one of them; the other route-carrying modules (`orders`, `qr_http`, `relay`) serve
-/// `/v1` and the relay surface only.
+/// The router sources: `http.rs` and every module under `http/` and `cell/`, where each business
+/// area's routes are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin`
+/// route is registered in one of them; the other route-carrying modules (`orders`, `qr_http`,
+/// `relay`) serve `/v1` and the relay surface only.
 ///
 /// Read from the tree when the test runs, so a route that moves into a new module is still found.
 #[cfg(test)]
 pub(crate) fn router_sources() -> Vec<String> {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![source.join("http.rs")];
-    let mut directories = vec![source.join("http")];
+    let mut directories = vec![source.join("http"), source.join("cell")];
     for route_crate in ROUTE_CRATES {
         let crate_source = source.join("../..").join(route_crate).join("src");
         files.push(crate_source.join("routes.rs"));

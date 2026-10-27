@@ -240,6 +240,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | GET | `/admin/floor/tables/{table_id}` | `admin_get_table` | `session_cookie` | `console.data.read` | [`crates/pos-cloud-floor/src/routes/tables.rs`](../../crates/pos-cloud-floor/src/routes/tables.rs) |
 | PATCH | `/admin/floor/tables/{table_id}` | `admin_update_table` | `session_cookie` | `console.floor.manage` | [`crates/pos-cloud-floor/src/routes/tables.rs`](../../crates/pos-cloud-floor/src/routes/tables.rs) |
 | GET | `/admin/health/tasks` | `admin_task_health` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/health.rs`](../../crates/pos-cloud/src/http/health.rs) |
+| GET | `/admin/hq/rollups` | `admin_hq_rollups` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/cell/hq.rs`](../../crates/pos-cloud/src/cell/hq.rs) |
 | GET | `/admin/integrations/connections` | `admin_list_connections` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |
 | POST | `/admin/integrations/connections` | `admin_create_connection` | `session_cookie` | `console.integrations.manage` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |
 | GET | `/admin/integrations/connections/{connection_id}` | `admin_get_connection` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |

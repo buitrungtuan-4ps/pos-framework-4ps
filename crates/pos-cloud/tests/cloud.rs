@@ -72,6 +72,8 @@ mod fees;
 mod fleet;
 #[path = "cloud/floor.rs"]
 mod floor;
+#[path = "cloud/hq_rollups.rs"]
+mod hq_rollups;
 #[path = "cloud/integrations.rs"]
 mod integrations;
 #[path = "cloud/inventory.rs"]

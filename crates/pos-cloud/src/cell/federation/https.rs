@@ -120,7 +120,7 @@ pub(crate) fn rollups_url(
 }
 
 /// `YYYY-MM-DD`, by shape: the cell that answers checks it is a real day.
-fn is_date(text: &str) -> bool {
+pub(crate) fn is_date(text: &str) -> bool {
     text.len() == 10
         && text.char_indices().all(|(at, character)| match at {
             4 | 7 => character == '-',
