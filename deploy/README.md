@@ -7,7 +7,7 @@ This directory holds the deployment artifacts; the store-side service unit lives
 [`edge/`](edge/). The end-to-end fork-to-UI runbook is P8e; this README documents the stack
 itself so it is reviewable and operable on its own.
 
-## Cells: named and directed, the rest decided and not built
+## Cells
 
 A cell is named by a cell id (`vn1`, `jp1`), not a country
 ([ADR-0179](../docs/adr/0179-cells-the-directory-and-the-front-door.md)). Today this stack is the
@@ -15,7 +15,8 @@ only cell, which is that record's level 0, and needs nothing more. An optional `
 `cloud.toml` names it: id, country alias, home country, base URL and the country it runs in
 ([`docs/deploy-runbook.md`](../docs/deploy-runbook.md)); without one it is the cell `default`. A
 cell in a multi-cell fleet also reads a minisign-signed cell directory from a file it re-reads every
-five minutes. Decided but not built yet: the redirects, a non-secret
+five minutes, and redirects a request for a tenant homed in another cell there: `302` for a browser,
+`307` for an API, never `301`, never a proxy. Decided but not built yet: a non-secret
 `deploy/cells/<cell>.env` and one GitHub Environment per cell, deployed as a matrix in canary order.
 Levels 0 and 1 use only what runs below, with Caddy's per-host HTTP-01 certificates and the
 registrar's plain DNS.

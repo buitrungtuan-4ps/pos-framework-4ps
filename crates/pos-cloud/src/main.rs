@@ -87,7 +87,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);
-    let service = startup::routes::served(service, sync_throttle);
+    let service = startup::routes::served(service, sync_throttle, &cell);
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
