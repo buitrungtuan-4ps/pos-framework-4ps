@@ -44,7 +44,8 @@ import {
   RowActions,
   TechnicalDetails,
 } from "../components/kit";
-import { ProviderFields } from "../components/ProviderFields";
+import { ConnectionSettings } from "../components/ConnectionSettings";
+import { processingHint } from "../lib/cell-country";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import type { Connection, Provider } from "../api/schemas";
@@ -92,6 +93,41 @@ function providerName(provider: Provider | undefined, providerId: string): strin
   return provider ? tFromServer(provider.name_key, provider.provider_id) : providerId;
 }
 
+/** Which layer a connection serves, as the table names it. */
+function scopeLabel(row: Connection): string {
+  switch (row.scope_level) {
+    case "CONNECTION_SCOPE_BRAND":
+      return t("integrations.scope.brand");
+    case "CONNECTION_SCOPE_STORE":
+      return row.scope_id === storeId()
+        ? t("integrations.scope.store", { store: storeName() })
+        : t("integrations.scope.otherStore");
+    default:
+      return t("integrations.scope.tenant");
+  }
+}
+
+/** Where the vendor processes data, flagged when it is not the cell's home country (ADR-0179 C7). */
+function processingCell(row: Connection) {
+  return (
+    <Show
+      when={row.processing_country}
+      fallback={<span class="text-sm text-ink-muted">{t("integrations.processingUnknown")}</span>}
+    >
+      {(country) => (
+        <StatusBadge
+          tone={row.processing_outside_cell ? "danger" : "neutral"}
+          label={
+            row.processing_outside_cell
+              ? t("integrations.processingAbroad", { country: country() })
+              : country()
+          }
+        />
+      )}
+    </Show>
+  );
+}
+
 export function Integrations() {
   const catalogue = createAdminResource(() => api.listProviders(), { scope: "tenant" });
   const connections = createAdminResource((tenant) => api.listConnections(tenant), {
@@ -114,6 +150,7 @@ export function Integrations() {
   const [values, setValues] = createSignal<Record<string, SettingValue>>({});
   const [secrets, setSecrets] = createSignal<Record<string, string>>({});
   const [clearing, setClearing] = createSignal<string[]>([]);
+  const [processing, setProcessing] = createSignal("");
 
   const chosen = () => providerById().get(providerId());
   const inFamily = (wanted: string) =>
@@ -133,6 +170,7 @@ export function Integrations() {
     setValues({ ...(row?.settings ?? {}) });
     setSecrets({});
     setClearing([]);
+    setProcessing(row?.processing_country ?? "");
   };
 
   const openCreate = (forFamily: IntegrationFamily) => {
@@ -235,7 +273,8 @@ export function Integrations() {
     const typedSecrets = Object.fromEntries(
       Object.entries(secrets()).filter(([, value]) => value !== ""),
     );
-    const input: ConnectionInput = {
+    // The processing country rides beside the hand-typed input: the server reads it (ADR-0179 C7).
+    const input: ConnectionInput & { readonly processing_country?: string } = {
       provider_id: providerId(),
       scope_level: scope(),
       ...(scopeId() ? { scope_id: scopeId() } : {}),
@@ -244,6 +283,7 @@ export function Integrations() {
       settings: values(),
       secrets: typedSecrets,
       clear_secrets: clearing(),
+      processing_country: processing().trim().toUpperCase() || undefined,
     };
     const target = editor.subject();
     void editor
@@ -281,19 +321,6 @@ export function Integrations() {
       });
   };
 
-  const scopeLabel = (row: Connection) => {
-    switch (row.scope_level) {
-      case "CONNECTION_SCOPE_BRAND":
-        return t("integrations.scope.brand");
-      case "CONNECTION_SCOPE_STORE":
-        return row.scope_id === storeId()
-          ? t("integrations.scope.store", { store: storeName() })
-          : t("integrations.scope.otherStore");
-      default:
-        return t("integrations.scope.tenant");
-    }
-  };
-
   const columns = (): Column<Connection>[] => [
     {
       key: "name",
@@ -323,6 +350,7 @@ export function Integrations() {
         />
       ),
     },
+    { key: "processing", header: t("integrations.processing"), cell: processingCell },
     {
       key: "secrets",
       header: t("integrations.credentials"),
@@ -444,48 +472,29 @@ export function Integrations() {
               onChange={setEnabled}
               hint={t("integrations.enabledHint")}
             />
+            <TextField
+              label={t("integrations.processing")}
+              value={processing()}
+              onInput={setProcessing}
+              placeholder={t("integrations.processingPlaceholder")}
+              hint={processingHint(processing())}
+            />
             <Show when={chosen()}>
               {(provider) => (
-                <fieldset class="border-t border-line pt-4">
-                  <legend class="mb-2 text-sm font-medium text-ink">
-                    {t("integrations.settings")}
-                  </legend>
-                  <Show
-                    when={provider().fields.length > 0}
-                    fallback={<p class="text-sm text-ink-muted">{t("integrations.noSettings")}</p>}
-                  >
-                    <ProviderFields
-                      fields={provider().fields}
-                      values={values()}
-                      onValue={(key, value) =>
-                        setValues((current) => {
-                          const next = { ...current };
-                          if (value === undefined) {
-                            delete next[key];
-                          } else {
-                            next[key] = value;
-                          }
-                          return next;
-                        })
-                      }
-                      secrets={secrets()}
-                      onSecret={(key, value) =>
-                        setSecrets((current) => ({ ...current, [key]: value }))
-                      }
-                      secretsSet={
-                        editor.subject()?.provider_id === providerId()
-                          ? (editor.subject()?.secrets_set ?? [])
-                          : []
-                      }
-                      clearing={clearing()}
-                      onClear={(key, clear) =>
-                        setClearing((current) =>
-                          clear ? [...current, key] : current.filter((entry) => entry !== key),
-                        )
-                      }
-                    />
-                  </Show>
-                </fieldset>
+                <ConnectionSettings
+                  provider={provider()}
+                  values={values()}
+                  setValues={setValues}
+                  secrets={secrets()}
+                  setSecrets={setSecrets}
+                  secretsSet={
+                    editor.subject()?.provider_id === providerId()
+                      ? (editor.subject()?.secrets_set ?? [])
+                      : []
+                  }
+                  clearing={clearing()}
+                  setClearing={setClearing}
+                />
               )}
             </Show>
           </div>
