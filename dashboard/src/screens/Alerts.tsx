@@ -8,7 +8,7 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Alert, AlertSeverity } from "../api/types";
+import type { AlertSeverity } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { formatInstant, formatRelativeAge } from "../lib/format";
 import { actingAdmin } from "../state/session";
@@ -23,6 +23,8 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import type { Alert } from "../api/schemas";
+import { isKnown, tokenLabel } from "../lib/tokens";
 
 /** The most rows one recent-history read returns; the server caps it too. */
 const ALERT_LIMIT = 200;
@@ -51,6 +53,9 @@ const SEVERITY_LABEL: Record<AlertSeverity, MessageKey> = {
 
 /** Sort rank for a severity, so a sort surfaces the most serious first. */
 const SEVERITY_RANK: Record<AlertSeverity, number> = { info: 0, warning: 1, critical: 2 };
+// A severity a newer cloud names sorts below every one this console knows.
+const severityRank = (severity: string): number =>
+  isKnown(Object.keys(SEVERITY_RANK) as AlertSeverity[], severity) ? SEVERITY_RANK[severity] : -1;
 
 /** The three lifecycle states of an alert, derived from its timestamps. */
 type AlertState = "firing" | "acknowledged" | "resolved";
@@ -208,11 +213,11 @@ export function Alerts() {
     {
       key: "severity",
       header: t("alerts.severity"),
-      sortValue: (row) => SEVERITY_RANK[row.severity],
+      sortValue: (row) => severityRank(row.severity),
       cell: (row) => (
         <StatusBadge
           tone={row.severity === "critical" ? "danger" : "neutral"}
-          label={t(SEVERITY_LABEL[row.severity])}
+          label={tokenLabel(SEVERITY_LABEL, row.severity)}
         />
       ),
     },
@@ -335,7 +340,7 @@ export function Alerts() {
           {(alert) => (
             <div class="flex flex-col gap-4">
               <div>
-                {detailRow(t("alerts.severity"), t(SEVERITY_LABEL[alert().severity]))}
+                {detailRow(t("alerts.severity"), tokenLabel(SEVERITY_LABEL, alert().severity))}
                 {detailRow(t("alerts.kind"), kindLabel(alert().kind))}
                 {detailRow(t("alerts.summary"), alert().summary)}
                 {detailRow(t("alerts.scope"), scopeLabel(alert()))}

@@ -13,7 +13,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Station } from "../src/api/types";
+import type { Station } from "../src/api/schemas";
 import { Stations } from "../src/screens/Stations";
 import { selectStore, selectTenant, setActingAdmin } from "../src/state/session";
 

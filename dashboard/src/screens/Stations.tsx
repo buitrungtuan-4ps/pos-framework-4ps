@@ -13,7 +13,7 @@
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { RoutingRule, Station } from "../api/types";
+import type { RoutingRule, Station } from "../api/schemas";
 import { t, tFromServer } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";

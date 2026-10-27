@@ -16,7 +16,6 @@ import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { Brand, Store } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
 import { screenHref, STORE_PARAM } from "../state/screens";
@@ -43,7 +42,7 @@ import type { InstallerValues } from "../installers.d.mts";
 import { downloadFile } from "../lib/handoff";
 import { apiMessage } from "../lib/errors";
 import { SetupFile } from "../components/SetupFile";
-import type { CreateApiKeyResponse } from "../api/schemas";
+import type { Brand, CreateApiKeyResponse, Store } from "../api/schemas";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
 // not be a MessageKey and would defeat the type check).

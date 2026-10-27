@@ -17,11 +17,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import {
-  type TaxClass,
-  type TaxComponent,
-  type TaxRate,
-} from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -34,6 +29,7 @@ import { addToRelease, describePublish, previewNode } from "../lib/publish-copy"
 import { usePublishedNodes } from "../lib/published";
 import { isTaxComponentName } from "../lib/tax-components";
 import { CHANNEL_LABEL, SALES_CHANNELS, type KnownSalesChannel } from "../lib/channels";
+import type { TaxClass, TaxComponent, TaxRate } from "../api/schemas";
 
 
 /** The highest rate the server accepts, in basis points (100%). */
