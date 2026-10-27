@@ -436,3 +436,34 @@ fn the_first_failing_check_is_the_one_reported() {
     );
     assert!(config.validate().is_ok());
 }
+
+/// No `[cell]` section is level 0 of ADR-0179: the boot carries on as the one default cell.
+#[test]
+fn no_cell_section_is_the_default_cell() {
+    let config = valid();
+    assert!(config.validate().is_ok());
+    assert_eq!(
+        config.cell().expect("absent resolves"),
+        crate::cell::Cell::single()
+    );
+}
+
+/// A `[cell]` section is checked at boot: a malformed one stops the process by name.
+#[test]
+fn a_cell_section_is_read_and_checked_at_boot() {
+    let text = format!(
+        "{MINIMAL_TOML}internal_shared_secret = \"{}\"\n[cell]\ncell_id = \"vn1\"\n\
+         home_country = \"VN\"\nbase_url = \"https://vn1.example.com\"\nruns_in = \"VN\"\n",
+        "a".repeat(MIN_INTERNAL_SECRET_LEN)
+    );
+    let config = CloudConfig::from_toml(&text).expect("the section parses");
+    assert!(config.validate().is_ok());
+    assert_eq!(config.cell().expect("resolves").cell_id, "vn1");
+
+    let broken = text.replace("\"vn1\"", "\"VN\"");
+    let error = CloudConfig::from_toml(&broken)
+        .expect("parses")
+        .validate()
+        .expect_err("a country is not a cell id");
+    assert!(error.contains("cell_id"), "{error}");
+}
