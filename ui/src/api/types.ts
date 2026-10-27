@@ -267,21 +267,6 @@ export interface SyncResponse {
   clock_measure_time?: string;
 }
 
-/**
- * Opening a shift with a float, on this device's own drawer or, where the store keeps a drawer per
- * till, on the till `terminal_device_id` names (ADR-0167): another till's takes an approver where
- * the person holds `cash.shift.manage_other_till` only with approval.
- */
-export type OpenShiftRequest = {
-  opening_float: Money;
-  terminal_device_id?: string;
-  /** Whom another till's drawer is for, by staff code, where the store assigns drawers. */
-  assigned_staff_code?: string;
-} & Partial<ApproverRequest>;
-
-/** The blind count, with an approver for another till's drawer where the person needs one. */
-export type CountShiftRequest = { counted_minor: number } & Partial<ApproverRequest>;
-
 export interface ShiftResponse {
   shift_id: string;
   /** The till whose drawer it is, where the store keeps a drawer per till (ADR-0167). */
@@ -343,56 +328,15 @@ export interface DrawersResponse {
   drawer_access?: "DRAWER_ACCESS_ASSIGNED";
 }
 
-/**
- * A close's optional body: an approver for another till's drawer, and the reason for an over or short
- * the store asks one of (ADR-0167 decision 12).
- */
-export type CloseShiftRequest = Partial<ApproverRequest> & { reason_code_id?: string };
-
-/** The reason for one drawer's over or short, in a batch close (ADR-0167 decision 12). */
-export interface VarianceReason {
-  shift_id: string;
-  reason_code_id: string;
-}
-
-/**
- * Several counted drawers closed in one act, with one approver for every other till's among them,
- * and a reason for each over or short the store asks one of.
- */
-export type BatchCloseRequest = {
-  shift_ids: string[];
-  variance_reasons?: VarianceReason[];
-} & Partial<ApproverRequest>;
-
 /** Each closed drawer's figures, and what came of the one slip a combined close report prints. */
 export interface BatchCloseResponse {
   shifts: ShiftResponse[];
   shift_report_print?: string;
 }
 
-/** A paid in or a paid out: how much, in minor units, and why (ADR-0165). */
-export type CashMovementRequest = {
-  amount_minor: number;
-  reason_code_id: string;
-} & Partial<ApproverRequest>;
-
-/**
- * Opening the drawer without a sale: why, and the manager whose PIN allows it (ADR-0165). No manager
- * where the store enforces each person's own set and the person holds the act directly (ADR-0158).
- */
-export type OpenDrawerRequest = { reason_code_id: string } & Partial<ApproverRequest>;
-
 /** The opening is recorded; this is whether the drawer sprang. */
 export interface OpenDrawerResponse {
   drawer_open: DrawerOutcome;
-}
-
-export interface PairRequest {
-  code: string;
-}
-
-export interface PairAccepted {
-  device_token: string;
 }
 
 // One device this store has admitted, from `GET /api/pair/devices` (ADR-0091,
@@ -406,85 +350,7 @@ export interface PairedDevice {
   readonly this_device: boolean;
 }
 
-// What the store says about its own pairing: how many devices, whether that survives a restart, and
-// which they are.
-export interface PairingState {
-  readonly devices: number;
-  readonly durable: boolean;
-  readonly paired: readonly PairedDevice[];
-}
-
-// Which device to retire. An absent `device_id` retires every one of them — the break-glass.
-export interface RevokeRequest {
-  device_id?: string;
-}
-
-// The pairing code for the next device (ADR-0118). Minted by a signed-in manager on a paired till,
-// so adding a second device no longer means restarting the store server.
-//
-// **This response is the only place the code exists.** It is not written to a file and not logged,
-// so a screen that loses it mints another rather than looking the old one up.
-export interface MintedCode {
-  /** The six digits the next device presents. */
-  readonly code: string;
-  /** When it stops working, Unix ms. From the server, so the till assumes no particular TTL. */
-  readonly expires_at_ms: number;
-}
-
-// The first-boot activation exchange (ADR-0050), mounted only when the store server is provisioned
-// for a cloud (ADR-0086) — a LAN-only edge serves neither route.
-export interface ActivateRequest {
-  code: string;
-}
-
-// What a successful activation grants. The device credential itself never reaches the browser: the
-// edge stores it in the operating system's keyring and answers with the identity alone.
-export interface ActivateAccepted {
-  device_id: string;
-}
-
-export interface ActivationStanding {
-  activated: boolean;
-  // Whether the store's data is closed to other accounts on the store server's computer
-  // (ADR-0174): `STATE_ACCESS_OK`, `STATE_ACCESS_TOO_OPEN` or `STATE_ACCESS_UNCHECKED`. Absent from
-  // an edge older than the field, or one that was not told where its data is.
-  state_access?: string;
-}
-
-/**
- * What a box being claimed shows, from `GET /api/claim` (ADR-0148). Served only by `pos-edge claim`,
- * on the box's own screen, before it belongs to any store.
- */
-export type ClaimStatus =
-  | { state: "CONNECTING"; cloud: string }
-  | { state: "WAITING"; user_code: string; expires_at_ms: number; cloud: string }
-  | { state: "UNREACHABLE"; cloud: string }
-  | { state: "CLAIMED"; store_id: string };
-
 /** One printer the store published, from `GET /api/printers`. */
-/**
- * One vendor connection the cloud published to this store (ADR-0153), from `GET /api/integrations`.
- * Names only: no setting, and never a credential.
- */
-export interface IntegrationEntry {
-  connection_id: string;
-  /** `INTEGRATION_FAMILY_*`; `INTEGRATION_FAMILY_UNSPECIFIED` for one this edge does not know. */
-  family: string;
-  provider_id: string;
-  display_name: string;
-}
-
-export interface PrinterEntry {
-  device_id: string;
-  name: string;
-  /** The station it serves; absent for the receipt printer. */
-  station_id?: string;
-}
-
-/** What came of a test page — the same tokens a receipt's print reports. */
-export interface TestPrintResponse {
-  print: string;
-}
 
 /**
  * One of the store's tills, from `GET /api/print/agent`
@@ -511,11 +377,6 @@ export interface TerminalsResponse {
 /** What a bind came to: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`. */
 export interface BindResponse {
   outcome: string;
-}
-
-/** What printing pre-bills came to: one outcome per document, in the order they were sent. */
-export interface PrintResponse {
-  prints: string[];
 }
 
 /**
@@ -554,11 +415,3 @@ export interface TakingsResponse {
   bill_count: number;
 }
 
-/** What a copy's press reports (ADR-0164): which copy it was, and what came of the printing. */
-export interface ReprintResponse {
-  bill_id: string;
-  receipt_number: number;
-  copy_number: number;
-  /** The same outcomes as a settle's `receipt_print`. The copy is counted whichever it is. */
-  receipt_print: string;
-}

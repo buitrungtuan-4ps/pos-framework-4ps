@@ -74,7 +74,7 @@ where
             let views: Vec<Versioned<ConnectionView>> = rows
                 .into_iter()
                 .map(|row| Versioned {
-                    record: ConnectionView::of(&row.record),
+                    record: ConnectionView::of(&row.record, state.cell_country),
                     etag: row.etag,
                     updated_at_ms: row.updated_at_ms,
                 })
@@ -137,7 +137,10 @@ where
         Err(refusal) => return refusal,
     };
     match state.connections.get(tenant_id, &connection_id).await {
-        Ok(Some(row)) => versioned_ok(ConnectionView::of(&row.record), &row.etag),
+        Ok(Some(row)) => versioned_ok(
+            ConnectionView::of(&row.record, state.cell_country),
+            &row.etag,
+        ),
         Ok(None) => not_found("connection"),
         Err(error) => connection_error_response(&error),
     }
@@ -232,7 +235,10 @@ where
                 serde_json::to_value(ConnectionAuditSummary::of(&connection)).ok(),
             )
             .await;
-            versioned_created(ConnectionView::of(&connection), &version)
+            versioned_created(
+                ConnectionView::of(&connection, state.cell_country),
+                &version,
+            )
         }
         Ok(CreateOutcome::AlreadyExists) => already_exists("connection"),
         Err(error) => connection_error_response(&error),
@@ -348,7 +354,10 @@ where
                 serde_json::to_value(ConnectionAuditSummary::of(&connection)).ok(),
             )
             .await;
-            versioned_ok(ConnectionView::of(&connection), &version)
+            versioned_ok(
+                ConnectionView::of(&connection, state.cell_country),
+                &version,
+            )
         }
         Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
         Ok(UpdateOutcome::NotFound) => not_found("connection"),
