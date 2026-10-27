@@ -83,7 +83,7 @@
     "max-lines-per-function": 649
   },
   "src/screens/Integrations.tsx": {
-    "max-lines-per-function": 391
+    "max-lines-per-function": 364
   },
   "src/screens/Inventory.tsx": {
     "max-lines-per-function": 675
