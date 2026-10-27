@@ -72,9 +72,11 @@ function drawerRows(report: XzReport): DrawerRow[] {
  * day kept more than the store's one drawer.
  */
 function DrawerTable(props: { report: XzReport }) {
+  // Optimization: Memoize drawer rows to avoid re-sorting and array mapping on both <Show> and <For> evaluations.
+  const rows = createMemo(() => drawerRows(props.report));
   const cash = (minor: number) => money(minor, props.report.cash.currency_code);
   return (
-    <Show when={drawerRows(props.report).length > 0}>
+    <Show when={rows().length > 0}>
       <div class="mt-4 overflow-x-auto">
         <table class="w-full text-left text-sm">
           <caption class="mb-2 text-left font-medium text-ink">{t("reports.drawersTitle")}</caption>
@@ -90,7 +92,7 @@ function DrawerTable(props: { report: XzReport }) {
             </tr>
           </thead>
           <tbody>
-            <For each={drawerRows(props.report)}>
+            <For each={rows()}>
               {(drawer) => {
                 // Only a close says what a drawer should have held: with none closed there is
                 // nothing to show, and nothing here works one out.
@@ -127,8 +129,9 @@ function DrawerTable(props: { report: XzReport }) {
 /** A minimal, theme-aware inline-SVG bar chart. The data table beside it carries the real values, so
  * the chart is decorative — labelled for a screen reader, but not the source of truth. */
 function BarChart(props: { data: number[]; label: string }) {
-  const max = () => Math.max(1, ...props.data);
-  const count = () => Math.max(1, props.data.length);
+  // Optimization: Memoize max and count calculations to avoid O(N^2) Math.max(...props.data) evaluations inside JSX <For> loop.
+  const max = createMemo(() => Math.max(1, ...props.data));
+  const count = createMemo(() => Math.max(1, props.data.length));
   return (
     <Show
       when={props.data.length > 0}
@@ -270,6 +273,8 @@ export function Reports() {
     }
     return [...totals.values()].sort((a, b) => b.value - a.value).slice(0, 10);
   });
+  // Optimization: Memoize max product mix value to avoid accessing productMix()[0] inside every row callback.
+  const maxProductValue = createMemo(() => productMix()[0]?.value || 1);
 
   // Each fee over the window, by code (ADR-0159): the days' totals summed, under the latest day's
   // name, and in code order as the export lists them.
@@ -609,23 +614,20 @@ export function Reports() {
               >
                 <div class="flex flex-col gap-2">
                   <For each={productMix()}>
-                    {(item) => {
-                      const max = productMix()[0]?.value || 1;
-                      return (
-                        <div class="flex items-center gap-3">
-                          <span class="w-40 shrink-0 truncate text-sm text-ink">{item.name}</span>
-                          <span class="h-3 flex-1 rounded-token bg-surface-raised">
-                            <span
-                              class="block h-3 rounded-token bg-accent"
-                              style={{ width: `${Math.round((item.value / max) * 100)}%` }}
-                            />
-                          </span>
-                          <span class="w-28 shrink-0 text-right text-sm text-ink-muted">
-                            {money(item.value, revenueCurrency())}
-                          </span>
-                        </div>
-                      );
-                    }}
+                    {(item) => (
+                      <div class="flex items-center gap-3">
+                        <span class="w-40 shrink-0 truncate text-sm text-ink">{item.name}</span>
+                        <span class="h-3 flex-1 rounded-token bg-surface-raised">
+                          <span
+                            class="block h-3 rounded-token bg-accent"
+                            style={{ width: `${Math.round((item.value / maxProductValue()) * 100)}%` }}
+                          />
+                        </span>
+                        <span class="w-28 shrink-0 text-right text-sm text-ink-muted">
+                          {money(item.value, revenueCurrency())}
+                        </span>
+                      </div>
+                    )}
                   </For>
                 </div>
               </Show>

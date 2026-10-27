@@ -1,3 +1,9 @@
+## 2026-10-27 - Hoisting Invariant Calculations outside SolidJS JSX `<For>` render callbacks
+
+**Learning:** Un-memoized getters evaluated inside SolidJS `<For each={...}>` render callbacks (such as `Math.max(...props.data)` or accessing `productMix()[0]?.value`) execute $N$ times for $N$ list elements during component rendering, creating an $O(N^2)$ hidden performance cost. Wrapping invariant aggregations with `createMemo` outside the `<For>` block reduces per-render computations to $O(N)$.
+
+**Action:** Whenever calculating aggregate metrics (max, count, top values) used to scale or lay out list items in SolidJS JSX components, calculate them using `createMemo` before the `<For>` loop instead of calling un-memoized getters inside the per-item render callback.
+
 ## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
 
 **Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.
