@@ -13911,6 +13911,83 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/hq/rollups": {
+      "get": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "A console admin reads the daily rollups of the stores this HQ reads in other cells.",
+        "operationId": "admin_hq_rollups",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first business date, `YYYY-MM-DD`, inclusive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last business date, `YYYY-MM-DD`, inclusive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether `[federation]` names any source (`configured`), and per configured store in another cell its `cell_id`, `store_id`, and its daily `rollups` (counts only, no personal data) or the `error` saying why there are none. Read through each cell's public /v1 API within 30 seconds in all (ADR-0179 C10)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HqRollupsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "from or to is not a YYYY-MM-DD date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/integrations/connections": {
       "get": {
         "tags": [
@@ -28775,6 +28852,64 @@
           "size_bytes": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "HqRollupsView": {
+        "type": "object",
+        "description": "The HQ read as the console sees it.",
+        "required": [
+          "configured",
+          "stores"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether `cloud.toml` has a `[federation]` section with any source."
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HqStoreView"
+            },
+            "description": "One answer per configured store, in the order configured."
+          }
+        }
+      },
+      "HqStoreView": {
+        "type": "object",
+        "description": "One store in another cell, and its rollups or why there are none.",
+        "required": [
+          "cell_id",
+          "store_id",
+          "rollups",
+          "error"
+        ],
+        "properties": {
+          "cell_id": {
+            "type": "string",
+            "description": "The cell the store is in."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why they could not be read. Null when they were."
+          },
+          "rollups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DailyRollup"
+            },
+            "description": "Its daily rollups, oldest day first: counts only. Null when they could not be read."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store's ULID in that cell."
           }
         }
       },

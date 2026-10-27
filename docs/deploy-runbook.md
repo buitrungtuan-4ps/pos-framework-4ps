@@ -189,6 +189,25 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   and the directory already held stays in use. Until one is accepted, the cell answers for no tenant.
   To check what a cell answers, ask it: `curl https://vn1.example.com/.well-known/pos-cell?tenant=<slug>`
   names the tenant's home cell, from the directory this cell holds.
+- **An HQ reading other cells**: a `[federation]` block in `secrets/cloud.toml` lets this cell's
+  console show the daily rollups of stores in other cells, on `GET /admin/hq/rollups`
+  ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md) C10). **Most deployments need
+  nothing**: with no block the view says it is not configured. For each other cell, ask its operator
+  for an API key with the `read_rollups` scope and name the stores to read:
+
+  ```toml
+  [[federation.sources]]
+  cell_id = "jp1"                                  # a cell the signed directory lists
+  api_key = "<read_rollups key issued by jp1>"     # placeholder: the real key lives on the box only
+  stores = ["<store ULID in jp1>"]                 # 1 to 1000 per cell
+  ```
+
+  The key is a secret: it lives in `cloud.toml` on the box, is never committed, and never appears in
+  a log or an answer. The address is never configured here: it is the directory's `base_url` for
+  that cell, so a cell the directory does not list is reported, not called. **Only aggregates
+  cross**: a store's daily event counts, no personal data. Each store's read has 10 seconds and
+  1 MiB, follows no redirect, and the whole read has 30 seconds; a store not read says why. At most
+  64 cells and 2,000 stores in all; a malformed block stops the boot naming the source.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

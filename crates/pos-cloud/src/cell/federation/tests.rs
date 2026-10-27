@@ -4,7 +4,8 @@ use std::sync::Mutex;
 use pos_cloud_reports::types::DailyRollup;
 
 use super::{
-    FederationSection, FederationSource, RollupFetcher, RollupWindow, SourceKey, federate,
+    FederationSection, FederationSource, OUT_OF_TIME, RollupFetcher, RollupWindow, SourceKey,
+    federate,
 };
 use crate::cell::directory::tests::vn1;
 use crate::cell::signed::{CellDirectory, parse_public_key};
@@ -63,6 +64,10 @@ impl RollupFetcher for ScriptedFetcher {
     }
 }
 
+fn far() -> tokio::time::Instant {
+    tokio::time::Instant::now() + std::time::Duration::from_secs(60)
+}
+
 fn holding_directory() -> CellDirectory {
     let directory = CellDirectory::trusting(
         vn1(),
@@ -84,6 +89,7 @@ async fn every_store_answers_and_one_failure_never_fails_the_others() {
         &section(vec![source("jp1", &[STORE_A, STORE_B])]),
         &fetcher,
         &window,
+        far(),
     )
     .await;
     assert_eq!(answers.len(), 2);
@@ -117,6 +123,7 @@ async fn a_cell_the_directory_does_not_list_is_an_answer_not_a_call() {
         &section(vec![source("sg1", &[STORE_A])]),
         &fetcher,
         &RollupWindow::default(),
+        far(),
     )
     .await;
     assert_eq!(answers.len(), 1);
@@ -141,6 +148,7 @@ async fn a_cell_the_directory_does_not_list_is_an_answer_not_a_call() {
         &section(vec![source("jp1", &[STORE_A])]),
         &fetcher,
         &RollupWindow::default(),
+        far(),
     )
     .await;
     assert!(answers[0].error.is_some());
@@ -252,5 +260,61 @@ fn the_total_number_of_stores_is_bounded() {
             .validate()
             .expect_err("refused")
             .contains("at most 2000")
+    );
+}
+
+#[tokio::test]
+async fn stores_not_reached_by_the_deadline_say_so_and_are_not_called() {
+    let fetcher = ScriptedFetcher::default();
+    let answers = federate(
+        &holding_directory(),
+        &section(vec![source("jp1", &[STORE_A, STORE_A])]),
+        &fetcher,
+        &RollupWindow::default(),
+        tokio::time::Instant::now(),
+    )
+    .await;
+    assert_eq!(answers.len(), 2, "every configured store still answers");
+    assert!(
+        answers
+            .iter()
+            .all(|answer| answer.error.as_deref() == Some(OUT_OF_TIME) && answer.rollups.is_none())
+    );
+    assert!(
+        fetcher.asked.lock().expect("lock").is_empty(),
+        "nothing was called"
+    );
+}
+
+/// Never answers.
+struct Silent;
+
+impl RollupFetcher for Silent {
+    async fn fetch(
+        &self,
+        _base_url: &str,
+        _store_id: &str,
+        _key: &SourceKey,
+        _window: &RollupWindow,
+    ) -> Result<Vec<DailyRollup>, String> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn a_cell_that_never_answers_cannot_hold_the_read_past_its_deadline() {
+    let answers = federate(
+        &holding_directory(),
+        &section(vec![source("jp1", &[STORE_A, STORE_B])]),
+        &Silent,
+        &RollupWindow::default(),
+        tokio::time::Instant::now() + std::time::Duration::from_millis(50),
+    )
+    .await;
+    assert_eq!(answers.len(), 2);
+    assert!(
+        answers
+            .iter()
+            .all(|answer| answer.error.as_deref() == Some(OUT_OF_TIME))
     );
 }
