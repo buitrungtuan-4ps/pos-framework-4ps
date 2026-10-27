@@ -23,7 +23,6 @@ import type {
   PermissionInfo,
   PermissionsPublishReport,
   RoleTemplate,
-  StoreGroup,
   WrittenSetting,
 } from "../api/types";
 import { t } from "../i18n";
@@ -63,6 +62,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+import type { StoreGroup } from "../api/schemas";
 
 /** The most digits a PIN may have, and the fewest while the tenant asks for no more (ADR-0160). */
 const PIN_MOST_DIGITS = 8;

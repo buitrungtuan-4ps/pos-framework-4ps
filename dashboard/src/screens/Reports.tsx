@@ -13,7 +13,6 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import { STORE_DRAWER } from "../api/types";
 import type {
-  Store,
   XzReport,
 } from "../api/types";
 import { t } from "../i18n";
@@ -31,6 +30,7 @@ import type {
   DailyRevenue,
   DailyRollup,
   FeeTotal,
+  Store,
   TaxComponentTotal,
 } from "../api/schemas";
 

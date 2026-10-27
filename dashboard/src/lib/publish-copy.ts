@@ -6,13 +6,13 @@
 // that wants its own wording can still pass its own `describe`.
 
 import { api } from "../api/client";
-import type { NodePreview } from "../api/types";
 import { type PublishState } from "../components/kit";
 import { toast } from "../components/Toast";
 import { t } from "../i18n";
 import { apiMessage } from "./errors";
 import { screenHref } from "../state/screens";
 import { formatInstant } from "./format";
+import type { NodePreview } from "../api/schemas";
 
 /** The query parameter a publish bar hands the publish centre, naming the node it came from. */
 export const RELEASE_NODE_PARAM = "node";
