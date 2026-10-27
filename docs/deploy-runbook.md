@@ -190,6 +190,8 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   signature verifies, every entry is well-formed, the directory lists this cell at its own
   `base_url`, and the version is higher than the one it holds. Otherwise the Fleet screen shows why,
   and the directory already held stays in use. Until one is accepted, the cell answers for no tenant.
+  To check what a cell answers, ask it: `curl https://vn1.example.com/.well-known/pos-cell?tenant=<slug>`
+  names the tenant's home cell, from the directory this cell holds.
 - **Where backups rest**: set `BACKUP_COUNTRY` in `deploy/cells/<cell>.env` to the country the
   `RCLONE_REMOTE` bucket is in. `bootstrap.sh` records it with the cell's home country in `.env`,
   and every off-box backup then logs `region   backups rest in VN`, or warns when that country is

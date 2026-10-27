@@ -369,6 +369,7 @@ From [`docs/openapi-device.json`](../openapi-device.json).
 
 | Method | Path | Handler | Who | Permission | File |
 |---|---|---|---|---|---|
+| GET | `/.well-known/pos-cell` | `well_known_cell` | public: asked before any credential exists, by a box being set up or by anyone finding a tenant's cell; it says only what the PII-free cell directory says (ADR-0179) | — | [`crates/pos-cloud/src/http/well_known.rs`](../../crates/pos-cloud/src/http/well_known.rs) |
 | POST | `/activate` | `exchange_activation_code` | public: a single-use activation code from the store's setup sheet | — | [`crates/pos-cloud-devices/src/routes/activation.rs`](../../crates/pos-cloud-devices/src/routes/activation.rs) |
 | POST | `/claim` | `open_claim` | public: nothing: its code works only once the console binds it | — | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |
 | POST | `/claim/{claim_id}/collect` | `collect_claim` | public: the secret the claim was opened with | — | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |

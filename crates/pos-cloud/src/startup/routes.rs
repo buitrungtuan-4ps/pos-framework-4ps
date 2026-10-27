@@ -777,6 +777,9 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
         ))
+        // Which cell this is and where a tenant is homed (ADR-0179 C3): public, answered from the
+        // same directory holder, so it names the directory the reload last accepted.
+        .merge(http::well_known::well_known_cell_router(Arc::clone(cell)))
         // A store whose country differs from its cell's (ADR-0179 C6): a warning, and an
         // acknowledgement recorded in the audit trail, never a refusal.
         .merge(http::cell_standing_router(

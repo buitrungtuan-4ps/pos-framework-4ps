@@ -128,6 +128,7 @@ mod settings_confirm;
 mod store_groups;
 pub(crate) mod subjects;
 mod sync;
+pub mod well_known;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives

@@ -63,6 +63,18 @@ pub enum Offer {
     Unchanged(u64),
 }
 
+/// Where a tenant is homed, as this cell can say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantHome {
+    /// The home cell's id.
+    pub cell_id: String,
+    /// The home cell's origin: from the directory, or this cell's own `base_url` when the home is
+    /// this cell. `None` only when that is this cell and it has no base URL configured.
+    pub base_url: Option<String>,
+    /// Whether the home is this cell.
+    pub here: bool,
+}
+
 /// Parses `[cell] directory_public_key`: the second line of a `minisign.pub` file, verbatim.
 ///
 /// # Errors
@@ -163,6 +175,25 @@ impl CellDirectory {
                 .held()
                 .and_then(|held| held.tenant_cell(tenant_slug).map(str::to_owned)),
         }
+    }
+
+    /// Where a tenant is homed, with that cell's origin, when this cell can say
+    /// ([`Self::tenant_cell`]).
+    #[must_use]
+    pub fn tenant_home(&self, tenant_slug: &str) -> Option<TenantHome> {
+        let cell_id = self.tenant_cell(tenant_slug)?;
+        let here = cell_id == self.cell.cell_id;
+        let base_url = if here {
+            self.cell.base_url.clone()
+        } else {
+            self.held()
+                .and_then(|held| held.cell_url(&cell_id).map(str::to_owned))
+        };
+        Some(TenantHome {
+            cell_id,
+            base_url,
+            here,
+        })
     }
 
     /// Offers a directory document and its `.minisig` file. The held directory changes only when
