@@ -31,7 +31,7 @@ import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import { PAPER_WIDTHS } from "../api/types";
-import type { DeviceProposalSummary, Json, PaperWidth, Station, Store } from "../api/types";
+import type { Json, PaperWidth, Station, Store } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { storeCurrency } from "../lib/fees";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -61,6 +61,8 @@ import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
 import { apiMessage, withStaleReload } from "../lib/errors";
+import type { DeviceProposalSummary } from "../api/schemas";
+import { tokenLabel } from "../lib/tokens";
 
 // What each paper is called on screen (ADR-0160). 80 mm at 42 characters a line is what every
 // printer was taken to be before an operator could say, so it is what a printer nobody set shows.
@@ -70,8 +72,8 @@ const PAPER_LABELS: Record<PaperWidth, MessageKey> = {
   PAPER_WIDTH_MILLIMETRES_58: "devices.paper.millimetres58",
 };
 const UNSET_PAPER: PaperWidth = "PAPER_WIDTH_MILLIMETRES_80";
-const paperLabel = (paper: PaperWidth | null) =>
-  t(PAPER_LABELS[paper ?? UNSET_PAPER] ?? PAPER_LABELS[UNSET_PAPER]);
+// A paper a newer cloud named shows as its token, never as another paper's name.
+const paperLabel = (paper: string | null): string => tokenLabel(PAPER_LABELS, paper ?? UNSET_PAPER);
 
 // The first release whose edge prints a till's receipts at its own printer and in its own languages
 // (ADR-0160 decision 4). An older edge ignores both.
@@ -164,7 +166,7 @@ export function Devices() {
   // The printer whose paper is being said, under the same conditional write (ADR-0160). The form
   // opens on what the till takes a printer nobody set to be: 80 mm paper, and a cutter.
   const paperDraft = useEntityCrud<DeviceProposalSummary>();
-  const [paperChoice, setPaperChoice] = createSignal<PaperWidth>(UNSET_PAPER);
+  const [paperChoice, setPaperChoice] = createSignal<string>(UNSET_PAPER);
   const [cutsChoice, setCutsChoice] = createSignal(true);
   // The terminal whose receipts are being said, under the same conditional write (ADR-0160 decision
   // 4). Each picker's empty choice is the store's.

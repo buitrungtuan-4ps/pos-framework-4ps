@@ -9,10 +9,10 @@ import { createSignal, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { Enrolment } from "../api/types";
 import { t } from "../i18n";
 import { Banner, Button, Card, TextField } from "../components/ui";
 import { apiMessage } from "../lib/errors";
+import type { Enrolment } from "../api/schemas";
 
 export function AcceptInvite() {
   const [searchParams] = useSearchParams();
