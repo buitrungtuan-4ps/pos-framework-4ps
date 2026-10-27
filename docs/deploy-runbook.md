@@ -168,7 +168,7 @@ is spent. Sign in at `/admin/login` with the password and a current code.
 
   It holds no secret and no personal data. Every key but `country_alias` is required, an unknown key
   is refused, and a malformed value stops the boot naming the key. Servers outside the home country
-  are logged as a warning at boot and shown on the console's Fleet screen, never refused. The block
+  are logged as a warning at boot, never refused. The block
   takes effect when `pos_cloud` next starts.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).

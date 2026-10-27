@@ -33,7 +33,7 @@
 import { createSignal, Show, type JSXElement } from "solid-js";
 
 import { api } from "../api/client";
-import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/types";
+import type { Alert, FleetStore } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
@@ -53,6 +53,7 @@ import { screenHref, type ScreenId } from "../state/screens";
 import { GetStarted } from "../components/GetStarted";
 import { Button, Card, PageHeader, Skeleton, TextArea } from "../components/ui";
 import { KpiTile } from "../components/kit";
+import type { DailyRevenue, DailyRollup } from "../api/schemas";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {

@@ -15,7 +15,6 @@ import type {
   AdminSessionView,
   AdminStatus,
   Alert,
-  ApiKeySummary,
   Assignment,
   AssignmentTarget,
   Area,
@@ -35,18 +34,10 @@ import type {
   TableQrSheet,
   ChannelPrice,
   ConfigLevel,
-  ConfigNodes,
-  ConfigVersion,
-  CreateApiKeyResponse,
   CreatedAssignment,
   CreatedId,
-  DailyRevenue,
-  DailyRollup,
   XzReport,
   Device,
-  CreateTerminalResponse,
-  DeviceProposalSummary,
-  PaperWidth,
   DisplayCategory,
   DisplaySubcategory,
   AdmittedDevice,
@@ -54,7 +45,6 @@ import type {
   Employee,
   EntityStatus,
   ETag,
-  Enrolment,
   FleetStore,
   RegionAcknowledgement,
   StoreLease,
@@ -81,7 +71,6 @@ import type {
   OtaRollout,
   HostedRelease,
   FetchedRelease,
-  PublishDevicesResponse,
   PublishPlacementRequest,
   PublishRolloutRequest,
   ReasonCode,
@@ -106,8 +95,6 @@ import type {
   SettingPublishReport,
   SettingScope,
   WrittenSetting,
-  PublishedConfig,
-  RegisterWebhookResponse,
   RoleTemplate,
   Release,
   ReleaseNode,
@@ -127,8 +114,6 @@ import type {
   TaxRate,
   Tenant,
   TrailOrder,
-  TranslationGrid,
-  TranslationImportReport,
   Page,
   PageRequest,
   UploadedMedia,
@@ -138,6 +123,22 @@ import type {
 import type { AdminMethod, AdminUrlFor } from "./paths";
 import { setActingAdmin, setAuthed } from "../state/session";
 import type { KnownSalesChannel } from "../lib/channels";
+import type {
+  ApiKeySummary,
+  ConfigNodes,
+  ConfigVersion,
+  CreateApiKeyResponse,
+  CreateTerminalResponse,
+  DailyRevenue,
+  DailyRollup,
+  DeviceProposalSummary,
+  Enrolment,
+  PublishDevicesResponse,
+  PublishedConfig,
+  RegisterWebhookResponse,
+  TranslationGrid,
+  TranslationImportReport,
+} from "./schemas";
 
 /** One field-level reason from an AIP-193 error body: the offending field, and a stable reason for it. */
 export interface ApiErrorDetail {
@@ -823,7 +824,7 @@ export const api = {
   setPrinterPaper: (
     tenantId: string,
     id: string,
-    paperWidth: PaperWidth,
+    paperWidth: string,
     cutsPaper: boolean,
     version: string,
   ) =>

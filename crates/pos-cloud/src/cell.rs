@@ -86,7 +86,7 @@ impl Cell {
     }
 
     /// Whether the servers run in a different country from the one the tenants are homed by. Never
-    /// a refusal (ADR-0179): the boot logs it and the console shows both.
+    /// a refusal (ADR-0179): the boot logs it, and an operator decides.
     #[must_use]
     pub fn runs_abroad(&self) -> bool {
         match (self.home_country, self.runs_in) {

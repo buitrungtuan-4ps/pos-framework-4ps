@@ -24,7 +24,7 @@ import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { Brand, CreateApiKeyResponse, Store, Tenant } from "../api/types";
+import type { Brand, Store, Tenant } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import {
@@ -61,6 +61,7 @@ import { toast } from "../components/Toast";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import { DEFAULT_BIND_PORT } from "../installers.mjs";
 import type { InstallerValues } from "../installers.d.mts";
+import type { CreateApiKeyResponse } from "../api/schemas";
 
 export function Stores() {
   const [stores, setStores] = createSignal<Store[] | null>(null);

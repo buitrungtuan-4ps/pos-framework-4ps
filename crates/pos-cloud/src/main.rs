@@ -40,7 +40,7 @@ async fn main() -> ExitCode {
 /// bound and served until shutdown.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
-    let cell = startup::cell(&config)?;
+    startup::cell(&config)?;
     let (store, one_switch) = startup::open_store(&config).await?;
     let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
@@ -83,7 +83,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         expected_tasks: &expected_tasks,
         orders_limiter: &orders_limiter,
         relay_wake: &relay_wake,
-        cell: &cell,
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);
