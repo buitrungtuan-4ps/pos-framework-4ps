@@ -595,6 +595,7 @@ impl CloudConfig {
         self.validate_alert_webhook()?;
         self.validate_release_source()?;
         self.cell()?;
+        crate::cell::directory_source(self.cell.as_ref())?;
         Ok(())
     }
 

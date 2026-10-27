@@ -13,7 +13,7 @@ use blob_garage::S3Blobs;
 use pos_cloud::anchor::AnchorLedger;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::auth::rate_limit::SlidingRateLimiter;
-use pos_cloud::cell::Cell;
+use pos_cloud::cell::signed::CellDirectory;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::SyncThrottle;
 use pos_cloud::qr::TableTokenSecret;
@@ -51,8 +51,9 @@ pub(crate) struct RouteDeps<'a> {
     /// would each signal an audience the other is not listening to, and every wait would fall back
     /// to its timer.
     pub(crate) relay_wake: &'a SharedWake,
-    /// Which cell this cloud is, resolved once at boot (ADR-0179 C1).
-    pub(crate) cell: &'a Cell,
+    /// Which cell this cloud is, resolved once at boot (ADR-0179 C1), and the directory it answers
+    /// from (C2). One holder, so every route answers from the directory the reload last accepted.
+    pub(crate) cell: &'a Arc<CellDirectory>,
 }
 
 /// Every sub-router the cloud serves beside its own, merged onto it in the order the flat chain
@@ -513,7 +514,7 @@ fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
             // Each connection's processing country is compared with this (ADR-0179 C7).
-            cell.home_country,
+            cell.cell().home_country,
         ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
@@ -771,7 +772,11 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
     } = *deps;
     Router::new()
         // Which cell this is (ADR-0179 C1): the `[cell]` section, read-only.
-        .merge(http::cell_router(cell, store.admin(), SystemClock))
+        .merge(http::cell_router(
+            Arc::clone(cell),
+            store.admin(),
+            SystemClock,
+        ))
         // A store whose country differs from its cell's (ADR-0179 C6): a warning, and an
         // acknowledgement recorded in the audit trail, never a refusal.
         .merge(http::cell_standing_router(
@@ -779,7 +784,7 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             store.config_trees(),
             store.admin(),
             SystemClock,
-            Arc::new(cell.clone()),
+            Arc::new(cell.cell().clone()),
         ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.

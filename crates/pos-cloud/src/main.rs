@@ -40,7 +40,7 @@ async fn main() -> ExitCode {
 /// bound and served until shutdown.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
-    let cell = startup::cell(&config)?;
+    let (cell, directory_reload) = startup::cell_directory(&config)?;
     let (store, one_switch) = startup::open_store(&config).await?;
     let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
@@ -93,6 +93,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     loops.wind_down(archive_retention_task).await;
+    if let Some(task) = directory_reload {
+        task.abort();
+    }
     Ok(())
 }
 
