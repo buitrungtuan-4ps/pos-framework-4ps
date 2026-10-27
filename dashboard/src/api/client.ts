@@ -77,7 +77,6 @@ import type {
   PermissionsReadiness,
   RecoveryCodesResponse,
   RecoveryCodesStatus,
-  SalesChannel,
   OtaPlacement,
   OtaRollout,
   HostedRelease,
@@ -138,6 +137,7 @@ import type {
 } from "./types";
 import type { AdminMethod, AdminUrlFor } from "./paths";
 import { setActingAdmin, setAuthed } from "../state/session";
+import type { KnownSalesChannel } from "../lib/channels";
 
 /** One field-level reason from an AIP-193 error body: the offending field, and a stable reason for it. */
 export interface ApiErrorDetail {
@@ -1576,11 +1576,11 @@ export const api = {
   // applies channels/tender as gates and qr as its staff-confirmation source; vendor policy is
   // authored here, its live marketplace loop deferred.
   readChannels: (tenantId: string, storeId: string) =>
-    requestJson<{ enabled: SalesChannel[] } | null>(
+    requestJson<{ enabled: KnownSalesChannel[] } | null>(
       "GET",
       `/admin/config/channels?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
-  publishChannels: (tenantId: string, storeId: string, enabled: SalesChannel[]) =>
+  publishChannels: (tenantId: string, storeId: string, enabled: KnownSalesChannel[]) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/channels", {
       tenant_id: tenantId,
       store_id: storeId,
@@ -1889,7 +1889,7 @@ export const api = {
   previewFees: (
     tenantId: string,
     storeId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     rules: readonly PreviewFeeRule[],
     lines: readonly SampleLineInput[],
   ) =>
@@ -2387,7 +2387,7 @@ export const api = {
   // the button already there (ADR-0095).
   createLayoutButton: (
     tenantId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     menuItemId: string,
     fields: LayoutButtonFields,
   ) =>
@@ -2400,7 +2400,7 @@ export const api = {
   // Relabel or move a button already on that channel, at the version it was read at.
   updateLayoutButton: (
     tenantId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     menuItemId: string,
     etag: ETag,
     fields: LayoutButtonFields,
@@ -2411,7 +2411,7 @@ export const api = {
       etag,
       { tenant_id: tenantId, ...layoutButtonBody(fields) },
     ),
-  removeLayoutButton: (tenantId: string, salesChannel: SalesChannel, menuItemId: string) =>
+  removeLayoutButton: (tenantId: string, salesChannel: KnownSalesChannel, menuItemId: string) =>
     requestVoid(
       "DELETE",
       `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,

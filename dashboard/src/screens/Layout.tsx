@@ -17,9 +17,7 @@ import type {
   DisplaySubcategory,
   ETag,
   LayoutButton,
-  SalesChannel,
 } from "../api/types";
-import { SALES_CHANNELS } from "../api/types";
 import { t } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -43,7 +41,8 @@ import {
   ReorderList,
 } from "../components/kit";
 import { toast } from "../components/Toast";
-import { CHANNEL_LABEL, errorMessage, isStale, StatusCell } from "./catalog/shared";
+import { errorMessage, isStale, StatusCell } from "./catalog/shared";
+import { CHANNEL_LABEL, SALES_CHANNELS, type KnownSalesChannel } from "../lib/channels";
 
 // Cap the rendered grid extent so a stray large column/row never blows up the preview; buttons beyond
 // it still appear in the flowing list and are editable.
@@ -70,7 +69,7 @@ export function Layout() {
   const buttons = () => layout.value()?.buttons ?? null;
   const [busy, setBusy] = createSignal(false);
 
-  const [channel, setChannel] = createSignal<SalesChannel>("SALES_CHANNEL_DINE_IN");
+  const [channel, setChannel] = createSignal<KnownSalesChannel>("SALES_CHANNEL_DINE_IN");
 
   // Button editor drawer.
   const [buttonOpen, setButtonOpen] = createSignal(false);
@@ -87,7 +86,7 @@ export function Layout() {
   const [pendingRemove, setPendingRemove] = createSignal<LayoutButton | null>(null);
 
   // Copy-between-channels.
-  const [copyTarget, setCopyTarget] = createSignal<SalesChannel | "">("");
+  const [copyTarget, setCopyTarget] = createSignal<KnownSalesChannel | "">("");
   const [copyConfirm, setCopyConfirm] = createSignal(false);
 
   // Display category create/edit.
@@ -625,7 +624,7 @@ export function Layout() {
                     value: row,
                     label: t(CHANNEL_LABEL[row]),
                   }))}
-                  onChange={(value) => setChannel(value as SalesChannel)}
+                  onChange={(value) => setChannel(value as KnownSalesChannel)}
                 />
                 <Button disabled={busy()} onClick={openAddButton}>
                   {t("layout.addButton")}
@@ -655,7 +654,7 @@ export function Layout() {
                       value: row,
                       label: t(CHANNEL_LABEL[row]),
                     }))}
-                    onChange={(value) => setCopyTarget(value as SalesChannel | "")}
+                    onChange={(value) => setCopyTarget(value as KnownSalesChannel | "")}
                     placeholder={t("layout.copyChooseTarget")}
                   />
                   <Button
@@ -1077,7 +1076,7 @@ export function Layout() {
           title={t("layout.copyTitle")}
           message={t("layout.copyMessage", {
             from: t(CHANNEL_LABEL[channel()]),
-            to: copyTarget() ? t(CHANNEL_LABEL[copyTarget() as SalesChannel]) : "",
+            to: copyTarget() ? t(CHANNEL_LABEL[copyTarget() as KnownSalesChannel]) : "",
           })}
           confirmLabel={t("layout.copyAction")}
           cancelLabel={t("action.cancel")}

@@ -24,11 +24,9 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import {
   QR_ORDERING_SWITCH,
-  SALES_CHANNELS,
   VENDOR_AVAILABILITIES,
   type Json,
   type QrGuardrails,
-  type SalesChannel,
   type VendorAvailability,
   type VendorPolicy,
 } from "../api/types";
@@ -51,15 +49,8 @@ import {
 import { PublishBar } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { CHANNEL_LABEL, SALES_CHANNELS, type KnownSalesChannel } from "../lib/channels";
 
-/** Per-channel labels, shared with the tax and campaign editors. */
-const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
-  SALES_CHANNEL_DINE_IN: "channel.dineIn",
-  SALES_CHANNEL_TAKEAWAY: "channel.takeaway",
-  SALES_CHANNEL_DELIVERY: "channel.delivery",
-  SALES_CHANNEL_QR: "channel.qr",
-  SALES_CHANNEL_API: "channel.api",
-};
 
 /** The payment-method wire tokens the tender editor offers, with their labels. */
 const PAYMENT_METHODS: readonly string[] = [
@@ -117,7 +108,7 @@ export function Channels() {
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
-  const [channels, setChannels] = createSignal<SalesChannel[]>([]);
+  const [channels, setChannels] = createSignal<KnownSalesChannel[]>([]);
   const [tender, setTender] = createSignal<string[]>([]);
   const [qr, setQr] = createSignal<QrGuardrails>({ ...QR_DEFAULTS });
   // The switch as the operator has set it here, and as the store last had it published.
@@ -198,7 +189,7 @@ export function Channels() {
   });
 
 
-  const toggleChannel = (channel: SalesChannel) =>
+  const toggleChannel = (channel: KnownSalesChannel) =>
     setChannels((prev) =>
       prev.includes(channel) ? prev.filter((c) => c !== channel) : [...prev, channel],
     );

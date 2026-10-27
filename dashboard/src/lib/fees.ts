@@ -21,8 +21,8 @@ import type {
   Json,
   Money,
   Ratio,
-  SalesChannel,
 } from "../api/types";
+import type { KnownSalesChannel } from "./channels";
 
 /** A rule as the form edits it. */
 export interface FeeDraft {
@@ -39,8 +39,8 @@ export interface FeeDraft {
   readonly amountMinor: number | null;
   /** The amount's currency. */
   readonly currency: string;
-  /** The channels it applies on; empty is every channel. */
-  readonly channels: readonly SalesChannel[];
+  /** The channels it applies on; empty is every channel. A channel a newer cloud sent is kept. */
+  readonly channels: readonly string[];
   readonly itemScope: FeeItems;
   readonly menuItemIds: readonly string[];
   readonly categoryIds: readonly string[];
@@ -123,9 +123,7 @@ export function draftFromRule(rule: FeeRuleFields, fallbackCurrency: string): Fe
     percent: rule.rate === undefined ? "" : percentText(rule.rate),
     amountMinor: rule.amount?.amount_minor ?? null,
     currency: rule.amount?.currency_code ?? fallbackCurrency,
-    channels: (rule.channels ?? []).filter((channel): channel is SalesChannel =>
-      channel.startsWith("SALES_CHANNEL_"),
-    ),
+    channels: [...(rule.channels ?? [])],
     itemScope: known(rule.item_scope, FEE_ITEM_SCOPES, "FEE_ITEMS_ALL"),
     menuItemIds: [...(rule.menu_item_ids ?? [])],
     categoryIds: [...(rule.item_category_ids ?? [])],
@@ -313,7 +311,7 @@ function offersIn(catalog: Json | undefined): MenuOffer[] {
  * book's fallback when the channel has none — the catalog the store prices a line from
  * (`MenuBook::catalog_for`). Empty for a store with no menu.
  */
-export function menuOffers(config: Json | null | undefined, channel: SalesChannel): MenuOffer[] {
+export function menuOffers(config: Json | null | undefined, channel: KnownSalesChannel): MenuOffer[] {
   const menu = field(config ?? undefined, "menu");
   const rows = field(menu, "channels");
   if (Array.isArray(rows)) {
