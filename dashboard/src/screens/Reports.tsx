@@ -12,9 +12,6 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import { STORE_DRAWER } from "../api/types";
-import type {
-  XzReport,
-} from "../api/types";
 import { t } from "../i18n";
 import { percentText } from "../lib/fees";
 import { formatCount } from "../lib/format";
@@ -32,6 +29,7 @@ import type {
   FeeTotal,
   Store,
   TaxComponentTotal,
+  XzReport,
 } from "../api/schemas";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */

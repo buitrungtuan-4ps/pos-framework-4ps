@@ -11,9 +11,10 @@
 
 import { type Accessor, createEffect, createSignal, on, type Setter, Show } from "solid-js";
 
-import type { Json, SettingDefinition } from "../api/types";
+import type { Json } from "../api/types";
 import { t, tFromServer } from "../i18n";
 import { CheckboxField } from "./ui";
+import type { SettingDefinition } from "../api/schemas";
 
 /** Whether the notice is ticked for the value picked now: a new pick, or none, unticks it. */
 export function createTick(picked: () => Json | undefined): [Accessor<boolean>, Setter<boolean>] {

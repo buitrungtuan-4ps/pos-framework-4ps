@@ -4,9 +4,6 @@
 // that way too.
 
 import type {
-  DailyCash,
-  DailyRevenue,
-  DailyRollup,
   Ingredient,
   Money,
   Quantity,
@@ -43,35 +40,8 @@ export const PAPER_WIDTHS: readonly PaperWidth[] = [
   "PAPER_WIDTH_MILLIMETRES_58",
 ];
 
-/** A webhook endpoint row from `GET /admin/webhooks` (ADR-0032). */
-export interface WebhookSummary {
-  readonly id: string;
-  readonly store_id: string;
-  readonly url: string;
-  readonly cursor: string | null;
-  readonly disabled: boolean;
-}
-
 /** The key `DailyCash.by_drawer` files the store's one drawer under (ADR-0167 decision 5). */
 export const STORE_DRAWER = "store";
-
-/**
- * An X or Z report for a store's trading day (ADR-0081, spec gap D10). `kind` is `"X"` (current,
- * non-resetting) or `"Z"` (a closed day, immutable). Bundles activity, revenue, and cash; T2.
- */
-export interface XzReport {
-  readonly kind: "X" | "Z";
-  readonly business_date: string;
-  readonly activity: DailyRollup;
-  readonly revenue: DailyRevenue;
-  readonly cash: DailyCash;
-  /**
-   * The name of each till among the day's drawers, keyed as `by_drawer` is, from the store's
-   * published devices as the report is served. The store's drawer, and a till no longer listed,
-   * have none.
-   */
-  readonly till_names: Readonly<Record<string, string>>;
-}
 
 /**
  * The same rail's report for the **item master** (roadmap-v3 **F15**).
@@ -396,134 +366,10 @@ export interface CampaignPreview {
   readonly unchanged: boolean;
 }
 
-/** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
-export interface ItemCategory {
-  readonly item_category_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** An item sub-category, nested under a category (ADR-0066 entity 3). */
-export interface ItemSubcategory {
-  readonly item_subcategory_id: string;
-  readonly tenant_id: string;
-  readonly item_category_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A display category — the presentation taxonomy a screen groups by (ADR-0066 entity 11). */
-export interface DisplayCategory {
-  readonly display_category_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A display sub-category, nested under a display category (ADR-0066 entity 11). */
-export interface DisplaySubcategory {
-  readonly display_subcategory_id: string;
-  readonly tenant_id: string;
-  readonly display_category_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A button's grid slot on a POS terminal (`pos-proto` `GridPosition`). */
-export interface GridPosition {
-  readonly column: number;
-  readonly row: number;
-}
-
-/** An item's button in a per-channel layout (ADR-0066 entity 12). */
-export interface LayoutButton {
-  readonly tenant_id: string;
-  readonly sales_channel: string | null;
-  readonly display_category_id: string;
-  readonly display_subcategory_id: string | null;
-  readonly menu_item_id: string;
-  readonly label: string;
-  readonly position: GridPosition | null;
-  readonly sort: number;
-  readonly etag: ETag;
-}
-
-/** A modifier group — a min/max selection rule with member modifiers, attached to items (ADR-0066 4/5). */
-export interface ModifierGroup {
-  readonly modifier_group_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly min_select: number;
-  readonly max_select: number;
-  readonly member_item_ids: string[];
-  readonly attached_item_ids: string[];
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
-export interface CatalogItem {
-  readonly menu_item_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  /** Per-locale names keyed by locale code ("vi", "en", …); `name` is the fallback (ADR-0074). */
-  readonly name_translations: Readonly<Record<string, string>>;
-  readonly tax_class_id: string;
-  readonly item_category_id: string | null;
-  readonly item_subcategory_id: string | null;
-  /** The item's photo — a media id (ADR-0075), or null. */
-  readonly image_ref: string | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
 /** The response to a media upload (ADR-0075): the id to reference the new asset by. */
 export interface UploadedMedia {
   readonly media_id: string;
   readonly detail_bytes: number;
-}
-
-/** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
-export interface Menu {
-  readonly menu_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly parent_menu_id: string | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A menu section — an authoring grouping within a menu (ADR-0066 entity 7). Authoring-only. */
-export interface MenuSection {
-  readonly menu_section_id: string;
-  readonly tenant_id: string;
-  readonly menu_id: string;
-  readonly name: string;
-  readonly sort: number;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */
-export interface ChannelPrice {
-  readonly sales_channel: string | null;
-  readonly unit_price: Money;
-}
-
-/** An item placed in a menu, with its per-channel prices and its published availability floor. */
-export interface MenuPlacement {
-  readonly tenant_id: string;
-  readonly menu_id: string;
-  readonly menu_item_id: string;
-  readonly menu_section_id: string | null;
-  readonly prices: ChannelPrice[];
-  readonly available: boolean;
-  readonly etag: ETag;
 }
 
 /** A console admin's least-privilege tier (ADR-0067). `owner` manages other admins; `viewer` is read-only. */
@@ -534,18 +380,6 @@ export const ADMIN_ROLES: readonly AdminRole[] = ["owner", "admin", "ops", "view
 
 /** Whether a console admin can sign in (ADR-0067). A suspended admin keeps its history but cannot. */
 export type AdminStatus = "active" | "suspended";
-
-/**
- * A console admin as `GET /admin/whoami` and `GET /admin/admins` list it (ADR-0067): identity and
- * role only — never a password hash or a TOTP secret.
- */
-export interface AdminIdentity {
-  readonly id: string;
-  readonly email: string;
-  readonly name: string;
-  readonly role: AdminRole;
-  readonly status: AdminStatus;
-}
 
 /**
  * One store's fleet row from `GET /admin/fleet` (ADR-0068 slice 3): identity + status joined with
@@ -672,52 +506,12 @@ export type AssignmentTarget =
 // --- Capabilities (ADR-0071, Track M8): the §10 flag catalogue the Config screen's form editor reads ---
 
 /**
- * One capability flag from `GET /admin/capabilities` (§10): its config key, default, and one-line
- * description. The console renders a labelled toggle per flag from this — never a hand-kept list, so
- * the framework's own catalogue stays the single source of truth (ADR-0071).
- */
-export interface CapabilityFlag {
-  readonly key: string;
-  readonly default_on: boolean;
-  readonly description: string;
-  /**
-   * Whether the console offers the flag as a switch (ADR-0160 decision 5). `false` for a flag no
-   * release reads yet, so turning it on would change nothing at any store. Absent from a cloud older
-   * than the field, which offered every flag.
-   */
-  readonly offered?: boolean;
-}
-
-/** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */
-export interface CapabilityPreset {
-  readonly id: string;
-  readonly keys: readonly string[];
-}
-
-/**
- * One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
- * created rather than as a `422` on publish. The console mirrors only the boolean check; this
- * description is the framework's own wording, and the server re-runs the real rules on publish.
- */
-export interface CapabilityRule {
-  readonly id: string;
-  readonly description: string;
-}
-
-/**
  * QR ordering's one switch (ADR-0160 decision 5): the capability flag the cloud's guest intake and
  * the edge read, off unless a store's configuration turns it on. `qr.enabled` and the QR sales
  * channel follow it. It is offered on Channels & payments, beside the QR guardrails, and nowhere
  * else, so the Config screen's capability form leaves it out.
  */
 export const QR_ORDERING_SWITCH = "qr_ordering_enabled";
-
-/** The whole capability catalogue `GET /admin/capabilities` serves for the form editor. */
-export interface CapabilityCatalogue {
-  readonly flags: readonly CapabilityFlag[];
-  readonly presets: readonly CapabilityPreset[];
-  readonly rules: readonly CapabilityRule[];
-}
 
 // --- Operational alerts (ADR-0073, Track O2): the alert engine's read model ---
 
@@ -745,37 +539,6 @@ export type SettingKind =
   | "SETTING_KIND_FLAG"
   | "SETTING_KIND_SECRET";
 
-/** One field of a provider's settings schema, from `GET /admin/integrations/providers`. */
-export interface ProviderField {
-  readonly key: string;
-  /** A translation key; the console falls back to `key` when it does not ship it. */
-  readonly label_key: string;
-  readonly kind: SettingKind;
-  readonly required: boolean;
-  readonly max_length?: number;
-  readonly min?: number;
-  readonly max?: number;
-  readonly options?: readonly string[];
-}
-
-/** One vendor this cloud can talk to, with the schema its connection form is drawn from. */
-export interface Provider {
-  readonly provider_id: string;
-  readonly family: IntegrationFamily;
-  readonly runs_on: "PROVIDER_RUNTIME_EDGE" | "PROVIDER_RUNTIME_CLOUD";
-  readonly name_key: string;
-  /** ISO 3166-1 alpha-2; empty means every country. */
-  readonly countries: readonly string[];
-  readonly capabilities: readonly string[];
-  readonly sandbox: boolean;
-  readonly fields: readonly ProviderField[];
-}
-
-/** The provider catalogue. */
-export interface ProviderCatalogue {
-  readonly providers: readonly Provider[];
-}
-
 /** A setting's value as the operator typed it: the plain JSON the schema's kind implies. */
 export type SettingValue = string | number | boolean;
 
@@ -784,23 +547,6 @@ export type ConnectionScopeLevel =
   | "CONNECTION_SCOPE_TENANT"
   | "CONNECTION_SCOPE_BRAND"
   | "CONNECTION_SCOPE_STORE";
-
-/**
- * A tenant's connection to one vendor (ADR-0153). No secret value is ever on it: `secrets_set`
- * names the secret fields that hold one.
- */
-export interface Connection {
-  readonly connection_id: string;
-  readonly provider_id: string;
-  readonly scope_level: ConnectionScopeLevel;
-  readonly scope_id?: string;
-  readonly display_name: string;
-  readonly enabled: boolean;
-  readonly settings: Readonly<Record<string, SettingValue>>;
-  readonly secrets_set: readonly string[];
-  readonly etag: ETag;
-  readonly updated_at_ms?: number;
-}
 
 /**
  * A connection write. `secrets` holds only what this write sets: a secret left out keeps the stored
@@ -828,104 +574,11 @@ export type SettingScope =
   | "SETTING_SCOPE_STORE_GROUP"
   | "SETTING_SCOPE_STORE";
 
-/**
- * One setting in the register, from `GET /admin/settings/catalogue`.
- *
- * It carries no sentence of its own: the console labels a setting and each of its values from its
- * own translations, keyed by `setting_key` and by the value's token, so a setting added to the
- * register needs its translations and nothing else to appear on the settings screen.
- */
-export interface SettingDefinition {
-  /** `node.field`, such as `shift.no_shift_selling`. */
-  readonly setting_key: string;
-  readonly node: string;
-  readonly field: string;
-  /**
-   * The shape of the value: `SETTING_KIND_CHOICE` (one of `values`), `SETTING_KIND_INT` (a whole
-   * number from `min` to `max`, counting `unit`) or `SETTING_KIND_BOOL` (`true` or `false`). A kind
-   * this console does not know is shown and not offered for editing.
-   */
-  readonly kind: string;
-  /** For a choice, every value it takes, as wire tokens. Absent for the other kinds. */
-  readonly values?: readonly string[];
-  /** For a whole number, the smallest value it takes. */
-  readonly min?: number;
-  /** For a whole number, the largest value it takes. */
-  readonly max?: number;
-  /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_HOURS`, `_COUNT`,
-   * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
-   * percentage — which the console names in the operator's language.
-   */
-  readonly unit?: string;
-  /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */
-  readonly default: Json;
-  /** What a new store is given, when the owner chose something other than the default. */
-  readonly preset?: Json;
-  /** Where it may be written. */
-  readonly scopes: readonly string[];
-  /** The first release that honours it, `MAJOR.MINOR.PATCH` (ADR-0160 decision 5). */
-  readonly since: string;
-  /**
-   * The value written only with a recorded confirmation, a wire token, and the translation key of
-   * the notice the person confirms, `settings.item.<setting_key>.confirm` (ADR-0169). Absent when
-   * every value can be written without one.
-   */
-  readonly confirm?: { readonly value: string; readonly notice: string };
-}
-
-/** One value a tenant has written, from `GET /admin/settings`. */
-export interface WrittenSetting {
-  readonly setting_key: string;
-  /** A {@link SettingScope} token. */
-  readonly scope: string;
-  /** The tenant, brand, store group or store it was written for. */
-  readonly scope_id: string;
-  readonly value: Json;
-  /** When it was written, RFC 3339. */
-  readonly update_time: string;
-}
-
-/**
- * One setting as one store runs it, from `GET /admin/settings/effective`. `scope` and `scope_id`
- * are absent when the store runs the default.
- */
-export interface EffectiveSetting {
-  readonly setting_key: string;
-  readonly value: Json;
-  readonly scope?: string;
-  readonly scope_id?: string;
-}
-
 /** How one store's settings publish went. Three outcomes, never two. */
 export type SettingPublishOutcome =
   | "SETTING_PUBLISH_APPLIED"
   | "SETTING_PUBLISH_UNCHANGED"
   | "SETTING_PUBLISH_FAILED";
-
-/** One store's row in a settings publish. */
-export interface SettingPublishResult {
-  readonly store_id: string;
-  readonly outcome: SettingPublishOutcome;
-  /** The config version the publish produced, for `SETTING_PUBLISH_APPLIED`. */
-  readonly config_version_id?: string;
-}
-
-/**
- * What a settings write, clear or republish did at every store it reached.
- *
- * A `200` is not "every store has it": a store that failed keeps the values it was last published
- * until it is published again with `POST /admin/settings/publish`.
- */
-export interface SettingPublishReport {
-  readonly stores: readonly SettingPublishResult[];
-}
-
-/** What `POST /admin/settings/presets` did: the settings it wrote, and the store's publish. */
-export interface SettingPresetsReport extends SettingPublishReport {
-  /** The keys of the settings written at the store's own scope. Empty when it set them all already. */
-  readonly applied: readonly string[];
-}
 
 // --- Fees (ADR-0159) ------------------------------------------------------------------------------
 
@@ -993,32 +646,6 @@ export type FeePublishOutcome =
   | "FEE_PUBLISH_REFUSED"
   | "FEE_PUBLISH_FAILED";
 
-/** One rule a store cannot apply, as a refused publish reports it: `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`. */
-export interface FeeFault {
-  readonly fee_id: string;
-  readonly reason: string;
-}
-
-/** One store's row in a fee write or publish. */
-export interface FeePublishResult {
-  readonly store_id: string;
-  readonly outcome: FeePublishOutcome | string;
-  /** The config version the publish produced, for `FEE_PUBLISH_APPLIED`. */
-  readonly config_version_id?: string;
-  /** For `FEE_PUBLISH_REFUSED`: each rule the store cannot apply, and why. */
-  readonly faults?: readonly FeeFault[];
-}
-
-/**
- * What a fee write, delete or republish did at every store it reached. A `200` is not "every store
- * charges it": a refused or failed store keeps the fees it had until it is published again.
- */
-export interface FeePublishReport {
-  /** The fee written; absent for a delete or a republish. */
-  readonly fee_id?: string;
-  readonly stores: readonly FeePublishResult[];
-}
-
 /** One fee as one store runs it, from `GET /admin/fees/effective`. */
 export interface EffectiveFee {
   readonly fee_id: string;
@@ -1053,39 +680,3 @@ export interface SampleLineInput {
   readonly quantity: number;
 }
 
-/** A sample bill as the store would assemble it, from `POST /admin/fees/preview`. */
-export interface SampleBill {
-  readonly store_id: string;
-  readonly sales_channel: string;
-  readonly lines: readonly {
-    readonly menu_item_id: string;
-    readonly display_name: string;
-    readonly quantity: number;
-    readonly unit_price: Money;
-    readonly line_total: Money;
-    readonly tax_class_id: string;
-  }[];
-  readonly subtotal: Money;
-  readonly fee_lines: readonly {
-    readonly fee_id: string;
-    readonly code: string;
-    readonly display_name: string;
-    readonly amount: Money;
-    readonly tax: Money;
-    readonly class_shares: readonly {
-      readonly tax_class_id: string;
-      readonly amount: Money;
-      readonly tax: Money;
-    }[];
-  }[];
-  readonly service_charge: Money;
-  readonly tax_lines: readonly {
-    readonly tax_class_id: string;
-    readonly taxable_base: Money;
-    readonly rate_basis_points: number;
-    readonly tax: Money;
-  }[];
-  readonly tax_total: Money;
-  readonly rounding_adjustment: Money;
-  readonly total_due: Money;
-}

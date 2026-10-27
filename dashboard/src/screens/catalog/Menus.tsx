@@ -9,13 +9,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type {
-  ChannelPrice,
-  ETag,
-  Menu,
-  MenuPlacement,
-  MenuSection,
-} from "../../api/types";
+import type { ETag } from "../../api/types";
 import { t } from "../../i18n";
 import { formatAmount } from "../../state/money";
 import { addToRelease, describePublish, previewNode } from "../../lib/publish-copy";
@@ -46,6 +40,7 @@ import { toast } from "../../components/Toast";
 import { emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
 import { SALES_CHANNELS, channelLabel, isKnownChannel } from "../../lib/channels";
 import type { KnownSalesChannel } from "../../lib/channels";
+import type { ChannelPrice, Menu, MenuPlacement, MenuSection } from "../../api/schemas";
 
 export function CatalogMenus() {
   // Write-in-flight only; the read's own refusal is `failureOf` below.

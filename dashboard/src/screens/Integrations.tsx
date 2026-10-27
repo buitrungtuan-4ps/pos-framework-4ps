@@ -15,11 +15,9 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { ApiError, api } from "../api/client";
 import type {
-  Connection,
   ConnectionInput,
   ConnectionScopeLevel,
   IntegrationFamily,
-  Provider,
   SettingValue,
 } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
@@ -49,6 +47,7 @@ import {
 import { ProviderFields } from "../components/ProviderFields";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
+import type { Connection, Provider } from "../api/schemas";
 
 /** The families in the order the screen lists them, each with its name and what it is for. */
 const FAMILIES: readonly {
@@ -106,7 +105,7 @@ export function Integrations() {
   const editor = useEntityCrud<Connection>();
   const deletion = useEntityCrud<Connection>();
   // Which family the editor is adding to — the provider picker lists only that family's vendors.
-  const [family, setFamily] = createSignal<IntegrationFamily>("INTEGRATION_FAMILY_E_INVOICE");
+  const [family, setFamily] = createSignal<string>("INTEGRATION_FAMILY_E_INVOICE");
   const [providerId, setProviderId] = createSignal("");
   const [name, setName] = createSignal("");
   const [scope, setScope] = createSignal<ConnectionScopeLevel>("CONNECTION_SCOPE_TENANT");
@@ -117,14 +116,14 @@ export function Integrations() {
   const [clearing, setClearing] = createSignal<string[]>([]);
 
   const chosen = () => providerById().get(providerId());
-  const inFamily = (wanted: IntegrationFamily) =>
+  const inFamily = (wanted: string) =>
     providers().filter((provider) => provider.family === wanted);
   const rowsIn = (wanted: IntegrationFamily) =>
     (connections.value() ?? []).filter(
       (row) => providerById().get(row.provider_id)?.family === wanted,
     );
 
-  const resetForm = (row: Connection | null, forFamily: IntegrationFamily) => {
+  const resetForm = (row: Connection | null, forFamily: string) => {
     setFamily(forFamily);
     setProviderId(row?.provider_id ?? inFamily(forFamily)[0]?.provider_id ?? "");
     setName(row?.display_name ?? "");

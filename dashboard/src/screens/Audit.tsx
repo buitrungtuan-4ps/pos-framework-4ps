@@ -7,7 +7,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { AdminIdentity, TrailOrder } from "../api/types";
+import type { TrailOrder } from "../api/types";
 import { t } from "../i18n";
 import { formatInstant, formatRelativeAge } from "../lib/format";
 import {
@@ -29,7 +29,7 @@ import {
   Toolbar,
 } from "../components/kit";
 import { createAdminResource, failureOf } from "../lib/resource";
-import type { AuditEntry } from "../api/schemas";
+import type { AdminIdentity, AuditEntry } from "../api/schemas";
 
 /**
  * How many entries one page of the table carries.
