@@ -162,6 +162,8 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_generate_vouchers,
         crate::http::cell::admin_get_cell,
         crate::cell::hq::admin_hq_rollups,
+        crate::http::cell_standing::admin_cell_standing,
+        crate::http::cell_standing::admin_acknowledge_cell,
         crate::http::countries::admin_list_countries,
         crate::http::countries::admin_list_locales,
         pos_cloud_catalog::routes::catalog::admin_list_display_categories,

@@ -155,7 +155,10 @@ is spent. Sign in at `/admin/login` with the password and a current code.
 - **Naming the cell**: a `[cell]` block in `secrets/cloud.toml` says which cell this deployment is
   ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md)). **A single deployment needs
   nothing**: with no block it is the one cell, named `default`. A fork that will run a second cell
-  adds the block by hand on the box:
+  commits `deploy/cells/<cell>.env` (copy `deploy/cells/example.env`); given those values as
+  `CELL_*`, `bootstrap.sh` writes the block once and keeps it afterwards, and a value the cloud would
+  refuse is warned about (`warn   …; [cell] not written`) and never fails the deploy. The block it
+  writes, which can equally be added by hand on the box:
 
   ```toml
   [cell]
@@ -208,6 +211,10 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   cross**: a store's daily event counts, no personal data. Each store's read has 10 seconds and
   1 MiB, follows no redirect, and the whole read has 30 seconds; a store not read says why. At most
   64 cells and 2,000 stores in all; a malformed block stops the boot naming the source.
+- **Where backups rest**: set `BACKUP_COUNTRY` in `deploy/cells/<cell>.env` to the country the
+  `RCLONE_REMOTE` bucket is in. `bootstrap.sh` records it with the cell's home country in `.env`,
+  and every off-box backup then logs `region   backups rest in VN`, or warns when that country is
+  not the cell's home country or was never recorded (ADR-0179). A warning never stops a backup.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach
