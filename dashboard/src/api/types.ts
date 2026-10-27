@@ -7,6 +7,10 @@ import type {
   DailyCash,
   DailyRevenue,
   DailyRollup,
+  Ingredient,
+  Money,
+  Quantity,
+  Supplier,
   TranslationImportReport,
 } from "./schemas";
 
@@ -69,11 +73,6 @@ export interface XzReport {
   readonly till_names: Readonly<Record<string, string>>;
 }
 
-/** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
-export interface ActivationCode {
-  readonly activation_code: string;
-}
-
 /**
  * The same rail's report for the **item master** (roadmap-v3 **F15**).
  *
@@ -97,150 +96,8 @@ export type EntityStatus = "active" | "archived";
  */
 export type ETag = string;
 
-/** A tenant from `GET /admin/tenants` (ADR-0065) — the root of the org tree. */
-export interface Tenant {
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A brand from `GET /admin/brands` — grouped under a tenant. */
-export interface Brand {
-  readonly brand_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A store from `GET /admin/stores` — grouped under a tenant and, optionally, a brand. */
-export interface Store {
-  readonly store_id: string;
-  readonly tenant_id: string;
-  readonly brand_id: string | null;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/**
- * A store group from `GET /admin/store-groups` — a named delivery cohort
- * ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
- *
- * Not the brand: a store belongs to exactly one brand and to any number of groups, because the
- * sets an operator publishes to cut across identity — the airport branches on a reduced menu, the
- * shops on one tax registration, the pilots that take a change first. A group holds no
- * configuration of its own; it is a list of stores to publish to as one.
- */
-export interface StoreGroup {
-  readonly group_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  /** The membership, riding along with the list so a screen never fetches it per group. */
-  readonly store_ids: readonly string[];
-  readonly etag: ETag;
-}
-
 /** What a batch did at one member (ADR-0122 §6). Three outcomes, never two. */
 export type BatchOutcome = "applied" | "skipped" | "failed";
-
-/** One member's row in a batch report. */
-export interface BatchResultRow {
-  readonly store_id: string;
-  readonly outcome: BatchOutcome;
-  /**
-   * The refusal's own message, for `skipped` and `failed` — the same sentence the single-store
-   * publish would have returned. Absent when it applied.
-   */
-  readonly detail?: string;
-  /** The config version the publish produced, for `applied`. This is what makes drift visible. */
-  readonly config_version_id?: string;
-  readonly at_ms: number;
-}
-
-/**
- * A batch publish and what it did at every member.
- *
- * A `200` is *not* "every store succeeded": a batch is deliberately not atomic (ADR-0122 §5), so
- * the counts and the per-store rows are the answer. A member whose last batch was not `applied` is
- * a store that is not running what its group runs.
- */
-export interface ConfigBatchReport {
-  readonly batch_id: string;
-  readonly group_id: string;
-  readonly node: string;
-  readonly arguments: Json;
-  readonly actor_email: string;
-  readonly started_at_ms: number;
-  /** Absent for a batch that died mid-fan-out — the row an operator goes looking for. */
-  readonly finished_at_ms?: number;
-  readonly applied: number;
-  readonly skipped: number;
-  readonly failed: number;
-  readonly results: readonly BatchResultRow[];
-}
-
-/** A device from `GET /admin/stores/{id}/devices` — the canonical device identity. */
-export interface Device {
-  readonly device_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly name: string;
-  readonly kind: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** Integer money (`pos-proto` `Money`): a currency and an amount in that currency's smallest unit. */
-export interface Money {
-  readonly currency_code: string;
-  readonly amount_minor: number;
-}
-
-/** A tax class — a named bucket an item belongs to (ADR-0066 entity 10). Its id is the item's `tax_class_id`. */
-export interface TaxClass {
-  readonly tax_class_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/**
- * One authored tax rate from `GET /admin/catalog/tax-rates` (ADR-0074, Track M4): the rate a tax class
- * resolves to on a sales channel, in **basis points** (10% is `1000`, the reduced 8% is `800`).
- * `sales_channel` is the full wire token. `PUT /admin/catalog/tax-rates` replaces a tenant's whole
- * table with a list of these; the edge reprices against it.
- */
-export interface TaxRate {
-  readonly tax_class_id: string;
-  readonly sales_channel: string;
-  readonly rate_bps: number;
-  /**
-   * How the rate is broken out on the invoice, when a country requires it
-   * ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). The parts must sum to
-   * `rate_bps`, and the server refuses a save where they do not.
-   *
-   * Empty is the ordinary case and means the invoice prints one line. India's 5 % restaurant GST is
-   * `[CGST 2.5 %, SGST 2.5 %]`, because the halves go to different governments.
-   */
-  readonly components: readonly TaxComponent[];
-  /**
-   * `true` on a row saved before the cloud checked names, one of whose `components` is named with
-   * anything but a code of two to eight capital letters and digits, starting with a letter
-   * (ADR-0168). Absent otherwise. The cloud refuses to save the grid until it is renamed, and the
-   * store charges the rate without its breakdown meanwhile. Read only: a save sends no such field.
-   */
-  readonly component_name_invalid?: boolean;
-}
-
-/** One named part of a tax rate, in basis points. */
-export interface TaxComponent {
-  readonly name: string;
-  readonly rate_bps: number;
-}
 
 // --- Campaigns & scheduling (ADR-0077, Track M3) --------------------------------------------------
 
@@ -337,21 +194,6 @@ export interface Voucher {
 /** A scheduled publish's lifecycle (`ScheduledPublishStatus`, snake_case on the wire). */
 export type ScheduledPublishStatus = "pending" | "applied" | "cancelled";
 
-/** A pending/applied/cancelled scheduled publish (`ScheduledPublishView`) — metadata only, no payload. */
-export interface ScheduledPublish {
-  readonly id: string;
-  readonly node_key: string;
-  readonly effective_at_ms: number;
-  readonly status: ScheduledPublishStatus;
-  readonly created_at_ms: number;
-}
-
-/** The `201` response of a schedule request — the new row's id and when it fires. */
-export interface ScheduledPublishCreated {
-  readonly id: string;
-  readonly effective_at_ms: number;
-}
-
 /**
  * Where a config release stands (`ReleaseStatus`, ADR-0125 §4).
  *
@@ -361,72 +203,10 @@ export interface ScheduledPublishCreated {
  */
 export type ReleaseStatus = "draft" | "scheduled" | "applying" | "applied" | "partial";
 
-/**
- * A config release: a name over a set of publishes, aimed at a cohort or a store list, timed once.
- *
- * The moment is two shapes and never both. `wall_clock_date`/`wall_clock_time` is what the operator
- * said in local terms ("Monday 04:00"), which the cloud converts to one instant *per store* from
- * that store's published timezone — a fleet spanning Ho Chi Minh City and Tokyo has a two-hour
- * spread. `instant_at_ms` is a single UTC instant instead, which needs no published locale and is
- * the escape hatch for a store still being set up.
- */
-export interface Release {
-  readonly release_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: ReleaseStatus;
-  readonly target_group_id: string | null;
-  readonly wall_clock_date: string | null;
-  readonly wall_clock_time: string | null;
-  readonly instant_at_ms: number | null;
-  readonly created_by: string;
-  readonly created_at_ms: number;
-  readonly updated_at_ms: number;
-}
-
-/**
- * One (node, store) cell of a release's report.
- *
- * `failure` is why it last could not apply. A pair that failed is still `pending`: the activator
- * retries it, and what an operator needs meanwhile is the reason, not a status that pretends the
- * attempt never happened. The snapshotted node value is deliberately not on the wire.
- */
-export interface ReleasePair {
-  readonly pair_id: string;
-  readonly store_id: string;
-  readonly node: string;
-  readonly status: ScheduledPublishStatus;
-  readonly effective_at_ms: number;
-  /**
-   * The IANA zone `effective_at_ms` was resolved against, or `null`.
-   *
-   * What turns the instant back into the sentence the operator approved. A wall-clock release is one
-   * instant per timezone, and printing the instant without its clock draws every shop's 04:00 in the
-   * reader's own time — which is the review
-   * [ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 rejected
-   * fire-time conversion to get. `null` for a release timed as a plain UTC instant, which has no
-   * per-store clock.
-   */
-  readonly resolved_timezone: string | null;
-  readonly applied_version_id: string | null;
-  readonly failure: string | null;
-}
-
-/** A release and the node × store grid of its pairs — the answer to "did Ginza get the new tax table". */
-export interface ReleaseReport {
-  readonly release: Release;
-  readonly pairs: readonly ReleasePair[];
-}
-
 /** One node of a release, and the arguments its compiler needs — the same pair a batch publish takes. */
 export interface ReleaseNode {
   readonly node: string;
   readonly arguments: Json;
-}
-
-/** A quantity in thousandths of a unit (`Quantity`) — 1.5 kg is `{ milli: 1500 }`. */
-export interface Quantity {
-  readonly milli: number;
 }
 
 /** A unit of measure (`UnitOfMeasure`); wire tokens are prefixed `UNIT_OF_MEASURE_` (ADR-0079). */
@@ -535,14 +315,6 @@ export interface ReasonCodePublishResult {
  */
 export type ReasonCodeInput = Omit<ReasonCode, "id" | "etag" | "updated_at_ms">;
 
-/** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
-export interface Ingredient {
-  readonly id: string;
-  readonly name: string;
-  readonly unit: UnitOfMeasure;
-  readonly etag: ETag;
-}
-
 /**
  * The authoring fields of an ingredient create/update — an `Ingredient` without its server-owned id
  * or the version it was read at (a write sends that as `If-Match`, not in the body).
@@ -568,13 +340,6 @@ export interface Recipe {
 
 /** The authoring fields of a recipe write — the BOM and threshold; the item is the URL key. */
 export type RecipeInput = Omit<Recipe, "item" | "etag">;
-
-/** A supplier reference (`PublishedSupplier`) — id and name only; purchasing lives in the ERP (§19). */
-export interface Supplier {
-  readonly id: string;
-  readonly name: string;
-  readonly etag: ETag;
-}
 
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
 export type SupplierInput = Omit<Supplier, "id" | "etag">;
@@ -629,49 +394,6 @@ export interface CampaignPreview {
   readonly from_version_id: string | null;
   readonly diff: Json;
   readonly unchanged: boolean;
-}
-
-/**
- * What `POST /admin/config/preview` answers with (roadmap-v3 **F11**): the same dry run the
- * campaigns preview always gave, for any node the cloud's node registry can compile.
- *
- * The same shape as {@link CampaignPreview} plus the node it was asked about, so a screen with
- * several publish bars — Channels has four — can tell one answer from another.
- */
-export interface NodePreview {
-  readonly node: string;
-  readonly from_version_id: string | null;
-  readonly diff: Json;
-  readonly unchanged: boolean;
-}
-
-/**
- * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
- * data: the code, human name, currency, preferred language, number format, and default retention
- * period. Feeds the currency picker and locale surfaces. `GET /admin/locales` returns the content
- * locales the platform can serve (BCP-47 tags), which the translation grid uses for its columns.
- */
-export interface Country {
-  readonly code: string;
-  readonly display_name: string;
-  readonly currency_code: string;
-  /**
-   * How many decimal places that currency has: 0 for the đồng and the yen, 2 for the paisa and the
-   * cent (ADR-0134). Every amount the console reads and writes is an integer in the minor unit, so
-   * this is what says where the decimal point goes.
-   */
-  readonly currency_exponent: number;
-  readonly default_language: string;
-  readonly decimal_separator: string;
-  readonly group_separator: string;
-  readonly digits_per_group: number;
-  readonly default_retention_days: number;
-  /** Whether this country's menu prices already contain their tax (ADR-0104): Japan and India do. */
-  readonly prices_include_tax: boolean;
-  /** What the total rounds to in cash, in minor units, or `null` for no rounding (ADR-0105). */
-  readonly cash_rounding_increment: number | null;
-  /** The notes a guest hands over, ascending, in minor units. Empty means the exact amount only. */
-  readonly cash_denominations: readonly number[];
 }
 
 /** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */

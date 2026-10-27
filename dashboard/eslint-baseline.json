@@ -5,9 +5,6 @@
   "src/api/client.ts": {
     "max-lines": 2083
   },
-  "src/api/types.ts": {
-    "max-lines": 1204
-  },
   "src/components/AccountMenu.tsx": {
     "max-lines-per-function": 154
   },

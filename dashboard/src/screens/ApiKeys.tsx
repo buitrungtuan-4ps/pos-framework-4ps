@@ -14,7 +14,6 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { formatInstant } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -41,7 +40,7 @@ import {
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
-import type { ApiKeySummary } from "../api/schemas";
+import type { ApiKeySummary, Store } from "../api/schemas";
 
 // The scopes that gate a live route. `relay_orders` belongs here because a store key without it
 // leaves the order relay answering 403 on every poll while config-pull works fine — a half-connected

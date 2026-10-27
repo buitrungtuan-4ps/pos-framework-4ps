@@ -21,7 +21,7 @@
 import { Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { ChainFinding, Store } from "../api/types";
+import type { ChainFinding } from "../api/types";
 import { t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -29,6 +29,7 @@ import { RequireContext } from "../lib/scoped";
 import { storeName, storeId } from "../state/session";
 import { Banner, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import { type Column, DataTable, EmptyState } from "../components/kit";
+import type { Store } from "../api/schemas";
 
 /** How often the findings re-read, so one arriving mid-shift shows without a manual refresh. */
 const POLL_MS = 30_000;

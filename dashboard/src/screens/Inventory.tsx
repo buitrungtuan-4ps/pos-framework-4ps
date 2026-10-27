@@ -14,12 +14,10 @@ import { api } from "../api/client";
 import {
   UNITS,
   type ETag,
-  type Ingredient,
   type IngredientInput,
   type Recipe,
   type RecipeInput,
   type RecipeLine,
-  type Supplier,
   type SupplierInput,
   type UnitOfMeasure,
 } from "../api/types";
@@ -50,6 +48,8 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import type { Ingredient, Supplier } from "../api/schemas";
+import { tokenLabel } from "../lib/tokens";
 
 /** The unit tokens mapped to their labels. */
 const UNIT_LABEL: Record<UnitOfMeasure, MessageKey> = {
@@ -108,7 +108,7 @@ export function Inventory() {
   // on that version (ADR-0095), so the two travel together rather than in signals that could drift.
   const [ingEditing, setIngEditing] = createSignal<{ id: string; etag: ETag } | null>(null);
   const [ingName, setIngName] = createSignal("");
-  const [ingUnit, setIngUnit] = createSignal<UnitOfMeasure>("UNIT_OF_MEASURE_GRAM");
+  const [ingUnit, setIngUnit] = createSignal<string>("UNIT_OF_MEASURE_GRAM");
   const [pendingIngDelete, setPendingIngDelete] = createSignal<Ingredient | null>(null);
 
   // Recipe drawer (keyed by item; the item is chosen on create, fixed on edit).
@@ -387,7 +387,7 @@ export function Inventory() {
     {
       key: "unit",
       header: t("inventory.unit"),
-      cell: (row) => <StatusBadge tone="neutral" label={t(UNIT_LABEL[row.unit])} />,
+      cell: (row) => <StatusBadge tone="neutral" label={tokenLabel(UNIT_LABEL, row.unit)} />,
     },
     {
       key: "id",
@@ -636,7 +636,7 @@ export function Inventory() {
               label={t("inventory.unit")}
               value={ingUnit()}
               options={UNITS.map((unit) => ({ value: unit, label: t(UNIT_LABEL[unit]) }))}
-              onChange={(value) => setIngUnit(value as UnitOfMeasure)}
+              onChange={setIngUnit}
             />
           </div>
         </Drawer>
@@ -704,7 +704,7 @@ export function Inventory() {
                             value={line.ingredient}
                             options={(ingredients() ?? []).map((ing) => ({
                               value: ing.id,
-                              label: `${ing.name} (${t(UNIT_LABEL[ing.unit])})`,
+                              label: `${ing.name} (${tokenLabel(UNIT_LABEL, ing.unit)})`,
                             }))}
                             onChange={(value) =>
                               setRecLines((prev) =>

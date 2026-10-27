@@ -28,3 +28,27 @@ export type DailyCash = Schemas["DailyCash"];
 export type TranslationGrid = Schemas["TranslationGrid"];
 export type TranslationImportRow = Schemas["ImportRow"];
 export type TranslationImportReport = Schemas["ImportReport"];
+
+export type Tenant = Schemas["Versioned_TenantRecord"];
+export type Brand = Schemas["Versioned_BrandRecord"];
+export type Store = Schemas["Versioned_StoreRecord"];
+export type StoreGroup = Schemas["StoreGroupView"];
+export type BatchResultRow = Schemas["BatchResultView"];
+export type ConfigBatchReport = Schemas["BatchReport"];
+export type Device = Schemas["Versioned_DeviceRecord"];
+export type Money = Schemas["Money"];
+export type TaxClass = Schemas["Versioned_TaxClass"];
+export type TaxRate = Schemas["TaxRateView"];
+export type TaxComponent = Schemas["TaxComponentView"];
+export type ActivationCode = Schemas["IssueActivationResponse"];
+
+export type ScheduledPublish = Schemas["ScheduledPublishView"];
+export type ScheduledPublishCreated = Schemas["CampaignsScheduled"];
+export type Release = Schemas["ReleaseView"];
+export type ReleasePair = Schemas["ReleasePairView"];
+export type ReleaseReport = Schemas["ReleaseReport"];
+export type NodePreview = Schemas["NodePreview"];
+export type Country = Schemas["CountryView"];
+export type Quantity = Schemas["Quantity"];
+export type Ingredient = Schemas["Versioned_PublishedIngredient"];
+export type Supplier = Schemas["Versioned_PublishedSupplier"];
