@@ -73,7 +73,7 @@ bash -n "$WORK/reconcile.sh" || fail "the extracted region does not parse"
 
 # Step 2c, the [release_source] block, runs on the same helpers and is its own script.
 r_start="$(line_of '^# 2c\.')"
-r_end=$(( $(line_of '^# 3\. NATS') - 1 ))
+r_end=$(( $(line_of '^# 2d\.') - 1 ))
 [ -n "$r_start" ] && [ "$r_end" -gt "$r_start" ] || {
   echo "FAIL  could not locate step 2c ([release_source]) in bootstrap.sh" >&2
   exit 1
@@ -87,8 +87,25 @@ r_end=$(( $(line_of '^# 3\. NATS') - 1 ))
 } > "$WORK/release.sh"
 grep -q '} | cloud_toml_append' "$WORK/release.sh" || fail "extraction lost step 2c's append"
 bash -n "$WORK/release.sh" || fail "the extracted step 2c does not parse"
+
+# Step 2d, the [cell] block (ADR-0179 C8), runs on the same helpers and is its own script.
+d_start="$(line_of '^# 2d\.')"
+d_end=$(( $(line_of '^# 3\. NATS') - 1 ))
+[ -n "$d_start" ] && [ "$d_end" -gt "$d_start" ] || {
+  echo "FAIL  could not locate step 2d ([cell]) in bootstrap.sh" >&2
+  exit 1
+}
+{
+  echo 'set -euo pipefail'
+  echo 'SECRETS="$PWD/secrets"'
+  sed -n "${h_start},${h_end}p" "$BOOTSTRAP"
+  sed -n "${d_start},${d_end}p" "$BOOTSTRAP"
+  echo 'echo "done   bootstrap complete"'
+} > "$WORK/cell.sh"
+grep -q '} | cloud_toml_append' "$WORK/cell.sh" || fail "extraction lost step 2d's append"
+bash -n "$WORK/cell.sh" || fail "the extracted step 2d does not parse"
 [ "$fails" = 0 ] || { echo "refusing to assert against a broken extraction" >&2; exit 1; }
-pass "extracted the helpers, the reconcile block and step 2c from bootstrap.sh"
+pass "extracted the helpers, the reconcile block and steps 2c and 2d from bootstrap.sh"
 
 # --------------------------------------------------------------------------------------------------
 # Scenarios. Each writes a fixture cloud.toml, runs the block, and checks status + output.
@@ -367,6 +384,125 @@ expect_completed
 expect_says "could not write"
 expect_silent_on "set    cloud.toml"
 if grep -q release_source secrets/cloud.toml; then fail "$name: wrote the block anyway"; else pass "$name: wrote nothing"; fi
+
+# --------------------------------------------------------------------------------------------------
+# Step 2d. The deploy workflow hands bootstrap.sh a cell's values from deploy/cells/<cell>.env and
+# the [cell] block is written once (ADR-0179 C8). Like 2c it belongs to the operator afterwards, it is
+# never written from a value the cloud would refuse, and no value ever fails the deploy.
+# --------------------------------------------------------------------------------------------------
+cell_scenario() {   # $1 = name, then KEY=value pairs for the environment; stdin = the fixture
+  name="$1"; shift
+  rm -rf secrets && mkdir -p secrets
+  cat > secrets/cloud.toml
+  cp secrets/cloud.toml before.toml
+  set +e
+  out="$(env "$@" bash "$WORK/cell.sh" 2>&1)"
+  rc=$?
+  set -e
+}
+VN1=(CELL_ID=vn1 CELL_COUNTRY_ALIAS=vn CELL_HOME_COUNTRY=VN CELL_RUNS_IN=VN
+     CELL_BASE_URL=https://vn1.example.com)
+
+cell_scenario "D1 absent" "${VN1[@]}" <<'TOML'
+bind = "0.0.0.0:8080"
+
+[artifacts]
+bucket = "pos-artifacts"
+TOML
+expect_completed
+expect_says "set    cloud.toml [cell] cell_id = vn1"
+if head -c "$(wc -c < before.toml)" secrets/cloud.toml | cmp -s - before.toml &&
+   [ "$(grep '^\[' secrets/cloud.toml | tail -1)" = "[cell]" ] &&
+   [ "$(tail -5 secrets/cloud.toml | tr '\n' '|')" = \
+     'cell_id = "vn1"|country_alias = "vn"|home_country = "VN"|base_url = "https://vn1.example.com"|runs_in = "VN"|' ]; then
+  pass "$name: [cell] is the last table, with every key the cloud reads"
+else
+  fail "$name: the block is not what the cloud reads"; sed 's/^/      /' secrets/cloud.toml >&2
+fi
+
+cell_scenario "D2 no alias" CELL_ID=jp1 CELL_HOME_COUNTRY=JP CELL_RUNS_IN=JP \
+  CELL_BASE_URL=https://jp1.example.com <<'TOML'
+bind = "0.0.0.0:8080"
+TOML
+expect_completed
+if grep -q country_alias secrets/cloud.toml; then fail "$name: wrote an empty alias"
+else pass "$name: no alias line"; fi
+
+# The operator's own block, perhaps with the directory keys (C2): left exactly as it is.
+for spelling in '[cell]' '[ cell ]' 'cell.cell_id = "vn1"' '  cell = { cell_id = "vn1" }'; do
+  cell_scenario "D3 present as $spelling" "${VN1[@]}" <<TOML
+bind = "0.0.0.0:8080"
+$spelling
+TOML
+  expect_completed
+  expect_says "keep   cell"
+  expect_unchanged
+done
+
+# A commented-out example is not a block.
+cell_scenario "D4 only a commented example" "${VN1[@]}" <<'TOML'
+bind = "0.0.0.0:8080"
+# [cell]
+# cell_id = "vn1"
+TOML
+expect_completed
+expect_says "set    cloud.toml [cell]"
+
+# Nothing passed is level 0: no block, and nothing said.
+cell_scenario "D5 nothing passed" <<'TOML'
+bind = "0.0.0.0:8080"
+TOML
+expect_completed
+expect_silent_on "cell"
+expect_unchanged
+
+# A value the cloud would refuse at boot is never written, and the deploy goes on.
+for bad in "CELL_ID=VN" "CELL_ID=vn" "CELL_COUNTRY_ALIAS=VNM" "CELL_HOME_COUNTRY=vn" \
+           "CELL_RUNS_IN=" "CELL_BASE_URL=http://vn1.example.com" \
+           "CELL_BASE_URL=https://vn1.example.com/path" 'CELL_BASE_URL=https://a"b.example.com'; do
+  cell_scenario "D6 refused $bad" "${VN1[@]}" "$bad" <<'TOML'
+bind = "0.0.0.0:8080"
+TOML
+  expect_completed
+  expect_says "[cell] not written"
+  expect_unchanged
+done
+
+# --------------------------------------------------------------------------------------------------
+# backup.sh's region note (ADR-0179 C7, recorded in C8): a warning and never a stop. Kept in this
+# file because it is the deploy test pr.yml runs.
+# --------------------------------------------------------------------------------------------------
+BACKUP="$HERE/../backup.sh"
+n_start="$(grep -n '^env_value() {' "$BACKUP" | cut -d: -f1 || true)"
+n_end="$(awk -v s="$n_start" 'NR>s && /^}$/ {print NR; exit}' "$BACKUP")"
+[ -n "$n_start" ] && [ -n "$n_end" ] || { echo "FAIL  could not locate the region note in backup.sh" >&2; exit 1; }
+{
+  echo 'set -euo pipefail'
+  echo 'HERE="$PWD"'
+  sed -n "${n_start},${n_end}p" "$BACKUP"
+  echo 'backup_region_note'
+  echo 'echo "done   bootstrap complete"'
+} > "$WORK/region.sh"
+bash -n "$WORK/region.sh" || fail "the extracted region note does not parse"
+
+region_case() {   # $1 = name, $2 = .env contents ("" for none), then KEY=value overrides
+  name="$1"; contents="$2"; shift 2
+  rm -f .env
+  if [ -n "$contents" ]; then printf '%s\n' "$contents" > .env; fi
+  set +e
+  out="$(env -u BACKUP_COUNTRY -u CELL_HOME_COUNTRY "$@" bash "$WORK/region.sh" 2>&1)"
+  rc=$?
+  set -e
+}
+region_case "B1 same country" $'CELL_HOME_COUNTRY=VN\nBACKUP_COUNTRY=VN'
+expect_completed; expect_says "region   backups rest in VN"
+region_case "B2 another country" $'CELL_HOME_COUNTRY=VN\nBACKUP_COUNTRY=SG'
+expect_completed; expect_says "backups rest in SG, outside this cell's home country VN"
+region_case "B3 not recorded" ""
+expect_completed; expect_says "is not recorded"
+region_case "B4 the environment overrides .env" "BACKUP_COUNTRY=SG" BACKUP_COUNTRY=VN CELL_HOME_COUNTRY=VN
+expect_completed; expect_says "region   backups rest in VN"
+rm -f .env
 
 # --------------------------------------------------------------------------------------------------
 # The static rule the fifth blocker earned: read a helper's status through a captured variable, not
