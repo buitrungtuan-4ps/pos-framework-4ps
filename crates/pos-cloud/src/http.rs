@@ -106,6 +106,7 @@ mod archives;
 mod authored_layer;
 pub(crate) mod campaigns;
 pub(crate) mod cell;
+pub(crate) mod cell_standing;
 mod chain;
 mod cloud_routes;
 pub(crate) mod config_nodes;
@@ -158,6 +159,7 @@ pub use campaigns::{
 };
 pub use catalog::{catalog_publish_router, catalog_router};
 pub use cell::cell_router;
+pub use cell_standing::cell_standing_router;
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{
