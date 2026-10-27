@@ -467,3 +467,27 @@ fn a_cell_section_is_read_and_checked_at_boot() {
         .expect_err("a country is not a cell id");
     assert!(error.contains("cell_id"), "{error}");
 }
+
+/// A `[federation]` section is checked at boot: a source that cannot be read stops the process by
+/// name, and no section is no federation (ADR-0179 C10).
+#[test]
+fn a_federation_section_is_checked_at_boot() {
+    assert!(valid().federation.is_none());
+    let text = format!(
+        "{MINIMAL_TOML}internal_shared_secret = \"{}\"\n[[federation.sources]]\ncell_id = \"jp1\"\n\
+         api_key = \"pos_k1_secret\"\nstores = [\"01M2219QK4T3W6Z0Y8FBQ2X5MV\"]\n",
+        "a".repeat(MIN_INTERNAL_SECRET_LEN)
+    );
+    let config = CloudConfig::from_toml(&text).expect("the section parses");
+    assert!(config.validate().is_ok());
+    assert!(
+        !format!("{config:?}").contains("pos_k1_secret"),
+        "the key never reaches a Debug"
+    );
+    let broken = text.replace("01M2219QK4T3W6Z0Y8FBQ2X5MV", "store-1");
+    let error = CloudConfig::from_toml(&broken)
+        .expect("parses")
+        .validate()
+        .expect_err("a store that is not a ULID");
+    assert!(error.contains("[federation]"), "{error}");
+}

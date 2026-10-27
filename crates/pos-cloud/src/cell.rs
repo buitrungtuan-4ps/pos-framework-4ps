@@ -23,6 +23,7 @@ use pos_proto::locale::CountryCode;
 use serde::Deserialize;
 
 pub mod directory;
+pub mod federation;
 pub mod signed;
 #[cfg(test)]
 pub(crate) mod testkit;
