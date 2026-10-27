@@ -15,9 +15,7 @@ import type {
   Menu,
   MenuPlacement,
   MenuSection,
-  SalesChannel,
 } from "../../api/types";
-import { SALES_CHANNELS } from "../../api/types";
 import { t } from "../../i18n";
 import { formatAmount } from "../../state/money";
 import { addToRelease, describePublish, previewNode } from "../../lib/publish-copy";
@@ -45,7 +43,9 @@ import {
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
-import { CHANNEL_LABEL, emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
+import { emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
+import { SALES_CHANNELS, channelLabel, isKnownChannel } from "../../lib/channels";
+import type { KnownSalesChannel } from "../../lib/channels";
 
 export function CatalogMenus() {
   // Write-in-flight only; the read's own refusal is `failureOf` below.
@@ -97,7 +97,7 @@ export function CatalogMenus() {
   >(null);
   const [bulkAppliedCount, setBulkAppliedCount] = createSignal(0);
   const [bulkSection, setBulkSection] = createSignal("");
-  const [bulkChannel, setBulkChannel] = createSignal<SalesChannel>("SALES_CHANNEL_DINE_IN");
+  const [bulkChannel, setBulkChannel] = createSignal<KnownSalesChannel>("SALES_CHANNEL_DINE_IN");
   const [bulkCurrency, setBulkCurrency] = createSignal("VND");
   const [bulkAmount, setBulkAmount] = createSignal<number | null>(null);
 
@@ -422,16 +422,17 @@ export function CatalogMenus() {
     setPlacementOpen(true);
   };
 
-  const setChannelAmount = (channel: SalesChannel, amount: number | null) =>
+  const setChannelAmount = (channel: KnownSalesChannel, amount: number | null) =>
     setPriceSheet({ ...priceSheet(), [channel]: amount });
 
   const pricesFromSheet = (
-    sheet: Record<SalesChannel, number | null>,
+    sheet: Record<string, number | null>,
     currency: string,
   ): ChannelPrice[] => {
     const prices: ChannelPrice[] = [];
-    for (const channel of SALES_CHANNELS) {
-      const amount = sheet[channel];
+    // The known channels in editor order, then any a newer cloud priced, kept as they were.
+    for (const channel of [...SALES_CHANNELS, ...Object.keys(sheet).filter((c) => !isKnownChannel(c))]) {
+      const amount = sheet[channel] ?? null;
       if (amount !== null) {
         prices.push({
           sales_channel: channel,
@@ -509,7 +510,7 @@ export function CatalogMenus() {
       .filter((price) => price.sales_channel)
       .map(
         (price) =>
-          `${t(CHANNEL_LABEL[price.sales_channel as SalesChannel])} ${formatAmount(price.unit_price)}`,
+          `${channelLabel(price.sales_channel ?? "")} ${formatAmount(price.unit_price)}`,
       );
     return parts.length > 0 ? parts.join(" · ") : t("catalog.noPrices");
   };
@@ -1063,9 +1064,9 @@ export function CatalogMenus() {
                 {(channel) => (
                   <MoneyField
                     data-step="setChannelAmount"
-                    label={t(CHANNEL_LABEL[channel])}
+                    label={channelLabel(channel)}
                     currencyCode={placementCurrency()}
-                    value={priceSheet()[channel]}
+                    value={priceSheet()[channel] ?? null}
                     onChange={(amount) => setChannelAmount(channel, amount)}
                   />
                 )}
@@ -1144,9 +1145,9 @@ export function CatalogMenus() {
             value={bulkChannel()}
             options={SALES_CHANNELS.map((channel) => ({
               value: channel,
-              label: t(CHANNEL_LABEL[channel]),
+              label: channelLabel(channel),
             }))}
-            onChange={(value) => setBulkChannel(value as SalesChannel)}
+            onChange={(value) => setBulkChannel(value as KnownSalesChannel)}
           />
           <SelectField
             label={t("catalog.currency")}
