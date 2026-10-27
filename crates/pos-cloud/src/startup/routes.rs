@@ -491,6 +491,7 @@ fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         config,
         audit,
         providers,
+        cell,
         ..
     } = *deps;
     Router::new()
@@ -511,6 +512,8 @@ fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
             Arc::clone(audit),
+            // Each connection's processing country is compared with this (ADR-0179 C7).
+            cell.home_country,
         ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
@@ -769,6 +772,15 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
     Router::new()
         // Which cell this is (ADR-0179 C1): the `[cell]` section, read-only.
         .merge(http::cell_router(cell, store.admin(), SystemClock))
+        // A store whose country differs from its cell's (ADR-0179 C6): a warning, and an
+        // acknowledgement recorded in the audit trail, never a refusal.
+        .merge(http::cell_standing_router(
+            store.audit(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::new(cell.clone()),
+        ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(

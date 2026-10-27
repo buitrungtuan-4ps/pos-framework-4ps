@@ -14,8 +14,15 @@ A cell is named by a cell id (`vn1`, `jp1`), not a country
 only cell, which is that record's level 0, and needs nothing more. An optional `[cell]` section in
 `cloud.toml` names it: id, country alias, home country, base URL and the country it runs in
 ([`docs/deploy-runbook.md`](../docs/deploy-runbook.md)); without one it is the cell `default`.
-Decided but not built yet: a minisign-signed cell directory in every cell, a non-secret
-`deploy/cells/<cell>.env` and one GitHub Environment per cell, deployed as a matrix in canary order.
+A cell's non-secret values live in [`cells/<cell>.env`](cells/example.env), one file per cell,
+committed: its id, country alias, home country, base URL, the country it runs in, its canary rank,
+and the country its off-box backups rest in (`BACKUP_COUNTRY`). Given those as `CELL_*` and
+`BACKUP_COUNTRY`, `bootstrap.sh` writes the `[cell]` section once (an existing one is kept, and a
+value the cloud would refuse is warned about and never fails the deploy), and `backup.sh` says where
+each off-box backup rests, warning when that is not the cell's home country or is not recorded.
+Decided but not built yet: a minisign-signed cell directory in every cell, and one GitHub
+Environment per cell, deployed as a matrix in canary order; the workflow change is drafted for the
+owner to apply.
 Levels 0 and 1 use only what runs below, with Caddy's per-host HTTP-01 certificates and the
 registrar's plain DNS.
 
