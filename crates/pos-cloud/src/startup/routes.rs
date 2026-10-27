@@ -905,7 +905,11 @@ pub(crate) fn with_guest_ordering(service: Router, deps: &RouteDeps<'_>) -> Rout
 
 /// The finished service: the console as the fallback, then the `/sync` budget, then the console's
 /// security headers outermost — in that order, because each layer covers only what is beneath it.
-pub(crate) fn served(service: Router, sync_throttle: SyncThrottle<SystemClock>) -> Router {
+pub(crate) fn served(
+    service: Router,
+    sync_throttle: SyncThrottle<SystemClock>,
+    cell: &Arc<CellDirectory>,
+) -> Router {
     // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
     // first, and everything else — `/`, client-routed paths, the built static assets — is served
     // the single-page app, with an unknown path returning index.html for client-side routing.
@@ -918,6 +922,14 @@ pub(crate) fn served(service: Router, sync_throttle: SyncThrottle<SystemClock>) 
     let service = service.layer(axum::middleware::from_fn_with_state(
         sync_throttle,
         http::throttle_sync,
+    ));
+    // The front door (ADR-0179 C5): a request for a tenant homed in another cell is redirected
+    // there, 302 for a browser and 307 for an API call, never proxied. Over the fully-composed
+    // service, fallback included, because a browser's first request is the console document; and
+    // outside the throttle, so a redirected request costs this cell no budget.
+    let service = service.layer(axum::middleware::from_fn_with_state(
+        Arc::clone(cell),
+        pos_cloud::cell::front_door::front_door,
     ));
     // The console security headers over the **fully-composed** service (ADR-0067 slice 5,
     // production-readiness **S3**). `http::router` layers the same middleware over its own routes, and

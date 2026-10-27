@@ -7,7 +7,7 @@ This directory holds the deployment artifacts; the store-side service unit lives
 [`edge/`](edge/). The end-to-end fork-to-UI runbook is P8e; this README documents the stack
 itself so it is reviewable and operable on its own.
 
-## Cells: named and directed, the rest decided and not built
+## Cells
 
 A cell is named by a cell id (`vn1`, `jp1`), not a country
 ([ADR-0179](../docs/adr/0179-cells-the-directory-and-the-front-door.md)). Today this stack is the
@@ -21,8 +21,10 @@ and the country its off-box backups rest in (`BACKUP_COUNTRY`). Given those as `
 value the cloud would refuse is warned about and never fails the deploy), and `backup.sh` says where
 each off-box backup rests, warning when that is not the cell's home country or is not recorded.
 A cell in a multi-cell fleet also reads a minisign-signed cell directory from a file it re-reads
-every five minutes. Decided but not built yet: the redirects, and one GitHub Environment per cell,
-deployed as a matrix in canary order; the workflow change is drafted for the owner to apply.
+every five minutes, and redirects a request for a tenant homed in another cell there: `302` for a
+browser, `307` for an API, never `301`, never a proxy. Decided but not built yet: one GitHub
+Environment per cell, deployed as a matrix in canary order; the workflow change is drafted for the
+owner to apply.
 Levels 0 and 1 use only what runs below, with Caddy's per-host HTTP-01 certificates and the
 registrar's plain DNS.
 
