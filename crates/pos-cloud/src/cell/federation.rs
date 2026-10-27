@@ -19,7 +19,7 @@
 //! holder listed. The key is a secret, redacted in every `Debug`.
 //!
 //! This module is the record and the fold; the transport is a [`RollupFetcher`], so the fold is
-//! tested without a network, and the HTTPS fetcher and the console route come after it.
+//! tested without a network. [`https::HttpsRollupFetcher`] is the real one.
 
 use core::fmt;
 use core::future::Future;
@@ -220,6 +220,8 @@ where
     }
     answers
 }
+
+pub mod https;
 
 #[cfg(test)]
 mod tests;
