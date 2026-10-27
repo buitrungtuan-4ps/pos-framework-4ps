@@ -1,7 +1,7 @@
 import { Match, Switch, createSignal, onCleanup, onMount } from "solid-js";
 
 import { api } from "../api/client";
-import type { ClaimStatus } from "../api/types";
+import type { ClaimStatus } from "../api/schemas";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";

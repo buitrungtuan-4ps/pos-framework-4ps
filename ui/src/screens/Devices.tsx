@@ -1,13 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { api } from "../api/client";
-import type {
-  IntegrationEntry,
-  MintedCode,
-  PairedDevice,
-  PrinterEntry,
-  TerminalsResponse,
-} from "../api/types";
+import type { PairedDevice, TerminalsResponse } from "../api/types";
 import { QrCode } from "../components/QrCode";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
@@ -17,6 +11,7 @@ import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead, onStatus } from "../state/screen-read";
 import { loadDrawers, loadShift, loadSync, state } from "../state/store";
+import type { IntegrationEntry, MintedCode, PrinterEntry } from "../api/schemas";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
