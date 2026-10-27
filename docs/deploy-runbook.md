@@ -204,10 +204,12 @@ is spent. Sign in at `/admin/login` with the password and a current code.
 
   The key is a secret: it lives in `cloud.toml` on the box, is never committed, and never appears in
   a log or an answer. The address is never configured here: it is the directory's `base_url` for
-  that cell, so a cell the directory does not list is reported, not called. **Only aggregates
-  cross**: a store's daily event counts, no personal data. Each store's read has 10 seconds and
-  1 MiB, follows no redirect, and the whole read has 30 seconds; a store not read says why. At most
-  64 cells and 2,000 stores in all; a malformed block stops the boot naming the source.
+  that cell, so a cell the directory does not list is reported, not called. The console's Fleet
+  screen shows the result as **HQ: other cells**: per store, its days and events, or why it was
+  not read. **Only aggregates cross**: a store's daily event counts, no personal data. Each store's
+  read has 10 seconds and 1 MiB, follows no redirect, and the whole read has 30 seconds; a store not
+  read says why. At most 64 cells and 2,000 stores in all; a malformed block stops the boot naming
+  the source.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

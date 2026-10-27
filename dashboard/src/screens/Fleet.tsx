@@ -26,6 +26,7 @@ import {
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
 import { CellPanel } from "../components/CellPanel";
+import { HqCellsPanel } from "../components/HqCellsPanel";
 import { apiMessage } from "../lib/errors";
 
 /** How often the view re-reads the fleet and health, so "online" and "last seen" stay current. */
@@ -439,6 +440,7 @@ export function Fleet() {
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <CellPanel />
+          <HqCellsPanel />
           <Card
             title={t("fleet.systemHealth")}
             actions={
