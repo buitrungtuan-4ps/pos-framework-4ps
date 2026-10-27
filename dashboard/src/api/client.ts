@@ -254,7 +254,7 @@ function errorDetails(raw: unknown): ApiErrorDetail[] {
   });
 }
 
-async function requestJson<T, M extends AdminMethod = AdminMethod>(
+export async function requestJson<T, M extends AdminMethod = AdminMethod>(
   method: M,
   path: AdminUrlFor<M>,
   body?: unknown,

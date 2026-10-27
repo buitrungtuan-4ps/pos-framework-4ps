@@ -70,6 +70,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
 
     let providers = startup::vendor_catalogue(&config)?;
+    let cell = startup::cell(&config)?;
 
     let deps = startup::routes::RouteDeps {
         store: &store,
@@ -82,6 +83,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         expected_tasks: &expected_tasks,
         orders_limiter: &orders_limiter,
         relay_wake: &relay_wake,
+        cell: &cell,
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);

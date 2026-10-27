@@ -13,6 +13,7 @@ use blob_garage::S3Blobs;
 use pos_cloud::anchor::AnchorLedger;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::auth::rate_limit::SlidingRateLimiter;
+use pos_cloud::cell::Cell;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::SyncThrottle;
 use pos_cloud::qr::TableTokenSecret;
@@ -50,6 +51,8 @@ pub(crate) struct RouteDeps<'a> {
     /// would each signal an audience the other is not listening to, and every wait would fall back
     /// to its timer.
     pub(crate) relay_wake: &'a SharedWake,
+    /// Which cell this cloud is, resolved once at boot (ADR-0179 C1).
+    pub(crate) cell: &'a Cell,
 }
 
 /// Every sub-router the cloud serves beside its own, merged onto it in the order the flat chain
@@ -760,8 +763,12 @@ fn config_node_routes(deps: &RouteDeps<'_>) -> Router {
 
 /// Countries, and the per-node configuration of locale, store profile and channels.
 fn locale_routes(deps: &RouteDeps<'_>) -> Router {
-    let RouteDeps { store, audit, .. } = *deps;
+    let RouteDeps {
+        store, audit, cell, ..
+    } = *deps;
     Router::new()
+        // Which cell this is (ADR-0179 C1): the `[cell]` section, read-only.
+        .merge(http::cell_router(cell, store.admin(), SystemClock))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(

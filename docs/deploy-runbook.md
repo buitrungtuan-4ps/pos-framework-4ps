@@ -152,6 +152,24 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   box then needs outbound HTTPS to the forge. It is an operator's path and never a store's, so a
   forge that is unreachable delays a release and stops no shop trading — and the upload route stays
   as the way past it. Without the block the button says so rather than failing obscurely.
+- **Naming the cell**: a `[cell]` block in `secrets/cloud.toml` says which cell this deployment is
+  ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md)). **A single deployment needs
+  nothing**: with no block it is the one cell, named `default`. A fork that will run a second cell
+  adds the block by hand on the box:
+
+  ```toml
+  [cell]
+  cell_id = "vn1"                      # 3–32 of a-z, 0-9 and '-', starting with a letter
+  country_alias = "vn"                 # optional
+  home_country = "VN"                  # the country this cell's tenants are homed by
+  base_url = "https://vn1.example.com" # the origin this cell answers on: https, no path
+  runs_in = "VN"                       # the country its servers run in
+  ```
+
+  It holds no secret and no personal data. Every key but `country_alias` is required, an unknown key
+  is refused, and a malformed value stops the boot naming the key. Servers outside the home country
+  are logged as a warning at boot and shown on the console's Fleet screen, never refused. The block
+  takes effect when `pos_cloud` next starts.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach
