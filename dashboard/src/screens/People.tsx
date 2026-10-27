@@ -15,7 +15,7 @@ import { useSearchParams } from "@solidjs/router";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { AssignmentTarget, Page, WrittenSetting } from "../api/types";
+import type { AssignmentTarget, Page } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import {
@@ -60,6 +60,7 @@ import type {
   PermissionsPublishReport,
   RoleTemplate,
   StoreGroup,
+  WrittenSetting,
 } from "../api/schemas";
 
 /** The most digits a PIN may have, and the fewest while the tenant asks for no more (ADR-0160). */

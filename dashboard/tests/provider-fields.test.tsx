@@ -6,8 +6,9 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { ProviderField, SettingValue } from "../src/api/types";
+import type { SettingValue } from "../src/api/types";
 import { ProviderFields } from "../src/components/ProviderFields";
+import type { ProviderField } from "../src/api/schemas";
 
 afterEach(cleanup);
 
