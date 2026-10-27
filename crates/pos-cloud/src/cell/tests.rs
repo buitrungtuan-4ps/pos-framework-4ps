@@ -1,6 +1,9 @@
 use pos_proto::locale::CountryCode;
 
-use super::{Cell, CellSection, DEFAULT_CELL_ID, resolve};
+use std::path::PathBuf;
+
+use super::{Cell, CellSection, DEFAULT_CELL_ID, directory_source, resolve};
+use crate::cell::testkit::public_key_line;
 
 fn section() -> CellSection {
     CellSection {
@@ -9,6 +12,8 @@ fn section() -> CellSection {
         home_country: "vn".to_owned(),
         base_url: "https://vn1.example.com/".to_owned(),
         runs_in: "VN".to_owned(),
+        directory_path: None,
+        directory_public_key: None,
     }
 }
 
@@ -153,4 +158,44 @@ fn the_section_parses_from_toml_and_refuses_unknown_keys() {
         "cell_id = \"vn1\"\nhome_country = \"VN\"\nbase_ulr = \"https://vn1.example.com\"\nruns_in = \"VN\"\n",
     );
     assert!(typo.is_err(), "a misspelt key is refused, not ignored");
+}
+
+#[test]
+fn the_directory_pair_is_both_or_neither() {
+    assert!(directory_source(None).expect("no section").is_none());
+    assert!(
+        directory_source(Some(&section()))
+            .expect("neither")
+            .is_none()
+    );
+
+    let mut raw = section();
+    raw.directory_path = Some(PathBuf::from("/etc/pos/cells.json"));
+    raw.directory_public_key = Some(public_key_line());
+    let source = directory_source(Some(&raw))
+        .expect("both")
+        .expect("a source");
+    assert_eq!(
+        source.signature_path(),
+        PathBuf::from("/etc/pos/cells.json.minisig"),
+        "the signature sits beside the file, as minisign writes it"
+    );
+
+    let mut only_path = section();
+    only_path.directory_path = Some(PathBuf::from("/etc/pos/cells.json"));
+    let mut only_key = section();
+    only_key.directory_public_key = Some(public_key_line());
+    for raw in [only_path, only_key] {
+        let error = directory_source(Some(&raw)).expect_err("one without the other");
+        assert!(error.contains("set together"), "{error}");
+    }
+
+    let mut bad_key = section();
+    bad_key.directory_path = Some(PathBuf::from("/etc/pos/cells.json"));
+    bad_key.directory_public_key = Some("RWQ=".to_owned());
+    assert!(
+        directory_source(Some(&bad_key))
+            .expect_err("a malformed key")
+            .contains("directory_public_key")
+    );
 }

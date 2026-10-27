@@ -184,6 +184,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # advisory-clean; pulls only `csv-core`/`itoa`/`ryu` beside `serde`, already in the tree.
 csv = "1"
 
+# The cell directory's minisign check (ADR-0179 C2), reusing the verifier the edge checks a release
+# with. A workspace path crate whose subtree (ed25519-dalek, blake2) is already in the lock, and
+# verify-only: the cloud never holds or generates the directory's signing key.
+updater-minisign = { path = "../adapters/updater-minisign" }
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }
@@ -196,6 +201,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # store-postgres in the cloud; the fixtures build the event batches.
 pos-fakes = { path = "../pos-fakes" }
 pos-contract-tests = { path = "../pos-contract-tests" }
+# Signs test cell directories with a throwaway fixed-seed key (ADR-0179 C2), as updater-minisign's
+# own tests do. Already in the lock at this version through that adapter, so no new crate enters.
+ed25519-dalek = "2"
 
 # A shipped binary, not a library, so it declares its own lint table (Cargo rejects a manifest that
 # both inherits [workspace.lints] and adds to it). Money, no-PII-to-stdout and no-float rules stay
