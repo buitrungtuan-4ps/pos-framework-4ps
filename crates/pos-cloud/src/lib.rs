@@ -78,6 +78,7 @@ pub mod archive;
 pub mod archive_retention;
 pub mod assets;
 pub mod campaigns;
+pub mod cell;
 pub mod chain_audit;
 pub mod clock;
 pub mod cloud;

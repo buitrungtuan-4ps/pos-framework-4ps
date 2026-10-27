@@ -442,6 +442,14 @@ pub struct CloudConfig {
     /// block it finds.
     #[serde(default)]
     pub release_source: Option<ReleaseSourceConfig>,
+    /// Which cell this cloud is ([ADR-0179](../../../docs/adr/0179-cells-the-directory-and-the-front-door.md)
+    /// C1): its cell id, an optional country alias, its home country, its base URL and the country
+    /// its servers run in.
+    ///
+    /// **Absent is level 0**, the single cell under [`crate::cell::DEFAULT_CELL_ID`]; present, it is
+    /// checked at boot by [`Self::cell`].
+    #[serde(default)]
+    pub cell: Option<crate::cell::CellSection>,
 }
 
 /// The forge the cloud fetches signed edge releases from
@@ -586,7 +594,18 @@ impl CloudConfig {
         self.validate_archive_retention()?;
         self.validate_alert_webhook()?;
         self.validate_release_source()?;
+        self.cell()?;
         Ok(())
+    }
+
+    /// Which cell this cloud is: the `[cell]` section checked, or the level-0 cell when there is
+    /// none (ADR-0179 C1).
+    ///
+    /// # Errors
+    ///
+    /// A message naming the `[cell]` key that cannot be honoured.
+    pub fn cell(&self) -> Result<crate::cell::Cell, String> {
+        crate::cell::resolve(self.cell.as_ref())
     }
 
     /// `trusted_proxy_hops` is at least one.

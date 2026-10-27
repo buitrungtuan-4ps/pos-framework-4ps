@@ -231,3 +231,21 @@ pub(super) fn vendor_catalogue(
     }
     Ok(providers)
 }
+
+/// Which cell this cloud is (ADR-0179 C1), named in the log once, with a warning when its servers run
+/// outside its home country. That is never a refusal (ADR-0179): the operator decides.
+pub(super) fn cell(
+    config: &CloudConfig,
+) -> Result<pos_cloud::cell::Cell, Box<dyn std::error::Error>> {
+    let cell = config.cell()?;
+    tracing::info!(cell_id = %cell.cell_id, configured = cell.configured, "serving as cell");
+    if cell.runs_abroad() {
+        tracing::warn!(
+            cell_id = %cell.cell_id,
+            home_country = ?cell.home_country.map(|code| code.as_str().to_owned()),
+            runs_in = ?cell.runs_in.map(|code| code.as_str().to_owned()),
+            "this cell's servers run outside its home country (ADR-0179)"
+        );
+    }
+    Ok(cell)
+}
