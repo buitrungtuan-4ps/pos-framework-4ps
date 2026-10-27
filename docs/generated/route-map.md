@@ -162,6 +162,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | PATCH | `/admin/catalog/tax-classes/{tax_class_id}` | `admin_update_tax_class` | `session_cookie` | `console.catalog.manage` | [`crates/pos-cloud-catalog/src/routes/catalog/tax_classes.rs`](../../crates/pos-cloud-catalog/src/routes/catalog/tax_classes.rs) |
 | GET | `/admin/catalog/tax-rates` | `admin_list_tax_rates` | `session_cookie` | `console.data.read` | [`crates/pos-cloud-catalog/src/routes/tax_rates.rs`](../../crates/pos-cloud-catalog/src/routes/tax_rates.rs) |
 | PUT | `/admin/catalog/tax-rates` | `admin_set_tax_rates` | `session_cookie` | `console.catalog.manage` | [`crates/pos-cloud-catalog/src/routes/tax_rates.rs`](../../crates/pos-cloud-catalog/src/routes/tax_rates.rs) |
+| GET | `/admin/cell` | `admin_get_cell` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/cell.rs`](../../crates/pos-cloud/src/http/cell.rs) |
 | GET | `/admin/chain-findings` | `admin_chain_findings` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/chain.rs`](../../crates/pos-cloud/src/http/chain.rs) |
 | POST | `/admin/claims/bind` | `admin_bind_claim` | `session_cookie` | `console.devices.manage` | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |
 | GET | `/admin/config-releases` | `admin_list_releases` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/config_publish/release_actions.rs`](../../crates/pos-cloud/src/http/config_publish/release_actions.rs) |

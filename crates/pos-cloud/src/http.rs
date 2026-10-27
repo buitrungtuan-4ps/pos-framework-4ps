@@ -105,6 +105,7 @@ pub(crate) mod alerts;
 mod archives;
 mod authored_layer;
 pub(crate) mod campaigns;
+pub(crate) mod cell;
 mod chain;
 mod cloud_routes;
 pub(crate) mod config_nodes;
@@ -156,6 +157,7 @@ pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
 };
 pub use catalog::{catalog_publish_router, catalog_router};
+pub use cell::cell_router;
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{

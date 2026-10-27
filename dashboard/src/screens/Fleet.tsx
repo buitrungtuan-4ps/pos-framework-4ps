@@ -25,6 +25,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
+import { CellPanel } from "../components/CellPanel";
 import { apiMessage } from "../lib/errors";
 
 /** How often the view re-reads the fleet and health, so "online" and "last seen" stay current. */
@@ -59,6 +60,12 @@ function placementLabel(token: string): string {
   const key = PLACEMENT_LABELS[token];
   return key ? t(key) : token;
 }
+
+/** A background loop's health as a badge: its tone, and its words. */
+const healthTone = (entry: TaskHealthEntry): "active" | "disabled" =>
+  entry.healthy ? "active" : "disabled";
+const healthLabel = (entry: TaskHealthEntry) =>
+  entry.healthy ? t("fleet.healthy") : t("fleet.unhealthy");
 
 /** The age, in whole seconds, of a Unix-ms instant against the browser clock (clamped at zero). */
 function ageSeconds(atMs: number): number {
@@ -426,16 +433,12 @@ export function Fleet() {
     </div>
   );
 
-  const healthTone = (entry: TaskHealthEntry): "active" | "disabled" =>
-    entry.healthy ? "active" : "disabled";
-  const healthLabel = (entry: TaskHealthEntry) =>
-    entry.healthy ? t("fleet.healthy") : t("fleet.unhealthy");
-
   return (
     <div>
       <PageHeader title={t("fleet.title")} description={t("fleet.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
+          <CellPanel />
           <Card
             title={t("fleet.systemHealth")}
             actions={
