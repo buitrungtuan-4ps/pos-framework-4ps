@@ -514,7 +514,8 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
             description = "Which cell this cloud is (ADR-0179): its cell id, country alias, home \
                            country, base URL and the country its servers run in, from the \
                            `[cell]` section of `cloud.toml`. Read-only, and fixed when the server \
-                           starts; a cloud with no `[cell]` section is the one default cell."
+                           starts; a cloud with no `[cell]` section is the one default cell. It also says which \
+                           signed cell directory the cell answers from, if any."
         ),
         (
             name = "countries",

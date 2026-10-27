@@ -16,6 +16,9 @@
 //! rather than becoming the id a directory later redirects tenants to. The section holds no
 //! personal data and no secret: it is safe to show to any console role that may read data.
 
+use std::path::{Path, PathBuf};
+
+use pos_ports::signer::PublicKey;
 use pos_proto::locale::CountryCode;
 use serde::Deserialize;
 
@@ -56,6 +59,82 @@ pub struct CellSection {
     /// The country this cell's servers run in, as an ISO 3166-1 alpha-2 code. Usually the home
     /// country; where it is not, the boot says so and carries on.
     pub runs_in: String,
+    /// The signed cell directory, a JSON file, with its minisign signature beside it as
+    /// `<file>.minisig` (C2). Set together with [`Self::directory_public_key`], or neither: neither
+    /// is level 0, where this cell answers for itself.
+    #[serde(default)]
+    pub directory_path: Option<PathBuf>,
+    /// The public half of the directory key: the second line of its `minisign.pub`, verbatim. Never
+    /// the release key (ADR-0179).
+    #[serde(default)]
+    pub directory_public_key: Option<String>,
+}
+
+/// Where this cell reads its signed directory from, and the key it checks it with.
+#[derive(Debug, Clone)]
+pub struct DirectorySource {
+    /// The directory file. Its signature is the same path with `.minisig` appended.
+    pub path: PathBuf,
+    /// The directory key's public half.
+    pub key: PublicKey,
+}
+
+impl DirectorySource {
+    /// The signature file beside the directory: `<path>.minisig`, as minisign writes it.
+    #[must_use]
+    pub fn signature_path(&self) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(".minisig");
+        PathBuf::from(name)
+    }
+}
+
+/// The directory source `[cell]` configures, or `None` for self mode.
+///
+/// # Errors
+///
+/// A message naming the key at fault: one of the pair without the other, or a key that is not a
+/// minisign public key.
+pub fn directory_source(section: Option<&CellSection>) -> Result<Option<DirectorySource>, String> {
+    let Some(section) = section else {
+        return Ok(None);
+    };
+    match (&section.directory_path, &section.directory_public_key) {
+        (None, None) => Ok(None),
+        (Some(path), Some(key)) => Ok(Some(DirectorySource {
+            path: path.clone(),
+            key: signed::parse_public_key(key)?,
+        })),
+        _ => Err(
+            "[cell] directory_path and directory_public_key are set together or not at all: the \
+             directory is only read when the key to check it is known (ADR-0179)"
+                .to_owned(),
+        ),
+    }
+}
+
+/// Reads a directory file and its signature beside it. Blocking: call it from a blocking context.
+///
+/// # Errors
+///
+/// A message naming the file that could not be read, or one that is too large.
+pub fn read_directory_files(
+    path: &Path,
+    signature_path: &Path,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let read = |path: &Path| {
+        let length = std::fs::metadata(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?
+            .len();
+        if usize::try_from(length).map_or(true, |length| length > directory::MAX_DIRECTORY_BYTES) {
+            return Err(format!(
+                "{} is larger than a directory may be",
+                path.display()
+            ));
+        }
+        std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))
+    };
+    Ok((read(path)?, read(signature_path)?))
 }
 
 /// Which cell this cloud is, checked: what the console shows and the directory will name.

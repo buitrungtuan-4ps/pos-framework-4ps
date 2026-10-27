@@ -23,9 +23,39 @@ const ROWS: readonly { readonly key: MessageKey; readonly value: (cell: CellInfo
     { key: "cell.baseUrl", value: (cell) => cell.base_url },
   ];
 
+/** The words for each directory mode (ADR-0179 C2). A map, so a new mode fails to compile until it
+ *  is named. */
+const DIRECTORY_MODE: Record<CellInfo["directory_mode"], MessageKey> = {
+  CELL_DIRECTORY_SELF: "cell.directory.self",
+  CELL_DIRECTORY_MISSING: "cell.directory.missing",
+  CELL_DIRECTORY_SIGNED: "cell.directory.signed",
+};
+
+/** Which directory the cell answers from, and why the last one offered was refused, if it was. */
+function DirectoryStatus(props: { info: CellInfo }) {
+  return (
+    <>
+      <dt class="text-ink-muted">{t("cell.directoryLabel")}</dt>
+      <dd class="text-ink">
+        {t(DIRECTORY_MODE[props.info.directory_mode], {
+          version: String(props.info.directory_version ?? ""),
+        })}
+        <Show when={props.info.directory_refusal}>
+          {(why) => (
+            <p role="status" class="mt-1 break-words text-danger">
+              {t("cell.directory.refused", { reason: why() })}
+            </p>
+          )}
+        </Show>
+      </dd>
+    </>
+  );
+}
+
 export function CellPanel() {
-  // The cell is fixed when the server starts, so one read is the whole story: no interval.
-  const cell = createAdminResource(() => getCell());
+  // The [cell] section is fixed when the server starts; the directory can change under it, so the
+  // read is renewed when the operator comes back to the tab.
+  const cell = createAdminResource(() => getCell(), { revalidateOnFocus: true });
   return (
     <Card
       title={t("cell.title")}
@@ -64,6 +94,7 @@ export function CellPanel() {
                   </>
                 )}
               </For>
+              <DirectoryStatus info={info()} />
             </dl>
           </div>
         )}

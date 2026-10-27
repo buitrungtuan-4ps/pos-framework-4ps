@@ -18,6 +18,9 @@ const CONFIGURED = {
   runs_in: "VN",
   runs_abroad: false,
   configured: true,
+  directory_mode: "CELL_DIRECTORY_SIGNED",
+  directory_version: 7,
+  directory_refusal: null,
 };
 
 afterEach(() => {
@@ -33,6 +36,28 @@ describe("CellPanel", () => {
     expect(screen.getAllByText("vn1").length).toBeGreaterThan(0);
     expect(screen.getAllByText("VN").length).toBe(2);
     expect(screen.queryByText(/its servers run in/)).toBeNull();
+    expect(screen.getByText("Signed, version 7")).toBeTruthy();
+  });
+
+  it("says why the last directory was refused, beside the one still held", async () => {
+    getCell.mockResolvedValue({
+      ...CONFIGURED,
+      directory_refusal: "the directory's signature does not verify",
+    });
+    render(() => <CellPanel />);
+    const refusal = await screen.findByText(/signature does not verify/);
+    expect(refusal.textContent).toContain("the one held is kept");
+    expect(screen.getByText("Signed, version 7")).toBeTruthy();
+  });
+
+  it("says a cell with a key and no accepted directory answers for no tenant", async () => {
+    getCell.mockResolvedValue({
+      ...CONFIGURED,
+      directory_mode: "CELL_DIRECTORY_MISSING",
+      directory_version: null,
+    });
+    render(() => <CellPanel />);
+    expect(await screen.findByText(/answers for no tenant/)).toBeTruthy();
   });
 
   it("says a cloud with no [cell] section is the single cell", async () => {
@@ -44,6 +69,9 @@ describe("CellPanel", () => {
       runs_in: null,
       runs_abroad: false,
       configured: false,
+      directory_mode: "CELL_DIRECTORY_SELF",
+      directory_version: null,
+      directory_refusal: null,
     });
     render(() => <CellPanel />);
     expect(await screen.findByText("Single cell")).toBeTruthy();

@@ -170,6 +170,23 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   is refused, and a malformed value stops the boot naming the key. Servers outside the home country
   are logged as a warning at boot and shown on the console's Fleet screen, never refused. The block
   takes effect when `pos_cloud` next starts.
+
+  **A second cell also needs the cell directory**: one JSON file, the same in every cell, mapping
+  `tenants` (tenant slug → cell id), `countries` (country → default cell, with a `"*"` fallback) and
+  `cells` (cell id → base URL), with a `directory_version` that only ever goes up. It holds no
+  personal data. The owner, or a named delegate, signs it with the **directory key**, which is never
+  the release key, using `minisign -S -m cells.json`. Put both files on the box and name them:
+
+  ```toml
+  directory_path = "/run/secrets/cells.json"   # the signature is read from cells.json.minisig
+  directory_public_key = "RWQ…"                # the second line of the directory key's minisign.pub
+  ```
+
+  The two keys are set together or not at all. The cell reads the file at boot and again every five
+  minutes, so replacing both files takes effect without a restart. It accepts a file only when the
+  signature verifies, every entry is well-formed, the directory lists this cell at its own
+  `base_url`, and the version is higher than the one it holds. Otherwise the Fleet screen shows why,
+  and the directory already held stays in use. Until one is accepted, the cell answers for no tenant.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach
