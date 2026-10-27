@@ -1,4 +1,4 @@
-use super::{CellDirectory, DirectoryMode, Offer, parse_public_key};
+use super::{CellDirectory, DirectoryMode, Offer, TenantHome, parse_public_key};
 use crate::cell::directory::tests::vn1;
 use crate::cell::testkit::{
     V2, V3, V4, V5_FORGED, V6_NO_FALLBACK, V7_ELSEWHERE, public_key_line, tampered,
@@ -166,4 +166,42 @@ fn public_keys_are_checked() {
         assert!(error.contains(why), "{bad}: {error}");
         assert!(error.contains("directory_public_key"));
     }
+}
+
+#[test]
+fn a_tenant_home_carries_its_cell_and_origin() {
+    let single = CellDirectory::single(vn1());
+    assert_eq!(
+        single.tenant_home("anyone"),
+        Some(TenantHome {
+            cell_id: "vn1".to_owned(),
+            base_url: Some("https://vn1.example.com".to_owned()),
+            here: true,
+        })
+    );
+
+    let directory = trusting();
+    assert_eq!(
+        directory.tenant_home("ramen-osaka"),
+        None,
+        "nothing held yet"
+    );
+    assert!(directory.offer(V3.document, V3.minisig).is_ok());
+    assert_eq!(
+        directory.tenant_home("ramen-osaka"),
+        Some(TenantHome {
+            cell_id: "jp1".to_owned(),
+            base_url: Some("https://jp1.example.com".to_owned()),
+            here: false,
+        })
+    );
+    assert_eq!(
+        directory.tenant_home("pho-hanoi"),
+        Some(TenantHome {
+            cell_id: "vn1".to_owned(),
+            base_url: Some("https://vn1.example.com".to_owned()),
+            here: true,
+        })
+    );
+    assert_eq!(directory.tenant_home("unknown"), None);
 }

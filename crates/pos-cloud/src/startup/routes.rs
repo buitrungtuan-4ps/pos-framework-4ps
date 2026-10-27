@@ -774,6 +774,9 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
         ))
+        // Which cell this is and where a tenant is homed (ADR-0179 C3): public, answered from the
+        // same directory holder, so it names the directory the reload last accepted.
+        .merge(http::well_known_cell_router(Arc::clone(cell)))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(

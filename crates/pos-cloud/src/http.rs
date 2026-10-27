@@ -127,6 +127,7 @@ mod settings_confirm;
 mod store_groups;
 pub(crate) mod subjects;
 mod sync;
+pub(crate) mod well_known;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
@@ -229,6 +230,7 @@ pub(crate) use sync::{
 };
 pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
 use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
+pub use well_known::well_known_cell_router;
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.
 use pos_cloud_config::route::registry_error_response;
 pub use settings::settings_router;

@@ -188,7 +188,7 @@ fn checked_country_key(key: &str) -> Option<CountryCode> {
 }
 
 /// A tenant slug: one DNS label, lower-case.
-fn is_slug(slug: &str) -> bool {
+pub(crate) fn is_slug(slug: &str) -> bool {
     (1..=MAX_SLUG_LEN).contains(&slug.len())
         && !slug.starts_with('-')
         && !slug.ends_with('-')

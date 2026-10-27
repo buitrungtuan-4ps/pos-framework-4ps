@@ -187,6 +187,8 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   signature verifies, every entry is well-formed, the directory lists this cell at its own
   `base_url`, and the version is higher than the one it holds. Otherwise the Fleet screen shows why,
   and the directory already held stays in use. Until one is accepted, the cell answers for no tenant.
+  To check what a cell answers, ask it: `curl https://vn1.example.com/.well-known/pos-cell?tenant=<slug>`
+  names the tenant's home cell, from the directory this cell holds.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach
