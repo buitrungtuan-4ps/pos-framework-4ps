@@ -40,3 +40,15 @@ export function countryHint(country: string): string {
   }
   return `${base} ${t("storeSettings.countryOtherCell", { country: own, cellCountry })}`;
 }
+
+/** A vendor connection's processing-country hint, with the cell warning added when `country` is
+ *  not the cell's home country (ADR-0179 C7). A warning only: the connection still saves. */
+export function processingHint(country: string): string {
+  const base = t("integrations.processingHint");
+  const cellCountry = cellHomeCountry();
+  const own = country.trim().toUpperCase();
+  if (cellCountry === null || own === "" || own === cellCountry) {
+    return base;
+  }
+  return `${base} ${t("integrations.processingOtherCell", { country: own, cellCountry })}`;
+}
