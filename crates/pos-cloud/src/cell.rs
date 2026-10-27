@@ -19,6 +19,11 @@
 use pos_proto::locale::CountryCode;
 use serde::Deserialize;
 
+pub mod directory;
+pub mod signed;
+#[cfg(test)]
+pub(crate) mod testkit;
+
 /// The cell id of a cloud whose `cloud.toml` has no `[cell]` section.
 pub const DEFAULT_CELL_ID: &str = "default";
 
