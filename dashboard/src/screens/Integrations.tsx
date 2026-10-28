@@ -128,6 +128,61 @@ function processingCell(row: Connection) {
   );
 }
 
+/** Table column definitions for connection rows. */
+function buildColumns(providerById: Map<string, Provider>): Column<Connection>[] {
+  return [
+    {
+      key: "name",
+      header: t("integrations.name"),
+      cell: (row) => (
+        <div>
+          <div>{row.display_name}</div>
+          <div class="text-sm text-ink-muted">
+            {providerName(providerById.get(row.provider_id), row.provider_id)}
+          </div>
+        </div>
+      ),
+      sortValue: (row) => row.display_name,
+    },
+    {
+      key: "scope",
+      header: t("integrations.scope"),
+      cell: (row) => <span class="text-sm">{scopeLabel(row)}</span>,
+    },
+    {
+      key: "standing",
+      header: t("integrations.standing"),
+      cell: (row) => (
+        <StatusBadge
+          tone={row.enabled ? "active" : "archived"}
+          label={row.enabled ? t("integrations.enabled") : t("integrations.disabled")}
+        />
+      ),
+    },
+    { key: "processing", header: t("integrations.processing"), cell: processingCell },
+    {
+      key: "secrets",
+      header: t("integrations.credentials"),
+      cell: (row) => (
+        <span class="text-sm text-ink-muted">
+          {row.secrets_set.length > 0
+            ? t("integrations.credentialsSet", { count: row.secrets_set.length })
+            : t("integrations.credentialsNone")}
+        </span>
+      ),
+    },
+    {
+      key: "id",
+      header: t("integrations.id"),
+      cell: (row) => (
+        <TechnicalDetails label={t("common.technicalDetails")}>
+          {row.connection_id}
+        </TechnicalDetails>
+      ),
+    },
+  ];
+}
+
 export function Integrations() {
   const catalogue = createAdminResource(() => api.listProviders(), { scope: "tenant" });
   const connections = createAdminResource((tenant) => api.listConnections(tenant), {
@@ -156,13 +211,10 @@ export function Integrations() {
   // rather than re-filtering the providers array on every render pass / JSX access.
   const providersByFamily = createMemo(() => {
     const map = new Map<string, Provider[]>();
-    for (const provider of providers()) {
-      const list = map.get(provider.family);
-      if (list) {
-        list.push(provider);
-      } else {
-        map.set(provider.family, [provider]);
-      }
+    for (const p of providers()) {
+      const list = map.get(p.family);
+      if (list) list.push(p);
+      else map.set(p.family, [p]);
     }
     return map;
   });
@@ -175,11 +227,8 @@ export function Integrations() {
       const provider = providerById().get(row.provider_id);
       if (provider) {
         const list = map.get(provider.family);
-        if (list) {
-          list.push(row);
-        } else {
-          map.set(provider.family, [row]);
-        }
+        if (list) list.push(row);
+        else map.set(provider.family, [row]);
       }
     }
     return map;
@@ -358,59 +407,7 @@ export function Integrations() {
 
   // Optimization: Memoize columns array definition to avoid allocating new Column[] arrays
   // and closure instances on every render.
-  const columns = createMemo(
-    (): Column<Connection>[] => [
-      {
-        key: "name",
-        header: t("integrations.name"),
-        cell: (row) => (
-          <div>
-            <div>{row.display_name}</div>
-            <div class="text-sm text-ink-muted">
-              {providerName(providerById().get(row.provider_id), row.provider_id)}
-            </div>
-          </div>
-        ),
-        sortValue: (row) => row.display_name,
-      },
-      {
-        key: "scope",
-        header: t("integrations.scope"),
-        cell: (row) => <span class="text-sm">{scopeLabel(row)}</span>,
-      },
-      {
-        key: "standing",
-        header: t("integrations.standing"),
-        cell: (row) => (
-          <StatusBadge
-            tone={row.enabled ? "active" : "archived"}
-            label={row.enabled ? t("integrations.enabled") : t("integrations.disabled")}
-          />
-        ),
-      },
-      { key: "processing", header: t("integrations.processing"), cell: processingCell },
-      {
-        key: "secrets",
-        header: t("integrations.credentials"),
-        cell: (row) => (
-          <span class="text-sm text-ink-muted">
-            {row.secrets_set.length > 0
-              ? t("integrations.credentialsSet", { count: row.secrets_set.length })
-              : t("integrations.credentialsNone")}
-          </span>
-        ),
-      },
-      {
-        key: "id",
-        header: t("integrations.id"),
-        cell: (row) => (
-          <TechnicalDetails label={t("common.technicalDetails")}>
-            {row.connection_id}
-          </TechnicalDetails>
-        ),
-      },
-    ],
-  );
+  const columns = createMemo(() => buildColumns(providerById()));
 
   return (
     <div>
