@@ -21,7 +21,7 @@ import type {
   LocaleResponse,
   ShiftResponse,
   SyncResponse,
-} from "../api/types";
+} from "../api/schemas";
 import {
   FALLBACK_NUMBER_FORMAT,
   fallbackExponent,
