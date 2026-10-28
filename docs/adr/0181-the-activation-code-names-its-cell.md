@@ -1,11 +1,10 @@
 # ADR-0181 — The activation code names its cell
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-10-27 · Amends
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-10-27 · Amends
 [ADR-0050](0050-activation-code-exchange.md) · Implements item C4 of
 [ADR-0179](0179-cells-the-directory-and-the-front-door.md)
 
-Waits on the owner's approval. It changes `pos-core`'s `ActivationCode`, which needs an owner
-review, and no code changes until it is Accepted.
+Accepted by the owner on 2026-10-28.
 
 ## Context
 

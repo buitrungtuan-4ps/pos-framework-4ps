@@ -35,10 +35,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import type {
   Json,
-  Release,
   ReleaseNode,
-  ReleasePair,
-  ReleaseReport,
   ReleaseStatus,
   ScheduledPublishStatus,
 } from "../api/types";
@@ -68,6 +65,7 @@ import {
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
+import type { Release, ReleasePair, ReleaseReport } from "../api/schemas";
 
 /**
  * The nodes a release may carry, in the order an operator reaches for them.

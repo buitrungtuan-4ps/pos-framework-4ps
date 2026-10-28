@@ -16,7 +16,7 @@
 import { createSignal } from "solid-js";
 
 import { ApiError, api } from "../api/client";
-import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/types";
+import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/schemas";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
 // How long a write the edge answered waits for its event before the open orders are read again.

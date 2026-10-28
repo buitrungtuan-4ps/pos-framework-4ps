@@ -21,15 +21,7 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import {
-  CONFIG_LEVELS,
-  QR_ORDERING_SWITCH,
-  type CapabilityCatalogue,
-  type CapabilityFlag,
-  type CapabilityPreset,
-  type ConfigLevel,
-  type Json,
-} from "../api/types";
+import { CONFIG_LEVELS, QR_ORDERING_SWITCH, type ConfigLevel, type Json } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 
 // The level names are user-visible, so each maps to a static i18n key (a template-literal key would
@@ -59,7 +51,12 @@ import { ConfirmDialog, EmptyState, PublishBar } from "../components/kit";
 import { describePublish, previewNode } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
-import type { ConfigVersion } from "../api/schemas";
+import type {
+  CapabilityCatalogue,
+  CapabilityFlag,
+  CapabilityPreset,
+  ConfigVersion,
+} from "../api/schemas";
 
 // The three §10 presets the catalogue serves, each to a static i18n label (a template-literal key
 // would not be a MessageKey). An id the map does not cover falls back to its raw server id.

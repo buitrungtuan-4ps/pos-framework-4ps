@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createSignal, on, onMount } from "solid-js";
 
 import { ApiError, api } from "../api/client";
-import type { ReprintResponse, SettledBill, TakingsResponse } from "../api/types";
+import type { SettledBill, TakingsResponse } from "../api/types";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
@@ -12,6 +12,7 @@ import { can, holdsOwn } from "../state/permissions";
 import { retryable } from "../state/engine";
 import { createScreenRead } from "../state/screen-read";
 import { formatAmount, openBillCount, state, tableCounts, tableLabel } from "../state/store";
+import type { ReprintResponse } from "../api/schemas";
 
 const ORDER = [
   "TABLE_STATE_FREE",

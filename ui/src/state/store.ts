@@ -13,25 +13,12 @@ import { keptShift, shiftInfo } from "./shift-info";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
-  BillCheckResponse,
   BillResponse,
-  BuyerRequest,
-  CheckResponse,
-  CourseResponse,
-  DiscountResponse,
-  LayoutCategory,
-  MenuItemResponse,
   MenuResponse,
-  ModifierGroup,
-  PaymentRequest,
   DrawerOutcome,
   DrawersResponse,
-  FloorResponse,
   LiveOrder,
-  LayoutResponse,
   LocaleResponse,
-  ReasonCodeEntry,
-  ReasonCodesResponse,
   ShiftResponse,
   SyncResponse,
 } from "../api/types";
@@ -45,6 +32,10 @@ import {
   type MoneyStyle,
   type NumberFormat,
 } from "../lib/money";
+import type { BillCheckResponse, BuyerRequest, CheckResponse, CourseResponse } from "../api/schemas";
+import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } from "../api/schemas";
+import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
+import type { ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
 
 export interface OrderLine {
   // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.

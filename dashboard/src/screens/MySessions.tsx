@@ -7,7 +7,7 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { AdminSessionView } from "../api/types";
+import type { AdminSessionView } from "../api/schemas";
 import { t } from "../i18n";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import {

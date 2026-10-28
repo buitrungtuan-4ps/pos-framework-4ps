@@ -12,12 +12,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type {
-  DisplayCategory,
-  DisplaySubcategory,
-  ETag,
-  LayoutButton,
-} from "../api/types";
+import type { ETag } from "../api/types";
 import { t } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -43,6 +38,7 @@ import {
 import { toast } from "../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./catalog/shared";
 import { CHANNEL_LABEL, SALES_CHANNELS, type KnownSalesChannel } from "../lib/channels";
+import type { DisplayCategory, DisplaySubcategory, LayoutButton } from "../api/schemas";
 
 // Cap the rendered grid extent so a stray large column/row never blows up the preview; buttons beyond
 // it still appear in the flowing list and are editable.

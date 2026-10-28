@@ -7,7 +7,8 @@
 //! A third audience beside the integrator's `/v1` ([`crate::openapi`]) and the console's `/admin`
 //! ([`crate::openapi_admin`]): the edge's own cloud client. It covers the store-facing `/sync`
 //! surface, which a box reaches with its device credential or its store's scoped key, and the two
-//! ways a box first comes to hold one, `/activate` and `/claim`, which carry no credential at all.
+//! ways a box first comes to hold one, `/activate` and `/claim`, which carry no credential at all,
+//! and `/.well-known/pos-cell`, which says which cell a box should ask (ADR-0179).
 //! It documents what [`crate::openapi_admin`] does, with the same error envelope: paths,
 //! parameters, request bodies in prose, and every outcome.
 //!
@@ -40,10 +41,12 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         title = "Pizza 4P's POS Store Box API",
         version = "1.0.0",
         description = "What a store's edge calls on its cloud: the store-facing `/sync` surface, \
-                       and `/activate` and `/claim`, the two ways a box first comes to hold a \
-                       credential. Generated from the handlers (ADR-0177). Every failure carries \
-                       the AIP-193 `ErrorResponse` envelope, and the whole surface is rate-limited \
-                       per client before any credential is read."
+                       `/activate` and `/claim`, the two ways a box first comes to hold a \
+                       credential, and `/.well-known/pos-cell`, which says which cell to ask. \
+                       Generated from the handlers (ADR-0177). Every failure carries the AIP-193 \
+                       `ErrorResponse` envelope. Every route but `/.well-known/pos-cell`, which \
+                       answers from memory, is rate-limited per client before any credential is \
+                       read."
     ),
     paths(
         crate::http::edge_config_sync,
@@ -62,6 +65,7 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         pos_cloud_devices::routes::exchange_activation_code,
         pos_cloud_devices::routes::open_claim,
         pos_cloud_devices::routes::collect_claim,
+        crate::http::well_known::well_known_cell,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&DeviceCredential),
@@ -86,6 +90,10 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
                                                  credential: an activation code from the setup \
                                                  sheet, or a claim the console binds (ADR-0050, \
                                                  ADR-0148)."),
+        (name = "cells", description = "Which cell this cloud is, and which cell is a tenant's \
+                                        home, from the signed, PII-free cell directory. Asked \
+                                        once by a box being set up, which then keeps its \
+                                        `cloud_url` (ADR-0179)."),
     )
 )]
 pub(crate) struct DeviceApiDoc;
@@ -125,6 +133,7 @@ impl Modify for DeviceCredential {
 #[cfg(test)]
 fn is_device_path(path: &str) -> bool {
     path == "/activate"
+        || path == "/.well-known/pos-cell"
         || path == "/claim"
         || path.starts_with("/claim/")
         || path.starts_with("/sync/")

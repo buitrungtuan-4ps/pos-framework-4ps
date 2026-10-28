@@ -11,7 +11,7 @@
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { Area, FloorTable, TableQrToken } from "../api/types";
+import type { Area, FloorTable, TableQrToken } from "../api/schemas";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import { createAdminResource, failureOf } from "../lib/resource";

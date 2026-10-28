@@ -100,6 +100,7 @@ flowchart LR
   pos_cloud --> shipping_ahamove
   pos_cloud --> shipping_grabexpress
   pos_cloud --> store_postgres
+  pos_cloud --> updater_minisign
   pos_cloud_api --> pos_ports
   pos_cloud_api --> pos_proto
   pos_cloud_api --> store_postgres
@@ -252,6 +253,6 @@ flowchart LR
 | `shipping-grabexpress` | adapter | `crates/adapters/shipping-grabexpress` | The Grab Express ShippingDispatch adapter: book, cancel and track a courier job over HTTPS. | `pos-cloud` | — |
 | `store-postgres` | adapter | `crates/adapters/store-postgres` | The cloud EventStore and the cloud's own stores over PostgreSQL (tokio-postgres, deadpool, monthly partitions, RLS). | `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports` | — |
 | `store-sqlite` | adapter | `crates/adapters/store-sqlite` | The edge store over SQLite: event, config, device, subject and intake stores on one single-writer thread. | `pos-edge`, `pos-edge-app`, `pos-edge-printing` | — |
-| `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-edge` | — |
+| `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-cloud`, `pos-edge` | — |
 | `windows-protect` | adapter | `crates/adapters/windows-protect` | Windows' own protection for a store box's state: DPAPI for the vault key, and who may read the state directory. | `key-vault-keyring`, `pos-edge` | — |
 | `xtask` | tool | `xtask` | Repository checks run by just preflight and CI: dependency rule, snapshots, migrations, links, changelog, code size. | — | — |

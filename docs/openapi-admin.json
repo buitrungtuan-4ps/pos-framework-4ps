@@ -6566,6 +6566,53 @@
         "x-permission": "console.catalog.manage"
       }
     },
+    "/admin/cell": {
+      "get": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "A console admin reads which cell this cloud is.",
+        "operationId": "admin_get_cell",
+        "responses": {
+          "200": {
+            "description": "Which cell this cloud is (ADR-0179): `cell_id`, the optional `country_alias`, `home_country`, `base_url`, the country it `runs_in`, whether that differs from the home country (`runs_abroad`), and whether `cloud.toml` has a `[cell]` section at all (`configured`), all fixed when the server starts; and the directory it answers from now: `directory_mode`, the signed `directory_version` held, and why the last directory offered was refused (`directory_refusal`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CellView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/chain-findings": {
       "get": {
         "tags": [
@@ -13864,6 +13911,83 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/hq/rollups": {
+      "get": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "A console admin reads the daily rollups of the stores this HQ reads in other cells.",
+        "operationId": "admin_hq_rollups",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first business date, `YYYY-MM-DD`, inclusive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last business date, `YYYY-MM-DD`, inclusive.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether `[federation]` names any source (`configured`), and per configured store in another cell its `cell_id`, `store_id`, and its daily `rollups` (counts only, no personal data) or the `error` saying why there are none. Read through each cell's public /v1 API within 30 seconds in all (ADR-0179 C10)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HqRollupsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "from or to is not a YYYY-MM-DD date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/integrations/connections": {
       "get": {
         "tags": [
@@ -20970,6 +21094,192 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/stores/{store_id}/cell-acknowledgement": {
+      "post": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "An admin records why a store's country differing from its cell's is correct.",
+        "operationId": "admin_acknowledge_cell",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, the two country codes the console showed, and one sentence saying why the difference between them is correct",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeCellRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded in the audit trail. The body is the answer as recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CellAcknowledgementView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, a country code is not two letters, or the reason is blank or over 280 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing to answer, or the store or cell has moved since this screen was drawn: the codes named are not the ones it has now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The config tree or the audit trail is unreachable; nothing was recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.stores.manage"
+      }
+    },
+    "/admin/stores/{store_id}/cell-standing": {
+      "get": {
+        "tags": [
+          "cell"
+        ],
+        "summary": "A console admin reads whether a store's country differs from its cell's, and how it is answered.",
+        "operationId": "admin_cell_standing",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant the store belongs to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's country against its cell's: `cell_id`, `cell_country`, `profile_country`, whether they `differ`, and the `acknowledgement` that answers this difference, if one does (ADR-0179 C6)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CellStandingView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The config tree or the audit trail is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/stores/{store_id}/config": {
       "get": {
         "tags": [
@@ -24730,6 +25040,33 @@
           }
         }
       },
+      "AcknowledgeCellRequest": {
+        "type": "object",
+        "description": "What a console sends to answer a store's cell warning. The two countries say which difference is\nanswered: a write naming a pair the store no longer has is refused.",
+        "required": [
+          "tenant_id",
+          "profile_country",
+          "cell_country"
+        ],
+        "properties": {
+          "cell_country": {
+            "type": "string",
+            "description": "The cell's country the console showed."
+          },
+          "profile_country": {
+            "type": "string",
+            "description": "The store's country the console showed."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the difference is correct: required, at most 280 characters. Defaulted so an omitted\nfield is refused through the envelope naming it."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the store belongs to."
+          }
+        }
+      },
       "AcknowledgeRegionRequest": {
         "type": "object",
         "description": "What a console sends to answer a store's region warning\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\n**The two country codes are the precondition, and they are in the body rather than in an\n`If-Match` header.** ADR-0114's Consequences said `If-Match`; the code does not, and the reason\nis the one [`LeaseStore::settle_handover`] already gives one table over: *the named value is the\nprecondition*, and here it is strictly stronger than any version could be. There is no single\nresource whose `ETag` covers both halves of this comparison — the region lives on `store_lease`\nand the country lives in the config tree, two rows with two independent writers — so an\n`If-Match` would have to name one of them and silently miss changes to the other. Naming both\ncodes catches every move of either, and says in the request exactly what the admin was looking at\nwhen they decided. The departure is written up in the record's delivery note.",
@@ -25988,6 +26325,168 @@
           }
         }
       },
+      "CellAcknowledgementView": {
+        "type": "object",
+        "description": "A recorded answer to a store's cell difference.",
+        "required": [
+          "profile_country",
+          "cell_country",
+          "reason",
+          "acknowledged_at_ms"
+        ],
+        "properties": {
+          "acknowledged_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it was recorded, in milliseconds since the epoch."
+          },
+          "cell_country": {
+            "type": "string",
+            "description": "The cell's country the answer was about."
+          },
+          "profile_country": {
+            "type": "string",
+            "description": "The store's country the answer was about."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the difference is correct, as typed."
+          }
+        }
+      },
+      "CellDirectoryMode": {
+        "type": "string",
+        "description": "Which kind of answer the cell gives about where a tenant is (ADR-0179 C2).",
+        "enum": [
+          "CELL_DIRECTORY_SELF",
+          "CELL_DIRECTORY_MISSING",
+          "CELL_DIRECTORY_SIGNED"
+        ]
+      },
+      "CellStandingView": {
+        "type": "object",
+        "description": "A store's country against its cell's.",
+        "required": [
+          "cell_id",
+          "cell_country",
+          "profile_country",
+          "differs",
+          "acknowledgement"
+        ],
+        "properties": {
+          "acknowledgement": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CellAcknowledgementView",
+                "description": "The answer to this difference, while it is still this difference."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cell_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cell's home country. Null when the cell has no `[cell]` section, which compares with\nnothing."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "The cell this store's data rests in."
+          },
+          "differs": {
+            "type": "boolean",
+            "description": "Whether both are known and differ. A warning, never a refusal."
+          },
+          "profile_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country the store publishes in its `locale` node. Null when it has published none."
+          }
+        }
+      },
+      "CellView": {
+        "type": "object",
+        "description": "This cell as the console reads it: the `[cell]` section, fixed when the server starts, and the\ndirectory it answers from now. The same for every tenant. It holds no personal data and no\nsecret.",
+        "required": [
+          "cell_id",
+          "country_alias",
+          "home_country",
+          "base_url",
+          "runs_in",
+          "runs_abroad",
+          "configured",
+          "directory_mode",
+          "directory_version",
+          "directory_refusal"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The origin this cell answers on. Null when no `[cell]` section is configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "The cell id (`vn1`), or `default` when `cloud.toml` has no `[cell]` section."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether `cloud.toml` carries a `[cell]` section. False is level 0: the one and only cell."
+          },
+          "country_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country alias (`vn`), when one is configured."
+          },
+          "directory_mode": {
+            "$ref": "#/components/schemas/CellDirectoryMode",
+            "description": "Which kind of answer the cell gives about where a tenant is."
+          },
+          "directory_refusal": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last directory offered was refused, until one is accepted. The directory held, if\nany, is kept."
+          },
+          "directory_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The version of the signed directory held. Null unless one is.",
+            "minimum": 0
+          },
+          "home_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's tenants are homed by (`VN`). Null when no `[cell]` section is\nconfigured."
+          },
+          "runs_abroad": {
+            "type": "boolean",
+            "description": "Whether the servers run in a different country from the home country. A warning, never a\nrefusal."
+          },
+          "runs_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's servers run in. Null when no `[cell]` section is configured."
+          }
+        }
+      },
       "ChainFindingView": {
         "type": "object",
         "description": "One refused chain claim on the wire.\n\nPositions, hashes and identifiers — no event contents and no customer identifier. A chain hash is\na digest of an envelope whose every payload field `pos_proto::pii` has already proven free of\npersonal data.",
@@ -26173,6 +26672,13 @@
             "type": "boolean",
             "description": "Absent means enabled: a caller that omits it is setting up a connection to use."
           },
+          "processing_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country the vendor processes this connection's data in (`SG`), when known (ADR-0179\nC7). Recorded, compared with the cell's home country, and never a reason to refuse."
+          },
           "provider_id": {
             "type": "string"
           },
@@ -26212,7 +26718,9 @@
           "display_name",
           "enabled",
           "settings",
-          "secrets_set"
+          "secrets_set",
+          "processing_country",
+          "processing_outside_cell"
         ],
         "properties": {
           "connection_id": {
@@ -26223,6 +26731,17 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "processing_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country the vendor processes this connection's data in, when recorded."
+          },
+          "processing_outside_cell": {
+            "type": "boolean",
+            "description": "Whether that country is known and differs from the cell's home country. A warning, never a\nrefusal (ADR-0179 C7)."
           },
           "provider_id": {
             "type": "string"
@@ -28641,6 +29160,64 @@
           "size_bytes": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "HqRollupsView": {
+        "type": "object",
+        "description": "The HQ read as the console sees it.",
+        "required": [
+          "configured",
+          "stores"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether `cloud.toml` has a `[federation]` section with any source."
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HqStoreView"
+            },
+            "description": "One answer per configured store, in the order configured."
+          }
+        }
+      },
+      "HqStoreView": {
+        "type": "object",
+        "description": "One store in another cell, and its rollups or why there are none.",
+        "required": [
+          "cell_id",
+          "store_id",
+          "rollups",
+          "error"
+        ],
+        "properties": {
+          "cell_id": {
+            "type": "string",
+            "description": "The cell the store is in."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why they could not be read. Null when they were."
+          },
+          "rollups": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DailyRollup"
+            },
+            "description": "Its daily rollups, oldest day first: counts only. Null when they could not be read."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store's ULID in that cell."
           }
         }
       },
@@ -34690,7 +35267,9 @@
               "display_name",
               "enabled",
               "settings",
-              "secrets_set"
+              "secrets_set",
+              "processing_country",
+              "processing_outside_cell"
             ],
             "properties": {
               "connection_id": {
@@ -34701,6 +35280,17 @@
               },
               "enabled": {
                 "type": "boolean"
+              },
+              "processing_country": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The country the vendor processes this connection's data in, when recorded."
+              },
+              "processing_outside_cell": {
+                "type": "boolean",
+                "description": "Whether that country is known and differs from the cell's home country. A warning, never a\nrefusal (ADR-0179 C7)."
               },
               "provider_id": {
                 "type": "string"
@@ -36300,6 +36890,10 @@
     {
       "name": "catalog taxonomy",
       "description": "How a tenant's catalog is sorted (ADR-0066, ADR-0130): item categories and their sub-categories, which reporting groups an item under; display categories and their sub-categories, which a till's layout shows; and courses, the order a table's dishes are served in. Ids are minted by the server, records are archived rather than deleted, and every edit is conditional on the version it was read at. An item category or sub-category that active items still use cannot be archived. Nothing reaches a store until its catalog is published."
+    },
+    {
+      "name": "cell",
+      "description": "Which cell this cloud is (ADR-0179): its cell id, country alias, home country, base URL and the country its servers run in, from the `[cell]` section of `cloud.toml`. Read-only, and fixed when the server starts; a cloud with no `[cell]` section is the one default cell. It also says which signed cell directory the cell answers from, if any."
     },
     {
       "name": "countries",

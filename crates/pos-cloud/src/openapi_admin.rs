@@ -160,6 +160,10 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::campaigns::admin_delete_campaign,
         crate::http::campaigns::admin_list_vouchers,
         crate::http::campaigns::admin_generate_vouchers,
+        crate::http::cell::admin_get_cell,
+        crate::cell::hq::admin_hq_rollups,
+        crate::http::cell_standing::admin_cell_standing,
+        crate::http::cell_standing::admin_acknowledge_cell,
         crate::http::countries::admin_list_countries,
         crate::http::countries::admin_list_locales,
         pos_cloud_catalog::routes::catalog::admin_list_display_categories,
@@ -509,6 +513,14 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            reaches a store until its catalog is published."
         ),
         (
+            name = "cell",
+            description = "Which cell this cloud is (ADR-0179): its cell id, country alias, home \
+                           country, base URL and the country its servers run in, from the \
+                           `[cell]` section of `cloud.toml`. Read-only, and fixed when the server \
+                           starts; a cloud with no `[cell]` section is the one default cell. It also says which \
+                           signed cell directory the cell answers from, if any."
+        ),
+        (
             name = "countries",
             description = "The read-only master data a console picks a store's country and \
                            locale from (ADR-0074, ADR-0105): the country modules this build \
@@ -802,17 +814,17 @@ const ROUTE_CRATES: [&str; 5] = [
     "pos-cloud-people",
 ];
 
-/// The router sources: `http.rs` and every module under `http/`, where each business area's routes
-/// are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin` route is
-/// registered in one of them; the other route-carrying modules (`orders`, `qr_http`, `relay`) serve
-/// `/v1` and the relay surface only.
+/// The router sources: `http.rs` and every module under `http/` and `cell/`, where each business
+/// area's routes are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin`
+/// route is registered in one of them; the other route-carrying modules (`orders`, `qr_http`,
+/// `relay`) serve `/v1` and the relay surface only.
 ///
 /// Read from the tree when the test runs, so a route that moves into a new module is still found.
 #[cfg(test)]
 pub(crate) fn router_sources() -> Vec<String> {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![source.join("http.rs")];
-    let mut directories = vec![source.join("http")];
+    let mut directories = vec![source.join("http"), source.join("cell")];
     for route_crate in ROUTE_CRATES {
         let crate_source = source.join("../..").join(route_crate).join("src");
         files.push(crate_source.join("routes.rs"));

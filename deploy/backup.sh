@@ -39,9 +39,28 @@ docker compose -f "$HERE/compose.yml" exec -T -e PGPASSWORD="$POSTGRES_PASSWORD"
   pg_dump -Fc -U "$POSTGRES_USER" "$POSTGRES_DB" > "$file"
 echo "backup   $file"
 
+# Where the off-box copy rests, against the cell's home country (ADR-0179 C7, C8). bootstrap.sh
+# records both in ../.env from deploy/cells/<cell>.env; the environment may override either. A
+# difference is a warning and never stops a backup: an unshipped backup protects nothing.
+# `|| true`: under `set -euo pipefail` a missing ../.env would otherwise end the script here, after
+# the dump and before the off-box copy, which is the one outcome this file exists to prevent.
+env_value() { sed -n "s/^$1=//p" "$HERE/.env" 2>/dev/null | tail -1 || true; }
+BACKUP_COUNTRY="${BACKUP_COUNTRY:-$(env_value BACKUP_COUNTRY)}"
+CELL_HOME_COUNTRY="${CELL_HOME_COUNTRY:-$(env_value CELL_HOME_COUNTRY)}"
+backup_region_note() {
+  if [ -z "${BACKUP_COUNTRY:-}" ]; then
+    echo "warn     the country these backups rest in is not recorded: set BACKUP_COUNTRY in deploy/cells/<cell>.env (ADR-0179)"
+  elif [ -n "${CELL_HOME_COUNTRY:-}" ] && [ "$BACKUP_COUNTRY" != "$CELL_HOME_COUNTRY" ]; then
+    echo "warn     backups rest in $BACKUP_COUNTRY, outside this cell's home country $CELL_HOME_COUNTRY: record why that transfer is covered (ADR-0179)"
+  else
+    echo "region   backups rest in $BACKUP_COUNTRY"
+  fi
+}
+
 if [ -n "${RCLONE_REMOTE:-}" ]; then
   rclone copy "$file" "${RCLONE_REMOTE%/}/cloud-db/"
   echo "shipped  ${RCLONE_REMOTE%/}/cloud-db/$(basename "$file")"
+  backup_region_note
 else
   echo "note     RCLONE_REMOTE unset; kept on-box only — set it for the off-box tier (ADR-0046)"
 fi

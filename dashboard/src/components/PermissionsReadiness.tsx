@@ -13,7 +13,7 @@
 import { createEffect, createSignal, For, Match, on, Show, Switch } from "solid-js";
 
 import { api } from "../api/client";
-import type { MissingPermission, PermissionsReadiness, RoleReadiness } from "../api/types";
+import type { MissingPermission, PermissionsReadiness, RoleReadiness } from "../api/schemas";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { screenHref } from "../state/screens";

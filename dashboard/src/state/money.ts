@@ -14,8 +14,8 @@
 
 import { createSignal } from "solid-js";
 
-import type { Country, Money } from "../api/types";
 import { formatMoney, parseMoney } from "../lib/format";
+import type { Country, Money } from "../api/schemas";
 
 // How many decimal places a currency has, for the window before `GET /admin/countries` answers.
 //

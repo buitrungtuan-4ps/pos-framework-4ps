@@ -12,7 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PublishBar } from "../src/components/kit";
-import type { NodePreview } from "../src/api/types";
+import type { NodePreview } from "../src/api/schemas";
 
 const PREVIEW: NodePreview = {
   node: "tax",
