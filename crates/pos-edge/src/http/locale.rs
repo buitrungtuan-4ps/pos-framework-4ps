@@ -50,6 +50,7 @@ pub(crate) struct LocaleResponse {
     /// The till does not apply this — `pos_core::billing` does, and the rounding is already inside
     /// the total the check reports. It is here so the screen can *show* the adjustment as its own
     /// line, which is what makes a rounded bill reconcile for the guest reading it.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     cash_rounding_increment: Option<i64>,
     /// Whether the prices on this store's menu already contain their tax
     /// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
@@ -66,6 +67,7 @@ pub(crate) struct LocaleResponse {
     /// none. A till that has never been told otherwise starts in it, so a Vietnamese shop does not
     /// open every reload in English.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     display_language: Option<String>,
 }
 

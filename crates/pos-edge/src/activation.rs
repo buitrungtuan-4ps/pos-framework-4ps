@@ -115,6 +115,7 @@ struct StandingResponse {
     /// Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent
     /// from a router that was given no state directory, and from an edge older than the field.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     state_access: Option<StateAccess>,
 }
 

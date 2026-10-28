@@ -74,6 +74,7 @@ struct TerminalsResponse {
     /// bind answers that it is already another, and nothing on a screen can release it. Only ever
     /// the caller's own binding: never another device's, and never a person.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     unlisted_agent_device_id: Option<String>,
 }
 

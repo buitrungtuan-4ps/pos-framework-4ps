@@ -143,6 +143,7 @@ pub(crate) struct MenuResponse {
     /// `None` rather than "all seven listed" so the till can tell "no restriction published" from "a
     /// restriction that happens to allow everything" — and so a method added to the enum later is
     /// accepted by an unrestricted store without a config change.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     accepted_tender: Option<Vec<&'static str>>,
     /// The tip keys the pay screen offers, each a whole percentage of the bill, in the order the
     /// store's `tender_keys` node names them: a key set to `0`, or to a percentage an earlier key
@@ -211,6 +212,7 @@ pub(crate) struct MenuItemResponse {
     tax_class_id: TaxClassId,
     /// The rate for that class on this channel, or `None` when the store's table has no row —
     /// a configuration error the till surfaces rather than papers over with zero.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     tax_rate: Option<Ratio>,
     /// The modifier groups the till must ask about before this item is sold
     /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
@@ -225,6 +227,7 @@ pub(crate) struct MenuItemResponse {
     /// modifier groups are. The till reads it to group an order into starters, mains and desserts,
     /// and to know which lines a fire-by-course will send.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     course_id: Option<CourseId>,
     /// Whether the item can be sold right now. An item present but 86'd is shown and refused, not
     /// hidden, so staff can see why it cannot be ordered.

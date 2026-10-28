@@ -41,6 +41,7 @@ pub(crate) struct PrinterResponse {
     name: String,
     /// The station it serves, absent for the receipt printer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     station_id: Option<String>,
 }
 
