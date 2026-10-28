@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-04 - [ISATAP u/g Bit Variations SSRF Bypass]
+**Vulnerability:** Webhook destinations could bypass SSRF IPv6 checks when hostnames/IPs were provided using ISATAP interface identifiers with non-zero universal/group (u/g) bits such as `0100:5efe` or `0300:5efe` attached to arbitrary 64-bit IPv6 prefixes (e.g. `2001:1234:5678:9abc:100:5efe:127.0.0.1`), because the ISATAP check strictly required `segments[4] == 0` or `segments[4] == 0x0200`.
+**Learning:** ISATAP interface identifiers (RFC 5214) use modified EUI-64 format where the upper 16 bits of the interface ID (`segments[4]`) can vary in the u/g bits (`0x0000`, `0x0100`, `0x0200`, `0x0300`) while keeping the lower byte zero and `segments[5] == 0x5efe`.
+**Prevention:** Inspect ISATAP interface identifiers with `(segments[4] & 0xfcff) == 0 && segments[5] == 0x5efe` across all IPv6 prefixes to catch all u/g bit variations embedding IPv4 addresses.
