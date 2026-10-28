@@ -23,23 +23,49 @@ import { createScreenRead, onStatus } from "../state/screen-read";
 /// The number of symbols in an activation code, checksum symbol included (`pos_core::activation`).
 const CODE_LENGTH = 12;
 
+/// The most characters the field keeps: a grouped code (14) and the longest cell prefix with its
+/// hyphen (33), with room to spare.
+const MAX_TYPED = 64;
+
 // Codes are written in Crockford's base-32 alphabet, which omits `I`, `L`, `O` and `U` so a printed
-// sheet reads unambiguously. `ActivationCode::parse` folds the ambiguous glyphs on the way in; so does
-// this field, so what the operator sees is exactly what the edge will parse — a typo is caught by the
-// checksum on the box, not after a round-trip to the cloud.
+// sheet reads unambiguously; `ActivationCode::parse` folds the ambiguous glyphs on the box. A code may
+// also carry its cell's id as a prefix, `VN1-XXXX-XXXX-XXXX` (ADR-0181), and a cell id is never
+// folded (`lon1`, `us1`) and may hold hyphens (`jp-east-2`). So the field never folds and never drops
+// a letter. While what is typed reads as groups of four, it groups the symbols as the sheet prints
+// them; as soon as the operator puts a hyphen or a space anywhere else, a prefix is being typed, and
+// the field keeps exactly what was typed, upper-cased, for the box to read from the end.
 function normalize(raw: string): string {
-  const symbols = raw
-    .toUpperCase()
-    .replace(/[IL]/gu, "1")
-    .replace(/O/gu, "0")
-    .replace(/[^0-9ABCDEFGHJKMNPQRSTVWXYZ]/gu, "")
-    .slice(0, CODE_LENGTH);
-  // Displayed as three hyphenated groups of four, the way the setup sheet prints it.
-  return symbols.replace(/(.{4})(?=.)/gu, "$1-");
+  const upper = raw.toUpperCase().trimStart();
+  const segments = upper.split(/[-\s]+/u);
+  const prefixTyped = segments
+    .slice(0, -1)
+    .some((segment) => segment.length !== 4 || /[^0-9A-Z]/u.test(segment));
+  if (prefixTyped) {
+    return upper.replace(/[^0-9A-Z\s-]/gu, "").slice(0, MAX_TYPED);
+  }
+  const symbols = upper.replace(/[^0-9A-Z]/gu, "");
+  // Displayed as hyphenated groups of four, the way the setup sheet prints a code.
+  return symbols.replace(/(.{4})(?=.)/gu, "$1-").slice(0, MAX_TYPED);
 }
 
-function symbolCount(formatted: string): number {
-  return formatted.replace(/-/gu, "").length;
+// The code's symbols, counted from the end as the box reads them: separators skipped, the ambiguous
+// glyphs counted as the symbols they fold to, and a cell prefix's own letters not counted once a
+// character that is no code symbol, or the twelfth symbol, is reached.
+function symbolCount(typed: string): number {
+  let count = 0;
+  for (const character of [...typed].reverse()) {
+    if (count === CODE_LENGTH) {
+      break;
+    }
+    if (/[-\s]/u.test(character)) {
+      continue;
+    }
+    if (!/[0-9A-TV-Z]/u.test(character)) {
+      break;
+    }
+    count += 1;
+  }
+  return count;
 }
 
 // What the box says about itself, resolved once on mount. `unavailable` is the LAN-only store server
@@ -172,7 +198,7 @@ export function Setup() {
             value={code()}
             onInput={(event) => setCode(normalize(event.currentTarget.value))}
           />
-          {/* The count is symbols, not characters: the hyphens are formatting the field adds. */}
+          {/* The count is the code's symbols, not characters: not the hyphens, nor a cell prefix. */}
           <p class="mt-2 text-center text-ink-muted tabular-nums">
             {t("setup.code_progress", { entered: symbolCount(code()), total: CODE_LENGTH })}
           </p>

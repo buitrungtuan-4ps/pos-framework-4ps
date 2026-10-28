@@ -256,5 +256,23 @@ impl CellDirectory {
     }
 }
 
+/// The cell the activation routes answer for (ADR-0181): a cell named by a `[cell]` section issues
+/// codes with its id as their prefix, and a prefix naming another cell is answered from the directory
+/// held.
+impl pos_cloud_devices::routes::ActivationCell for CellDirectory {
+    fn issuing_cell_id(&self) -> Option<String> {
+        self.cell.configured.then(|| self.cell.cell_id.clone())
+    }
+
+    fn is_this_cell(&self, cell_id: &str) -> bool {
+        cell_id == self.cell.cell_id
+    }
+
+    fn cell_base_url(&self, cell_id: &str) -> Option<String> {
+        self.held()
+            .and_then(|held| held.cell_url(cell_id).map(str::to_owned))
+    }
+}
+
 #[cfg(test)]
 mod tests;

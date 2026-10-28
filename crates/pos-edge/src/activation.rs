@@ -94,7 +94,8 @@ const RESTART_AFTER_ACTIVATION: core::time::Duration = core::time::Duration::fro
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ActivateRequest {
-    /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
+    /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its
+    /// cell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181).
     code: String,
 }
 
@@ -224,7 +225,10 @@ where
     V: KeyVault + Send + Sync + 'static,
 {
     // A malformed code never named a real one, so refuse it locally: a plain client error, and a
-    // saved round-trip. `parse` normalises casing and spacing exactly as the cloud does.
+    // saved round-trip. `parse` normalises casing and spacing exactly as the cloud does. A code
+    // printed with its cell's prefix (ADR-0181) is presented as typed, so the cell it reaches reads
+    // the prefix too; this box does not yet act on the prefix itself, and presents every code to its
+    // configured cloud.
     if ActivationCode::parse(&request.code).is_err() {
         return refused(
             StatusCode::BAD_REQUEST,
