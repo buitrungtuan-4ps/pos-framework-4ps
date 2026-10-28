@@ -54,7 +54,24 @@ describe("RowActions component", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("restores focus to trigger button when dismissed with Escape key", () => {
+  it("automatically focuses the first action item when opened", async () => {
+    render(() => (
+      <RowActions label="Actions">
+        <button type="button">First Action</button>
+        <button type="button">Second Action</button>
+      </RowActions>
+    ));
+
+    const trigger = screen.getByRole("button", { name: "Actions" });
+    fireEvent.click(trigger);
+
+    await Promise.resolve();
+
+    const firstAction = screen.getByRole("button", { name: "First Action" });
+    expect(document.activeElement).toBe(firstAction);
+  });
+
+  it("restores focus to trigger button when dismissed with Escape key", async () => {
     render(() => (
       <RowActions label="Actions">
         <button type="button">Action item</button>
@@ -65,8 +82,9 @@ describe("RowActions component", () => {
     trigger.focus();
     fireEvent.click(trigger);
 
+    await Promise.resolve();
+
     const actionItem = screen.getByRole("button", { name: "Action item" });
-    actionItem.focus();
     expect(document.activeElement).toBe(actionItem);
 
     fireEvent.keyDown(window, { key: "Escape" });

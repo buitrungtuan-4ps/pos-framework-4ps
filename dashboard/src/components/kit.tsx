@@ -1095,6 +1095,7 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
   const [open, setOpen] = createSignal(false);
   let container: HTMLDivElement | undefined;
   let trigger: HTMLButtonElement | undefined;
+  let menuRef: HTMLDivElement | undefined;
 
   // Escape hands focus back to the trigger when it was inside the menu, as the notification bell
   // does: the entries take focus, and closing under one would drop it on the page body.
@@ -1107,6 +1108,18 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
   });
 
   useClickOutside(open, () => container, () => setOpen(false));
+
+  // Focus the first action item in the menu when opened so keyboard users can navigate immediately.
+  createEffect(() => {
+    if (open()) {
+      queueMicrotask(() => {
+        const first = menuRef?.querySelector<HTMLElement>(
+          "button:not([disabled]), a[href], [tabindex='0']:not([disabled])",
+        );
+        first?.focus();
+      });
+    }
+  });
 
   return (
     <div class="relative" ref={container}>
@@ -1125,6 +1138,7 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
         {/* `onClick` on the panel rather than on each entry: every entry closes the menu, and a
             caller that had to remember to close it would eventually forget on one row. */}
         <div
+          ref={menuRef}
           role="menu"
           onClick={() => setOpen(false)}
           class="absolute right-0 z-20 mt-1 flex min-w-40 flex-col items-stretch gap-1 rounded-token border border-line bg-surface p-1 shadow-overlay"
