@@ -10,6 +10,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0126](../adr/0126-when-an-agent-may-merge.md) When an agent may press merge
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
+- [ADR-0181](../adr/0181-the-activation-code-names-its-cell.md) The activation code names its cell
 - [ADR-0182](../adr/0182-a-signed-cell-moved-config-node.md) A signed "cell moved" config node
 
 ## Citations of ADRs that do not exist
