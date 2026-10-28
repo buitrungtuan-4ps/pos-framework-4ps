@@ -31360,10 +31360,7 @@
             "description": "What must hold for it to apply."
           },
           "exclusion_group": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "An exclusion group: at most one campaign per group applies to a bill. Absent means it stacks\nwith everything.",
             "minimum": 0
@@ -31386,10 +31383,7 @@
             "description": "Priority within its kind and exclusion group; higher applies first."
           },
           "quota_remaining": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "Remaining quota; absent is unlimited, `Some(0)` is exhausted.",
             "minimum": 0
@@ -31425,36 +31419,19 @@
         "description": "The conditions a campaign requires before it applies. Wire mirror of\n`pos_core::campaign::Conditions`; every field is optional and absent means unrestricted.",
         "properties": {
           "channels": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
             },
             "description": "The sales channels it applies on. Absent means every channel. Wrapped in [`Open`] so a\nchannel token from a newer cloud round-trips rather than failing the whole node."
           },
           "min_bill": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money",
-                "description": "A minimum bill total. Absent means no minimum."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money",
+            "description": "A minimum bill total. Absent means no minimum."
           },
           "schedule": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/PublishedSchedule",
-                "description": "The weekly schedule window. Absent means always active."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/PublishedSchedule",
+            "description": "The weekly schedule window. Absent means always active."
           }
         }
       },
@@ -31485,15 +31462,8 @@
             "description": "Whether the rule applies at all. Absent means `true`: a rule the cloud publishes applies\nunless it is paused."
           },
           "amount": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money",
-                "description": "For [`FeeKind::AmountPerBill`] and [`FeeKind::AmountPerUnit`]: the charge, an integer in the\ncurrency's minor unit. Ignored for a percentage."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money",
+            "description": "For [`FeeKind::AmountPerBill`] and [`FeeKind::AmountPerUnit`]: the charge, an integer in the\ncurrency's minor unit. Ignored for a percentage."
           },
           "base_discounted": {
             "type": "boolean",
@@ -31548,30 +31518,16 @@
             "description": "The items a [`FeeItems::Include`] or [`FeeItems::Exclude`] scope lists, by id rather than by\ncategory (the module documentation says why). Ignored for [`FeeItems::All`]."
           },
           "rate": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Ratio",
-                "description": "For [`FeeKind::Percent`]: the share of the base, as an exact ratio. 5 % is\n`Ratio::percent(5)` and 2.5 % is `Ratio::basis_points(250)`; never a float. Ignored for the\namount kinds."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Ratio",
+            "description": "For [`FeeKind::Percent`]: the share of the base, as an exact ratio. 5 % is\n`Ratio::percent(5)` and 2.5 % is `Ratio::basis_points(250)`; never a float. Ignored for the\namount kinds."
           },
           "tax": {
             "$ref": "#/components/schemas/OpenFeeTax_FeeTax",
             "description": "How the fee is taxed. Read it through [`tax`](Self::tax()), which reads an absent or unknown\ntreatment as [`FeeTax::FollowLines`]."
           },
           "tax_class_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TaxClassId",
-                "description": "For [`FeeTax::TaxClass`]: the class the fee is taxed at. Ignored otherwise."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/TaxClassId",
+            "description": "For [`FeeTax::TaxClass`]: the class the fee is taxed at. Ignored otherwise."
           },
           "waivable": {
             "type": "boolean",
@@ -31638,46 +31594,27 @@
         "description": "The `qr` node: its setting, and the guardrails the console's QR form writes beside it.\n\nEach guardrail is `None` where the node does not carry it, or carries something other than its\nJSON type, and each is left off the wire while absent.",
         "properties": {
           "business_hours": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/QrBusinessHours",
-                "description": "The hours the store takes QR orders. Absent, or without a whole open and close hour, is\nalways open."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/QrBusinessHours",
+            "description": "The hours the store takes QR orders. Absent, or without a whole open and close hour, is\nalways open."
           },
           "enabled": {
-            "type": [
-              "boolean",
-              "null"
-            ],
+            "type": "boolean",
             "description": "QR ordering's switch as the node carries it. The switch itself is the store's\n`qr_ordering_enabled` flag (ADR-0160 decision 5), and a cloud that knows it writes this equal\nto it, so a `false` flag beside a value that is not `false` is the flag from before the\nswitch."
           },
           "per_table_limit": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "How many guest orders one table may submit within the rate window. Absent is the guest\nintake's default.",
             "minimum": 0
           },
           "rate_window_secs": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "The rate window, in seconds. Absent is the guest intake's default.",
             "minimum": 0
           },
           "staff_confirmation_required": {
-            "type": [
-              "boolean",
-              "null"
-            ],
+            "type": "boolean",
             "description": "Whether a table-bearing guest order waits for a member of staff before the kitchen sees it.\nAbsent is `true` to both readers (ADR-0057): a store that never said holds guest orders."
           },
           "table_order": {
@@ -31778,10 +31715,7 @@
         "description": "The `retention` node.\n\nNo `deny_unknown_fields`, as for every published node: an edge on an older release applies a node\nthat carries a field it does not know, rather than refusing the whole document.",
         "properties": {
           "event_log_days": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "How many days the edge keeps a synced event, as the node carries it: a whole number, and\n`None` for anything else. Read it through [`PublishedRetention::event_log_days`].",
             "minimum": 0
@@ -31949,10 +31883,7 @@
             "minimum": 0
           },
           "tz_offset_minutes": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "The store's offset from UTC, in minutes. Absent reads as UTC."
           }
@@ -35994,10 +35925,7 @@
                 "description": "What must hold for it to apply."
               },
               "exclusion_group": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int32",
                 "description": "An exclusion group: at most one campaign per group applies to a bill. Absent means it stacks\nwith everything.",
                 "minimum": 0
@@ -36020,10 +35948,7 @@
                 "description": "Priority within its kind and exclusion group; higher applies first."
               },
               "quota_remaining": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+                "type": "integer",
                 "format": "int32",
                 "description": "Remaining quota; absent is unlimited, `Some(0)` is exhausted.",
                 "minimum": 0

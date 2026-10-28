@@ -83,13 +83,16 @@ pub struct PublishedSchedule {
 pub struct PublishedConditions {
     /// A minimum bill total. Absent means no minimum.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub min_bill: Option<Money>,
     /// The sales channels it applies on. Absent means every channel. Wrapped in [`Open`] so a
     /// channel token from a newer cloud round-trips rather than failing the whole node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub channels: Option<Vec<Open<SalesChannel>>>,
     /// The weekly schedule window. Absent means always active.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub schedule: Option<PublishedSchedule>,
 }
 
@@ -111,6 +114,7 @@ pub struct PublishedCampaign {
     /// An exclusion group: at most one campaign per group applies to a bill. Absent means it stacks
     /// with everything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub exclusion_group: Option<u16>,
     /// What it takes off.
     pub action: PublishedAction,
@@ -119,6 +123,7 @@ pub struct PublishedCampaign {
     pub conditions: PublishedConditions,
     /// Remaining quota; absent is unlimited, `Some(0)` is exhausted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub quota_remaining: Option<u32>,
 }
 
