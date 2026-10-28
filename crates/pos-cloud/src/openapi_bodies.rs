@@ -4,10 +4,9 @@
 //! Every body the cloud's documents describe names its schema
 //! ([ADR-0177](../../../docs/adr/0177-openapi-is-the-route-map.md) decision 3).
 //!
-//! A success answer with a body, and a request body, each carry a schema, except on the routes the
-//! two lists below still name. The lists only shrink: a route leaves when its handler's annotation
-//! names its bodies, and a list goes when it is empty. The `/v1` document has no list: every one
-//! of its bodies has a schema.
+//! A success answer with a body, and a request body, each carry a schema, in all three documents:
+//! the `/admin` console's, the store box's and the `/v1` integrators'. A route whose handler's
+//! annotation leaves one out fails here.
 
 use std::collections::BTreeSet;
 
@@ -16,12 +15,6 @@ use utoipa::OpenApi as _;
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
 use crate::openapi_device::DeviceApiDoc;
-
-/// `/admin` routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const ADMIN_NO_SCHEMA_YET: &[&str] = &[];
-
-/// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const DEVICE_NO_SCHEMA_YET: &[&str] = &[];
 
 /// The operations in `document` with a success answer (other than `204`) that has no content, or
 /// a request body with a media type that names no schema.
@@ -49,31 +42,33 @@ fn without_schema(document: &utoipa::openapi::OpenApi) -> BTreeSet<String> {
     missing
 }
 
-fn listed(routes: &[&str]) -> BTreeSet<String> {
-    routes.iter().map(|&route| route.to_owned()).collect()
-}
+/// What a failing test says: which annotation to fix.
+const MISSING: &str = "these routes answer, or take, a body with no schema: name it with `body = …` \
+                       in the response or `content = …` in the request_body of the handler's annotation";
 
 #[test]
-fn every_admin_body_has_a_schema_or_is_listed() {
+fn every_admin_body_has_a_schema() {
     assert_eq!(
         without_schema(&AdminApiDoc::openapi()),
-        listed(ADMIN_NO_SCHEMA_YET),
-        "a body without a schema must be in ADMIN_NO_SCHEMA_YET, and a route whose bodies all have one now \
-         must leave it"
+        BTreeSet::new(),
+        "{MISSING}"
     );
 }
 
 #[test]
-fn every_device_body_has_a_schema_or_is_listed() {
+fn every_device_body_has_a_schema() {
     assert_eq!(
         without_schema(&DeviceApiDoc::openapi()),
-        listed(DEVICE_NO_SCHEMA_YET),
-        "a body without a schema must be in DEVICE_NO_SCHEMA_YET, and a route whose bodies all have one now \
-         must leave it"
+        BTreeSet::new(),
+        "{MISSING}"
     );
 }
 
 #[test]
 fn every_v1_body_has_a_schema() {
-    assert_eq!(without_schema(&ApiDoc::openapi()), BTreeSet::new());
+    assert_eq!(
+        without_schema(&ApiDoc::openapi()),
+        BTreeSet::new(),
+        "{MISSING}"
+    );
 }
