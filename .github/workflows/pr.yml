@@ -138,6 +138,8 @@ jobs:
           fi
       - name: the files both front ends share live once, in packages/shared
         run: cargo run -q -p xtask -- mirrored-files
+      - name: the front ends mirror no more wire types by hand than the baseline allows (ADR-0177)
+        run: cargo run -q -p xtask -- hand-types
       - name: no vendor brand name in pos-core / pos-proto production code
         run: cargo run -q -p xtask -- vendor-neutral-core
       - name: the print agent links only the three workspace crates ADR-0112 allows
