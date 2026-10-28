@@ -17,7 +17,15 @@
 // is only left off where the read cannot depend on it.
 
 import { menuPath, type SessionState } from "../api/client";
-import type { DrawersResponse, LocaleResponse, MenuResponse, ShiftResponse } from "../api/types";
+import type {
+  DrawersResponse,
+  FloorResponse,
+  LayoutResponse,
+  LocaleResponse,
+  MenuResponse,
+  ReasonCodesResponse,
+  ShiftResponse,
+} from "../api/schemas";
 import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { takeSession } from "./session";
 import {
@@ -36,7 +44,6 @@ import {
   type LiveOrdersRead,
   walkInChannel,
 } from "./store";
-import type { FloorResponse, LayoutResponse, ReasonCodesResponse } from "../api/schemas";
 
 const ENTRIES: readonly Entry[] = [
   {

@@ -89,9 +89,11 @@ pub(crate) struct ButtonResponse {
     /// The button's zero-based column on a fixed grid, absent for a flowing layout where order alone
     /// places it.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     column: Option<u16>,
     /// The button's zero-based row, absent for the same reason as `column`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     row: Option<u16>,
 }
 
