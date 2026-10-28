@@ -1,3 +1,9 @@
+## 2026-10-28 - Pre-grouping relational data into createMemo Maps in SolidJS screens
+
+**Learning:** Un-memoized filter functions called inside JSX `<For>` loops and prop callbacks (e.g., `inFamily(family)` filtering `providers`, `rowsIn(family)` filtering `connections`) re-run $O(P + C)$ array scans $F$ times on every render or signal update. Pre-grouping items by category/family into `createMemo` Map lookups cuts execution overhead to $O(P + C)$ total and enables $O(1)$ lookup per rendered card or cell.
+
+**Action:** When a SolidJS screen renders categorized sections or grouped data tables, pre-group items by category into a `createMemo` Map lookup rather than filtering arrays inside component helper functions or `<For each={...}>`.
+
 ## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
 
 **Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.

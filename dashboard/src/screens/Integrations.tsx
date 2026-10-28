@@ -152,13 +152,48 @@ export function Integrations() {
   const [clearing, setClearing] = createSignal<string[]>([]);
   const [processing, setProcessing] = createSignal("");
 
+  // Optimization: Pre-group providers by family with createMemo so inFamily lookups are O(1) Map accesses
+  // rather than re-filtering the providers array on every render pass / JSX access.
+  const providersByFamily = createMemo(() => {
+    const map = new Map<string, Provider[]>();
+    for (const provider of providers()) {
+      const list = map.get(provider.family);
+      if (list) {
+        list.push(provider);
+      } else {
+        map.set(provider.family, [provider]);
+      }
+    }
+    return map;
+  });
+
+  // Optimization: Pre-group connections by family with createMemo so rowsIn lookups are O(1) Map accesses
+  // rather than scanning connections.value() and providerById() on every render pass.
+  const rowsByFamily = createMemo(() => {
+    const map = new Map<string, Connection[]>();
+    for (const row of connections.value() ?? []) {
+      const provider = providerById().get(row.provider_id);
+      if (provider) {
+        const list = map.get(provider.family);
+        if (list) {
+          list.push(row);
+        } else {
+          map.set(provider.family, [row]);
+        }
+      }
+    }
+    return map;
+  });
+
+  // Optimization: Memoize families with at least one provider to avoid re-evaluating FAMILIES.filter(...)
+  // and nested inFamily filter passes during render loops.
+  const activeFamilies = createMemo(() =>
+    FAMILIES.filter((entry) => (providersByFamily().get(entry.family)?.length ?? 0) > 0),
+  );
+
   const chosen = () => providerById().get(providerId());
-  const inFamily = (wanted: string) =>
-    providers().filter((provider) => provider.family === wanted);
-  const rowsIn = (wanted: IntegrationFamily) =>
-    (connections.value() ?? []).filter(
-      (row) => providerById().get(row.provider_id)?.family === wanted,
-    );
+  const inFamily = (wanted: string) => providersByFamily().get(wanted) ?? [];
+  const rowsIn = (wanted: IntegrationFamily) => rowsByFamily().get(wanted) ?? [];
 
   const resetForm = (row: Connection | null, forFamily: string) => {
     setFamily(forFamily);
@@ -321,57 +356,61 @@ export function Integrations() {
       });
   };
 
-  const columns = (): Column<Connection>[] => [
-    {
-      key: "name",
-      header: t("integrations.name"),
-      cell: (row) => (
-        <div>
-          <div>{row.display_name}</div>
-          <div class="text-sm text-ink-muted">
-            {providerName(providerById().get(row.provider_id), row.provider_id)}
+  // Optimization: Memoize columns array definition to avoid allocating new Column[] arrays
+  // and closure instances on every render.
+  const columns = createMemo(
+    (): Column<Connection>[] => [
+      {
+        key: "name",
+        header: t("integrations.name"),
+        cell: (row) => (
+          <div>
+            <div>{row.display_name}</div>
+            <div class="text-sm text-ink-muted">
+              {providerName(providerById().get(row.provider_id), row.provider_id)}
+            </div>
           </div>
-        </div>
-      ),
-      sortValue: (row) => row.display_name,
-    },
-    {
-      key: "scope",
-      header: t("integrations.scope"),
-      cell: (row) => <span class="text-sm">{scopeLabel(row)}</span>,
-    },
-    {
-      key: "standing",
-      header: t("integrations.standing"),
-      cell: (row) => (
-        <StatusBadge
-          tone={row.enabled ? "active" : "archived"}
-          label={row.enabled ? t("integrations.enabled") : t("integrations.disabled")}
-        />
-      ),
-    },
-    { key: "processing", header: t("integrations.processing"), cell: processingCell },
-    {
-      key: "secrets",
-      header: t("integrations.credentials"),
-      cell: (row) => (
-        <span class="text-sm text-ink-muted">
-          {row.secrets_set.length > 0
-            ? t("integrations.credentialsSet", { count: row.secrets_set.length })
-            : t("integrations.credentialsNone")}
-        </span>
-      ),
-    },
-    {
-      key: "id",
-      header: t("integrations.id"),
-      cell: (row) => (
-        <TechnicalDetails label={t("common.technicalDetails")}>
-          {row.connection_id}
-        </TechnicalDetails>
-      ),
-    },
-  ];
+        ),
+        sortValue: (row) => row.display_name,
+      },
+      {
+        key: "scope",
+        header: t("integrations.scope"),
+        cell: (row) => <span class="text-sm">{scopeLabel(row)}</span>,
+      },
+      {
+        key: "standing",
+        header: t("integrations.standing"),
+        cell: (row) => (
+          <StatusBadge
+            tone={row.enabled ? "active" : "archived"}
+            label={row.enabled ? t("integrations.enabled") : t("integrations.disabled")}
+          />
+        ),
+      },
+      { key: "processing", header: t("integrations.processing"), cell: processingCell },
+      {
+        key: "secrets",
+        header: t("integrations.credentials"),
+        cell: (row) => (
+          <span class="text-sm text-ink-muted">
+            {row.secrets_set.length > 0
+              ? t("integrations.credentialsSet", { count: row.secrets_set.length })
+              : t("integrations.credentialsNone")}
+          </span>
+        ),
+      },
+      {
+        key: "id",
+        header: t("integrations.id"),
+        cell: (row) => (
+          <TechnicalDetails label={t("common.technicalDetails")}>
+            {row.connection_id}
+          </TechnicalDetails>
+        ),
+      },
+    ],
+  );
 
   return (
     <div>
@@ -380,7 +419,7 @@ export function Integrations() {
         <Show when={failureOf(catalogue) ?? failureOf(connections)}>
           {(message) => <Banner tone="danger" message={message()} />}
         </Show>
-        <For each={FAMILIES.filter((entry) => inFamily(entry.family).length > 0)}>
+        <For each={activeFamilies()}>
           {(entry) => (
             <Card
               title={t(entry.title)}
