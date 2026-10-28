@@ -5,9 +5,6 @@
   "src/api/client.ts": {
     "max-lines": 2083
   },
-  "src/api/types.ts": {
-    "max-lines": 1204
-  },
   "src/components/AccountMenu.tsx": {
     "max-lines-per-function": 154
   },
@@ -86,7 +83,7 @@
     "max-lines-per-function": 649
   },
   "src/screens/Integrations.tsx": {
-    "max-lines-per-function": 391
+    "max-lines-per-function": 364
   },
   "src/screens/Inventory.tsx": {
     "max-lines-per-function": 675

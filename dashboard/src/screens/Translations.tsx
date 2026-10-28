@@ -9,7 +9,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { TranslationGrid, TranslationImportReport } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
@@ -26,6 +25,7 @@ import {
 import { EmptyState, Modal } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+import type { TranslationGrid, TranslationImportReport } from "../api/schemas";
 
 /** The enforced fallback locale (ADR-0020) — always a column, even if the catalogue omits it. */
 const FALLBACK_LOCALE = "en";

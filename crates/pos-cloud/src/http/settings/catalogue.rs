@@ -17,6 +17,8 @@ use super::{SettingsState, settings_store_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{Json, settings_confirm};
+use crate::settings::SettingValue;
+use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 
 /// One setting as the console's settings screen draws it: the register entry, without its
@@ -27,26 +29,34 @@ use crate::settings::SettingsStore;
 /// `unit`, which the screen bounds its input by and names in the operator's language; nothing more
 /// for a switch. `default` and `preset` are the value as the node carries it — a token, a number or
 /// a boolean. `confirm` is a value written only with a recorded confirmation (ADR-0169).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct SettingCatalogueEntry {
     setting_key: String,
     node: &'static str,
     field: &'static str,
+    #[schema(value_type = pos_proto::settings::SettingKind)]
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     values: Option<Vec<&'static str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     min: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     unit: Option<&'static str>,
+    #[schema(value_type = SettingValueSchema)]
     default: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false, value_type = Option<SettingValueSchema>)]
     preset: Option<serde_json::Value>,
     scopes: Vec<&'static str>,
     since: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     confirm: Option<settings_confirm::CatalogueConfirm>,
 }
 
@@ -79,13 +89,27 @@ impl SettingCatalogueEntry {
     }
 }
 
+/// What the settings catalogue answers: every setting the register declares.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct SettingsCatalogue {
+    /// One entry per setting, in register order.
+    settings: Vec<SettingCatalogueEntry>,
+}
+
+/// What the settings list answers: every value the tenant has written, at every scope.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct SettingValues {
+    /// The stored values.
+    values: Vec<SettingValue>,
+}
+
 #[utoipa::path(
     get,
     path = "/admin/settings/catalogue",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.data.read"))),
     responses(
-        (status = 200, description = "Every setting in the register: its key, node and field, its \
+        (status = 200, body = SettingsCatalogue, description = "Every setting in the register: its key, node and field, its \
                                       kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it \
                                       takes — a choice's values, or a whole number's min, max \
                                       and unit — its default and the value a new store is given \
@@ -126,7 +150,7 @@ where
         .collect();
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "settings": entries })),
+        Json(SettingsCatalogue { settings: entries }),
     )
         .into_response()
 }
@@ -140,7 +164,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant whose values to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every value the tenant has written: the setting, the scope \
+        (status = 200, body = SettingValues, description = "Every value the tenant has written: the setting, the scope \
                                       and the id it was written for, the value and when"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -178,11 +202,27 @@ where
         Err(refusal) => return refusal,
     };
     match state.settings.list(tenant_id).await {
-        Ok(values) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "values": values })),
-        )
-            .into_response(),
+        Ok(values) => (StatusCode::OK, Json(SettingValues { values })).into_response(),
         Err(error) => settings_store_error_response(&error),
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::{SettingValues, SettingsCatalogue};
+
+    #[test]
+    fn the_catalogue_and_the_values_are_their_lists() {
+        let catalogue = serde_json::to_value(SettingsCatalogue {
+            settings: Vec::new(),
+        });
+        assert_eq!(
+            catalogue.expect("json"),
+            serde_json::json!({ "settings": [] })
+        );
+        let values = serde_json::to_value(SettingValues { values: Vec::new() });
+        assert_eq!(values.expect("json"), serde_json::json!({ "values": [] }));
     }
 }

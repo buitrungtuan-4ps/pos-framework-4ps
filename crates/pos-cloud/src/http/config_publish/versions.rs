@@ -51,8 +51,10 @@ struct ConfigNodeView {
     /// `null` is *not* "never published": the node is in the effective document, so it was. It means
     /// the version that put it there predates this field, or was a whole-layer replace that named
     /// nothing. The console says "published, when is not recorded" rather than inventing a date.
+    #[schema(required = true)]
     version_id: Option<String>,
     /// When that version was published (from its ULID's own timestamp, Unix ms), or `null` with it.
+    #[schema(required = true)]
     at_ms: Option<i64>,
 }
 
@@ -64,6 +66,7 @@ struct ConfigNodeView {
 /// happens where both numbers already are.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodesView {
+    #[schema(required = true)]
     current_version_id: Option<String>,
     nodes: Vec<ConfigNodeView>,
 }
@@ -246,7 +249,7 @@ where
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "That version's effective configuration, for comparing with \
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "That version's effective configuration, for comparing with \
                                       another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
                                       holding console.people.read, and prices only for a role \
                                       holding console.reports.revenue: a past version is no less sensitive"),

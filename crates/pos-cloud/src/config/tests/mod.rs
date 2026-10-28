@@ -436,3 +436,58 @@ fn the_first_failing_check_is_the_one_reported() {
     );
     assert!(config.validate().is_ok());
 }
+
+/// No `[cell]` section is level 0 of ADR-0179: the boot carries on as the one default cell.
+#[test]
+fn no_cell_section_is_the_default_cell() {
+    let config = valid();
+    assert!(config.validate().is_ok());
+    assert_eq!(
+        config.cell().expect("absent resolves"),
+        crate::cell::Cell::single()
+    );
+}
+
+/// A `[cell]` section is checked at boot: a malformed one stops the process by name.
+#[test]
+fn a_cell_section_is_read_and_checked_at_boot() {
+    let text = format!(
+        "{MINIMAL_TOML}internal_shared_secret = \"{}\"\n[cell]\ncell_id = \"vn1\"\n\
+         home_country = \"VN\"\nbase_url = \"https://vn1.example.com\"\nruns_in = \"VN\"\n",
+        "a".repeat(MIN_INTERNAL_SECRET_LEN)
+    );
+    let config = CloudConfig::from_toml(&text).expect("the section parses");
+    assert!(config.validate().is_ok());
+    assert_eq!(config.cell().expect("resolves").cell_id, "vn1");
+
+    let broken = text.replace("\"vn1\"", "\"VN\"");
+    let error = CloudConfig::from_toml(&broken)
+        .expect("parses")
+        .validate()
+        .expect_err("a country is not a cell id");
+    assert!(error.contains("cell_id"), "{error}");
+}
+
+/// A `[federation]` section is checked at boot: a source that cannot be read stops the process by
+/// name, and no section is no federation (ADR-0179 C10).
+#[test]
+fn a_federation_section_is_checked_at_boot() {
+    assert!(valid().federation.is_none());
+    let text = format!(
+        "{MINIMAL_TOML}internal_shared_secret = \"{}\"\n[[federation.sources]]\ncell_id = \"jp1\"\n\
+         api_key = \"pos_k1_secret\"\nstores = [\"01M2219QK4T3W6Z0Y8FBQ2X5MV\"]\n",
+        "a".repeat(MIN_INTERNAL_SECRET_LEN)
+    );
+    let config = CloudConfig::from_toml(&text).expect("the section parses");
+    assert!(config.validate().is_ok());
+    assert!(
+        !format!("{config:?}").contains("pos_k1_secret"),
+        "the key never reaches a Debug"
+    );
+    let broken = text.replace("01M2219QK4T3W6Z0Y8FBQ2X5MV", "store-1");
+    let error = CloudConfig::from_toml(&broken)
+        .expect("parses")
+        .validate()
+        .expect_err("a store that is not a ULID");
+    assert!(error.contains("[federation]"), "{error}");
+}

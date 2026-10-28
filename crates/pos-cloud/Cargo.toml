@@ -185,6 +185,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # advisory-clean; pulls only `csv-core`/`itoa`/`ryu` beside `serde`, already in the tree.
 csv = "1"
 
+# The cell directory's minisign check (ADR-0179 C2), reusing the verifier the edge checks a release
+# with (ADR-0047). A workspace path crate whose subtree (ed25519-dalek, blake2) is already in the
+# lock, and verify-only: the cloud never holds or generates the directory's signing key.
+updater-minisign = { path = "../adapters/updater-minisign" }
+
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }

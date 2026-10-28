@@ -83,11 +83,15 @@ pub(super) struct ReleaseView {
     /// and every other status on this surface reaches the console `snake_case`. Two spellings for one
     /// concept is two branches in the console's type for no gain.
     status: ReleaseStatus,
+    #[schema(required = true)]
     target_group_id: Option<String>,
     /// The operator's local date, for a wall-clock release. Null for an instant release.
+    #[schema(required = true)]
     wall_clock_date: Option<String>,
+    #[schema(required = true)]
     wall_clock_time: Option<String>,
     /// The single instant, for a release timed in UTC. Null for a wall-clock release.
+    #[schema(required = true)]
     instant_at_ms: Option<i64>,
     created_by: String,
     created_at_ms: i64,
@@ -139,8 +143,11 @@ pub(super) struct ReleasePairView {
     /// clock it came from draws every shop's 04:00 in the reader's own time — which is the review
     /// ADR-0125 §26 rejected fire-time conversion to avoid. `None` for a release timed as a plain
     /// UTC instant, which has no per-store clock, and for pairs written before the column existed.
+    #[schema(required = true)]
     pub(super) resolved_timezone: Option<String>,
+    #[schema(required = true)]
     pub(super) applied_version_id: Option<String>,
+    #[schema(required = true)]
     pub(super) failure: Option<String>,
 }
 

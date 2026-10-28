@@ -16,7 +16,6 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Device } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -42,6 +41,7 @@ import {
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
+import type { Device } from "../api/schemas";
 
 // The device kinds offered when adding one, each mapped to a static i18n key. `kind` is free text on
 // the wire, so this is a convenience list, not a closed set.

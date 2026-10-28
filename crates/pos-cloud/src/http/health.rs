@@ -48,7 +48,9 @@ struct TaskHealthView {
     task: String,
     expected: bool,
     healthy: bool,
+    #[schema(required = true)]
     last_tick_at_ms: Option<i64>,
+    #[schema(required = true)]
     seconds_since: Option<i64>,
     detail: serde_json::Value,
 }

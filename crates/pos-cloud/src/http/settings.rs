@@ -28,6 +28,7 @@ use crate::http::Json;
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::response::StoresPublished;
 
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
 pub(super) mod catalogue;
@@ -127,7 +128,9 @@ where
 fn publish_results_response(results: &[SettingPublishResult]) -> Response {
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "stores": results })),
+        Json(StoresPublished {
+            stores: results.to_vec(),
+        }),
     )
         .into_response()
 }

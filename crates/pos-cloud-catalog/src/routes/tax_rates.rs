@@ -53,6 +53,7 @@ struct TaxRateState<Tax, Cat, A, C> {
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TaxRateView {
     tax_class_id: String,
+    #[schema(value_type = SalesChannel)]
     sales_channel: String,
     rate_bps: u32,
     /// The named parts the invoice prints, which must sum to `rate_bps`

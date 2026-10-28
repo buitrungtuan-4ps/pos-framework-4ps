@@ -411,7 +411,7 @@ pub(super) fn batch_report(
             .iter()
             .map(|result| BatchResultView {
                 store_id: result.store_id.to_string(),
-                outcome: result.outcome.as_wire().to_owned(),
+                outcome: result.outcome,
                 detail: result.detail.clone(),
                 config_version_id: result.version_id.clone(),
                 at_ms: result.at_ms,

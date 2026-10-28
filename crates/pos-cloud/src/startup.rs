@@ -12,6 +12,7 @@ use std::sync::Arc;
 use blob_garage::S3Blobs;
 
 use pos_cloud::audit::AuditRecorder;
+use pos_cloud::cell::signed::{CellDirectory, Offer};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
 use pos_cloud::qr_ordering::OneSwitch;
@@ -230,4 +231,81 @@ pub(super) fn vendor_catalogue(
         );
     }
     Ok(providers)
+}
+
+/// How often a cell re-reads its directory file, so a new signed directory placed on the box is
+/// taken up without a restart (ADR-0179 C2).
+const DIRECTORY_RELOAD_INTERVAL: core::time::Duration = core::time::Duration::from_secs(300);
+
+/// The cell's directory holder, and the task that re-reads its file when one is configured.
+pub(super) type CellAndReload = (Arc<CellDirectory>, Option<tokio::task::JoinHandle<()>>);
+
+/// Which cell this cloud is (ADR-0179 C1) and the directory it answers from (C2), named in the log
+/// once, with a warning when its servers run outside its home country. That is never a refusal: the
+/// operator decides. With a directory configured, the file is read now and re-read on an interval by
+/// the returned task; a file that fails its check is logged and the directory held is kept.
+pub(super) fn cell_directory(
+    config: &CloudConfig,
+) -> Result<CellAndReload, Box<dyn std::error::Error>> {
+    let cell = config.cell()?;
+    tracing::info!(cell_id = %cell.cell_id, configured = cell.configured, "serving as cell");
+    if cell.runs_abroad() {
+        tracing::warn!(
+            cell_id = %cell.cell_id,
+            home_country = ?cell.home_country.map(|code| code.as_str().to_owned()),
+            runs_in = ?cell.runs_in.map(|code| code.as_str().to_owned()),
+            "this cell's servers run outside its home country (ADR-0179)"
+        );
+    }
+    let Some(source) = pos_cloud::cell::directory_source(config.cell.as_ref())? else {
+        return Ok((Arc::new(CellDirectory::single(cell)), None));
+    };
+    let directory = Arc::new(CellDirectory::trusting(cell, source.key.clone()));
+    // The first read is at boot, before anything serves, so the first answer is the file's.
+    offer_directory_file(&directory, &source);
+    let task = tokio::spawn({
+        let directory = Arc::clone(&directory);
+        async move {
+            let mut ticks = tokio::time::interval(DIRECTORY_RELOAD_INTERVAL);
+            ticks.tick().await;
+            loop {
+                ticks.tick().await;
+                let (directory, source) = (Arc::clone(&directory), source.clone());
+                // File reads block, so they run off the async workers.
+                let _ = tokio::task::spawn_blocking(move || {
+                    offer_directory_file(&directory, &source);
+                })
+                .await;
+            }
+        }
+    });
+    Ok((directory, Some(task)))
+}
+
+/// Reads the directory file and its signature and offers them, logging what became of it. A
+/// refusal is logged when it first appears, not on every re-read.
+fn offer_directory_file(directory: &CellDirectory, source: &pos_cloud::cell::DirectorySource) {
+    let before = directory.last_refusal();
+    let outcome =
+        match pos_cloud::cell::read_directory_files(&source.path, &source.signature_path()) {
+            Ok((document, signature)) => directory.offer(&document, &signature),
+            Err(why) => {
+                directory.record_refusal(why.clone());
+                Err(why)
+            }
+        };
+    match outcome {
+        Ok(Offer::Accepted(version)) => {
+            tracing::info!(directory_version = version, "accepted the cell directory");
+        }
+        Ok(Offer::Unchanged(_)) => {}
+        Err(why) => {
+            if before.as_deref() != Some(why.as_str()) {
+                tracing::error!(
+                    mode = ?directory.mode(),
+                    "refused the cell directory, keeping the one held: {why}"
+                );
+            }
+        }
+    }
 }

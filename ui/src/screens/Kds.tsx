@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
-import type { MenuItemResponse } from "../api/types";
+import type { MenuItemResponse } from "../api/schemas";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { chime, chimeReady, unlockChime } from "../lib/chime";

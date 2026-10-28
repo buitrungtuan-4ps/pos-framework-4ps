@@ -19,6 +19,7 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::retention::PublishedRetention;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
@@ -39,7 +40,7 @@ pub(super) struct PublishRetentionRequest {
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
+        (status = 200, body = Option<PublishedRetention>, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
                                       composed from all four layers, or `null` when it has none (the edge then keeps 90 days)"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),

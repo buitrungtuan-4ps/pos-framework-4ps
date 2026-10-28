@@ -7,11 +7,9 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 ## Cited nowhere
 
 - [ADR-0009](../adr/0009-licence.md) Licence: proprietary, internal use
-- [ADR-0023](../adr/0023-tenant-hostname-and-slug.md) Tenant hostnames: flat per-tenant subdomains, DNS as the uniqueness ledger
 - [ADR-0126](../adr/0126-when-an-agent-may-merge.md) When an agent may press merge
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
-- [ADR-0179](../adr/0179-cells-the-directory-and-the-front-door.md) Cells, the directory and the front door
 
 ## Citations of ADRs that do not exist
 

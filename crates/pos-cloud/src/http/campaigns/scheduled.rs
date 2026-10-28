@@ -112,6 +112,15 @@ where
         })
 }
 
+/// What scheduling a campaign publish answers: the scheduled publish and when it takes effect.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct CampaignsScheduled {
+    /// The scheduled publish's id, a ULID.
+    id: String,
+    /// When it publishes, in Unix milliseconds.
+    effective_at_ms: i64,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/config/campaigns/schedule",
@@ -124,7 +133,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Scheduled: the compiled `campaigns` node is held until its \
+        (status = 201, body = CampaignsScheduled, description = "Scheduled: the compiled `campaigns` node is held until its \
                                       time, when the scheduler publishes it. The body carries `id`, \
                                       what a cancel names, and `effective_at_ms`. Audited with the \
                                       number of campaigns and the instant"),
@@ -221,10 +230,10 @@ where
             .await;
             (
                 StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "id": publish.id,
-                    "effective_at_ms": request.effective_at_ms,
-                })),
+                Json(CampaignsScheduled {
+                    id: publish.id,
+                    effective_at_ms: request.effective_at_ms,
+                }),
             )
                 .into_response()
         }
@@ -376,4 +385,23 @@ pub(in crate::http) fn scheduled_error_response(error: &ScheduledPublishError) -
         ErrorStatus::Unavailable,
         "the scheduling service is unavailable",
     )
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::CampaignsScheduled;
+
+    #[test]
+    fn a_schedule_answers_its_id_and_moment() {
+        let answer = CampaignsScheduled {
+            id: "01J0000000000000000000000P".to_owned(),
+            effective_at_ms: 1_700_000_000_000,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000P", "effective_at_ms": 1_700_000_000_000_i64 })
+        );
+    }
 }

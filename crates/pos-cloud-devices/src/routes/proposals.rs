@@ -125,7 +125,7 @@ where
             StatusCode::CREATED,
             Json(ProposeDeviceResponse {
                 id: id.to_string(),
-                status: DeviceProposalStatus::Pending.as_wire().to_owned(),
+                status: DeviceProposalStatus::Pending,
             }),
         )
             .into_response(),

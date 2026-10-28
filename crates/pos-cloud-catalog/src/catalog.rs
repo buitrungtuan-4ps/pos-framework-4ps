@@ -193,8 +193,10 @@ pub struct CatalogItem {
     /// The tax class, which the store's channel-keyed rate table turns into a rate at reprice time.
     pub tax_class_id: TaxClassId,
     /// The operational category this item reports under, or `None` if unclassified (entity 2).
+    #[schema(required = true)]
     pub item_category_id: Option<ItemCategoryId>,
     /// The operational sub-category, refining the category, or `None` (entity 3).
+    #[schema(required = true)]
     pub item_subcategory_id: Option<ItemSubcategoryId>,
     /// The course this item goes out on, or `None` for an item on no course
     /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).
@@ -207,9 +209,11 @@ pub struct CatalogItem {
     /// A **per-line override** is deliberately not modelled. The request it would serve — *"bring my
     /// main with the starters"* — is about when the food goes, and firing already answers that;
     /// relabelling a line's course to mean "sooner" would put a timing decision inside a taxonomy.
+    #[schema(required = true)]
     pub course_id: Option<CourseId>,
     /// The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display
     /// only; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder.
+    #[schema(required = true)]
     pub image_ref: Option<MediaId>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -229,6 +233,7 @@ pub struct Menu {
     /// The human name.
     pub name: String,
     /// The menu this one inherits from, or `None` for a root menu.
+    #[schema(required = true)]
     pub parent_menu_id: Option<MenuId>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -311,6 +316,7 @@ pub struct MenuPlacement {
     pub menu_item_id: MenuItemId,
     /// The section this placement sits under, or `None` for an unsectioned placement. Authoring-only
     /// (ADR-0066 entity 7): it groups the row for the operator, and does not reach the compiled book.
+    #[schema(required = true)]
     pub menu_section_id: Option<MenuSectionId>,
     /// The item's price per channel in this menu. A channel with no row here falls to the menu's
     /// parent (inheritance) or, failing that, is not sold on that channel.
@@ -403,6 +409,7 @@ pub struct Course {
 /// same id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the
 /// compiled `MenuEntry`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplayCategory)]
 pub struct DisplayCategory {
     /// The display-category id — carried into the compiled `DisplayPlan`.
     pub display_category_id: DisplayCategoryId,
@@ -416,6 +423,7 @@ pub struct DisplayCategory {
 
 /// A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplaySubcategory)]
 pub struct DisplaySubcategory {
     /// The display-sub-category id — carried into the compiled plan.
     pub display_subcategory_id: DisplaySubcategoryId,
@@ -446,12 +454,14 @@ pub struct LayoutButton {
     /// The display category the button sits under.
     pub display_category_id: DisplayCategoryId,
     /// The sub-category within that category, or `None` for a button directly under the category.
+    #[schema(required = true)]
     pub display_subcategory_id: Option<DisplaySubcategoryId>,
     /// The item this button orders — a `menu_item_id` the compiled `MenuBook` prices.
     pub menu_item_id: MenuItemId,
     /// The caption to show (may be shorter than the item's catalog name on a crowded grid).
     pub label: String,
     /// The button's grid slot on a POS terminal, or `None` for a flowing layout (tablet, QR).
+    #[schema(required = true)]
     pub position: Option<GridPosition>,
     /// The display order within its group; lower comes first.
     pub sort: i32,

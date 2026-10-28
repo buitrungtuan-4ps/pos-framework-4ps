@@ -46,6 +46,7 @@ struct CountryView {
     digits_per_group: u8,
     default_retention_days: u16,
     prices_include_tax: bool,
+    #[schema(required = true)]
     cash_rounding_increment: Option<i64>,
     cash_denominations: Vec<i64>,
 }

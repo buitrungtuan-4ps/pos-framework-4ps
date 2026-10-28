@@ -78,6 +78,7 @@ pub struct WebhookSummary {
     /// The destination URL.
     pub url: String,
     /// The cursor position (an event-id ULID string), or `null` if nothing has been delivered.
+    #[schema(required = true)]
     pub cursor: Option<String>,
     /// Whether the endpoint is auto-disabled.
     pub disabled: bool,

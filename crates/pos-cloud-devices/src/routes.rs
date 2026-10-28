@@ -28,7 +28,9 @@ use terminals::{admin_set_terminal_float, admin_set_terminal_receipt, create_ter
 use crate::audit::AuditRecorder;
 use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::apikey::ApiKeyStore;
-use crate::devices::{DeviceProposalId, DeviceProposalStore, DeviceWriteOutcome};
+use crate::devices::{
+    DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceWriteOutcome,
+};
 use pos_cloud_api::conditional::version_mismatch;
 use pos_cloud_api::refusal::not_found;
 
@@ -163,7 +165,7 @@ struct ProposeDeviceResponse {
     /// The proposal's id (a ULID).
     id: String,
     /// The status — `pending` until an operator resolves it.
-    status: String,
+    status: DeviceProposalStatus,
 }
 
 /// The tenant a device listing or resolution is scoped to (the super-admin is global).

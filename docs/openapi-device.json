@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pizza 4P's POS Store Box API",
-    "description": "What a store's edge calls on its cloud: the store-facing `/sync` surface, and `/activate` and `/claim`, the two ways a box first comes to hold a credential. Generated from the handlers (ADR-0177). Every failure carries the AIP-193 `ErrorResponse` envelope, and the whole surface is rate-limited per client before any credential is read.",
+    "description": "What a store's edge calls on its cloud: the store-facing `/sync` surface, `/activate` and `/claim`, the two ways a box first comes to hold a credential, and `/.well-known/pos-cell`, which says which cell to ask. Generated from the handlers (ADR-0177). Every failure carries the AIP-193 `ErrorResponse` envelope. Every route but `/.well-known/pos-cell`, which answers from memory, is rate-limited per client before any credential is read.",
     "license": {
       "name": "LicenseRef-Proprietary",
       "identifier": "LicenseRef-Proprietary"
@@ -10,6 +10,70 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/.well-known/pos-cell": {
+      "get": {
+        "tags": [
+          "cells"
+        ],
+        "summary": "Anyone asks which cell this is and, optionally, where a tenant is homed.",
+        "operationId": "well_known_cell",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "description": "A tenant slug: 1 to 63 lower-case letters, digits or `-`, not starting or ending with `-`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This cell: `cell_id`, `base_url`, `country_alias`, `home_country` and the `directory_version` it answers from. With `tenant`, also `tenant`: the tenant's home `cell_id`, that cell's `base_url`, and whether it is `here`. Never a redirect. May be cached for 60 seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WellKnownCell"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`tenant` is not a tenant slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The directory this cell holds does not list the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This cell is configured for a signed directory and holds none yet, so it can name no tenant's home; ask again later",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-public-reason": "asked before any credential exists, by a box being set up or by anyone finding a tenant's cell; it says only what the PII-free cell directory says (ADR-0179)"
+      }
+    },
     "/activate": {
       "post": {
         "tags": [
@@ -168,7 +232,14 @@
             }
           },
           "202": {
-            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again"
+            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimPending"
+                }
+              }
+            }
           },
           "400": {
             "description": "claim_id is not a ULID",
@@ -1721,6 +1792,19 @@
           }
         }
       },
+      "ClaimPending": {
+        "type": "object",
+        "description": "What collecting a claim nobody has bound yet answers: that it is pending.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PendingStatus",
+            "description": "Always `PENDING`."
+          }
+        }
+      },
       "CollectClaimRequest": {
         "type": "object",
         "description": "A box presents its secret to collect.",
@@ -1914,6 +1998,15 @@
         "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "DeviceProposalStatus": {
+        "type": "string",
+        "description": "Where a proposal sits in the approval workflow.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
       "DeviceProposalSummary": {
         "type": "object",
         "description": "A proposal as listed — the durable facts plus its status.",
@@ -1923,7 +2016,16 @@
           "kind",
           "name",
           "address",
+          "connection",
+          "station_id",
+          "agent_device_id",
           "drawer_attached",
+          "paper_width",
+          "cuts_paper",
+          "receipt_printer_id",
+          "receipt_language",
+          "receipt_second_language",
+          "opening_float_minor",
           "status",
           "version"
         ],
@@ -2440,6 +2542,13 @@
           }
         }
       },
+      "PendingStatus": {
+        "type": "string",
+        "description": "The one status a pending claim answers with.",
+        "enum": [
+          "PENDING"
+        ]
+      },
       "PrintAgentStanding": {
         "type": "object",
         "description": "One bound print agent, as the store last reported it\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).\n\nIds are kept as raw strings for the reason the config versions below are: the cloud did not mint\nthe paired device id — the store did — and one report the cloud cannot parse must not fail a\nwhole fleet read. The console shows what the store said.\n\nCarries no personal data by construction: two opaque identifiers and a duration. Nothing a ticket\n*says* helps diagnose a stalled agent, so nothing a ticket says is here.",
@@ -2503,7 +2612,7 @@
             "description": "The proposal's id (a ULID)."
           },
           "status": {
-            "type": "string",
+            "$ref": "#/components/schemas/DeviceProposalStatus",
             "description": "The status — `pending` until an operator resolves it."
           }
         }
@@ -2541,7 +2650,8 @@
         "description": "One line of a [`QueuedOrderPayload`].",
         "required": [
           "menu_item_id",
-          "quantity_milli"
+          "quantity_milli",
+          "modifier_menu_item_ids"
         ],
         "properties": {
           "menu_item_id": {
@@ -2556,10 +2666,7 @@
             "description": "Chosen modifiers."
           },
           "note": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The guest's free-text note; stays at the store, never the event log."
           },
           "quantity_milli": {
@@ -2568,15 +2675,8 @@
             "description": "How many, in thousandths."
           },
           "quoted_unit_price": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPayload",
-                "description": "The price the caller quoted, advisory only."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/MoneyPayload",
+            "description": "The price the caller quoted, advisory only."
           }
         }
       },
@@ -2616,17 +2716,11 @@
             "description": "The store to make it."
           },
           "subject_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The recipient side-table id, when there is one."
           },
           "table_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The table, for a QR order."
           }
         }
@@ -2750,6 +2844,37 @@
           }
         }
       },
+      "TenantHomeView": {
+        "type": "object",
+        "description": "A tenant's home cell.",
+        "required": [
+          "tenant_slug",
+          "cell_id",
+          "base_url",
+          "here"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That cell's origin. Null only when it is this cell and its base URL is not configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "The tenant's home cell id."
+          },
+          "here": {
+            "type": "boolean",
+            "description": "Whether that cell is this one."
+          },
+          "tenant_slug": {
+            "type": "string",
+            "description": "The tenant slug asked about."
+          }
+        }
+      },
       "TenantId": {
         "type": "string",
         "description": "A `TenantId`: a ULID, 26 Crockford base-32 characters",
@@ -2759,6 +2884,57 @@
         "type": "string",
         "format": "date-time",
         "description": "An instant in UTC, as RFC 3339"
+      },
+      "WellKnownCell": {
+        "type": "object",
+        "description": "This cell, as anyone may know it.",
+        "required": [
+          "cell_id",
+          "base_url",
+          "country_alias",
+          "home_country",
+          "directory_version"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The origin this cell answers on. Null when it is not configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "This cell's id (`vn1`), or `default` for a cloud with no `[cell]` section."
+          },
+          "country_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This cell's country alias (`vn`), when one is configured."
+          },
+          "directory_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The version of the signed directory this cell answers from. Null when it holds none.",
+            "minimum": 0
+          },
+          "home_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's tenants are homed by. Null when it is not configured."
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/TenantHomeView",
+            "description": "The asked-for tenant's home. Present only when `tenant` was asked."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -2797,6 +2973,10 @@
     {
       "name": "box activation",
       "description": "How a box first comes to hold its device credential: an activation code from the setup sheet, or a claim the console binds (ADR-0050, ADR-0148)."
+    },
+    {
+      "name": "cells",
+      "description": "Which cell this cloud is, and which cell is a tenant's home, from the signed, PII-free cell directory. Asked once by a box being set up, which then keeps its `cloud_url` (ADR-0179)."
     }
   ]
 }

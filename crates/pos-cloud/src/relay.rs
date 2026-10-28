@@ -123,9 +123,11 @@ pub struct QueuedOrderPayload {
     pub store_id: String,
     /// The table, for a QR order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub table_id: Option<String>,
     /// The recipient side-table id, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub subject_id: Option<String>,
     /// The requested lines.
     pub lines: Vec<QueuedOrderLine>,
@@ -142,12 +144,15 @@ pub struct QueuedOrderLine {
     pub quantity_milli: i64,
     /// Chosen modifiers.
     #[serde(default)]
+    #[schema(required = true)]
     pub modifier_menu_item_ids: Vec<String>,
     /// The price the caller quoted, advisory only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub quoted_unit_price: Option<MoneyPayload>,
     /// The guest's free-text note; stays at the store, never the event log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub note: Option<String>,
 }
 

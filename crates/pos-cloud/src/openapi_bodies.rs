@@ -18,60 +18,10 @@ use crate::openapi_admin::AdminApiDoc;
 use crate::openapi_device::DeviceApiDoc;
 
 /// `/admin` routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const ADMIN_NO_SCHEMA_YET: &[&str] = &[
-    "DELETE /admin/assignments/{assignment_id}",
-    "DELETE /admin/fees",
-    "DELETE /admin/settings",
-    "GET /admin/config-releases",
-    "GET /admin/config/channels",
-    "GET /admin/config/lease",
-    "GET /admin/config/origins",
-    "GET /admin/config/ota",
-    "GET /admin/config/ota/placement",
-    "GET /admin/config/qr",
-    "GET /admin/config/retention",
-    "GET /admin/config/tender",
-    "GET /admin/config/vendors",
-    "GET /admin/fees",
-    "GET /admin/fees/effective",
-    "GET /admin/openapi.json",
-    "GET /admin/ota/releases/{release}",
-    "GET /admin/ota/releases/{release}/installer",
-    "GET /admin/settings",
-    "GET /admin/settings/catalogue",
-    "GET /admin/settings/effective",
-    "GET /admin/stores/{store_id}/config",
-    "GET /admin/stores/{store_id}/config/versions/{version_id}",
-    "PATCH /admin/employees/{employee_id}",
-    "PATCH /admin/roles/{role_id}",
-    "POST /admin/assignments",
-    "POST /admin/config/campaigns/schedule",
-    "POST /admin/config/lease/bump",
-    "POST /admin/devices/publish",
-    "POST /admin/employees",
-    "POST /admin/fees",
-    "POST /admin/fees/publish",
-    "POST /admin/floor/areas",
-    "POST /admin/floor/tables",
-    "POST /admin/kitchen/routing",
-    "POST /admin/kitchen/stations",
-    "POST /admin/ota/releases",
-    "POST /admin/ota/releases/fetch",
-    "POST /admin/roles",
-    "POST /admin/settings/presets",
-    "POST /admin/settings/publish",
-    "POST /admin/subjects/{subject_id}/erase",
-    "PUT /admin/config/integrations",
-    "PUT /admin/config/ota",
-    "PUT /admin/config/ota/placement",
-    "PUT /admin/config/reason-codes",
-    "PUT /admin/fees",
-    "PUT /admin/settings",
-    "PUT /admin/store-groups/{group_id}/members",
-];
+const ADMIN_NO_SCHEMA_YET: &[&str] = &[];
 
 /// Store-box routes, `METHOD /path`, with a success answer or a request body that has no schema yet.
-const DEVICE_NO_SCHEMA_YET: &[&str] = &["POST /claim/{claim_id}/collect"];
+const DEVICE_NO_SCHEMA_YET: &[&str] = &[];
 
 /// The operations in `document` with a success answer (other than `204`) that has no content, or
 /// a request body with a media type that names no schema.

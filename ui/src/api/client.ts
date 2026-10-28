@@ -5,67 +5,70 @@
 // with a plain-text reason (the edge maps a domain refusal to 409); this surfaces it as an
 // `ApiError` the screens can show without guessing.
 
+import type { EdgeMethod, EdgeUrlFor } from "./paths";
 import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./credentials";
 import { observeEdgeVersion } from "./edgeVersion";
 import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
-  ActivateAccepted,
-  ActivationStanding,
-  BatchCloseRequest,
   BatchCloseResponse,
   BindResponse,
-  ClaimStatus,
   BillResponse,
-  BumpRequest,
-  BumpResponse,
-  CheckResponse,
-  CashMovementRequest,
-  CloseShiftRequest,
-  CountShiftRequest,
-  BillCheckResponse,
   CounterOrder,
-  DiscountRequest,
-  DiscountResponse,
   DrawersResponse,
-  FireRequest,
-  QuantityRequest,
-  FloorResponse,
-  LineRequest,
-  LineResponse,
-  LayoutResponse,
   LiveOrder,
   LocaleResponse,
-  MergeRequest,
   MenuResponse,
-  MintedCode,
-  OpenedOrder,
-  OpenDrawerRequest,
   OpenDrawerResponse,
-  OpenShiftRequest,
-  OrderLineRequest,
-  PairAccepted,
-  PairingState,
-  IntegrationEntry,
-  PrinterEntry,
-  PrintResponse,
-  ReasonCodesResponse,
-  ReprintResponse,
   SettleRequest,
   SettledBill,
   TakingsResponse,
   ShiftResponse,
-  SplitRequest,
-  SplitResponse,
   SyncResponse,
   TableResponse,
   TerminalsResponse,
-  TestPrintResponse,
   TransferResponse,
-  VoidBillResponse,
   VoidRequest,
-  WaitingResponse,
   WaiveFeeRequest,
 } from "./types";
+import type {
+  ActivateAccepted,
+  ActivationStanding,
+  BatchCloseRequest,
+  BillCheckResponse,
+  BumpRequest,
+  BumpResponse,
+  CashMovementRequest,
+  CheckResponse,
+  ClaimStatus,
+  CloseShiftRequest,
+  CountShiftRequest,
+  DiscountRequest,
+  DiscountResponse,
+  FireRequest,
+  FloorResponse,
+  IntegrationEntry,
+  LayoutResponse,
+  LineRequest,
+  LineResponse,
+  MergeRequest,
+  MintedCode,
+  OpenDrawerRequest,
+  OpenShiftRequest,
+  OpenedOrder,
+  OrderLineRequest,
+  PairAccepted,
+  PairingState,
+  PrintResponse,
+  PrinterEntry,
+  QuantityRequest,
+  ReasonCodesResponse,
+  ReprintResponse,
+  SplitRequest,
+  SplitResponse,
+  TestPrintResponse,
+  VoidBillResponse,
+  WaitingResponse,
+} from "./schemas";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -173,7 +176,10 @@ export type Revalidated<T> =
 // `no-store`, so the browser neither answers from its own cache nor adds a tag of its own: the
 // engine that calls this holds the copy and its tag. An edge too old to send a tag answers every
 // read in full, and `etag` is then `null`.
-export async function revalidate<T>(path: string, etag: string | null): Promise<Revalidated<T>> {
+export async function revalidate<T>(
+  path: EdgeUrlFor<"GET">,
+  etag: string | null,
+): Promise<Revalidated<T>> {
   const headers = authHeaders(false);
   if (etag !== null) {
     headers["if-none-match"] = etag;
@@ -191,16 +197,16 @@ export async function revalidate<T>(path: string, etag: string | null): Promise<
 }
 
 // The path of a price book: the store's own, or one channel's (ADR-0066).
-export function menuPath(channel?: string): string {
+export function menuPath(channel?: string): EdgeUrlFor<"GET"> {
   return channel === undefined ? "/api/menu" : `/api/menu?channel=${encodeURIComponent(channel)}`;
 }
 
 // `base` defaults to the edge this device paired with. Pairing itself passes one explicitly,
 // because at that moment nothing is stored yet — the base is what the operator just supplied, and
 // storing it before the call succeeds would leave a device claiming an edge that refused it.
-async function request<T>(
-  method: string,
-  path: string,
+async function request<T, M extends EdgeMethod = EdgeMethod>(
+  method: M,
+  path: EdgeUrlFor<M>,
   body?: unknown,
   base: string = edgeBase(),
 ): Promise<T> {
@@ -575,7 +581,7 @@ export const api = {
     // a shell that can read the floor and settle a bill but can never sign an employee in — a worse
     // failure than not shipping one, since the three session routes are covered precisely so a second
     // origin can sign in (ADR-0111).
-    const response = await fetch(edgeBase() + "/api/session/sign-in", {
+    const response = await fetch(edgeBase() + ("/api/session/sign-in" satisfies EdgeUrlFor<"POST">), {
       method: "POST",
       headers: authHeaders(true),
       body: JSON.stringify({ code, pin }),
@@ -606,7 +612,7 @@ export const api = {
   // Sign the current employee out on this device (S0b). The device stays paired; the next command
   // needs a fresh sign-in.
   signOut: async (): Promise<void> => {
-    const response = await fetch(edgeBase() + "/api/session/sign-out", {
+    const response = await fetch(edgeBase() + ("/api/session/sign-out" satisfies EdgeUrlFor<"POST">), {
       method: "POST",
       headers: authHeaders(false),
     });
