@@ -42,7 +42,7 @@ mod publish;
 mod revoke;
 mod terminals;
 
-pub use activation::activation_router;
+pub use activation::{ActivationCell, activation_router, activation_router_in_cell};
 pub use claims::{CLAIM_PATH, claim_router};
 pub use publish::device_publish_router;
 pub use revoke::device_revoke_router;

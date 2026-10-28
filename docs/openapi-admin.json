@@ -30,7 +30,7 @@
         },
         "responses": {
           "201": {
-            "description": "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, for the setup sheet. It is returned exactly once, since only its hash is stored, and it is spent the first time a box exchanges it for a credential (ADR-0050)",
+            "description": "Issued. The body carries `activation_code`, `XXXX-XXXX-XXXX`, for the setup sheet, prefixed with this cell's id (`VN1-XXXX-XXXX-XXXX`) once a `[cell]` section names it (ADR-0181). It is returned exactly once, since only its hash is stored, and it is spent the first time a box exchanges it for a credential (ADR-0050)",
             "content": {
               "application/json": {
                 "schema": {
@@ -29399,7 +29399,7 @@
         "properties": {
           "activation_code": {
             "type": "string",
-            "description": "The `XXXX-XXXX-XXXX` code — the only time it is visible; only its hash is stored."
+            "description": "The code for the setup sheet: `XXXX-XXXX-XXXX`, or `VN1-XXXX-XXXX-XXXX` with this cell's id\nas its prefix once the cloud names its cell. The only time it is visible; only the hash of its\ntwelve symbols is stored."
           }
         }
       },
