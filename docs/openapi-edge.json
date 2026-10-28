@@ -3883,7 +3883,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing."
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its\ncell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181)."
           }
         }
       },

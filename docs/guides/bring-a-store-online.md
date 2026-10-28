@@ -302,15 +302,19 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 1. In the dashboard, **Activation** (with the store in context): pick the device by name, or **Add a
    device** (name + kind — POS terminal, printer, kitchen display, tablet). It is created in the
    registry — no ULID typed.
-2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**.
+2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**. A cloud that names its
+   cell prints it with the cell's id in front, `VN1-XXXX-XXXX-XXXX`
+   ([ADR-0181](../adr/0181-the-activation-code-names-its-cell.md)); type it with the prefix.
 3. On any device on the store's LAN, open the store server's address in a browser. An unactivated box
    lands straight on **`/setup`**; type the code there. The **store server** — not the browser —
    exchanges it with the cloud for a credential and keeps it in its own OS keyring, then restarts
    itself — the screen says so and waits — so that its config, heartbeat and order-relay loops start
    with the new credential; they run at boot behind the activation gate. A spent code is refused
-   ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous glyphs
-   (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the counter
-   rather than after a round-trip.
+   ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen groups the symbols as printed,
+   keeps a cell prefix exactly as typed, and the store server folds the ambiguous glyphs
+   (`I`/`L` → `1`, `O` → `0`) and checks the code, so a typo is caught on the counter rather than
+   after a round-trip. A code whose prefix names another cell is refused with that cell's address:
+   the box was set up for the wrong cloud.
 
    **If the screen warns that other accounts can read this store's data,** the directory that holds
    the database is open to other accounts on the store server's computer. On Windows that is any box
