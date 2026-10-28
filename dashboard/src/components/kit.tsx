@@ -1102,9 +1102,7 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
   useEscape(open, () => {
     const hadFocus = container?.contains(document.activeElement) ?? false;
     setOpen(false);
-    if (hadFocus) {
-      trigger?.focus();
-    }
+    if (hadFocus) trigger?.focus();
   });
 
   useClickOutside(open, () => container, () => setOpen(false));
@@ -1112,12 +1110,8 @@ export function RowActions(props: { label: string; children: JSX.Element }) {
   // Focus the first action item in the menu when opened so keyboard users can navigate immediately.
   createEffect(() => {
     if (open()) {
-      queueMicrotask(() => {
-        const first = menuRef?.querySelector<HTMLElement>(
-          "button:not([disabled]), a[href], [tabindex='0']:not([disabled])",
-        );
-        first?.focus();
-      });
+      const selector = "button:not([disabled]), a[href], [tabindex='0']:not([disabled])";
+      queueMicrotask(() => menuRef?.querySelector<HTMLElement>(selector)?.focus());
     }
   });
 
