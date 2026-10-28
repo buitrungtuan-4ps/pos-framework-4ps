@@ -67,12 +67,14 @@ struct CounterOrderResponse {
     /// The daily number staff shouted. Absent for an order that was never given one, which is why
     /// the route reads the number rather than allocating it.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     queue_number: Option<u64>,
     items: Vec<CounterLineResponse>,
     total_due: Money,
     /// A bill already open on this order. The screen settles **this** bill rather than opening a
     /// second one, which the domain refuses.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     bill_id: Option<String>,
 }
 
@@ -134,8 +136,10 @@ struct SettledBillResponse {
     /// The table it was paid at, which the till shows by the floor's label. Absent for a counter
     /// order, which shows its queue number instead.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     table_id: Option<TableId>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     queue_number: Option<u64>,
     receipt_number: u64,
     total_due: Money,
@@ -144,6 +148,7 @@ struct SettledBillResponse {
     /// as it is: a till's own clock may keep another zone, and the list is today's, so the date
     /// would say nothing. Absent in the one case the calendar cannot read the instant.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     settle_clock: Option<String>,
     /// How many copies have been printed.
     copies: u32,

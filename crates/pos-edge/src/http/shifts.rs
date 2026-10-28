@@ -173,6 +173,7 @@ pub(crate) fn variance_reasons_required(
 struct BatchCloseResponse {
     shifts: Vec<ShiftResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     shift_report_print: Option<String>,
 }
 
@@ -183,20 +184,25 @@ pub(crate) struct ShiftResponse {
     shift_id: String,
     /// The till whose drawer it is, absent for the store's one drawer (ADR-0167).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     /// The person the drawer is assigned to for this session, where the store assigns drawers:
     /// an id, never a name. Absent where drawers are shared.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     assigned_employee_id: Option<String>,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
     /// Revealed at close (§11.1), and before it only where the store's count is not blind.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     expected_amount: Option<Money>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     counted_amount: Option<Money>,
     /// Revealed only at close. Negative means short.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     variance: Option<Money>,
     /// Cash paid into the drawer outside a sale so far (ADR-0165).
     paid_in_amount: Money,
@@ -206,10 +212,12 @@ pub(crate) struct ShiftResponse {
     /// What came of printing the shift report, on the close that asked for one — the same wire
     /// tokens a settle reports its receipt with. Absent on every other command.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     shift_report_print: Option<String>,
     /// What came of opening the drawer, on a paid in or a paid out: `OPENED`, `NO_DRAWER` or
     /// `DRAWER_UNAVAILABLE`. Absent on every other command.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<super::cash_movements::DrawerOutcomeSchema>))]
     pub(super) drawer_open: Option<String>,
     /// `true` while the shift is still open past the business day it opened on, which a till and
     /// the console flag (ADR-0167 decision 11). Absent otherwise.
@@ -350,16 +358,19 @@ struct DrawersResponse {
     drawer_model: &'static str,
     /// The model the store has published, while open shifts keep the edge on the other.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     waiting_drawer_model: Option<&'static str>,
     /// The till this device is, whose drawer is its own, where the store keeps a drawer per till.
     /// Absent for a device that is no till, and where the store keeps one drawer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     drawers: Vec<DrawerResponse>,
     /// `DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167
     /// decision 9), so the till asks whom another till's drawer is for and tells a person's own
     /// drawer by `assigned_employee_id`. Absent where drawers are shared, as before.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     drawer_access: Option<&'static str>,
 }
 
@@ -368,17 +379,22 @@ struct DrawersResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct DrawerResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     name: Option<DisplayName>,
     default_float: Money,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     opened_time: Option<Timestamp>,
     /// The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, for the till to
     /// show as it is: a till's own clock may keep another zone. Absent while the drawer is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     opened_clock: Option<String>,
     /// Its shift, `null` while the drawer is closed.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     shift: Option<ShiftResponse>,
 }
 
