@@ -17,7 +17,10 @@
 //!  * [`ActivationCode`] is the code's **format** — a human-typed string with a trailing checksum, so a
 //!    typo is caught here rather than after a round-trip. The checksum is a typo guard, **not** a
 //!    security check: the entropy of the code and the single-use redemption below are the security, and
-//!    the cloud is the only authority on whether a code is live.
+//!    the cloud is the only authority on whether a code is live. A code may carry the id of the cell
+//!    that issued it as a prefix, `VN1-XXXX-XXXX-XXXX`
+//!    ([ADR-0181](../../../docs/adr/0181-the-activation-code-names-its-cell.md)): a routing hint that
+//!    says which cell to present the code to, never part of the credential.
 //!  * [`redeem`] is the **single-use rule** — deny by default, granting only a code the cloud still
 //!    records as [`CodeStatus::Issued`]. The authoritative look-up-and-consume (flipping `Issued` to
 //!    [`CodeStatus::Redeemed`] in the same transaction that mints the credential) is cloud I/O, exactly
@@ -43,6 +46,16 @@ const ALPHABET_SIZE: u32 = 32;
 /// hyphenated groups of four, `XXXX-XXXX-XXXX`.
 const CODE_LENGTH: usize = 12;
 
+/// The characters a code's reader skips between symbols.
+const SEPARATORS: [char; 5] = ['-', ' ', '\t', '\n', '\r'];
+
+/// The shortest cell id a prefix may be: three, so a cell id is never a two-letter country code
+/// (ADR-0179). The same bounds `pos_cloud` checks a `[cell] cell_id` against.
+const MIN_CELL_ID_LEN: usize = 3;
+
+/// The longest cell id a prefix may be.
+const MAX_CELL_ID_LEN: usize = 32;
+
 /// The number of payload symbols — the code length without its one checksum symbol, and the number
 /// of entropy bytes [`ActivationCode::from_entropy`] consumes.
 pub const PAYLOAD_LEN: usize = CODE_LENGTH - 1;
@@ -51,66 +64,100 @@ pub const PAYLOAD_LEN: usize = CODE_LENGTH - 1;
 ///
 /// Constructed only through [`ActivationCode::parse`], which normalises human input and verifies the
 /// checksum, so an `ActivationCode` value is always well-formed. It is a bearer credential until it is
-/// redeemed, so its [`Debug`] is redacted; [`ActivationCode::as_str`] is the one accessor that yields
-/// the code itself, named to be conspicuous in a diff.
+/// redeemed, so its [`Debug`] is redacted; [`ActivationCode::as_str`] and
+/// [`ActivationCode::to_setup_sheet_text`] are the accessors that yield the code itself, named to be
+/// conspicuous in a diff.
+///
+/// A code may carry a **cell prefix**, the id of the cell that issued it
+/// ([ADR-0181](../../../docs/adr/0181-the-activation-code-names-its-cell.md)). The prefix is a routing
+/// hint and never part of the credential: [`ActivationCode::as_str`] is the twelve symbols alone, which
+/// is what a cloud hashes and redeems, so a prefix can neither make a spent code live nor change which
+/// record it names.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ActivationCode {
     /// The canonical `XXXX-XXXX-XXXX` text.
     canonical: String,
+    /// The cell id the code names, lower-case, when it carries one.
+    cell_id: Option<String>,
 }
 
 impl ActivationCode {
-    /// Parses and validates an activation code from human input.
+    /// Parses and validates an activation code from human input, with or without a cell prefix.
     ///
     /// Input is normalised the way Crockford's alphabet is meant to be read: case is ignored, hyphens
     /// and ASCII whitespace are discarded, and the ambiguous glyphs are folded (`I` and `L` become
-    /// `1`, `O` becomes `0`). The result must be exactly twelve symbols and its trailing
-    /// checksum must agree, so a mistyped code is rejected here rather than after a network round-trip.
+    /// `1`, `O` becomes `0`). An input that reads as exactly twelve symbols is a code with no prefix,
+    /// exactly as before prefixes existed. Otherwise the code is read from the **end**: the last
+    /// twelve symbols, separators skipped, are the code, and what comes before them, less one
+    /// separating hyphen, is a cell id, read case-insensitively and never folded. Reading from the
+    /// end is what lets a cell id hold hyphens (`jp-east-2`) and letters outside the code's alphabet
+    /// (`u`). Either way the trailing checksum must agree, so a mistyped code is rejected here rather
+    /// than after a network round-trip.
     ///
     /// # Errors
     ///
-    /// [`CodeError::Empty`] if nothing but separators was given, [`CodeError::WrongLength`] if the
-    /// symbol count is not twelve, [`CodeError::BadSymbol`] for a character outside the
-    /// alphabet, and [`CodeError::BadChecksum`] if the checksum symbol does not match the payload.
+    /// [`CodeError::Empty`] if nothing but separators was given, [`CodeError::WrongLength`] if there
+    /// are fewer than twelve symbols, or more with no cell prefix before them,
+    /// [`CodeError::BadSymbol`] for a character outside the alphabet among the code's twelve,
+    /// [`CodeError::BadChecksum`] if the checksum symbol does not match the payload,
+    /// [`CodeError::PrefixNotSeparated`] if something other than code symbols comes before the code
+    /// with no hyphen between, and [`CodeError::BadCellPrefix`] if what comes before the hyphen is
+    /// not a cell id.
     pub fn parse(input: &str) -> Result<Self, CodeError> {
-        let mut values: Vec<u8> = Vec::with_capacity(CODE_LENGTH);
-        for raw in input.chars() {
-            let folded = match raw {
-                '-' | ' ' | '\t' | '\n' | '\r' => continue,
-                'I' | 'i' | 'L' | 'l' => '1',
-                'O' | 'o' => '0',
-                other => other.to_ascii_uppercase(),
-            };
-            let byte = u8::try_from(u32::from(folded)).map_err(|_ignored| CodeError::BadSymbol)?;
-            let value = ALPHABET
-                .iter()
-                .position(|&symbol| symbol == byte)
-                .ok_or(CodeError::BadSymbol)?;
-            let value = u8::try_from(value).map_err(|_ignored| CodeError::BadSymbol)?;
-            values.push(value);
-        }
-        if values.is_empty() {
-            return Err(CodeError::Empty);
-        }
-        if values.len() != CODE_LENGTH {
-            return Err(CodeError::WrongLength);
-        }
+        let (head, values) = read_code_from_end(input)?;
         let (check, payload) = values.split_last().ok_or(CodeError::WrongLength)?;
+        let cell_id = if head.chars().all(is_separator) {
+            None
+        } else {
+            Some(cell_prefix(head)?)
+        };
         if checksum(payload) != *check {
             return Err(CodeError::BadChecksum);
         }
         Ok(Self {
             canonical: canonical_form(&values),
+            cell_id,
         })
     }
 
-    /// The canonical `XXXX-XXXX-XXXX` text of the code.
+    /// The canonical `XXXX-XXXX-XXXX` text of the code: its twelve symbols, without any cell prefix.
     ///
-    /// The one accessor that yields the code itself, named to be conspicuous: the code is a bearer
-    /// credential until it is redeemed.
+    /// The one accessor that yields the credential itself, named to be conspicuous: the code is a
+    /// bearer credential until it is redeemed. It is what a cloud hashes, stores and redeems.
     #[must_use]
     pub fn as_str(&self) -> &str {
         self.canonical.as_str()
+    }
+
+    /// The id of the cell the code names, lower-case (`vn1`), when it carries a prefix.
+    #[must_use]
+    pub fn cell_id(&self) -> Option<&str> {
+        self.cell_id.as_deref()
+    }
+
+    /// The code naming `cell_id` as its cell, for a cell that issues codes with its prefix.
+    ///
+    /// # Errors
+    ///
+    /// [`CodeError::BadCellPrefix`] if `cell_id` is not a cell id: 3 to 32 letters, digits or `-`,
+    /// starting with a letter and not ending with `-`.
+    pub fn with_cell_id(self, cell_id: &str) -> Result<Self, CodeError> {
+        Ok(Self {
+            cell_id: Some(checked_cell_id(cell_id)?),
+            ..self
+        })
+    }
+
+    /// The text printed on a setup sheet: `VN1-XXXX-XXXX-XXXX` with the cell prefix upper-case, or
+    /// `XXXX-XXXX-XXXX` for a code with none. It parses back to this code.
+    ///
+    /// Like [`Self::as_str`], it yields the code itself.
+    #[must_use]
+    pub fn to_setup_sheet_text(&self) -> String {
+        match &self.cell_id {
+            Some(cell_id) => format!("{}-{}", cell_id.to_ascii_uppercase(), self.canonical),
+            None => self.canonical.clone(),
+        }
     }
 
     /// Mints a fresh code from `entropy`, one byte per payload symbol.
@@ -119,7 +166,7 @@ impl ActivationCode {
     /// because 256 is a whole multiple of 32. The checksum symbol is then appended, so the result
     /// always [`ActivationCode::parse`]s. `pos-core` reads no randomness of its own — the caller
     /// supplies the entropy (the cloud passes bytes from its CSPRNG), which keeps code generation at
-    /// the I/O edge.
+    /// the I/O edge. The code carries no cell prefix; [`Self::with_cell_id`] adds one.
     #[must_use]
     pub fn from_entropy(entropy: [u8; PAYLOAD_LEN]) -> Self {
         let mut values: Vec<u8> = entropy
@@ -130,7 +177,90 @@ impl ActivationCode {
         values.push(check);
         Self {
             canonical: canonical_form(&values),
+            cell_id: None,
         }
+    }
+}
+
+/// Whether the code's reader skips `raw`.
+fn is_separator(raw: char) -> bool {
+    SEPARATORS.contains(&raw)
+}
+
+/// The alphabet value of one typed character, after case and the ambiguous glyphs are folded, or
+/// `None` for a character outside the alphabet.
+fn symbol_value(raw: char) -> Option<u8> {
+    let folded = match raw {
+        'I' | 'i' | 'L' | 'l' => '1',
+        'O' | 'o' => '0',
+        other => other.to_ascii_uppercase(),
+    };
+    let byte = u8::try_from(u32::from(folded)).ok()?;
+    let value = ALPHABET.iter().position(|&symbol| symbol == byte)?;
+    u8::try_from(value).ok()
+}
+
+/// Reads the code's twelve symbols from the end of `input`, skipping separators, and returns what
+/// comes before them with their values in order.
+fn read_code_from_end(input: &str) -> Result<(&str, Vec<u8>), CodeError> {
+    let mut values: Vec<u8> = Vec::with_capacity(CODE_LENGTH);
+    let mut start = input.len();
+    for (index, raw) in input.char_indices().rev() {
+        if values.len() == CODE_LENGTH {
+            break;
+        }
+        if is_separator(raw) {
+            start = index;
+            continue;
+        }
+        values.push(symbol_value(raw).ok_or(CodeError::BadSymbol)?);
+        start = index;
+    }
+    if values.is_empty() {
+        return Err(CodeError::Empty);
+    }
+    if values.len() != CODE_LENGTH {
+        return Err(CodeError::WrongLength);
+    }
+    values.reverse();
+    let head = input.get(..start).ok_or(CodeError::WrongLength)?;
+    Ok((head, values))
+}
+
+/// The cell id in what comes before a code's twelve symbols.
+///
+/// It must end with one separating hyphen, and what precedes that must be a cell id. A head made only
+/// of code symbols with no hyphen after it is a code with too many symbols, not a prefix, and is
+/// refused as such.
+fn cell_prefix(head: &str) -> Result<String, CodeError> {
+    let trimmed = head.trim_end_matches(|raw: char| raw != '-' && is_separator(raw));
+    let Some(prefix) = trimmed.strip_suffix('-') else {
+        let only_symbols = head
+            .chars()
+            .all(|raw| is_separator(raw) || symbol_value(raw).is_some());
+        return Err(if only_symbols {
+            CodeError::WrongLength
+        } else {
+            CodeError::PrefixNotSeparated
+        });
+    };
+    checked_cell_id(prefix.trim_matches(|raw: char| raw != '-' && is_separator(raw)))
+}
+
+/// A cell id as ADR-0179 C1 defines it, lower-cased: 3 to 32 of `a-z`, `0-9` and `-`, starting with a
+/// letter and not ending with `-`. Never folded.
+fn checked_cell_id(raw: &str) -> Result<String, CodeError> {
+    let cell_id = raw.to_ascii_lowercase();
+    let well_formed = (MIN_CELL_ID_LEN..=MAX_CELL_ID_LEN).contains(&cell_id.len())
+        && cell_id.starts_with(|c: char| c.is_ascii_lowercase())
+        && !cell_id.ends_with('-')
+        && cell_id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if well_formed {
+        Ok(cell_id)
+    } else {
+        Err(CodeError::BadCellPrefix)
     }
 }
 
@@ -180,6 +310,11 @@ pub enum CodeError {
     BadSymbol,
     /// The checksum symbol did not match the payload — a likely typo.
     BadChecksum,
+    /// What came before the code, less its separating hyphen, is not a cell id
+    /// ([ADR-0181](../../../docs/adr/0181-the-activation-code-names-its-cell.md)).
+    BadCellPrefix,
+    /// Something other than code symbols came before the code with no hyphen to separate it.
+    PrefixNotSeparated,
 }
 
 impl fmt::Display for CodeError {
@@ -192,6 +327,13 @@ impl fmt::Display for CodeError {
             }
             Self::BadChecksum => {
                 f.write_str("activation code checksum does not match — likely a typo")
+            }
+            Self::BadCellPrefix => f.write_str(
+                "activation code's cell prefix is not a cell id: 3 to 32 letters, digits or '-', \
+                 starting with a letter",
+            ),
+            Self::PrefixNotSeparated => {
+                f.write_str("activation code's cell prefix must be followed by a hyphen")
             }
         }
     }
@@ -372,6 +514,151 @@ mod tests {
         let debugged = format!("{code:?}");
         assert!(!debugged.contains(code.as_str()), "got {debugged}");
         assert_eq!(debugged, "ActivationCode(redacted)");
+    }
+
+    #[test]
+    fn a_cell_prefix_is_split_off_and_kept_out_of_the_code() {
+        let text = make_code([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        let code = ActivationCode::parse(&format!("VN1-{text}")).expect("a prefixed code parses");
+        assert_eq!(code.cell_id(), Some("vn1"));
+        assert_eq!(
+            code.as_str(),
+            text,
+            "the credential is the twelve symbols alone"
+        );
+        let bare = ActivationCode::parse(&text).expect("the same code without a prefix");
+        assert_eq!(bare.cell_id(), None);
+        assert_eq!(
+            bare.as_str(),
+            code.as_str(),
+            "a prefix never changes the code"
+        );
+    }
+
+    #[test]
+    fn a_cell_prefix_is_read_case_insensitively_and_never_folded() {
+        let text = make_code([2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31]);
+        for (typed, cell_id) in [
+            ("jp-east-2", "jp-east-2"),
+            ("US1", "us1"),
+            ("lon1", "lon1"),
+            ("Io-Oil", "io-oil"),
+        ] {
+            let code = ActivationCode::parse(&format!("{typed}-{}", text.to_lowercase()))
+                .unwrap_or_else(|error| panic!("{typed}: {error}"));
+            assert_eq!(code.cell_id(), Some(cell_id), "{typed}");
+            assert_eq!(code.as_str(), text, "{typed}");
+        }
+    }
+
+    #[test]
+    fn a_cell_prefix_tolerates_spaces_around_its_hyphen_and_ungrouped_symbols() {
+        let text = make_code([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let plain = text.replace('-', "");
+        for typed in [
+            format!("  vn1 - {text} "),
+            format!("vn1-{plain}"),
+            format!("vn1-{}", text.replace('-', " ")),
+        ] {
+            let code = ActivationCode::parse(&typed).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(code.cell_id(), Some("vn1"), "{typed:?}");
+            assert_eq!(code.as_str(), text, "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn the_setup_sheet_text_carries_the_prefix_upper_case_and_parses_back() {
+        let code = ActivationCode::from_entropy([7; super::PAYLOAD_LEN]);
+        assert_eq!(
+            code.to_setup_sheet_text(),
+            code.as_str(),
+            "no prefix, no change"
+        );
+        let prefixed = code.clone().with_cell_id("jp-East-2").expect("a cell id");
+        let printed = prefixed.to_setup_sheet_text();
+        assert_eq!(printed, format!("JP-EAST-2-{}", code.as_str()));
+        assert_eq!(ActivationCode::parse(&printed), Ok(prefixed));
+    }
+
+    #[test]
+    fn with_cell_id_refuses_what_is_not_a_cell_id() {
+        let code = ActivationCode::from_entropy([3; super::PAYLOAD_LEN]);
+        let too_long = "a".repeat(33);
+        for bad in [
+            "",
+            "vn",
+            "1vn",
+            "vn1-",
+            "vn_1",
+            "v\u{0129}1",
+            too_long.as_str(),
+        ] {
+            assert_eq!(
+                code.clone().with_cell_id(bad),
+                Err(CodeError::BadCellPrefix),
+                "{bad:?}"
+            );
+        }
+        assert!(code.clone().with_cell_id(&"a".repeat(32)).is_ok());
+        assert!(code.with_cell_id("abc").is_ok());
+    }
+
+    #[test]
+    fn a_prefix_that_is_not_a_cell_id_is_refused() {
+        let text = make_code([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        for prefix in ["1vn", "vn", "vn1-", "vn_1", "v\u{0129}1"] {
+            assert_eq!(
+                ActivationCode::parse(&format!("{prefix}-{text}")),
+                Err(CodeError::BadCellPrefix),
+                "{prefix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prefix_with_no_hyphen_before_the_code_is_refused() {
+        let text = make_code([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(
+            ActivationCode::parse(&format!("us1{text}")),
+            Err(CodeError::PrefixNotSeparated),
+            "a 'u' is no code symbol, so this is a prefix missing its hyphen"
+        );
+        assert_eq!(
+            ActivationCode::parse(&format!("us1 {text}")),
+            Err(CodeError::PrefixNotSeparated),
+            "a space does not separate a prefix"
+        );
+        assert_eq!(
+            ActivationCode::parse(&format!("vn1{text}")),
+            Err(CodeError::WrongLength),
+            "only code symbols before the code read as a code that is too long"
+        );
+    }
+
+    #[test]
+    fn a_prefixed_code_whose_twelve_symbols_are_wrong_is_refused_as_a_code() {
+        let text = make_code([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        let mangled = text.replacen('1', "2", 1);
+        assert_eq!(
+            ActivationCode::parse(&format!("vn1-{mangled}")),
+            Err(CodeError::BadChecksum)
+        );
+        let with_u = text.replacen('5', "U", 1);
+        assert_eq!(
+            ActivationCode::parse(&format!("vn1-{with_u}")),
+            Err(CodeError::BadSymbol)
+        );
+        assert_eq!(
+            ActivationCode::parse("vn1-0123"),
+            Err(CodeError::WrongLength)
+        );
+    }
+
+    #[test]
+    fn a_prefixed_code_never_reveals_itself_through_debug() {
+        let text = make_code([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        let code = ActivationCode::parse(&format!("vn1-{text}")).expect("valid");
+        assert_eq!(format!("{code:?}"), "ActivationCode(redacted)");
     }
 
     #[test]
