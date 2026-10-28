@@ -8,10 +8,6 @@
 //! not `required`, and never `null`. So no property of a schema an answer reaches may be both
 //! optional and nullable, which would leave the till unable to tell "absent" from "null". Request
 //! bodies are not held to it: a request may leave an optional field out or send `null`.
-//!
-//! [`MAY_BE_ABSENT`] lists the properties that are both today. It only shrinks, and goes when it is
-//! empty. Every entry is a backbone type the till's answers carry, a `pos-proto` wire type or the
-//! printer port's job, whose fields wait for an owner-reviewed change to that crate.
 
 use std::collections::BTreeSet;
 
@@ -19,18 +15,6 @@ use serde_json::Value;
 use utoipa::OpenApi as _;
 
 use super::openapi::EdgeApiDoc;
-
-/// `Schema.property` in the till's document that an answer reaches and that is both optional and
-/// nullable.
-const MAY_BE_ABSENT: &[&str] = &[
-    "FloorTable.position",
-    "KitchenStation.backup_station_id",
-    "KitchenStation.late_after_seconds",
-    "PrintJob.station_id",
-    "RoutingRule.course_id",
-    "RoutingRule.menu_item_id",
-    "StationPlan.default_station_id",
-];
 
 /// Every `#/components/schemas/…` name `value` refers to.
 fn references(value: &Value, found: &mut Vec<String>) {
@@ -115,14 +99,10 @@ fn ambiguous() -> BTreeSet<String> {
 
 #[test]
 fn no_till_answer_field_is_both_optional_and_nullable() {
-    let listed: BTreeSet<String> = MAY_BE_ABSENT
-        .iter()
-        .map(|&entry| entry.to_owned())
-        .collect();
-    assert_eq!(
-        ambiguous(),
-        listed,
+    let found = ambiguous();
+    assert!(
+        found.is_empty(),
         "a field an answer always sends is `#[schema(required = true)]`; one it skips when empty is \
-         `#[schema(nullable = false)]`. A fixed entry leaves MAY_BE_ABSENT"
+         `#[schema(nullable = false)]`. Both optional and nullable: {found:?}"
     );
 }

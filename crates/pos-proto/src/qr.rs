@@ -59,6 +59,7 @@ pub struct PublishedQr {
         deserialize_with = "flag",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub enabled: Option<bool>,
     /// Whether a table-bearing guest order waits for a member of staff before the kitchen sees it.
     /// Absent is `true` to both readers (ADR-0057): a store that never said holds guest orders.
@@ -67,6 +68,7 @@ pub struct PublishedQr {
         deserialize_with = "flag",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub staff_confirmation_required: Option<bool>,
     /// How many guest orders one table may submit within the rate window. Absent is the guest
     /// intake's default.
@@ -75,6 +77,7 @@ pub struct PublishedQr {
         deserialize_with = "count",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub per_table_limit: Option<u32>,
     /// The rate window, in seconds. Absent is the guest intake's default.
     #[serde(
@@ -82,6 +85,7 @@ pub struct PublishedQr {
         deserialize_with = "seconds",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub rate_window_secs: Option<u64>,
     /// The hours the store takes QR orders. Absent, or without a whole open and close hour, is
     /// always open.
@@ -90,6 +94,7 @@ pub struct PublishedQr {
         deserialize_with = "hours",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub business_hours: Option<QrBusinessHours>,
 }
 
@@ -110,6 +115,7 @@ pub struct QrBusinessHours {
     pub close_hour: u8,
     /// The store's offset from UTC, in minutes. Absent reads as UTC.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub tz_offset_minutes: Option<i64>,
 }
 

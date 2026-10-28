@@ -7,10 +7,6 @@
 //! not `required`, and never `null`. So no property of a schema an answer reaches may be both
 //! optional and nullable, which would leave a client unable to tell "absent" from "null". Request
 //! bodies are not held to it: a request may leave an optional field out or send `null`.
-//!
-//! [`MAY_BE_ABSENT`] lists the properties that are both today. It only shrinks, and goes when it is
-//! empty. Every entry is a `pos-proto` wire type, which both answers and is sent, and whose fields
-//! wait for an owner-reviewed change to that crate.
 
 use std::collections::BTreeSet;
 
@@ -20,26 +16,6 @@ use utoipa::OpenApi as _;
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
 use crate::openapi_device::DeviceApiDoc;
-
-/// `Schema.property`, in any of the three documents, that an answer reaches and that is both
-/// optional and nullable.
-const MAY_BE_ABSENT: &[&str] = &[
-    "PublishedConditions.channels",
-    "PublishedConditions.min_bill",
-    "PublishedConditions.schedule",
-    "PublishedFee.amount",
-    "PublishedFee.rate",
-    "PublishedFee.tax_class_id",
-    "PublishedQr.business_hours",
-    "PublishedQr.enabled",
-    "PublishedQr.per_table_limit",
-    "PublishedQr.rate_window_secs",
-    "PublishedQr.staff_confirmation_required",
-    "PublishedRetention.event_log_days",
-    "QrBusinessHours.tz_offset_minutes",
-    "Versioned_PublishedCampaign.exclusion_group",
-    "Versioned_PublishedCampaign.quota_remaining",
-];
 
 /// Every `#/components/schemas/…` name `value` refers to.
 fn references(value: &Value, found: &mut Vec<String>) {
@@ -127,13 +103,9 @@ fn no_answer_field_is_both_optional_and_nullable() {
     let mut found = ambiguous(&AdminApiDoc::openapi());
     found.extend(ambiguous(&DeviceApiDoc::openapi()));
     found.extend(ambiguous(&ApiDoc::openapi()));
-    let listed: BTreeSet<String> = MAY_BE_ABSENT
-        .iter()
-        .map(|&entry| entry.to_owned())
-        .collect();
-    assert_eq!(
-        found, listed,
+    assert!(
+        found.is_empty(),
         "a field an answer always sends is `#[schema(required = true)]`; one it skips when empty is \
-         `#[schema(nullable = false)]`. A fixed entry leaves MAY_BE_ABSENT"
+         `#[schema(nullable = false)]`. Both optional and nullable: {found:?}"
     );
 }

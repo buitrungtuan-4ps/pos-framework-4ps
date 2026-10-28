@@ -4843,15 +4843,8 @@
             "description": "The label a host and guest read: \"T1\", \"Bar 3\". Presentation text, carried here so the UI\nnever re-reads anything to draw the floor."
           },
           "position": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GridPosition",
-                "description": "Where the table sits in the floor editor's grid. `None` for a table not yet placed — it exists\nand can be seated, it just has no pinned position. Omitted from the wire when absent, the same\noptional-field shape [`crate::display::DisplayButton`] uses."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GridPosition",
+            "description": "Where the table sits in the floor editor's grid. `None` for a table not yet placed — it exists\nand can be seated, it just has no pinned position. Omitted from the wire when absent, the same\noptional-field shape [`crate::display::DisplayButton`] uses."
           },
           "seats": {
             "type": "integer",
@@ -4956,21 +4949,11 @@
         ],
         "properties": {
           "backup_station_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StationId",
-                "description": "The station a ticket falls to when this station's printer is down — the backup-printer failover\ntarget a dispatcher consults. `None` means no failover: a ticket for this station stays here.\nA backup must name a *different* station in the same plan (enforced by `pos_core::floor`)."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a ticket falls to when this station's printer is down — the backup-printer failover\ntarget a dispatcher consults. `None` means no failover: a ticket for this station stays here.\nA backup must name a *different* station in the same plan (enforced by `pos_core::floor`)."
           },
           "late_after_seconds": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "How long a ticket at this station waits, in seconds, before the kitchen display marks it\nlate. Read it through [`KitchenStation::late_after_seconds`], which reads an absent value, or\none outside [`LATE_AFTER_SECONDS`], as [`DEFAULT_LATE_AFTER_SECONDS`]. Left off the wire\nwhile absent, so a station that sets none is written as before.",
             "minimum": 0
@@ -6124,6 +6107,7 @@
         "required": [
           "job_id",
           "store_id",
+          "station_id",
           "document"
         ],
         "properties": {
@@ -6421,26 +6405,12 @@
         ],
         "properties": {
           "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "Match any line on a course."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CourseId",
+            "description": "Match any line on a course."
           },
           "menu_item_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MenuItemId",
-                "description": "Match a specific item. Takes precedence over a course match."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "Match a specific item. Takes precedence over a course match."
           },
           "station_id": {
             "$ref": "#/components/schemas/StationId",
@@ -6790,15 +6760,8 @@
         "description": "The store's kitchen plan: its stations, the routing rules that place a fired line on one, and the\ndefault station a line with no matching rule falls to.\n\nAn empty plan is a store whose kitchen has not been published — the edge keeps whatever it holds.",
         "properties": {
           "default_station_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StationId",
-                "description": "The station a fired line falls to when no routing rule matches. `None` means the store has no\ncatch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a fired line falls to when no routing rule matches. `None` means the store has no\ncatch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback."
           },
           "routing": {
             "type": "array",
