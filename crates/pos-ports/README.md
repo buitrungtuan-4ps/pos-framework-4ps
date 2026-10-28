@@ -12,11 +12,12 @@ The boundaries between the framework and every external system: database, broker
 - `PortError`, the one error type every port returns
 - Object-safe mirrors (`Dyn…`) where a family is chosen at runtime
 - `TxContext`, the transaction an event is written inside
+- Behind the off-by-default `openapi` feature, the schemas of the port types a route serves: a print job and a configuration update ([ADR-0180](../../docs/adr/0180-utoipa-in-pos-cloud-config-and-pos-ports.md))
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `pos-proto`.
-- **Used by** (workspace crates): `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`.
+- **Depends on** (workspace crates): `pos-proto`; in tests, `pos-ports`.
+- **Used by** (workspace crates): `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`; in tests, `pos-ports`.
 
 ## Entry points
 
@@ -27,7 +28,7 @@ The boundaries between the framework and every external system: database, broker
 
 ## Rules
 
-- [ADR-0006](../../docs/adr/0006-ports-and-adapters.md) · [ADR-0013](../../docs/adr/0013-async-strategy.md) · [ADR-0021](../../docs/adr/0021-corrected-port-list.md) · [ADR-0026](../../docs/adr/0026-port-shapes.md)
+- [ADR-0006](../../docs/adr/0006-ports-and-adapters.md) · [ADR-0013](../../docs/adr/0013-async-strategy.md) · [ADR-0021](../../docs/adr/0021-corrected-port-list.md) · [ADR-0026](../../docs/adr/0026-port-shapes.md) · [ADR-0180](../../docs/adr/0180-utoipa-in-pos-cloud-config-and-pos-ports.md)
 
 ## How to test
 

@@ -2424,7 +2424,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`jobs`: at most one per printer the agent owns, each with the printer's address, connection and capabilities, when its lease lapses, and the document. Empty when nothing arrived while the request was parked"
+            "description": "`jobs`: at most one per printer the agent owns, each with the printer's address, connection and capabilities, when its lease lapses, and the document. Empty when nothing arrived while the request was parked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeasedJobs"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -4459,6 +4466,16 @@
           }
         }
       },
+      "CodePage": {
+        "type": "string",
+        "description": "The character set a printer's firmware can render directly.\n\nAnything outside it becomes a bitmap. The list is short because it only needs to cover\nwhat the fleet actually contains; an unrecognised page is\n[`CodePage::Unsupported`], which forces bitmap rendering for everything and is therefore\nalways safe.",
+        "enum": [
+          "Ascii",
+          "Vietnamese1258",
+          "Japanese932",
+          "Unsupported"
+        ]
+      },
       "CountRequest": {
         "type": "object",
         "description": "The blind count: the physical cash counted, in minor units. Nothing about what was expected.",
@@ -4759,6 +4776,11 @@
         "description": "A `EmployeeId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "EventId": {
+        "type": "string",
+        "description": "A `EventId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "FeeCode": {
         "type": "string",
         "description": "A short, stable, language-independent handle for a fee, such as `\"SERVICE\"` or `\"PACKAGING\"`.\n\nWhat a report groups fees by and a CSV export prints, so an operator reads a handle they chose\nrather than a ULID. Unlike [`crate::reason_codes::ReasonCode`], which no event carries, it is\nadmissible in an event payload ([`crate::pii`]): ADR-0159 has a bill record the code of every\nfee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It\nnames a charge, as a [`DisplayName`] names a product, and never a person."
@@ -5033,6 +5055,60 @@
               "$ref": "#/components/schemas/CategoryResponse"
             },
             "description": "The display categories, in the order the console arranged them. Empty when nothing has been\nlaid out, which the till reads as \"draw the flat price book\"."
+          }
+        }
+      },
+      "LeasedJob": {
+        "type": "object",
+        "description": "One leased job, as the agent receives it.",
+        "required": [
+          "printer_device_id",
+          "address",
+          "connection",
+          "capabilities",
+          "claim_expires_at",
+          "job"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Where to open it: a host and port for a network printer, a device path for a directly\nattached one ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md))."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/PrinterCapabilities",
+            "description": "What the **edge** assumed this printer can do when it prepared the document below."
+          },
+          "claim_expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix milliseconds after which this lease lapses and the job returns to the queue. The agent\nhas until then to write the bytes and acknowledge."
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PrinterConnection",
+            "description": "Which of those it is. The agent picks its transport from this and nothing else."
+          },
+          "job": {
+            "$ref": "#/components/schemas/PrintJob",
+            "description": "The finished document. Its `job_id` is what the acknowledgement carries — deliberately not\nrepeated at this level, because two copies of an id are two things that can disagree."
+          },
+          "printer_device_id": {
+            "type": "string",
+            "description": "The printer to open. Not on the job — a [`PrintJob`] names a *station*, and a receipt has\nnone at all."
+          }
+        }
+      },
+      "LeasedJobs": {
+        "type": "object",
+        "description": "What a claim returned. Always present, possibly empty: an empty park is the ordinary answer.",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeasedJob"
+            }
           }
         }
       },
@@ -5976,6 +6052,200 @@
           }
         }
       },
+      "PrintBlock": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A line of text.\n\nThe framework decides between this and [`Self::Bitmap`] using\n[`PrinterCapabilities::needs_bitmap`]; an adapter receiving `Text` sends it as text.",
+            "required": [
+              "Text"
+            ],
+            "properties": {
+              "Text": {
+                "type": "object",
+                "description": "A line of text.\n\nThe framework decides between this and [`Self::Bitmap`] using\n[`PrinterCapabilities::needs_bitmap`]; an adapter receiving `Text` sends it as text.",
+                "required": [
+                  "line",
+                  "style"
+                ],
+                "properties": {
+                  "line": {
+                    "type": "string",
+                    "description": "The line."
+                  },
+                  "style": {
+                    "$ref": "#/components/schemas/TextStyle",
+                    "description": "How to render it."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A pre-rendered raster image: one bit per pixel, rows padded to whole bytes.\n\nCarries the width so an adapter need not infer it, because inferring it from the\nbyte count requires knowing the height, and getting that wrong shears the image.",
+            "required": [
+              "Bitmap"
+            ],
+            "properties": {
+              "Bitmap": {
+                "type": "object",
+                "description": "A pre-rendered raster image: one bit per pixel, rows padded to whole bytes.\n\nCarries the width so an adapter need not infer it, because inferring it from the\nbyte count requires knowing the height, and getting that wrong shears the image.",
+                "required": [
+                  "width",
+                  "bits"
+                ],
+                "properties": {
+                  "bits": {
+                    "type": "string",
+                    "format": "hex",
+                    "description": "Row-major bits, `width.div_ceil(8)` bytes per row."
+                  },
+                  "width": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "Pixels per row.",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A one-dimensional barcode.",
+            "required": [
+              "Barcode"
+            ],
+            "properties": {
+              "Barcode": {
+                "type": "object",
+                "description": "A one-dimensional barcode.",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The encoded value."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A QR code — a table link for guest ordering, or an invoice lookup code.",
+            "required": [
+              "QrCode"
+            ],
+            "properties": {
+              "QrCode": {
+                "type": "object",
+                "description": "A QR code — a table link for guest ordering, or an invoice lookup code.",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The encoded value."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Blank lines.",
+            "required": [
+              "Feed"
+            ],
+            "properties": {
+              "Feed": {
+                "type": "object",
+                "description": "Blank lines.",
+                "required": [
+                  "lines"
+                ],
+                "properties": {
+                  "lines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "How many.",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "Cut the paper. Ignored by a printer that cannot.",
+            "enum": [
+              "Cut"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Open the cash drawer wired to this printer: the kick\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).\n\nA kick travels to a print agent as a job of its own, this block alone\n([`PrintDocument::kick`]), and the agent opens the drawer through\n[`PrinterDriver::open_drawer`], under its USB-only rule. It is never encoded into a\ndocument's bytes, so anywhere else it opens nothing. An agent built before it cannot read it,\nwhich is why the edge sends one only to an agent that says it carries a kick.",
+            "enum": [
+              "OpenDrawer"
+            ]
+          }
+        ],
+        "description": "One element of a printed document."
+      },
+      "PrintDocument": {
+        "type": "object",
+        "description": "A document to print.",
+        "required": [
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrintBlock"
+            },
+            "description": "The blocks, in order."
+          }
+        }
+      },
+      "PrintJob": {
+        "type": "object",
+        "description": "A print job.\n\n`job_id` is the idempotency key. Reprinting is a deliberate act with its own permission\nand its own audit trail (`docs/pos-spec.md` §12 counts reprint rates per employee), so a\nretry after an ambiguous failure must not silently produce a second ticket.",
+        "required": [
+          "job_id",
+          "store_id",
+          "document"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/PrintDocument",
+            "description": "What to print."
+          },
+          "job_id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "Idempotency key. A retry reuses it; a reprint mints a new one."
+          },
+          "station_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationId",
+                "description": "Which station's printer, or `None` for a job that no station made — the guest's receipt,\nwhich comes off the counter's printer when the bill settles\n([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).\n\nOptional rather than a nil id: a receipt genuinely has no station, and a placeholder would\nhave to be recognised as \"not really a station\" by everything that reads this."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "Which store."
+          }
+        }
+      },
       "PrintResponse": {
         "type": "object",
         "description": "What printing pre-bills came to: one outcome per document, in the order they were sent.\n\nA list because a split table prints one pre-bill per open part, and a printer can take the first\nand jam on the second; the till says which.",
@@ -5990,6 +6260,62 @@
             }
           }
         }
+      },
+      "PrinterCapabilities": {
+        "type": "object",
+        "description": "What a printer can do.",
+        "required": [
+          "connection",
+          "code_page",
+          "columns",
+          "dots_per_line",
+          "prints_bitmaps",
+          "cuts_paper",
+          "kicks_drawer"
+        ],
+        "properties": {
+          "code_page": {
+            "$ref": "#/components/schemas/CodePage",
+            "description": "The character set its firmware renders directly."
+          },
+          "columns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Characters per line in the standard font. Receipt layout is computed from this, so\na wrong value produces wrapped totals.",
+            "minimum": 1
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PrinterConnection",
+            "description": "How it is attached."
+          },
+          "cuts_paper": {
+            "type": "boolean",
+            "description": "Whether it can cut paper."
+          },
+          "dots_per_line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Printable dots per line — the width of a raster this printer will accept.\n\nSeparate from [`columns`](Self::columns) because the two answer different questions and\nneither derives from the other: `columns` is how much *text* fits, which depends on the\nfirmware's font, while this is how wide a *bitmap* may be, which is a property of the print\nhead. The common values are 384 for 58 mm paper and 576 for 80 mm, both at 203 dpi.\n\nA raster wider than this is not clipped by the printer — the excess wraps onto the next\nline and shears the image — so [ADR-0102](../../../docs/adr/0102-printing-any-script.md)\nmakes the renderer take this as its width rather than guess.",
+            "minimum": 1
+          },
+          "kicks_drawer": {
+            "type": "boolean",
+            "description": "Whether a cash drawer is wired to it."
+          },
+          "prints_bitmaps": {
+            "type": "boolean",
+            "description": "Whether it can print raster images, which is what bitmap fallback needs."
+          }
+        }
+      },
+      "PrinterConnection": {
+        "type": "string",
+        "description": "How a printer is attached.",
+        "enum": [
+          "Usb",
+          "Network",
+          "Serial"
+        ]
       },
       "PrinterResponse": {
         "type": "object",
@@ -6641,6 +6967,11 @@
           }
         }
       },
+      "StoreId": {
+        "type": "string",
+        "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "SubcategoryResponse": {
         "type": "object",
         "description": "One display sub-category: a second grouping level with its own buttons.",
@@ -6850,6 +7181,29 @@
         "properties": {
           "print": {
             "type": "string"
+          }
+        }
+      },
+      "TextStyle": {
+        "type": "object",
+        "description": "Text styling. Deliberately minimal — a receipt is a document, not a design.",
+        "required": [
+          "emphasised",
+          "double_size",
+          "centred"
+        ],
+        "properties": {
+          "centred": {
+            "type": "boolean",
+            "description": "Centred rather than left-aligned."
+          },
+          "double_size": {
+            "type": "boolean",
+            "description": "Double height and width, for a total or a queue number."
+          },
+          "emphasised": {
+            "type": "boolean",
+            "description": "Bold."
           }
         }
       },
