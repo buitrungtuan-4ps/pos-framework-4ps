@@ -15,7 +15,7 @@ import { cleanup, render, screen, waitFor, within } from "@solidjs/testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
-import type { PermissionsReadiness } from "../src/api/types";
+import type { PermissionsReadiness } from "../src/api/schemas";
 import { PermissionsReadinessPanel } from "../src/components/PermissionsReadiness";
 import { setLocale } from "../src/i18n";
 

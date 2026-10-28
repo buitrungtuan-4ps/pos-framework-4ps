@@ -13,6 +13,7 @@ use blob_garage::S3Blobs;
 use pos_cloud::anchor::AnchorLedger;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::auth::rate_limit::SlidingRateLimiter;
+use pos_cloud::cell::signed::CellDirectory;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::SyncThrottle;
 use pos_cloud::qr::TableTokenSecret;
@@ -50,6 +51,9 @@ pub(crate) struct RouteDeps<'a> {
     /// would each signal an audience the other is not listening to, and every wait would fall back
     /// to its timer.
     pub(crate) relay_wake: &'a SharedWake,
+    /// Which cell this cloud is, resolved once at boot (ADR-0179 C1), and the directory it answers
+    /// from (C2). One holder, so every route answers from the directory the reload last accepted.
+    pub(crate) cell: &'a Arc<CellDirectory>,
 }
 
 /// Every sub-router the cloud serves beside its own, merged onto it in the order the flat chain
@@ -488,6 +492,7 @@ fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         config,
         audit,
         providers,
+        cell,
         ..
     } = *deps;
     Router::new()
@@ -508,6 +513,8 @@ fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
             Arc::clone(audit),
+            // Each connection's processing country is compared with this (ADR-0179 C7).
+            cell.cell().home_country,
         ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
@@ -758,10 +765,43 @@ fn config_node_routes(deps: &RouteDeps<'_>) -> Router {
         ))
 }
 
+/// The rollups of the stores this HQ reads in other cells (ADR-0179 C10), through their public
+/// `/v1` API: aggregates only, bounded, and only from cells the directory lists.
+fn hq_routes(deps: &RouteDeps<'_>) -> Router {
+    pos_cloud::cell::hq::hq_rollups_router(
+        Arc::clone(deps.cell),
+        deps.config.federation.clone(),
+        pos_cloud::cell::federation::https::HttpsRollupFetcher::new(),
+        deps.store.admin(),
+        SystemClock,
+    )
+}
+
 /// Countries, and the per-node configuration of locale, store profile and channels.
 fn locale_routes(deps: &RouteDeps<'_>) -> Router {
-    let RouteDeps { store, audit, .. } = *deps;
+    let RouteDeps {
+        store, audit, cell, ..
+    } = *deps;
     Router::new()
+        // Which cell this is (ADR-0179 C1): the `[cell]` section, read-only.
+        .merge(http::cell_router(
+            Arc::clone(cell),
+            store.admin(),
+            SystemClock,
+        ))
+        .merge(hq_routes(deps))
+        // Which cell this is and where a tenant is homed (ADR-0179 C3): public, answered from the
+        // same directory holder, so it names the directory the reload last accepted.
+        .merge(http::well_known::well_known_cell_router(Arc::clone(cell)))
+        // A store whose country differs from its cell's (ADR-0179 C6): a warning, and an
+        // acknowledgement recorded in the audit trail, never a refusal.
+        .merge(http::cell_standing_router(
+            store.audit(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::new(cell.cell().clone()),
+        ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.
         .merge(http::country_router(
@@ -878,7 +918,11 @@ pub(crate) fn with_guest_ordering(service: Router, deps: &RouteDeps<'_>) -> Rout
 
 /// The finished service: the console as the fallback, then the `/sync` budget, then the console's
 /// security headers outermost — in that order, because each layer covers only what is beneath it.
-pub(crate) fn served(service: Router, sync_throttle: SyncThrottle<SystemClock>) -> Router {
+pub(crate) fn served(
+    service: Router,
+    sync_throttle: SyncThrottle<SystemClock>,
+    cell: &Arc<CellDirectory>,
+) -> Router {
     // The embedded back-office dashboard (ADR-0060) is the fallback: the API routes above match
     // first, and everything else — `/`, client-routed paths, the built static assets — is served
     // the single-page app, with an unknown path returning index.html for client-side routing.
@@ -891,6 +935,14 @@ pub(crate) fn served(service: Router, sync_throttle: SyncThrottle<SystemClock>) 
     let service = service.layer(axum::middleware::from_fn_with_state(
         sync_throttle,
         http::throttle_sync,
+    ));
+    // The front door (ADR-0179 C5): a request for a tenant homed in another cell is redirected
+    // there, 302 for a browser and 307 for an API call, never proxied. Over the fully-composed
+    // service, fallback included, because a browser's first request is the console document; and
+    // outside the throttle, so a redirected request costs this cell no budget.
+    let service = service.layer(axum::middleware::from_fn_with_state(
+        Arc::clone(cell),
+        pos_cloud::cell::front_door::front_door,
     ));
     // The console security headers over the **fully-composed** service (ADR-0067 slice 5,
     // production-readiness **S3**). `http::router` layers the same middleware over its own routes, and

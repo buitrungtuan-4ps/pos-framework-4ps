@@ -17,7 +17,6 @@ import {
   type CampaignInput,
   type CampaignKind,
   type ETag,
-  type ScheduledPublish,
   type Voucher,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
@@ -51,6 +50,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { CHANNEL_LABEL, SALES_CHANNELS } from "../lib/channels";
+import type { ScheduledPublish } from "../api/schemas";
 
 /** The five kinds, mapped to their labels. */
 const KIND_LABEL: Record<CampaignKind, MessageKey> = {

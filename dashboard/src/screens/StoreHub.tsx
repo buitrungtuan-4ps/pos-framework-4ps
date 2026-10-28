@@ -33,7 +33,6 @@
 import { createSignal, Show, type JSXElement } from "solid-js";
 
 import { api } from "../api/client";
-import type { Alert, FleetStore } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
@@ -50,10 +49,11 @@ import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { formatAmount } from "../state/money";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
+import { CellCountryCard } from "../components/CellCountryCard";
 import { GetStarted } from "../components/GetStarted";
 import { Button, Card, PageHeader, Skeleton, TextArea } from "../components/ui";
 import { KpiTile } from "../components/kit";
-import type { DailyRevenue, DailyRollup } from "../api/schemas";
+import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/schemas";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {
@@ -293,10 +293,7 @@ export function StoreHub() {
                 // Only a live, unanswered difference gets the form. An agreeing store has nothing to
                 // answer; a store with no published country has nothing to compare, and the fix
                 // there is to publish one, not to explain a difference nobody has established.
-                <Show
-                  when={store.region_agreement === "differs"}
-                  fallback={<></>}
-                >
+                <Show when={store.region_agreement === "differs"}>
                   <Show
                     when={store.region_acknowledgement}
                     fallback={
@@ -358,6 +355,8 @@ export function StoreHub() {
               })}
             </HubCard>
           </Show>
+
+          <CellCountryCard />
 
           <HubCard
             title={t("hub.config.title")}

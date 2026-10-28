@@ -4,9 +4,10 @@
 // that way too.
 
 import type {
-  DailyCash,
-  DailyRevenue,
-  DailyRollup,
+  Ingredient,
+  Money,
+  Quantity,
+  Supplier,
   TranslationImportReport,
 } from "./schemas";
 
@@ -39,40 +40,8 @@ export const PAPER_WIDTHS: readonly PaperWidth[] = [
   "PAPER_WIDTH_MILLIMETRES_58",
 ];
 
-/** A webhook endpoint row from `GET /admin/webhooks` (ADR-0032). */
-export interface WebhookSummary {
-  readonly id: string;
-  readonly store_id: string;
-  readonly url: string;
-  readonly cursor: string | null;
-  readonly disabled: boolean;
-}
-
 /** The key `DailyCash.by_drawer` files the store's one drawer under (ADR-0167 decision 5). */
 export const STORE_DRAWER = "store";
-
-/**
- * An X or Z report for a store's trading day (ADR-0081, spec gap D10). `kind` is `"X"` (current,
- * non-resetting) or `"Z"` (a closed day, immutable). Bundles activity, revenue, and cash; T2.
- */
-export interface XzReport {
-  readonly kind: "X" | "Z";
-  readonly business_date: string;
-  readonly activity: DailyRollup;
-  readonly revenue: DailyRevenue;
-  readonly cash: DailyCash;
-  /**
-   * The name of each till among the day's drawers, keyed as `by_drawer` is, from the store's
-   * published devices as the report is served. The store's drawer, and a till no longer listed,
-   * have none.
-   */
-  readonly till_names: Readonly<Record<string, string>>;
-}
-
-/** The one-time activation code returned by `POST /admin/activation-codes` (ADR-0050). */
-export interface ActivationCode {
-  readonly activation_code: string;
-}
 
 /**
  * The same rail's report for the **item master** (roadmap-v3 **F15**).
@@ -97,150 +66,8 @@ export type EntityStatus = "active" | "archived";
  */
 export type ETag = string;
 
-/** A tenant from `GET /admin/tenants` (ADR-0065) — the root of the org tree. */
-export interface Tenant {
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A brand from `GET /admin/brands` — grouped under a tenant. */
-export interface Brand {
-  readonly brand_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A store from `GET /admin/stores` — grouped under a tenant and, optionally, a brand. */
-export interface Store {
-  readonly store_id: string;
-  readonly tenant_id: string;
-  readonly brand_id: string | null;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/**
- * A store group from `GET /admin/store-groups` — a named delivery cohort
- * ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
- *
- * Not the brand: a store belongs to exactly one brand and to any number of groups, because the
- * sets an operator publishes to cut across identity — the airport branches on a reduced menu, the
- * shops on one tax registration, the pilots that take a change first. A group holds no
- * configuration of its own; it is a list of stores to publish to as one.
- */
-export interface StoreGroup {
-  readonly group_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  /** The membership, riding along with the list so a screen never fetches it per group. */
-  readonly store_ids: readonly string[];
-  readonly etag: ETag;
-}
-
 /** What a batch did at one member (ADR-0122 §6). Three outcomes, never two. */
 export type BatchOutcome = "applied" | "skipped" | "failed";
-
-/** One member's row in a batch report. */
-export interface BatchResultRow {
-  readonly store_id: string;
-  readonly outcome: BatchOutcome;
-  /**
-   * The refusal's own message, for `skipped` and `failed` — the same sentence the single-store
-   * publish would have returned. Absent when it applied.
-   */
-  readonly detail?: string;
-  /** The config version the publish produced, for `applied`. This is what makes drift visible. */
-  readonly config_version_id?: string;
-  readonly at_ms: number;
-}
-
-/**
- * A batch publish and what it did at every member.
- *
- * A `200` is *not* "every store succeeded": a batch is deliberately not atomic (ADR-0122 §5), so
- * the counts and the per-store rows are the answer. A member whose last batch was not `applied` is
- * a store that is not running what its group runs.
- */
-export interface ConfigBatchReport {
-  readonly batch_id: string;
-  readonly group_id: string;
-  readonly node: string;
-  readonly arguments: Json;
-  readonly actor_email: string;
-  readonly started_at_ms: number;
-  /** Absent for a batch that died mid-fan-out — the row an operator goes looking for. */
-  readonly finished_at_ms?: number;
-  readonly applied: number;
-  readonly skipped: number;
-  readonly failed: number;
-  readonly results: readonly BatchResultRow[];
-}
-
-/** A device from `GET /admin/stores/{id}/devices` — the canonical device identity. */
-export interface Device {
-  readonly device_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly name: string;
-  readonly kind: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** Integer money (`pos-proto` `Money`): a currency and an amount in that currency's smallest unit. */
-export interface Money {
-  readonly currency_code: string;
-  readonly amount_minor: number;
-}
-
-/** A tax class — a named bucket an item belongs to (ADR-0066 entity 10). Its id is the item's `tax_class_id`. */
-export interface TaxClass {
-  readonly tax_class_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/**
- * One authored tax rate from `GET /admin/catalog/tax-rates` (ADR-0074, Track M4): the rate a tax class
- * resolves to on a sales channel, in **basis points** (10% is `1000`, the reduced 8% is `800`).
- * `sales_channel` is the full wire token. `PUT /admin/catalog/tax-rates` replaces a tenant's whole
- * table with a list of these; the edge reprices against it.
- */
-export interface TaxRate {
-  readonly tax_class_id: string;
-  readonly sales_channel: string;
-  readonly rate_bps: number;
-  /**
-   * How the rate is broken out on the invoice, when a country requires it
-   * ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)). The parts must sum to
-   * `rate_bps`, and the server refuses a save where they do not.
-   *
-   * Empty is the ordinary case and means the invoice prints one line. India's 5 % restaurant GST is
-   * `[CGST 2.5 %, SGST 2.5 %]`, because the halves go to different governments.
-   */
-  readonly components: readonly TaxComponent[];
-  /**
-   * `true` on a row saved before the cloud checked names, one of whose `components` is named with
-   * anything but a code of two to eight capital letters and digits, starting with a letter
-   * (ADR-0168). Absent otherwise. The cloud refuses to save the grid until it is renamed, and the
-   * store charges the rate without its breakdown meanwhile. Read only: a save sends no such field.
-   */
-  readonly component_name_invalid?: boolean;
-}
-
-/** One named part of a tax rate, in basis points. */
-export interface TaxComponent {
-  readonly name: string;
-  readonly rate_bps: number;
-}
 
 // --- Campaigns & scheduling (ADR-0077, Track M3) --------------------------------------------------
 
@@ -337,21 +164,6 @@ export interface Voucher {
 /** A scheduled publish's lifecycle (`ScheduledPublishStatus`, snake_case on the wire). */
 export type ScheduledPublishStatus = "pending" | "applied" | "cancelled";
 
-/** A pending/applied/cancelled scheduled publish (`ScheduledPublishView`) — metadata only, no payload. */
-export interface ScheduledPublish {
-  readonly id: string;
-  readonly node_key: string;
-  readonly effective_at_ms: number;
-  readonly status: ScheduledPublishStatus;
-  readonly created_at_ms: number;
-}
-
-/** The `201` response of a schedule request — the new row's id and when it fires. */
-export interface ScheduledPublishCreated {
-  readonly id: string;
-  readonly effective_at_ms: number;
-}
-
 /**
  * Where a config release stands (`ReleaseStatus`, ADR-0125 §4).
  *
@@ -361,72 +173,10 @@ export interface ScheduledPublishCreated {
  */
 export type ReleaseStatus = "draft" | "scheduled" | "applying" | "applied" | "partial";
 
-/**
- * A config release: a name over a set of publishes, aimed at a cohort or a store list, timed once.
- *
- * The moment is two shapes and never both. `wall_clock_date`/`wall_clock_time` is what the operator
- * said in local terms ("Monday 04:00"), which the cloud converts to one instant *per store* from
- * that store's published timezone — a fleet spanning Ho Chi Minh City and Tokyo has a two-hour
- * spread. `instant_at_ms` is a single UTC instant instead, which needs no published locale and is
- * the escape hatch for a store still being set up.
- */
-export interface Release {
-  readonly release_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: ReleaseStatus;
-  readonly target_group_id: string | null;
-  readonly wall_clock_date: string | null;
-  readonly wall_clock_time: string | null;
-  readonly instant_at_ms: number | null;
-  readonly created_by: string;
-  readonly created_at_ms: number;
-  readonly updated_at_ms: number;
-}
-
-/**
- * One (node, store) cell of a release's report.
- *
- * `failure` is why it last could not apply. A pair that failed is still `pending`: the activator
- * retries it, and what an operator needs meanwhile is the reason, not a status that pretends the
- * attempt never happened. The snapshotted node value is deliberately not on the wire.
- */
-export interface ReleasePair {
-  readonly pair_id: string;
-  readonly store_id: string;
-  readonly node: string;
-  readonly status: ScheduledPublishStatus;
-  readonly effective_at_ms: number;
-  /**
-   * The IANA zone `effective_at_ms` was resolved against, or `null`.
-   *
-   * What turns the instant back into the sentence the operator approved. A wall-clock release is one
-   * instant per timezone, and printing the instant without its clock draws every shop's 04:00 in the
-   * reader's own time — which is the review
-   * [ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 rejected
-   * fire-time conversion to get. `null` for a release timed as a plain UTC instant, which has no
-   * per-store clock.
-   */
-  readonly resolved_timezone: string | null;
-  readonly applied_version_id: string | null;
-  readonly failure: string | null;
-}
-
-/** A release and the node × store grid of its pairs — the answer to "did Ginza get the new tax table". */
-export interface ReleaseReport {
-  readonly release: Release;
-  readonly pairs: readonly ReleasePair[];
-}
-
 /** One node of a release, and the arguments its compiler needs — the same pair a batch publish takes. */
 export interface ReleaseNode {
   readonly node: string;
   readonly arguments: Json;
-}
-
-/** A quantity in thousandths of a unit (`Quantity`) — 1.5 kg is `{ milli: 1500 }`. */
-export interface Quantity {
-  readonly milli: number;
 }
 
 /** A unit of measure (`UnitOfMeasure`); wire tokens are prefixed `UNIT_OF_MEASURE_` (ADR-0079). */
@@ -535,14 +285,6 @@ export interface ReasonCodePublishResult {
  */
 export type ReasonCodeInput = Omit<ReasonCode, "id" | "etag" | "updated_at_ms">;
 
-/** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
-export interface Ingredient {
-  readonly id: string;
-  readonly name: string;
-  readonly unit: UnitOfMeasure;
-  readonly etag: ETag;
-}
-
 /**
  * The authoring fields of an ingredient create/update — an `Ingredient` without its server-owned id
  * or the version it was read at (a write sends that as `If-Match`, not in the body).
@@ -568,13 +310,6 @@ export interface Recipe {
 
 /** The authoring fields of a recipe write — the BOM and threshold; the item is the URL key. */
 export type RecipeInput = Omit<Recipe, "item" | "etag">;
-
-/** A supplier reference (`PublishedSupplier`) — id and name only; purchasing lives in the ERP (§19). */
-export interface Supplier {
-  readonly id: string;
-  readonly name: string;
-  readonly etag: ETag;
-}
 
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
 export type SupplierInput = Omit<Supplier, "id" | "etag">;
@@ -631,202 +366,10 @@ export interface CampaignPreview {
   readonly unchanged: boolean;
 }
 
-/**
- * What `POST /admin/config/preview` answers with (roadmap-v3 **F11**): the same dry run the
- * campaigns preview always gave, for any node the cloud's node registry can compile.
- *
- * The same shape as {@link CampaignPreview} plus the node it was asked about, so a screen with
- * several publish bars — Channels has four — can tell one answer from another.
- */
-export interface NodePreview {
-  readonly node: string;
-  readonly from_version_id: string | null;
-  readonly diff: Json;
-  readonly unchanged: boolean;
-}
-
-/**
- * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
- * data: the code, human name, currency, preferred language, number format, and default retention
- * period. Feeds the currency picker and locale surfaces. `GET /admin/locales` returns the content
- * locales the platform can serve (BCP-47 tags), which the translation grid uses for its columns.
- */
-export interface Country {
-  readonly code: string;
-  readonly display_name: string;
-  readonly currency_code: string;
-  /**
-   * How many decimal places that currency has: 0 for the đồng and the yen, 2 for the paisa and the
-   * cent (ADR-0134). Every amount the console reads and writes is an integer in the minor unit, so
-   * this is what says where the decimal point goes.
-   */
-  readonly currency_exponent: number;
-  readonly default_language: string;
-  readonly decimal_separator: string;
-  readonly group_separator: string;
-  readonly digits_per_group: number;
-  readonly default_retention_days: number;
-  /** Whether this country's menu prices already contain their tax (ADR-0104): Japan and India do. */
-  readonly prices_include_tax: boolean;
-  /** What the total rounds to in cash, in minor units, or `null` for no rounding (ADR-0105). */
-  readonly cash_rounding_increment: number | null;
-  /** The notes a guest hands over, ascending, in minor units. Empty means the exact amount only. */
-  readonly cash_denominations: readonly number[];
-}
-
-/** An item category — the operational taxonomy for reporting/kitchen grouping (ADR-0066 entity 2). */
-export interface ItemCategory {
-  readonly item_category_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** An item sub-category, nested under a category (ADR-0066 entity 3). */
-export interface ItemSubcategory {
-  readonly item_subcategory_id: string;
-  readonly tenant_id: string;
-  readonly item_category_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A display category — the presentation taxonomy a screen groups by (ADR-0066 entity 11). */
-export interface DisplayCategory {
-  readonly display_category_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A display sub-category, nested under a display category (ADR-0066 entity 11). */
-export interface DisplaySubcategory {
-  readonly display_subcategory_id: string;
-  readonly tenant_id: string;
-  readonly display_category_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A button's grid slot on a POS terminal (`pos-proto` `GridPosition`). */
-export interface GridPosition {
-  readonly column: number;
-  readonly row: number;
-}
-
-/** An item's button in a per-channel layout (ADR-0066 entity 12). */
-export interface LayoutButton {
-  readonly tenant_id: string;
-  readonly sales_channel: string | null;
-  readonly display_category_id: string;
-  readonly display_subcategory_id: string | null;
-  readonly menu_item_id: string;
-  readonly label: string;
-  readonly position: GridPosition | null;
-  readonly sort: number;
-  readonly etag: ETag;
-}
-
-/** A modifier group — a min/max selection rule with member modifiers, attached to items (ADR-0066 4/5). */
-export interface ModifierGroup {
-  readonly modifier_group_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly min_select: number;
-  readonly max_select: number;
-  readonly member_item_ids: string[];
-  readonly attached_item_ids: string[];
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A catalog item — the product master (ADR-0066), the source of a compiled `MenuEntry`. */
-export interface CatalogItem {
-  readonly menu_item_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  /** Per-locale names keyed by locale code ("vi", "en", …); `name` is the fallback (ADR-0074). */
-  readonly name_translations: Readonly<Record<string, string>>;
-  readonly tax_class_id: string;
-  readonly item_category_id: string | null;
-  readonly item_subcategory_id: string | null;
-  /** The item's photo — a media id (ADR-0075), or null. */
-  readonly image_ref: string | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A media asset as listed (ADR-0075) — its id and size, never the bytes. */
-export interface MediaSummary {
-  readonly media_id: string;
-  readonly content_type: string;
-  readonly detail_bytes: number;
-  readonly created_at_ms: number;
-}
-
 /** The response to a media upload (ADR-0075): the id to reference the new asset by. */
 export interface UploadedMedia {
   readonly media_id: string;
   readonly detail_bytes: number;
-}
-
-/** A data subject as looked up (ADR-0076): existence and status, without the personal field values. */
-export interface SubjectMeta {
-  readonly subject_id: string;
-  readonly collected_at_ms: number;
-  /** Whether the personal data has already been masked (erased). */
-  readonly masked: boolean;
-  readonly field_count: number;
-}
-
-/** A data subject's exported record (ADR-0076) — the portability/access payload, with field values. */
-export interface SubjectExport {
-  readonly subject_id: string;
-  readonly collected_at_ms: number;
-  readonly masked: boolean;
-  readonly fields: Record<string, string>;
-}
-
-/** A menu — a named set of placements that may inherit from a parent menu (ADR-0066). */
-export interface Menu {
-  readonly menu_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  readonly parent_menu_id: string | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A menu section — an authoring grouping within a menu (ADR-0066 entity 7). Authoring-only. */
-export interface MenuSection {
-  readonly menu_section_id: string;
-  readonly tenant_id: string;
-  readonly menu_id: string;
-  readonly name: string;
-  readonly sort: number;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** One channel's price for a placement. `sales_channel` is the full wire token; `null` if unknown. */
-export interface ChannelPrice {
-  readonly sales_channel: string | null;
-  readonly unit_price: Money;
-}
-
-/** An item placed in a menu, with its per-channel prices and its published availability floor. */
-export interface MenuPlacement {
-  readonly tenant_id: string;
-  readonly menu_id: string;
-  readonly menu_item_id: string;
-  readonly menu_section_id: string | null;
-  readonly prices: ChannelPrice[];
-  readonly available: boolean;
-  readonly etag: ETag;
 }
 
 /** A console admin's least-privilege tier (ADR-0067). `owner` manages other admins; `viewer` is read-only. */
@@ -839,280 +382,10 @@ export const ADMIN_ROLES: readonly AdminRole[] = ["owner", "admin", "ops", "view
 export type AdminStatus = "active" | "suspended";
 
 /**
- * A console admin as `GET /admin/whoami` and `GET /admin/admins` list it (ADR-0067): identity and
- * role only — never a password hash or a TOTP secret.
- */
-export interface AdminIdentity {
-  readonly id: string;
-  readonly email: string;
-  readonly name: string;
-  readonly role: AdminRole;
-  readonly status: AdminStatus;
-}
-
-/** A pending invitation from `GET /admin/invites` (ADR-0067) — carries no token, only what it grants. */
-export interface AdminInvite {
-  readonly id: string;
-  readonly email: string;
-  readonly name: string;
-  readonly role: AdminRole;
-  readonly invited_by: string;
-  readonly accepted: boolean;
-}
-
-/** The one-time response to `POST /admin/invites` — the single-use token is shown exactly once. */
-export interface InviteAdminResponse {
-  readonly invite_id: string;
-  readonly token: string;
-  readonly expires_at_ms: number;
-}
-
-/**
- * One of the acting admin's live sessions from `GET /admin/sessions` (ADR-0067). `id` is the opaque
- * revocation handle (a hash, never the token); `current` marks the session making the request.
- */
-export interface AdminSessionView {
-  readonly id: string;
-  readonly ip: string | null;
-  readonly user_agent: string | null;
-  readonly created_at_ms: number;
-  readonly expires_at_ms: number;
-  readonly current: boolean;
-}
-
-/** The freshly-generated recovery codes from `POST /admin/recovery-codes` — returned exactly once. */
-export interface RecoveryCodesResponse {
-  readonly codes: string[];
-  readonly remaining: number;
-}
-
-/** How many unused recovery codes remain, from `GET /admin/recovery-codes` (never the codes). */
-export interface RecoveryCodesStatus {
-  readonly remaining: number;
-}
-
-/**
  * One store's fleet row from `GET /admin/fleet` (ADR-0068 slice 3): identity + status joined with
  * liveness, config drift, and relay backlog. `online` and `config_current` are the server's read-time
  * verdicts; the raw instants are Unix ms (or `null` for a store never seen / never configured).
  */
-/**
- * One bound print agent on a store, as the fleet console sees it (ADR-0112).
- *
- * Two opaque identifiers and a duration — no document, no line, no name. Nothing a ticket *says*
- * helps diagnose a stalled agent, so nothing a ticket says crosses this wire.
- */
-export interface FleetPrintAgent {
-  /** The terminal a console admin created and a manager bound at the till. */
-  readonly agent_device_id: string;
-  /** The paired device answering for it — the box somebody has to walk to. */
-  readonly paired_device_id: string;
-  /**
-   * How long the oldest still-unacknowledged job has waited, or absent when nothing is waiting.
-   * Absent is the healthy answer and is deliberately not zero.
-   */
-  readonly oldest_unacknowledged_secs?: number;
-}
-
-/**
- * A recorded answer to a store's region difference (ADR-0114).
- *
- * Carries the two country codes it was written about, because that is what makes it an answer to a
- * *difference* rather than a permanent "this store is fine": the server stops returning it the
- * moment either code moves.
- *
- * No author. The row does not hold one — the audit action `store.edge_placement.acknowledge` does,
- * and it is the copy that survives the next answer. Link to the audit trail rather than inventing a
- * name here.
- */
-export interface RegionAcknowledgement {
-  /** The country the store was registered in when the answer was written. */
-  readonly profile_country: string;
-  /** The country its data was resting in when the answer was written. */
-  readonly region_country: string;
-  /** Why the difference is correct, as somebody typed it. Render verbatim. */
-  readonly reason: string;
-  /** When it was written, in Unix milliseconds. */
-  readonly acknowledged_at_ms: number;
-}
-
-/**
- * One device a store has admitted, as the fleet console now sees it (ADR-0118 §4).
- *
- * Folded from the two events the edge publishes on the durable outbox, so a tablet paired during an
- * internet outage appears here when the link returns rather than staying invisible forever.
- *
- * **A different identity space from `Device`.** `local_device_id` is minted by the *edge* at
- * pairing; a `Device`'s id is minted by the *console* when an admin names a terminal, and nothing
- * joins the two — a browser till presents no identity of its own, and clearing its storage creates a
- * new device. This roster answers "what did this store admit", the named registry answers "what did
- * we intend it to have".
- *
- * Who admitted a device is deliberately absent: that is recorded on the store's own disk and reaches
- * no cloud (ADR-0118 §5). `admitted_by_device_id` is a *device* — the till whose signed-in manager
- * minted the code.
- */
-export interface AdmittedDevice {
-  readonly local_device_id: string;
-  readonly admitted_at_ms: number;
-  /** The till that authorised it, or `null` for the code a box announces at boot. */
-  readonly admitted_by_device_id: string | null;
-  /** When the store retired it, or `null` while it is still admitted. */
-  readonly revoked_at_ms: number | null;
-}
-
-/**
- * One sealed archive a store has shipped
- * ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
- *
- * **The index, never the key.** Nothing here can open an archive; the key is a separate,
- * deliberate ask, and the cloud holds it wrapped. What is here is what an operator needs to answer
- * "can this store be restored, and to when".
- */
-export interface StoreArchive {
-  /**
-   * When the *store* took the snapshot. This is the recovery point — not `received_at_ms`, which
-   * is when a possibly-delayed upload landed.
-   */
-  readonly taken_at_ms: number;
-  /** When the cloud received it. The gap from `taken_at_ms` is how far behind the uplink was. */
-  readonly received_at_ms: number;
-  readonly size_bytes: number;
-  /** The cloud's hex SHA-256 of the sealed bytes, so a download can be checked before a key is. */
-  readonly sha256: string;
-  /** Where the bytes are in the object store — what a restore is pointed at. */
-  readonly object_key: string;
-}
-
-export interface FleetStore {
-  readonly store_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly online: boolean;
-  readonly last_seen_at_ms: number | null;
-  readonly last_config_pull_at_ms: number | null;
-  readonly config_version_held: string | null;
-  readonly config_version_published: string | null;
-  readonly config_current: boolean;
-  readonly relay_backlog: number;
-  readonly relay_oldest_pending_at_ms: number | null;
-  /** The binary version the store last reported running (ADR-0078), or `null` if it never reported. */
-  readonly installed_version: string | null;
-  /** Whether the store's last post-install self-test passed, or `null`. */
-  readonly self_test_ok: boolean | null;
-  /** Unix ms of the store's most recent OTA report, or `null`. */
-  readonly reported_at_ms: number | null;
-  /**
-   * How many events the store had committed and not yet published as of its last heartbeat, or
-   * `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
-   * *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
-   * is not a store that is caught up — so the screen renders the two differently.
-   */
-  readonly outbox_depth: number | null;
-  /** Unix ms of the heartbeat that reported `outbox_depth`, or `null`. */
-  readonly outbox_reported_at_ms: number | null;
-  /**
-   * The print agents the store last reported (ADR-0112), or `null` if it never has.
-   *
-   * `null` and `[]` are different answers and the screen renders them differently: `null` is a store
-   * that has said nothing about agents — every store whose edge runs in the shop — while `[]` is a
-   * store that looked and has none.
-   */
-  readonly print_agents: readonly FleetPrintAgent[] | null;
-  /** Unix ms of the heartbeat that reported them, or `null`. */
-  readonly print_agents_reported_at_ms: number | null;
-  /**
-   * The lease generation the box last reported holding (ADR-0108), or `null` if it never said.
-   * Read together with `lease_generation_authoritative`: the pair is what tells a **replaced** box
-   * from a merely quiet one.
-   */
-  readonly lease_generation_held: number | null;
-  /** Unix ms of the heartbeat that reported it, or `null`. */
-  readonly lease_reported_at_ms: number | null;
-  /** The store's authoritative lease generation, or `null` if the cloud never issued it one. */
-  readonly lease_generation_authoritative: number | null;
-  /**
-   * Whether this box has been superseded — it holds a generation the store has moved past, so it
-   * refuses over-the-air updates and is no longer the machine the store runs on. The server derives
-   * it, so the console does not re-implement `lease_standing`.
-   */
-  readonly lease_superseded: boolean;
-  /** Where the machine holding the authoritative generation runs (ADR-0110), or `null`.
-   *
-   *  `null` is not a mode. It means either that the cloud has never bumped this store, or that the
-   *  stored token is one the server could not decode — and the server deliberately does not say
-   *  which, because the difference matters for alert *severity*, which the server has already
-   *  applied, and not for what a reader should display. Never `EDGE_PLACEMENT_UNSPECIFIED`: on the
-   *  wire that token means "this message did not say". */
-  readonly edge_placement: string | null;
-  /**
-   * Where in the world the machine holding the lease is — its ISO 3166-1 alpha-2 country — or
-   * `null` (ADR-0114).
-   *
-   * `null` means the same thing however it arises: never bumped, in its own shop, or a row written
-   * before the columns existed. There is nothing to show.
-   */
-  readonly region_country: string | null;
-  /** The place a person recognises — `ap-southeast-1`, `the rack in Sakai` — or `null`. */
-  readonly region_label: string | null;
-  /**
-   * The country this store publishes, **on the single-store read only** (ADR-0114).
-   *
-   * Absent on the listing, because a comparison there would be one config-tree load per row. Do not
-   * read its absence as "no country": read `region_agreement`, which is absent for the same reason.
-   */
-  readonly profile_country?: string | null;
-  /**
-   * Whether the region agrees with that country — `"agrees"`, `"differs"`,
-   * `"country-not-recorded"` — or absent (ADR-0114).
-   *
-   * Derived by the server so this rule lives in one place. Absent on the listing, and absent on the
-   * detail when the store has no region at all: an in-store machine has nothing to compare, and
-   * rendering that as agreement would be a lie of exactly the kind this record exists to prevent.
-   */
-  readonly region_agreement?: string | null;
-  /**
-   * The answer somebody recorded for **this** difference, or absent (ADR-0114).
-   *
-   * Present only when a stored answer names the same two country codes the store has now. An answer
-   * about a difference the store no longer has is not sent, so rendering "acknowledged" whenever
-   * this is present is correct without re-implementing the rule.
-   *
-   * Single-store read only, like the two fields above it.
-   */
-  readonly region_acknowledgement?: RegionAcknowledgement;
-  /**
-   * The generation the last bump displaced and nothing has yet proved drained, or `null` (ADR-0110).
-   *
-   * The number a settle has to name: it says *which machine* the handover is about, where
-   * `handover` says what is happening to it.
-   */
-  readonly lease_superseded_generation: number | null;
-  /**
-   * Which state this store's machine handover is in — `"taking-over"`, `"settled"`, `"retired"` —
-   * or `null` when it has never had one (ADR-0110).
-   *
-   * `null` is a real answer and the commonest one: a store on generation 0 has never been replaced,
-   * and a store with no lease row has never been issued one. Neither is a handover in any state, so
-   * the console renders no badge rather than a reassuring one. The server derives this, including
-   * the rule that an outbox depth and a lease generation only count together when one heartbeat
-   * carried both — which is why the console must not recompute it from the fields beside it.
-   */
-  readonly handover: "taking-over" | "settled" | "retired" | null;
-  /** Unix ms of the decision that this handover's old machine is no longer needed, or `null`. */
-  readonly retired_at_ms: number | null;
-  /** The deciding admin's id, or `null`. An id, not an email — the address lives in the audit trail. */
-  readonly retired_by: string | null;
-}
-
-/**
- * A store's authoritative lease generation from `GET /admin/config/lease` (ADR-0108), or `null`
- * inside when the cloud has never issued this store a lease — which is "no lease in force", not
- * generation zero.
- */
-export interface StoreLease {
-  readonly generation: number | null;
-}
 
 /**
  * A store's currently-published OTA rollout — the `fleet_update` config node — from
@@ -1160,113 +433,6 @@ export interface PublishPlacementRequest {
   readonly store_id: string;
   readonly ring: string;
   readonly canary_bucket: number;
-}
-
-/**
- * One release artifact the cloud hosts, from `GET /admin/ota/releases/{release}` (ADR-0088).
- *
- * `arch` is the target triple the binary was compiled for; a store fetches the one matching its own.
- * `sha256` is an integrity check over the stored bytes and emphatically **not** what makes an update
- * safe to install — only the minisign signature does that, and only the edge checks it.
- */
-export interface HostedArtifact {
-  readonly arch: string;
-  readonly size_bytes: number;
-  readonly sha256: string;
-  readonly recorded_at_ms: number;
-}
-
-/** What `GET /admin/ota/releases/{release}` answers: the version, and every target hosted for it. */
-export interface HostedRelease {
-  readonly release: string;
-  readonly artifacts: readonly HostedArtifact[];
-}
-
-/**
- * One artifact a fetch put in the cloud, from `POST /admin/ota/releases/fetch`
- * ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
- *
- * `outcome` is `recorded` for a new artifact and `already_hosted` for one the cloud already held
- * with these exact bytes, so pressing the button twice reads as a no-op rather than as work.
- */
-export interface FetchedArtifact {
-  readonly arch: string;
-  readonly size_bytes: number;
-  readonly sha256: string;
-  readonly outcome: string;
-  readonly asset: string;
-}
-
-/** What `POST /admin/ota/releases/fetch` answers: the version, the tag the forge published it under,
- *  and what was taken. */
-export interface FetchedRelease {
-  readonly release: string;
-  readonly tag: string;
-  readonly artifacts: readonly FetchedArtifact[];
-}
-
-/**
- * One reconciliation run from `GET /admin/reconcile` (ADR-0078, Track O3): counts and a timestamp per
- * diff (ADR-0040), never event contents. `missing_found` of zero means the store was fully in sync.
- */
-export interface ReconcileRun {
-  readonly run_id: string;
-  readonly store_id: string;
-  readonly candidates_offered: number;
-  readonly missing_found: number;
-  readonly ran_at_ms: number;
-}
-
-/**
- * One refused chain claim from `GET /admin/chain-findings`
- * ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4,
- * [ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
- *
- * Two hashes claiming to describe one store's chain at one length, and only one of them can be
- * true. Positions, hashes and identifiers only — never event contents.
- */
-export interface ChainFinding {
-  readonly finding_id: string;
-  readonly store_id: string;
-  readonly chain_seq: number;
-  readonly held_head: string;
-  readonly offered_head: string;
-  readonly offered_event_id: string;
-  readonly noticed_at_ms: number;
-}
-
-/** One background loop's health from `GET /admin/health/tasks` (ADR-0068 slice 4). */
-export interface TaskHealthEntry {
-  readonly task: string;
-  readonly expected: boolean;
-  readonly healthy: boolean;
-  readonly last_tick_at_ms: number | null;
-  readonly seconds_since: number | null;
-  readonly detail: Json;
-}
-
-/** The whole-fleet-of-loops report: an overall verdict plus per-loop entries. */
-export interface TaskHealthReport {
-  readonly healthy: boolean;
-  readonly tasks: readonly TaskHealthEntry[];
-}
-
-/** One console audit entry from `GET /admin/audit` (ADR-0069, Track G2). Ids are strings (the screen
- *  shows the action and actor, and hides the ULID behind Technical details); the actor snapshot is
- *  flattened; `at_ms` is Unix milliseconds. */
-export interface AuditEntry {
-  readonly id: string;
-  readonly tenant_id: string | null;
-  readonly actor_admin_id: string;
-  readonly actor_email: string;
-  readonly actor_role: string;
-  readonly action: string;
-  readonly entity_type: string;
-  readonly entity_id: string;
-  readonly before: Json | null;
-  readonly after: Json | null;
-  readonly request_id: string | null;
-  readonly at_ms: number;
 }
 
 /** The filters `GET /admin/audit` accepts. Every field is optional; an absent field does not filter.
@@ -1320,47 +486,6 @@ export interface AuditFilter {
 // --- People & access (ADR-0070, Track M1) ---
 
 /**
- * An employee as `GET /admin/employees` lists it: identity, code, status, and whether a sign-in PIN
- * is set — never the PIN or its hash. This is the console's first T1 Restricted data (ADR-0070),
- * read only with console.people.read (ADR-0158).
- */
-export interface Employee {
-  readonly employee_id: string;
-  readonly tenant_id: string;
-  readonly code: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly has_pin: boolean;
-  readonly etag: ETag;
-}
-
-/** A tenant's named role — a stored subset of the pos-core permission catalogue (§9, ADR-0070). */
-export interface RoleTemplate {
-  readonly role_template_id: string;
-  readonly tenant_id: string;
-  readonly name: string;
-  /** What the role grants directly: its holder acts on these alone. */
-  readonly permissions: readonly string[];
-  /**
-   * What the role grants only with approval: another person who holds one directly enters their
-   * code and PIN for each act (ADR-0158 decision 4). PIN-flagged ids, none also in `permissions`.
-   * Absent from a server too old to send it, which reads as nothing with approval.
-   */
-  readonly permissions_with_approval?: readonly string[];
-  /**
-   * How much this role may discount before it needs a manager, in the currency's minor unit.
-   *
-   * `billing.discount.apply` is granted without a PIN and its description says "up to the role's
-   * configured ceiling"; absent means none is configured, which the edge reads as **zero** — every
-   * discount then needs a manager. Absent and `0` land in the same place and are different
-   * statements, which is why this is nullable rather than defaulted.
-   */
-  readonly discount_ceiling_minor?: number | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/**
  * Where an assignment grants its role (ADR-0158 decision 3): one store, a store group (ADR-0122), or
  * every store of the tenant. A kind this console does not know reads as unspecified.
  */
@@ -1376,211 +501,9 @@ export type AssignmentTarget =
   | { readonly kind: "group"; readonly groupId: string }
   | { readonly kind: "tenant" };
 
-/**
- * An employee's assignment with a role, at one store, a store group or every store (ADR-0070,
- * ADR-0158 decision 3). It names the person it grants, so it is T1 like the roster and read only
- * with console.people.read (ADR-0158).
- */
-export interface Assignment {
-  readonly assignment_id: string;
-  readonly tenant_id: string;
-  readonly employee_id: string;
-  readonly scope_kind: AssignmentScopeKind;
-  /** The store, for an assignment to one store. */
-  readonly store_id?: string;
-  /** The group, for an assignment to a store group. */
-  readonly store_group_id?: string;
-  readonly role_template_id: string;
-  /**
-   * The assigned person's name, resolved by the server as it reads (ADR-0098, B3-4).
-   *
-   * `null` when no employee row matches `employee_id` — nothing in the schema forbids an assignment
-   * outliving the person's record, and a grant that still works is worth showing unlabelled rather
-   * than hiding. Render `employee_id` in that case.
-   */
-  readonly employee_name: string | null;
-  /** The assigned person's staff code, `null` on the same terms as the name. */
-  readonly employee_code: string | null;
-}
-
-/** How one store's `permissions` publish went, when a people write publishes at once. */
-export interface PermissionsPublishResult {
-  readonly store_id: string;
-  readonly outcome: "PERMISSIONS_PUBLISH_APPLIED" | "PERMISSIONS_PUBLISH_FAILED";
-  /** The config version the publish produced, for `PERMISSIONS_PUBLISH_APPLIED`. */
-  readonly config_version_id?: string;
-}
-
-/**
- * The `200` a people write answers when it publishes at once (ADR-0158 decision 7) — removing an
- * assignment, or archiving a person or a role: every store it reached, and how each publish went.
- */
-export interface PermissionsPublishReport {
-  readonly stores: readonly PermissionsPublishResult[];
-}
-
-/** One entry of the pos-core permission catalogue the role editor offers (ADR-0070, §9). */
-export interface PermissionInfo {
-  readonly id: string;
-  readonly group: string;
-  readonly risk: string;
-  readonly pin_required: boolean;
-  readonly description: string;
-}
-
-/** One catalogue permission a role grants neither directly nor with approval (ADR-0158, Rollout). */
-export interface MissingPermission {
-  readonly id: string;
-  readonly group: string;
-  /** `LOW` — an everyday act — `MEDIUM` or `HIGH`. */
-  readonly risk: string;
-}
-
-/** One active role held at a store, and what it does not grant, everyday permissions first. */
-export interface RoleReadiness {
-  readonly role_template_id: string;
-  readonly name: string;
-  /** How many people on the store's roster hold it, each once. */
-  readonly people: number;
-  readonly missing: readonly MissingPermission[];
-}
-
-/**
- * `GET /admin/stores/{store_id}/permissions/readiness` (ADR-0158, Rollout): what each role held at
- * a store does not grant, read before the store enforces each person's own permissions. It names
- * roles and counts people, and names no person.
- */
-export interface PermissionsReadiness {
-  readonly store_id: string;
-  /** What the store runs for `permissions.enforced`. */
-  readonly enforced: boolean;
-  /** The level of the value the store runs; absent when it runs the default. */
-  readonly enforced_scope?: SettingScope;
-  readonly enforced_scope_id?: string;
-  readonly roles: readonly RoleReadiness[];
-  /** People at the store who hold no active role there: enforced, they can do nothing. */
-  readonly people_without_role: number;
-}
-
-/** The `201 { id }` body a people create returns (employee / role / assignment). */
-export interface CreatedId {
-  readonly id: string;
-}
-
-/**
- * The `201` a new assignment answers: its id and, for one to a group or to every store, which
- * publishes at once (ADR-0158 decision 7), how each store's publish went.
- */
-export interface CreatedAssignment extends CreatedId {
-  readonly stores?: readonly PermissionsPublishResult[];
-}
-
 // --- Floor & kitchen (ADR-0072, Track M2): per-store areas/tables and kitchen stations/routing ---
 
-/** A floor area from `GET /admin/floor/areas` — a named region of one store's floor. */
-export interface Area {
-  readonly area_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly name: string;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A floor table — belongs to an area, optionally placed on the visual editor's grid (`position` is
- *  omitted by the server when the table is unplaced, so it arrives as `null` here). */
-export interface FloorTable {
-  readonly table_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly area_id: string;
-  readonly label: string;
-  readonly seats: number;
-  readonly position: GridPosition | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** A kitchen station from `GET /admin/kitchen/stations` — with an optional backup (printer failover)
- *  and a catch-all `is_default` flag. */
-export interface Station {
-  readonly station_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly name: string;
-  readonly backup_station_id: string | null;
-  readonly is_default: boolean;
-  /** How long a ticket waits, in seconds, before the station's kitchen display marks it late, or
-   *  `null` where nobody has said, which the store reads as ten minutes (ADR-0160 decision 2). */
-  readonly late_after_seconds: number | null;
-  /** The `RECEIPT_LANGUAGE_…` token the station's kitchen tickets print in, or `null` where nobody
-   *  has said, which the store reads as its display language (ADR-0160 decision 2). */
-  readonly ticket_language: string | null;
-  readonly status: EntityStatus;
-  readonly etag: ETag;
-}
-
-/** An item→station routing rule (ADR-0072) — matches a fired line by item or by course (exactly one).
- *  `sort` orders rules within their tier. */
-export interface RoutingRule {
-  readonly rule_id: string;
-  readonly tenant_id: string;
-  readonly store_id: string;
-  readonly station_id: string;
-  readonly menu_item_id: string | null;
-  readonly course_id: string | null;
-  readonly sort: number;
-}
-
-/** One table's printable QR from `GET /admin/floor/qr` (ADR-0072/ADR-0057): the label and the signed
- *  token the guest's QR carries. The token binds tenant/store/table — no PII — and is the public value
- *  printed on the code. */
-export interface TableQrToken {
-  readonly table_id: string;
-  readonly label: string;
-  readonly token: string;
-}
-
-/** A store's table QR tokens, for the console's printable sheet. */
-export interface TableQrSheet {
-  readonly store_id: string;
-  readonly tokens: readonly TableQrToken[];
-}
-
 // --- Capabilities (ADR-0071, Track M8): the §10 flag catalogue the Config screen's form editor reads ---
-
-/**
- * One capability flag from `GET /admin/capabilities` (§10): its config key, default, and one-line
- * description. The console renders a labelled toggle per flag from this — never a hand-kept list, so
- * the framework's own catalogue stays the single source of truth (ADR-0071).
- */
-export interface CapabilityFlag {
-  readonly key: string;
-  readonly default_on: boolean;
-  readonly description: string;
-  /**
-   * Whether the console offers the flag as a switch (ADR-0160 decision 5). `false` for a flag no
-   * release reads yet, so turning it on would change nothing at any store. Absent from a cloud older
-   * than the field, which offered every flag.
-   */
-  readonly offered?: boolean;
-}
-
-/** One capability preset (§10) — a named starting profile, given as the flag keys it turns on. */
-export interface CapabilityPreset {
-  readonly id: string;
-  readonly keys: readonly string[];
-}
-
-/**
- * One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
- * created rather than as a `422` on publish. The console mirrors only the boolean check; this
- * description is the framework's own wording, and the server re-runs the real rules on publish.
- */
-export interface CapabilityRule {
-  readonly id: string;
-  readonly description: string;
-}
 
 /**
  * QR ordering's one switch (ADR-0160 decision 5): the capability flag the cloud's guest intake and
@@ -1590,39 +513,10 @@ export interface CapabilityRule {
  */
 export const QR_ORDERING_SWITCH = "qr_ordering_enabled";
 
-/** The whole capability catalogue `GET /admin/capabilities` serves for the form editor. */
-export interface CapabilityCatalogue {
-  readonly flags: readonly CapabilityFlag[];
-  readonly presets: readonly CapabilityPreset[];
-  readonly rules: readonly CapabilityRule[];
-}
-
 // --- Operational alerts (ADR-0073, Track O2): the alert engine's read model ---
 
 /** How serious an alert is (ADR-0073), ordered least-to-most in the console. */
 export type AlertSeverity = "info" | "warning" | "critical";
-
-/**
- * One operational alert from `GET /admin/alerts` (ADR-0073, Track O2). `tenant_id` is null for a
- * server-wide condition; timestamps are Unix ms; `kind` is the stable wire token the console localizes
- * (`store_offline`, `relay_backlog`, `webhook_disabled`, `projector_unhealthy`, `jetstream_capacity`,
- * `print_agent_stalled`);
- * `detail` is a small JSON object of the numbers behind the alert. `resolved_at_ms` is null while the
- * alert is active; `acknowledged_at_ms` is null until an operator acknowledges it.
- */
-export interface Alert {
-  readonly id: string;
-  readonly tenant_id: string | null;
-  readonly kind: string;
-  readonly dedup_key: string;
-  readonly severity: AlertSeverity;
-  readonly summary: string;
-  readonly detail: Json;
-  readonly first_seen_at_ms: number;
-  readonly last_seen_at_ms: number;
-  readonly resolved_at_ms: number | null;
-  readonly acknowledged_at_ms: number | null;
-}
 
 /**
  * A kind of external system the store works with (ADR-0153). The prefix of every provider id says
@@ -1645,37 +539,6 @@ export type SettingKind =
   | "SETTING_KIND_FLAG"
   | "SETTING_KIND_SECRET";
 
-/** One field of a provider's settings schema, from `GET /admin/integrations/providers`. */
-export interface ProviderField {
-  readonly key: string;
-  /** A translation key; the console falls back to `key` when it does not ship it. */
-  readonly label_key: string;
-  readonly kind: SettingKind;
-  readonly required: boolean;
-  readonly max_length?: number;
-  readonly min?: number;
-  readonly max?: number;
-  readonly options?: readonly string[];
-}
-
-/** One vendor this cloud can talk to, with the schema its connection form is drawn from. */
-export interface Provider {
-  readonly provider_id: string;
-  readonly family: IntegrationFamily;
-  readonly runs_on: "PROVIDER_RUNTIME_EDGE" | "PROVIDER_RUNTIME_CLOUD";
-  readonly name_key: string;
-  /** ISO 3166-1 alpha-2; empty means every country. */
-  readonly countries: readonly string[];
-  readonly capabilities: readonly string[];
-  readonly sandbox: boolean;
-  readonly fields: readonly ProviderField[];
-}
-
-/** The provider catalogue. */
-export interface ProviderCatalogue {
-  readonly providers: readonly Provider[];
-}
-
 /** A setting's value as the operator typed it: the plain JSON the schema's kind implies. */
 export type SettingValue = string | number | boolean;
 
@@ -1684,23 +547,6 @@ export type ConnectionScopeLevel =
   | "CONNECTION_SCOPE_TENANT"
   | "CONNECTION_SCOPE_BRAND"
   | "CONNECTION_SCOPE_STORE";
-
-/**
- * A tenant's connection to one vendor (ADR-0153). No secret value is ever on it: `secrets_set`
- * names the secret fields that hold one.
- */
-export interface Connection {
-  readonly connection_id: string;
-  readonly provider_id: string;
-  readonly scope_level: ConnectionScopeLevel;
-  readonly scope_id?: string;
-  readonly display_name: string;
-  readonly enabled: boolean;
-  readonly settings: Readonly<Record<string, SettingValue>>;
-  readonly secrets_set: readonly string[];
-  readonly etag: ETag;
-  readonly updated_at_ms?: number;
-}
 
 /**
  * A connection write. `secrets` holds only what this write sets: a secret left out keeps the stored
@@ -1728,104 +574,11 @@ export type SettingScope =
   | "SETTING_SCOPE_STORE_GROUP"
   | "SETTING_SCOPE_STORE";
 
-/**
- * One setting in the register, from `GET /admin/settings/catalogue`.
- *
- * It carries no sentence of its own: the console labels a setting and each of its values from its
- * own translations, keyed by `setting_key` and by the value's token, so a setting added to the
- * register needs its translations and nothing else to appear on the settings screen.
- */
-export interface SettingDefinition {
-  /** `node.field`, such as `shift.no_shift_selling`. */
-  readonly setting_key: string;
-  readonly node: string;
-  readonly field: string;
-  /**
-   * The shape of the value: `SETTING_KIND_CHOICE` (one of `values`), `SETTING_KIND_INT` (a whole
-   * number from `min` to `max`, counting `unit`) or `SETTING_KIND_BOOL` (`true` or `false`). A kind
-   * this console does not know is shown and not offered for editing.
-   */
-  readonly kind: string;
-  /** For a choice, every value it takes, as wire tokens. Absent for the other kinds. */
-  readonly values?: readonly string[];
-  /** For a whole number, the smallest value it takes. */
-  readonly min?: number;
-  /** For a whole number, the largest value it takes. */
-  readonly max?: number;
-  /**
-   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES`, `_HOURS`, `_COUNT`,
-   * `_MINOR_UNITS`, an amount in the store currency's smallest unit, or `_PERCENT`, a whole
-   * percentage — which the console names in the operator's language.
-   */
-  readonly unit?: string;
-  /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */
-  readonly default: Json;
-  /** What a new store is given, when the owner chose something other than the default. */
-  readonly preset?: Json;
-  /** Where it may be written. */
-  readonly scopes: readonly string[];
-  /** The first release that honours it, `MAJOR.MINOR.PATCH` (ADR-0160 decision 5). */
-  readonly since: string;
-  /**
-   * The value written only with a recorded confirmation, a wire token, and the translation key of
-   * the notice the person confirms, `settings.item.<setting_key>.confirm` (ADR-0169). Absent when
-   * every value can be written without one.
-   */
-  readonly confirm?: { readonly value: string; readonly notice: string };
-}
-
-/** One value a tenant has written, from `GET /admin/settings`. */
-export interface WrittenSetting {
-  readonly setting_key: string;
-  /** A {@link SettingScope} token. */
-  readonly scope: string;
-  /** The tenant, brand, store group or store it was written for. */
-  readonly scope_id: string;
-  readonly value: Json;
-  /** When it was written, RFC 3339. */
-  readonly update_time: string;
-}
-
-/**
- * One setting as one store runs it, from `GET /admin/settings/effective`. `scope` and `scope_id`
- * are absent when the store runs the default.
- */
-export interface EffectiveSetting {
-  readonly setting_key: string;
-  readonly value: Json;
-  readonly scope?: string;
-  readonly scope_id?: string;
-}
-
 /** How one store's settings publish went. Three outcomes, never two. */
 export type SettingPublishOutcome =
   | "SETTING_PUBLISH_APPLIED"
   | "SETTING_PUBLISH_UNCHANGED"
   | "SETTING_PUBLISH_FAILED";
-
-/** One store's row in a settings publish. */
-export interface SettingPublishResult {
-  readonly store_id: string;
-  readonly outcome: SettingPublishOutcome;
-  /** The config version the publish produced, for `SETTING_PUBLISH_APPLIED`. */
-  readonly config_version_id?: string;
-}
-
-/**
- * What a settings write, clear or republish did at every store it reached.
- *
- * A `200` is not "every store has it": a store that failed keeps the values it was last published
- * until it is published again with `POST /admin/settings/publish`.
- */
-export interface SettingPublishReport {
-  readonly stores: readonly SettingPublishResult[];
-}
-
-/** What `POST /admin/settings/presets` did: the settings it wrote, and the store's publish. */
-export interface SettingPresetsReport extends SettingPublishReport {
-  /** The keys of the settings written at the store's own scope. Empty when it set them all already. */
-  readonly applied: readonly string[];
-}
 
 // --- Fees (ADR-0159) ------------------------------------------------------------------------------
 
@@ -1893,32 +646,6 @@ export type FeePublishOutcome =
   | "FEE_PUBLISH_REFUSED"
   | "FEE_PUBLISH_FAILED";
 
-/** One rule a store cannot apply, as a refused publish reports it: `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`. */
-export interface FeeFault {
-  readonly fee_id: string;
-  readonly reason: string;
-}
-
-/** One store's row in a fee write or publish. */
-export interface FeePublishResult {
-  readonly store_id: string;
-  readonly outcome: FeePublishOutcome | string;
-  /** The config version the publish produced, for `FEE_PUBLISH_APPLIED`. */
-  readonly config_version_id?: string;
-  /** For `FEE_PUBLISH_REFUSED`: each rule the store cannot apply, and why. */
-  readonly faults?: readonly FeeFault[];
-}
-
-/**
- * What a fee write, delete or republish did at every store it reached. A `200` is not "every store
- * charges it": a refused or failed store keeps the fees it had until it is published again.
- */
-export interface FeePublishReport {
-  /** The fee written; absent for a delete or a republish. */
-  readonly fee_id?: string;
-  readonly stores: readonly FeePublishResult[];
-}
-
 /** One fee as one store runs it, from `GET /admin/fees/effective`. */
 export interface EffectiveFee {
   readonly fee_id: string;
@@ -1953,39 +680,3 @@ export interface SampleLineInput {
   readonly quantity: number;
 }
 
-/** A sample bill as the store would assemble it, from `POST /admin/fees/preview`. */
-export interface SampleBill {
-  readonly store_id: string;
-  readonly sales_channel: string;
-  readonly lines: readonly {
-    readonly menu_item_id: string;
-    readonly display_name: string;
-    readonly quantity: number;
-    readonly unit_price: Money;
-    readonly line_total: Money;
-    readonly tax_class_id: string;
-  }[];
-  readonly subtotal: Money;
-  readonly fee_lines: readonly {
-    readonly fee_id: string;
-    readonly code: string;
-    readonly display_name: string;
-    readonly amount: Money;
-    readonly tax: Money;
-    readonly class_shares: readonly {
-      readonly tax_class_id: string;
-      readonly amount: Money;
-      readonly tax: Money;
-    }[];
-  }[];
-  readonly service_charge: Money;
-  readonly tax_lines: readonly {
-    readonly tax_class_id: string;
-    readonly taxable_base: Money;
-    readonly rate_basis_points: number;
-    readonly tax: Money;
-  }[];
-  readonly tax_total: Money;
-  readonly rounding_adjustment: Money;
-  readonly total_due: Money;
-}

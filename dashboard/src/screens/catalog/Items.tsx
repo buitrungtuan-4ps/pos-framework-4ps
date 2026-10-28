@@ -10,7 +10,7 @@ import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { api } from "../../api/client";
-import type { CatalogItem, ItemImportReport, ItemSort } from "../../api/types";
+import type { ItemImportReport, ItemSort } from "../../api/types";
 import { LOCALES, localeName, t } from "../../i18n";
 import { createAdminResource, failureOf } from "../../lib/resource";
 import { actingAdmin, tenantId } from "../../state/session";
@@ -27,6 +27,7 @@ import {
 import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
 import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
+import type { CatalogItem } from "../../api/schemas";
 
 /**
  * How many items one page of the table carries.

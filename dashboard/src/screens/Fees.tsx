@@ -41,13 +41,11 @@ import {
   type EffectiveFees,
   type FeeItems,
   type FeeKind,
-  type FeePublishResult,
   type FeeRule,
   type FeeRuleFields,
   type FeeScope,
   type FeeTax,
   type Json,
-  type SampleBill,
 } from "../api/types";
 import { LOCALES, type Locale, localeName, type MessageKey, t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -101,6 +99,7 @@ import {
 import { toast } from "../components/Toast";
 import { SALES_CHANNELS, channelLabel, isKnownChannel } from "../lib/channels";
 import type { KnownSalesChannel } from "../lib/channels";
+import type { FeePublishResult, SampleBill } from "../api/schemas";
 
 const TENANT: FeeScope = "FEE_SCOPE_TENANT";
 const BRAND: FeeScope = "FEE_SCOPE_BRAND";

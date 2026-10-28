@@ -8,7 +8,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { MediaSummary } from "../api/types";
+import type { MediaSummary } from "../api/schemas";
 import { t } from "../i18n";
 import { formatInstant } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";

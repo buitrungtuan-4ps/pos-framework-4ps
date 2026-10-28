@@ -1,12 +1,11 @@
 # ADR-0182 — A signed "cell moved" config node
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-10-27 · Implements item C9
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-10-27 · Implements item C9
 of [ADR-0179](0179-cells-the-directory-and-the-front-door.md) · Relates to
 [ADR-0033](0033-config-tree.md), [ADR-0039](0039-config-delivery.md),
 [ADR-0047](0047-minisign-verification.md)
 
-Waits on the owner's approval. It adds a node type to `pos-proto`, which needs an owner review, and
-no code changes until it is Accepted.
+Accepted by the owner on 2026-10-28.
 
 ## Context
 

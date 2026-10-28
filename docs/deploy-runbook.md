@@ -152,6 +152,70 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   box then needs outbound HTTPS to the forge. It is an operator's path and never a store's, so a
   forge that is unreachable delays a release and stops no shop trading — and the upload route stays
   as the way past it. Without the block the button says so rather than failing obscurely.
+- **Naming the cell**: a `[cell]` block in `secrets/cloud.toml` says which cell this deployment is
+  ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md)). **A single deployment needs
+  nothing**: with no block it is the one cell, named `default`. A fork that will run a second cell
+  commits `deploy/cells/<cell>.env` (copy `deploy/cells/example.env`); given those values as
+  `CELL_*`, `bootstrap.sh` writes the block once and keeps it afterwards, and a value the cloud would
+  refuse is warned about (`warn   …; [cell] not written`) and never fails the deploy. The block it
+  writes, which can equally be added by hand on the box:
+
+  ```toml
+  [cell]
+  cell_id = "vn1"                      # 3–32 of a-z, 0-9 and '-', starting with a letter
+  country_alias = "vn"                 # optional
+  home_country = "VN"                  # the country this cell's tenants are homed by
+  base_url = "https://vn1.example.com" # the origin this cell answers on: https, no path
+  runs_in = "VN"                       # the country its servers run in
+  ```
+
+  It holds no secret and no personal data. Every key but `country_alias` is required, an unknown key
+  is refused, and a malformed value stops the boot naming the key. Servers outside the home country
+  are logged as a warning at boot and shown on the console's Fleet screen, never refused. The block
+  takes effect when `pos_cloud` next starts.
+
+  **A second cell also needs the cell directory**: one JSON file, the same in every cell, mapping
+  `tenants` (tenant slug → cell id), `countries` (country → default cell, with a `"*"` fallback) and
+  `cells` (cell id → base URL), with a `directory_version` that only ever goes up. It holds no
+  personal data. The owner, or a named delegate, signs it with the **directory key**, which is never
+  the release key, using `minisign -S -m cells.json`. Put both files on the box and name them:
+
+  ```toml
+  directory_path = "/run/secrets/cells.json"   # the signature is read from cells.json.minisig
+  directory_public_key = "RWQ…"                # the second line of the directory key's minisign.pub
+  ```
+
+  The two keys are set together or not at all. The cell reads the file at boot and again every five
+  minutes, so replacing both files takes effect without a restart. It accepts a file only when the
+  signature verifies, every entry is well-formed, the directory lists this cell at its own
+  `base_url`, and the version is higher than the one it holds. Otherwise the Fleet screen shows why,
+  and the directory already held stays in use. Until one is accepted, the cell answers for no tenant.
+  To check what a cell answers, ask it: `curl https://vn1.example.com/.well-known/pos-cell?tenant=<slug>`
+  names the tenant's home cell, from the directory this cell holds.
+- **An HQ reading other cells**: a `[federation]` block in `secrets/cloud.toml` lets this cell's
+  console show the daily rollups of stores in other cells, on `GET /admin/hq/rollups`
+  ([ADR-0179](adr/0179-cells-the-directory-and-the-front-door.md) C10). **Most deployments need
+  nothing**: with no block the view says it is not configured. For each other cell, ask its operator
+  for an API key with the `read_rollups` scope and name the stores to read:
+
+  ```toml
+  [[federation.sources]]
+  cell_id = "jp1"                                  # a cell the signed directory lists
+  api_key = "<read_rollups key issued by jp1>"     # placeholder: the real key lives on the box only
+  stores = ["<store ULID in jp1>"]                 # 1 to 1000 per cell
+  ```
+
+  The key is a secret: it lives in `cloud.toml` on the box, is never committed, and never appears in
+  a log or an answer. The address is never configured here: it is the directory's `base_url` for
+  that cell, so a cell the directory does not list is reported, not called. The console's Fleet screen
+  shows the result as **HQ: other cells**: per store, its days and events, or why it was not read.
+  **Only aggregates cross**: a store's daily event counts, no personal data. Each store's read has 10 seconds and
+  1 MiB, follows no redirect, and the whole read has 30 seconds; a store not read says why. At most
+  64 cells and 2,000 stores in all; a malformed block stops the boot naming the source.
+- **Where backups rest**: set `BACKUP_COUNTRY` in `deploy/cells/<cell>.env` to the country the
+  `RCLONE_REMOTE` bucket is in. `bootstrap.sh` records it with the cell's home country in `.env`,
+  and every off-box backup then logs `region   backups rest in VN`, or warns when that country is
+  not the cell's home country or was never recorded (ADR-0179). A warning never stops a backup.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

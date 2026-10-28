@@ -19,10 +19,10 @@ import type {
   FeeRuleFields,
   FeeTax,
   Json,
-  Money,
   Ratio,
 } from "../api/types";
 import type { KnownSalesChannel } from "./channels";
+import type { Money } from "../api/schemas";
 
 /** A rule as the form edits it. */
 export interface FeeDraft {

@@ -40,6 +40,7 @@ async fn main() -> ExitCode {
 /// bound and served until shutdown.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
+    let (cell, directory_reload) = startup::cell_directory(&config)?;
     let (store, one_switch) = startup::open_store(&config).await?;
     let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
@@ -82,15 +83,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         expected_tasks: &expected_tasks,
         orders_limiter: &orders_limiter,
         relay_wake: &relay_wake,
+        cell: &cell,
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);
-    let service = startup::routes::served(service, sync_throttle);
+    let service = startup::routes::served(service, sync_throttle, &cell);
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     loops.wind_down(archive_retention_task).await;
+    if let Some(task) = directory_reload {
+        task.abort();
+    }
     Ok(())
 }
 

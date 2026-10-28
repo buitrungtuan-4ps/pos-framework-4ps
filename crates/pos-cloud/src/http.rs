@@ -105,6 +105,8 @@ pub(crate) mod alerts;
 mod archives;
 mod authored_layer;
 pub(crate) mod campaigns;
+pub(crate) mod cell;
+pub(crate) mod cell_standing;
 mod chain;
 mod cloud_routes;
 pub(crate) mod config_nodes;
@@ -126,6 +128,7 @@ mod settings_confirm;
 mod store_groups;
 pub(crate) mod subjects;
 mod sync;
+pub mod well_known;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
@@ -156,6 +159,8 @@ pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
 };
 pub use catalog::{catalog_publish_router, catalog_router};
+pub use cell::cell_router;
+pub use cell_standing::cell_standing_router;
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{
