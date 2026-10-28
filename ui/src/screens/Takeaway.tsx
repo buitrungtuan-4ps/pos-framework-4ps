@@ -2,7 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { BillResponse, CounterOrder } from "../api/types";
+import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from "../api/schemas";
 import { Keypad } from "../components/Keypad";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
@@ -24,7 +24,6 @@ import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
-import type { PaymentRequest, ReprintResponse } from "../api/schemas";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`

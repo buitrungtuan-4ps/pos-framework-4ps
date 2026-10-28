@@ -6,7 +6,7 @@
 // can hear its own event after its answer, so an event about the shift already held moves only its
 // state, and its count where it carries one.
 
-import type { ShiftResponse } from "../api/types";
+import type { ShiftResponse } from "../api/schemas";
 import type { Money } from "../lib/money";
 import type { ShiftInfo } from "./store";
 

@@ -1,7 +1,7 @@
 // The wire shapes, as the OpenAPI document declares them (ADR-0177 decision 3). Each name here is an
 // alias of a schema in the generated `generated/edge.d.ts`, so a field the server adds, renames or
-// stops sending changes the type the screens compile against. The hand-mirrored `types.ts` keeps only
-// what the document cannot say; T4's `xtask hand-types` counts what is left there.
+// stops sending changes the type the screens compile against. Nothing is mirrored by hand any more:
+// `xtask hand-types` holds the till at none.
 
 import type { components } from "./generated/edge";
 
@@ -69,3 +69,39 @@ export type PrinterEntry = Schemas["PrinterResponse"];
 export type TestPrintResponse = Schemas["TestPrintResponse"];
 export type PrintResponse = Schemas["PrintResponse"];
 export type ReprintResponse = Schemas["ReprintResponse"];
+
+export type TableResponse = Schemas["TableResponse"];
+export type TransferResponse = Schemas["TransferResponse"];
+export type LiveLine = Schemas["LiveLineResponse"];
+export type LiveOrder = Schemas["LiveOrderResponse"];
+export type MenuResponse = Schemas["MenuResponse"];
+export type FeeLine = Schemas["CheckFeeLine"];
+export type CounterOrder = Schemas["CounterOrderResponse"];
+export type SettledBill = Schemas["SettledBillResponse"];
+export type TakingsResponse = Schemas["TakingsResponse"];
+export type BillResponse = Schemas["BillResponse"];
+export type DrawerOutcome = Schemas["DrawerOutcomeSchema"];
+export type LocaleResponse = Schemas["LocaleResponse"];
+export type SyncResponse = Schemas["SyncResponse"];
+
+export type ShiftResponse = Schemas["ShiftResponse"];
+export type DrawerEntry = Schemas["DrawerResponse"];
+export type DrawersResponse = Schemas["DrawersResponse"];
+export type DrawerModel = DrawersResponse["drawer_model"];
+export type BatchCloseResponse = Schemas["BatchCloseResponse"];
+export type OpenDrawerResponse = Schemas["OpenDrawerResponse"];
+export type PairedDevice = Schemas["PairedDeviceView"];
+export type TerminalEntry = Schemas["TerminalResponse"];
+export type TerminalsResponse = Schemas["TerminalsResponse"];
+export type BindResponse = Schemas["AgentResponse"];
+
+// A void, a fee waive and a settle as the till sends them: the approver is present only where the
+// act needs one, and the edge decides which. A line's void and a bill's take the same body.
+export type VoidRequest = Schemas["VoidLineRequest"] & Schemas["VoidBillRequest"];
+export type WaiveFeeRequest = Schemas["WaiveFeeRequest"];
+export type SettleRequest = Schemas["SettleRequest"];
+// The manager who authorises an act that needs a second person (§11.4): sent with the request and
+// never stored.
+export type ApproverRequest = {
+  [K in "approver_code" | "approver_pin"]: NonNullable<VoidRequest[K]>;
+};
