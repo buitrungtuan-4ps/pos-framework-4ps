@@ -1299,6 +1299,14 @@ export function holdWalkIn(orderId: string): void {
   }
 }
 
+// Walk-ins this till opened with a channel and no live read has answered for since, each with the
+// count of such opens at its own. A live read that began before an open cannot list it yet, so
+// applying that read keeps the channel the till holds rather than dropping the guest's answer. An
+// entry leaves at the first read that began after it, so the map holds only the opens between two
+// reads.
+let walkInsOpened = 0;
+const walkInsUnread = new Map<string, number>();
+
 /**
  * Opens a tableless order at the counter and returns its id (ADR-0146). The edge records it, gives
  * it the day's next queue number, and prices every line added to it at the order's own channel:
@@ -1309,6 +1317,8 @@ export async function startWalkIn(channel?: string): Promise<string> {
   holdWalkIn(opened.order_id);
   if (channel !== undefined) {
     setState("walkInChannels", opened.order_id, channel);
+    walkInsOpened += 1;
+    walkInsUnread.set(opened.order_id, walkInsOpened);
   }
   return opened.order_id;
 }
@@ -1633,16 +1643,34 @@ export function loadLiveOrders(): Promise<void> {
 export interface LiveOrdersRead {
   orders: LiveOrder[];
   kitchen: LiveOrder[] | null;
+  // How many walk-ins this till had opened when the read began.
+  opensBefore: number;
 }
 
 export async function readLiveOrders(): Promise<LiveOrdersRead> {
+  const opensBefore = walkInsOpened;
   const orders = await api.liveOrders();
   const kitchen = await api.kitchenOrders().catch(() => null);
-  return { orders, kitchen };
+  return { orders, kitchen, opensBefore };
 }
 
-export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
+// The walk-ins opened after a read began, which it cannot list yet, with the channel the till holds.
+function walkInsOpenedSince(opensBefore: number, live: Set<string>): [string, string][] {
+  const unread: [string, string][] = [];
+  for (const [orderId, opened] of walkInsUnread) {
+    const channel = state.walkInChannels[orderId];
+    if (opened <= opensBefore) {
+      walkInsUnread.delete(orderId);
+    } else if (!live.has(orderId) && channel !== undefined) {
+      unread.push([orderId, channel]);
+    }
+  }
+  return unread;
+}
+
+export function applyLiveOrders({ orders, kitchen, opensBefore }: LiveOrdersRead): void {
   const live = new Set(orders.map((order) => order.order_id));
+  const unread = walkInsOpenedSince(opensBefore, live);
   const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
     produce((draft) => {
@@ -1651,13 +1679,14 @@ export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
       // The channel of each walk-in the edge names one for, replacing the set held for the same
       // reason: a walk-in that is no longer live needs no book.
-      draft.walkInChannels = Object.fromEntries(
-        orders.flatMap((order) =>
+      draft.walkInChannels = Object.fromEntries([
+        ...orders.flatMap((order) =>
           order.table_id === undefined && order.sales_channel !== undefined
             ? [[order.order_id, order.sales_channel] as const]
             : [],
         ),
-      );
+        ...unread,
+      ]);
       // The same for the kitchen's own set, when the edge answered: a paid order it no longer
       // lists has been bumped, or its day has ended.
       if (kitchen !== null) {
