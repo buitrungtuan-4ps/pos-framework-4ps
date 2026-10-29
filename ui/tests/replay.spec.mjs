@@ -150,10 +150,11 @@ async function startWalkIn(page) {
   await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
 }
 
-/** A walk-in with one line, back on the counter list where it waits to be charged. */
+/** A walk-in with one line sent to the kitchen, back on the counter list waiting to be charged. */
 async function aWalkInToCharge(page) {
   await startWalkIn(page);
   await addItem(page);
+  await sendOrder(page);
   await page.locator('a[href="/counter"]').first().click();
   await page.waitForURL((url) => url.pathname === "/counter");
   await expect(page.locator('[data-step="charge"]').first()).toBeVisible();
@@ -222,7 +223,7 @@ async function aTableWithTheDrinkSplitOff(page) {
   await seatTable(page);
   await addByName(page, "salad");
   await addByName(page, "iced");
-  await page.locator('[data-step="takePayment"]').click();
+  await sendThenTakePayment(page);
   await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
   await page.locator('[data-step="splitByItem"]').click();
   await expect(page.locator('[data-step="splitOff"]')).toBeDisabled();
@@ -239,13 +240,28 @@ async function sendOrder(page) {
 }
 
 /**
+ * Takes payment the way a server does once the kitchen has the food: **Send** first when anything
+ * is unsent, then **Take payment**. The till asks before it takes money for food the kitchen has not
+ * been sent (pilot U1), and a test about paying is not a test about that question, so it sends
+ * rather than answering it. The question has its own test.
+ */
+async function sendThenTakePayment(page) {
+  await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
+  const send = page.locator('[data-step="fireOrder"]');
+  if ((await send.count()) > 0 && (await send.isEnabled())) {
+    await sendOrder(page);
+  }
+  await page.locator('[data-step="takePayment"]').click();
+}
+
+/**
  * A table paid in cash, with the pay screen still showing what it settled for: the bill a guest
  * asks for a copy of.
  */
 async function aSettledTable(page) {
   await seatTable(page);
   await addItem(page);
-  await page.locator('[data-step="takePayment"]').click();
+  await sendThenTakePayment(page);
   await page.locator('[data-step="setTender"]').first().click();
   await page.locator('[data-step="payCash"]').click();
   await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
@@ -261,7 +277,8 @@ async function openShift(page) {
 
 // How the harness reaches each flow's starting line. Every entry ends with the browser on the
 // route the task's first step declares, with that tap available. A task with no entry starts on the
-// floor, which is where signing in leaves the device.
+// floor, which is where signing in leaves the device. A flow that takes payment starts from an order
+// the kitchen already has, because the till asks before taking money for unsent food (pilot U1).
 const PRECONDITIONS = {
   "Add an item to an open order": seatTable,
   // A counter order used to arrive only over the relay, which the on-fakes example does not run, so
@@ -347,28 +364,34 @@ const PRECONDITIONS = {
   "Settle a dine-in table in cash": async (page) => {
     await seatTable(page);
     await addItem(page);
+    await sendOrder(page);
   },
   "Settle a dine-in table in cash, taking a tip": async (page) => {
     await seatTable(page);
     await addItem(page);
+    await sendOrder(page);
   },
   "Settle a dine-in table by card": async (page) => {
     await seatTable(page);
     await addItem(page);
+    await sendOrder(page);
   },
   "Settle a dine-in table by QR transfer": async (page) => {
     await seatTable(page);
     await addItem(page);
+    await sendOrder(page);
   },
   "Split a dine-in bill evenly between two guests, each paying by QR": async (page) => {
     await seatTable(page);
     await addItem(page);
+    await sendOrder(page);
   },
   // Two different things, so there are two lines to split between two guests.
   "Split one guest's items off a dine-in bill, then settle each part by QR": async (page) => {
     await seatTable(page);
     await addByName(page, "salad");
     await addByName(page, "iced");
+    await sendOrder(page);
   },
   // One thing for seat 1 and one for seat 2, so there are two seats to split between.
   "Split a dine-in bill by seat, then settle each seat's part by QR": async (page) => {
@@ -377,6 +400,7 @@ const PRECONDITIONS = {
     await addByName(page, "salad");
     await page.locator('[data-step="chooseSeat"]').nth(1).click();
     await addByName(page, "iced");
+    await sendOrder(page);
   },
   // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
   // skipped for a reason the declaration states.
@@ -511,6 +535,62 @@ test("firing one course sends that course and leaves the rest of the order waiti
       page.locator('[data-outcome="line-unsent"]'),
       "the drink was on no course and should still be waiting",
     ).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till does not take money for food the kitchen was never sent (pilot U1).
+//
+// Take payment and the counter's charge used to open a bill whatever the lines' state, and settling
+// fires nothing: a walk-in paid, the ticket never printed, and no screen said so. Now either asks
+// first, in place. Cancel leaves the order as it was, still unsent and unbilled; Send and pay sends
+// the lines in one go and carries on to payment, so the answer costs one tap and the food is with
+// the kitchen before any money is.
+test("taking payment for unsent food asks to send it first, at the table and at the counter", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addByName(page, "iced");
+    const prompt = page.locator('[data-outcome="send-first"]');
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(prompt).toContainText("Send 2 items to the kitchen first?");
+    await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(2);
+    await expect(page).not.toHaveURL(/\/pay$/);
+
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="sendAndPay"]').click();
+    await page.waitForURL(/\/pay$/);
+    // The kitchen has both before any money is taken, which is the point of asking.
+    await navigateTo(page, "/kds");
+    await expect(page.getByText("Iced tea").first()).toBeVisible();
+    await navigateTo(page, "/");
+    await page.locator('[data-step="onCard"]').first().click();
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(2);
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(prompt, "nothing is left unsent, so nothing is asked").toHaveCount(0);
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    // The counter's charge asks the same of a walk-in nobody sent.
+    await startWalkIn(page);
+    await addItem(page);
+    await page.locator('a[href="/counter"]').first().click();
+    await page.waitForURL((url) => url.pathname === "/counter");
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(prompt).toContainText("Send 1 item to the kitchen first?");
+    await page.locator('[data-step="sendAndPay"]').click();
+    await expect(prompt).toHaveCount(0);
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
   } finally {
     await edge.stop();
   }
@@ -1925,7 +2005,7 @@ test("a tip on a bill that is not a round number still settles", async ({ page }
     await page.locator('[data-step="onItem"]').click();
     await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     // Asserted, not merely awaited: the tip keys are a share of this figure, so a test that tapped
     // before the check landed would take five percent of nothing and prove the opposite of the point.
     await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
@@ -1967,7 +2047,7 @@ test("a store whose country rounds its cash offers tips a guest can hand over", 
     await seatTable(page);
     await addStarter(page);
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     // The rounded total, so the keys below are a share of a figure that has already been rounded
     // once — and so a check that has not landed cannot pass this test with three zeroes.
     await expect(page.getByText("98.000₫", { exact: true })).toBeVisible();
@@ -2006,7 +2086,7 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
     await page.locator('[data-step="onItem"]').click();
     await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("10.000₫", { exact: true })).toBeVisible();
 
     await expect(page.locator('[data-step="setTip"]')).toHaveText(["500₫", "1.000₫", "1.500₫"]);
@@ -2032,7 +2112,7 @@ test("a store's own tip keys are offered in its order, and a store that hides th
     await addStarter(page);
     const table = new URL(page.url()).pathname.split("/")[2];
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-step="setTip"]')).toHaveText(["9,790₫", "19,580₫"]);
     await expect(page.getByRole("heading", { name: "Tip", exact: true })).toBeVisible();
@@ -2081,7 +2161,7 @@ test("a store that sets nothing, and an edge too old to send the settings, offer
     const today = ["4,895₫", "9,790₫", "14,685₫"];
     const twoToSix = ["2", "3", "4", "5", "6"];
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-step="setTip"]')).toHaveText(today);
     await expect(page.locator('[data-step="splitEvenly"]')).toHaveText(twoToSix);
@@ -2124,7 +2204,7 @@ test("a store that splits up to twelve ways keeps one row that scrolls, and the 
     await seatTable(page);
     await addStarter(page);
     const table = new URL(page.url()).pathname.split("/")[2];
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
 
     const ways = page.locator('[data-step="splitEvenly"]');
@@ -2200,7 +2280,7 @@ test("a bill larger than the largest note takes any amount handed over", async (
       await addItemWithAChoice(page);
     }
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-step="setTender"]')).toHaveText([
       "Exact",
@@ -2269,7 +2349,7 @@ test("a bill split three ways settles with each guest's own tender, and the cash
       await addItemWithAChoice(page);
     }
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Split between 3 guests" }).click();
     const share = page.locator('[data-outcome="share-due"]');
@@ -2328,7 +2408,7 @@ test("a table split by item charges each guest their own part, and waits for the
     await expect(firstDot).toHaveClass(/bg-awaiting/);
 
     await page.locator('[data-step="onCard"]').first().click();
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
     await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
     await page.locator('[data-step="payCard"]').click();
@@ -2358,7 +2438,7 @@ test("a split table's food stays on the kitchen board until its last part is pai
     await addByName(page, "salad");
     await addByName(page, "iced");
     await sendOrder(page);
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="splitByItem"]').click();
     await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
     await page.locator('[data-step="splitOff"]').click();
@@ -2371,7 +2451,7 @@ test("a split table's food stays on the kitchen board until its last part is pai
 
     await navigateTo(page, "/");
     await page.locator('[data-step="onCard"]').first().click();
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
     await page.locator('[data-step="payQr"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
@@ -2405,7 +2485,7 @@ test("a table split by seat pays seat by seat, with the table's own dishes as a 
     await seats.nth(1).click();
     await addByName(page, "water");
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.locator('[data-step="splitBySeat"]')).toHaveText("Split by seat (3 bills)");
     await page.locator('[data-step="splitBySeat"]').click();
 
@@ -2712,7 +2792,7 @@ test("a manager voids a bill on a till with no keyboard, typing on the on-screen
     await signIn(page, edge);
     await seatTable(page);
     await addItem(page);
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="askVoidBill"]').click();
 
     const pad = page.locator("#void-bill-approver-pad");
@@ -2824,7 +2904,7 @@ test("a store's float is filled in, the cashier changes it, and the count shows 
     await navigateTo(page, "/");
     await seatTable(page);
     await addByName(page, "salad");
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="setTender"]').first().click();
     await page.locator('[data-step="payCash"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
@@ -2940,7 +3020,7 @@ test("once the bill is open the menu is locked, and voiding the bill gives it ba
     await signIn(page, edge);
     await seatTable(page);
     await addItem(page);
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.getByRole("link", { name: "← Order" }).click();
 
     await expect(page.locator('[data-outcome="bill-open-locked"]')).toBeVisible();
@@ -2950,7 +3030,7 @@ test("once the bill is open the menu is locked, and voiding the bill gives it ba
       await expect(item).toBeDisabled();
     }
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="askVoidBill"]').click();
     await page.locator("#void-bill-approver-code").fill(edge.staffCode);
     await page.locator("#void-bill-approver-pin").fill(edge.staffPin);
@@ -3077,6 +3157,7 @@ test("a counter tip on a bill that is not a round number still settles", async (
     await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
     await page.locator('[data-step="onItem"]').click();
     await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+    await sendOrder(page);
     await page.locator('a[href="/counter"]').first().click();
     await page.waitForURL((url) => url.pathname === "/counter");
 
@@ -3335,7 +3416,7 @@ test("the till draws money with the exponent the store published", async ({ page
     await signIn(page, edge);
     await seatTable(page);
     await addStarter(page);
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
 
     // The salad is 89,000 plus ten percent, so the check is 97,900 minor units. Read with the
     // store's published exponent of two that is 979.00; read with the old table's guess for the
@@ -3568,7 +3649,7 @@ test("a store that enforces each person's own permissions hides what they may no
       await expect(page.locator(`[data-step="${hidden}"]`)).toHaveCount(0);
     }
 
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await expect(page.locator('[data-step="askVoidBill"]')).toBeVisible();
     for (const hidden of ["setTender", "payCash", "payCard", "splitEvenly", "askDiscount"]) {
       await expect(page.locator(`[data-step="${hidden}"]`)).toHaveCount(0);
@@ -3613,7 +3694,7 @@ test("a store that does not enforce each person's own permissions hides nothing"
     for (const shown of ["fireOrder", "openMove", "startMarking", "askVoid"]) {
       await expect(page.locator(`[data-step="${shown}"]`).first()).toBeVisible();
     }
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     for (const shown of ["setTender", "payCash", "askDiscount", "askVoidBill"]) {
       await expect(page.locator(`[data-step="${shown}"]`).first()).toBeVisible();
     }
@@ -3639,7 +3720,7 @@ test("the Today screen shows the day's takings to a person whose role grants the
     // A salad paid in cash: 97,900₫ with its tax.
     await seatTable(page);
     await addByName(page, "salad");
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="setTender"]').first().click();
     await page.locator('[data-step="payCash"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
@@ -4053,7 +4134,7 @@ test("a device that is no till says so, offers no drawer of its own, and is refu
     await navigateTo(page, "/");
     await seatTable(page);
     await addItem(page);
-    await page.locator('[data-step="takePayment"]').click();
+    await sendThenTakePayment(page);
     await page.locator('[data-step="setTender"]').first().click();
     await page.locator('[data-step="payCash"]').click();
     await expect(
