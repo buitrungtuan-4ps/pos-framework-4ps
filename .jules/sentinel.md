@@ -62,3 +62,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:3::/32` (AMT, RFC 7450) or `2001:4:112::/48` (AS112, RFC 7535) IPv6 special-purpose ranges, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
+
+## 2026-10-04 - [SSRF IPv6 Network Interconnection Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check `2001:a::/32` (RFC 9260 Network Interconnection) IPv6 special-purpose range, allowing non-globally-routable IPv6 destinations to fall through `classify_v6` as public unicast addresses.
+**Learning:** Special-purpose unicast ranges like Network Interconnection (`2001:a::/32`, RFC 9260) in IANA IPv6 Special-Purpose Address Registry serve network infrastructure / testing interconnections and must not be allowed as outbound webhook targets.
+**Prevention:** Include `(first == 0x2001 && second == 0x000a)` (`2001:a::/32`) in `is_special_purpose_v6` in `classify_v6` to refuse them.
