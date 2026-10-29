@@ -1,4 +1,5 @@
 ---
-kind: changed
+kind: fixed
 ---
-- Add item label context to up/down buttons in `ReorderList` for enhanced accessibility.
+- **The layout screen's move buttons say which button they move.** A screen reader heard "Move up"
+  on every row; each row's up and down buttons now name the item, for example "Move Iced tea up".

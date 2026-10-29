@@ -868,9 +868,9 @@ export function ReorderList<T>(props: {
   itemKey: (item: T) => string;
   renderItem: (item: T) => JSX.Element;
   onReorder: (from: number, to: number) => void;
-  upLabel: string;
-  downLabel: string;
-  itemLabel?: (item: T) => string;
+  // Each row's button names the row's item, so a screen reader hears which one moves.
+  upLabel: (item: T) => string;
+  downLabel: (item: T) => string;
 }) {
   const [dragIndex, setDragIndex] = createSignal<number | null>(null);
   const [overIndex, setOverIndex] = createSignal<number | null>(null);
@@ -883,11 +883,6 @@ export function ReorderList<T>(props: {
     setDragIndex(null);
     setOverIndex(null);
   };
-
-  const ariaUp = (item: T) =>
-    props.itemLabel ? `${props.upLabel}: ${props.itemLabel(item)}` : props.upLabel;
-  const ariaDown = (item: T) =>
-    props.itemLabel ? `${props.downLabel}: ${props.itemLabel(item)}` : props.downLabel;
 
   return (
     <ul class="flex flex-col gap-1">
@@ -920,7 +915,7 @@ export function ReorderList<T>(props: {
             <div class="flex flex-col">
               <button
                 type="button"
-                aria-label={ariaUp(item)}
+                aria-label={props.upLabel(item)}
                 disabled={index() === 0}
                 class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() - 1)}
@@ -929,7 +924,7 @@ export function ReorderList<T>(props: {
               </button>
               <button
                 type="button"
-                aria-label={ariaDown(item)}
+                aria-label={props.downLabel(item)}
                 disabled={index() === props.items.length - 1}
                 class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() + 1)}
