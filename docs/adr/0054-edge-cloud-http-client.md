@@ -127,3 +127,15 @@ not in R2's slice as this correction guessed: R2 built the *server* at the new p
 *client* belonged with the slice that gives it a caller. `fetch_update` now posts to
 `POST {base}/sync/stores/{store_id}/artifact` with `{ release, arch }`, and the sibling report to
 `POST {base}/sync/stores/{store_id}/report`. Everything else in this ADR stands unchanged.
+
+**Amendment (2026-10-29) — a store may also trust a private CA it is told about.** The edge trusted
+the bundled `webpki-roots` set and nothing else, so a box could not activate against a cloud whose
+certificate a private CA issued (a `byo-cert` deployment, staging, an on-premises pilot), and a failed
+activation logged nothing. The pilot run found both. An optional `cloud_ca_file` in the store's
+`config.toml` (and `pos-edge claim --cloud-ca-file`) names a PEM file whose roots are **added to** the
+bundled set, never in place of it, for every client that dials the cloud over HTTPS. It is opt-in and
+explicit: with no key set, the trust store is exactly the bundled set this ADR chose, so the default
+stays hermetic. An unusable file at service start is logged at ERROR and the box falls back to the
+public roots, so it keeps trading; the same file refuses a claim. No new crate: PEM parsing is
+`rustls::pki_types::pem`, already in the tree. The NATS event link dials with its own client and does
+not read the key. Everything else in this ADR stands.
