@@ -96,6 +96,7 @@ async fn an_expired_code_is_replaced_and_a_bound_one_makes_the_box_its_store() {
         &claims,
         &vault,
         &cloud_url,
+        None,
         &config_path,
         &status,
         Duration::ZERO,

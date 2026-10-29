@@ -39,6 +39,7 @@ pub mod backup;
 pub mod backup_client;
 pub mod claim;
 pub mod cloud_http;
+pub mod cloud_roots;
 pub mod config;
 pub mod config_changes;
 pub mod config_client;

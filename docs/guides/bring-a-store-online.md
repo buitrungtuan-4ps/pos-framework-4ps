@@ -330,6 +330,14 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
    again on that computer, as an administrator. The store server checks at every start and every time
    this screen asks, and says it once in its log at start; it never names the file or the account.
 
+   **If the screen says the store server does not trust the cloud's certificate,** the handshake
+   failed before the code reached the cloud. A cloud whose certificate comes from the company's own
+   CA (`TLS_MODE=byo-cert`) needs that CA named in the store server's `config.toml` as
+   `cloud_ca_file` ([`deploy/edge/README.md`](../../deploy/edge/README.md#a-cloud-on-a-private-ca-cloud_ca_file));
+   otherwise something on the shop's network is intercepting HTTPS. **If it says the cloud could not
+   be reached,** check the box's internet connection and the `cloud_url` in `config.toml`. Either
+   way the store server's log says the same, with the underlying error.
+
 > **One credential per box, not one per device.** This is the thing to get right, because the console
 > will happily issue a code per named device and only the first one typed can ever be redeemed. The box
 > holds a single `DeviceCredential`; a second code presented to an already-activated store is refused

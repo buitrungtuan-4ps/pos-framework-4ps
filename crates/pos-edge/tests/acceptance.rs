@@ -210,6 +210,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         public_origin: None,
         // LAN-only on purpose: no cloud loops, no network, and the shop still trades (ADR-0001).
         cloud_url: None,
+        cloud_ca_file: None,
         store_path: "unused-in-memory.sqlite".into(),
         nats: None,
         // Not set, as on a store whose window is the console's to publish (ADR-0160 decision 6).

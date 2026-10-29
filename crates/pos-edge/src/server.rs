@@ -22,6 +22,7 @@ use pos_ports::subject_store::SubjectStore;
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::session::PublishedSession;
+use tokio_rustls::rustls::pki_types::CertificateDer;
 use updater_minisign::MinisignVerifier;
 
 use self::cloud_loops::spawn_cloud_loops;
@@ -820,7 +821,7 @@ where
 
     // The store's cloud and identity, read before `config` moves into the app state: they decide
     // whether the config-pull and heartbeat loops run (ADR-0085).
-    let cloud_url = config.cloud_url.clone();
+    let (cloud_url, cloud_ca_file) = (config.cloud_url.clone(), config.cloud_ca_file.clone());
     let store_id = config.store_id;
     // What this box archives and how often (ADR-0124), read for the same reason and at the same
     // moment: `config` moves into the app state below, and the archive loop needs the path to the
@@ -984,6 +985,7 @@ where
             app,
             CloudWiring {
                 cloud_url: &cloud_url,
+                cloud_roots: &crate::cloud_roots::load(cloud_ca_file).await,
                 store_id,
                 edge: &config_edge,
                 queue,
@@ -1120,6 +1122,7 @@ impl CloudSurface {
 /// passed straight through to a loop that needs exactly it.
 struct CloudWiring<'a, S, Q, L, P> {
     cloud_url: &'a url::Url,
+    cloud_roots: &'a [CertificateDer<'static>],
     store_id: StoreId,
     edge: &'a Arc<Edge<S>>,
     queue: Q,
@@ -1157,7 +1160,7 @@ where
         state_dir,
         vault,
     } = lifecycle;
-    let Some(transport) = cloud_transport(wiring.cloud_url) else {
+    let Some(transport) = cloud_transport(wiring.cloud_url, wiring.cloud_roots) else {
         return CloudSurface::without_sync(app);
     };
     // Activation only, so the store id and target carried here are never used for a path: `/activate`
@@ -1201,8 +1204,8 @@ where
 /// One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
 /// own bearer-carrying client (`cloud_http`), keyed by a store key when one is set and by the device
 /// credential otherwise (ADR-0143). `None`, said once, when it cannot be built.
-fn cloud_transport(cloud_url: &url::Url) -> Option<TlsHttpTransport> {
-    match TlsHttpTransport::new(cloud_url.as_str(), ACTIVATION_TIMEOUT) {
+fn cloud_transport(url: &url::Url, roots: &[CertificateDer<'static>]) -> Option<TlsHttpTransport> {
+    match TlsHttpTransport::trusting(url.as_str(), ACTIVATION_TIMEOUT, roots) {
         Ok(transport) => Some(transport),
         Err(error) => {
             tracing::error!(
@@ -1230,7 +1233,7 @@ where
     P: crate::print_agent::PrintAgents + 'static,
     V: KeyVault,
 {
-    let (edge, cloud_url) = (wiring.edge, wiring.cloud_url);
+    let (edge, cloud) = (wiring.edge, (wiring.cloud_url, wiring.cloud_roots));
     let sync_key = resolve_sync_key(vault).await;
     // The signal that releases the stopping store's last beat. Created here so the sender
     // travels back out to whoever owns the lifetime and the receiver goes into the loop —
@@ -1248,7 +1251,7 @@ where
     // The event rail is spawned beside the `/sync` loops rather than inside them: it has its
     // own endpoint and presents the device credential whatever key the loops use
     // (ADR-0087, ADR-0143).
-    let publisher = spawn_event_publish(edge, nats, cloud_url, vault, shutdown_rx).await;
+    let publisher = spawn_event_publish(edge, nats, cloud, vault, shutdown_rx).await;
     CloudSurface {
         app,
         cloud: keyed_client,
@@ -1777,7 +1780,7 @@ where
 async fn spawn_event_publish<S, V>(
     edge: &Arc<Edge<S>>,
     nats: Option<&NatsConfig>,
-    cloud_url: &url::Url,
+    cloud: (&url::Url, &[CertificateDer<'static>]),
     vault: &V,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Option<tokio::task::JoinHandle<()>>
@@ -1801,7 +1804,7 @@ where
         ),
         (None, _) => {}
     }
-    spawn_https_publish(edge, cloud_url, vault, shutdown_rx).await
+    spawn_https_publish(edge, cloud, vault, shutdown_rx).await
 }
 
 /// The NATS rail: `None` only when the address in [`NATS_URL_ENV`] cannot be used at all.
@@ -1846,7 +1849,7 @@ where
 /// The HTTPS rail, over the box's device credential.
 async fn spawn_https_publish<S, V>(
     edge: &Arc<Edge<S>>,
-    cloud_url: &url::Url,
+    (cloud_url, roots): (&url::Url, &[CertificateDer<'static>]),
     vault: &V,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Option<tokio::task::JoinHandle<()>>
@@ -1861,7 +1864,7 @@ where
         );
         return None;
     };
-    let client = match CloudHttpClient::new(cloud_url, credential) {
+    let client = match CloudHttpClient::trusting(cloud_url, credential, roots) {
         Ok(client) => client,
         Err(error) => {
             tracing::error!(%error, "the event link could not be built; the outbox holds");

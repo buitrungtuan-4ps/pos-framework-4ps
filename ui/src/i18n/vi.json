@@ -114,6 +114,8 @@
   "devices.till_title": "Máy này",
   "devices.till_unlisted": "Máy này đang gắn với một máy POS mà cửa hàng không còn nữa.",
   "devices.title": "Thiết bị",
+  "error.activation_cloud_unreachable": "Chưa kích hoạt được: máy chủ cửa hàng không kết nối được tới cloud. Kiểm tra internet của máy và địa chỉ cloud trong config.toml, rồi thử lại.",
+  "error.activation_cloud_untrusted": "Chưa kích hoạt được: máy chủ cửa hàng không tin cậy chứng chỉ của cloud. Nếu cloud dùng chứng chỉ do CA nội bộ của công ty cấp, đặt cloud_ca_file trong config.toml của máy chủ cửa hàng trỏ tới tệp PEM của CA đó rồi khởi động lại. Nếu không, kiểm tra xem mạng này có thiết bị nào chặn HTTPS không.",
   "error.activation_code_malformed": "Đây không phải mã kích hoạt: mã gồm mười hai chữ và số, đúng như console hiển thị.",
   "error.activation_refused": "Cloud không chấp nhận mã này. Đối chiếu với console — mã phải được tạo cho đúng cửa hàng này — hoặc tạo mã mới ở đó; mỗi mã chỉ dùng được một lần.",
   "error.activation_unavailable": "Chưa kích hoạt được: máy chủ cửa hàng không kết nối được cloud, hoặc không lưu được thông tin xác thực. Kiểm tra internet của máy rồi thử lại.",

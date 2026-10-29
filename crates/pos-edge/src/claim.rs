@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `pos-edge claim --cloud <url>`: a box installed with no store claims itself
+//! `pos-edge claim --cloud <url> [--cloud-ca-file <pem>]`: a box installed with no store claims itself
 //! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
 //!
 //! One image fits every store. A box that boots from it has no `config.toml`, so instead of serving
@@ -117,6 +117,18 @@ pub fn cloud_from_arguments(arguments: &[String]) -> Result<url::Url, EdgeError>
         .ok_or_else(|| EdgeError::Install(format!("the cloud is not an https URL: {value}")))
 }
 
+/// Reads the optional `--cloud-ca-file <path>` from the arguments after `claim`: a PEM file of the
+/// private CA the cloud's certificate comes from ([`crate::cloud_roots`]). The claim trusts it, and
+/// writes it into `config.toml` as `cloud_ca_file` so the store server trusts it too.
+#[must_use]
+pub fn ca_file_from_arguments(arguments: &[String]) -> Option<PathBuf> {
+    arguments
+        .iter()
+        .position(|argument| argument == "--cloud-ca-file")
+        .and_then(|at| arguments.get(at + 1))
+        .map(PathBuf::from)
+}
+
 /// Runs the claim for a box whose configuration would live at `config_path`.
 ///
 /// A box that already has a `config.toml` is claimed or installed already, and this returns at once
@@ -135,7 +147,14 @@ pub fn run(arguments: &[String], config_path: &Path) -> Result<(), EdgeError> {
         return Ok(());
     }
     let cloud = cloud_from_arguments(arguments)?;
-    let transport = TlsHttpTransport::new(cloud.as_str(), REQUEST_TIMEOUT)
+    let ca_file = ca_file_from_arguments(arguments);
+    let roots = match &ca_file {
+        Some(path) => crate::cloud_roots::read(path).map_err(|reason| {
+            EdgeError::Install(format!("--cloud-ca-file {}: {reason}", path.display()))
+        })?,
+        None => Vec::new(),
+    };
+    let transport = TlsHttpTransport::trusting(cloud.as_str(), REQUEST_TIMEOUT, &roots)
         .map_err(|error| EdgeError::Install(error.to_string()))?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -154,6 +173,7 @@ pub fn run(arguments: &[String], config_path: &Path) -> Result<(), EdgeError> {
             &HttpClaim::new(transport),
             &vault,
             &cloud,
+            ca_file.as_deref(),
             config_path,
             &status,
             RETRY_AFTER,
@@ -183,6 +203,7 @@ pub async fn claim<T, V>(
     claims: &HttpClaim<T>,
     vault: &V,
     cloud: &url::Url,
+    cloud_ca_file: Option<&Path>,
     config_path: &Path,
     status: &tokio::sync::watch::Sender<ClaimStatus>,
     retry: Duration,
@@ -239,7 +260,8 @@ where
                                  pos-edge claim again as the service's own user"
                             ))
                         })?;
-                    write_config(config_path, &config_text(store_id, cloud, config_path))?;
+                    let text = config_text(store_id, cloud, cloud_ca_file, config_path);
+                    write_config(config_path, &text)?;
                     status.send_replace(ClaimStatus::Claimed {
                         store_id: store_id.to_string(),
                     });
@@ -265,9 +287,15 @@ fn origin(cloud: &url::Url) -> String {
 
 /// The `config.toml` a claimed box starts with: which store it is and which cloud it dials, and
 /// nothing secret. The database sits beside the file, named absolutely, so a service manager that
-/// starts the process in another directory still finds it.
+/// starts the process in another directory still finds it. `cloud_ca_file`, when the claim was
+/// given one, is written too, so the store server trusts the cloud the claim reached.
 #[must_use]
-pub fn config_text(store_id: StoreId, cloud: &url::Url, config_path: &Path) -> String {
+pub fn config_text(
+    store_id: StoreId,
+    cloud: &url::Url,
+    cloud_ca_file: Option<&Path>,
+    config_path: &Path,
+) -> String {
     let store_path = config_path
         .parent()
         .filter(|directory| directory.is_absolute())
@@ -295,6 +323,7 @@ pub fn config_text(store_id: StoreId, cloud: &url::Url, config_path: &Path) -> S
          \n\
          store_id = \"{store_id}\"\n\
          cloud_url = \"{cloud}\"\n\
+         {ca_line}\
          \n\
          # Optional — override the listen address (default 0.0.0.0:8787):\n\
          # bind = \"0.0.0.0:8787\"\n\
@@ -304,6 +333,10 @@ pub fn config_text(store_id: StoreId, cloud: &url::Url, config_path: &Path) -> S
          \n\
          {store_line}\n",
         cloud = toml_escape(&origin(cloud)),
+        ca_line = cloud_ca_file.map_or_else(String::new, |path| format!(
+            "cloud_ca_file = \"{}\"\n",
+            toml_escape(&path.display().to_string())
+        )),
     )
 }
 
@@ -391,7 +424,7 @@ mod tests {
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
 
-    use super::{cloud_from_arguments, config_text};
+    use super::{ca_file_from_arguments, cloud_from_arguments, config_text};
     use crate::config::EdgeConfig;
 
     /// The configuration a claimed box writes loads as the store it was claimed for, dialling the
@@ -400,9 +433,15 @@ mod tests {
     fn the_written_configuration_loads_as_the_claimed_store() {
         let store = StoreId::new(Ulid::from_u128(0x5708E));
         let cloud = url::Url::parse("https://pos.example.vn/").expect("a URL");
-        let text = config_text(store, &cloud, Path::new("/var/lib/pos-edge/config.toml"));
+        let text = config_text(
+            store,
+            &cloud,
+            None,
+            Path::new("/var/lib/pos-edge/config.toml"),
+        );
         let config = EdgeConfig::from_toml_str(&text).expect("the file loads");
         assert_eq!(config.store_id, store);
+        assert_eq!(config.cloud_ca_file, None);
         assert_eq!(
             config.cloud_url.as_ref().map(url::Url::as_str),
             Some("https://pos.example.vn/")
@@ -411,6 +450,35 @@ mod tests {
             config.store_path,
             Path::new("/var/lib/pos-edge/store.sqlite")
         );
+    }
+
+    /// A claim given `--cloud-ca-file` writes it, so the store server trusts the cloud the claim
+    /// reached rather than failing its first handshake after the restart.
+    #[test]
+    fn a_private_ca_given_to_the_claim_is_written_for_the_store_server() {
+        let arguments = [
+            "--cloud",
+            "https://pos.internal",
+            "--cloud-ca-file",
+            "/etc/ca.pem",
+        ]
+        .map(str::to_owned);
+        let ca_file = ca_file_from_arguments(&arguments);
+        assert_eq!(ca_file.as_deref(), Some(Path::new("/etc/ca.pem")));
+        let store = StoreId::new(Ulid::from_u128(0x5708E));
+        let cloud = cloud_from_arguments(&arguments).expect("an https cloud");
+        let text = config_text(
+            store,
+            &cloud,
+            ca_file.as_deref(),
+            Path::new("/srv/config.toml"),
+        );
+        let config = EdgeConfig::from_toml_str(&text).expect("the file loads");
+        assert_eq!(
+            config.cloud_ca_file.as_deref(),
+            Some(Path::new("/etc/ca.pem"))
+        );
+        assert_eq!(ca_file_from_arguments(&arguments[..2]), None);
     }
 
     /// Only an https cloud is accepted, as everywhere else the edge dials one.

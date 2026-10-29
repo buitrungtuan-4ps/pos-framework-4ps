@@ -465,7 +465,7 @@ on, so the over-the-air restart path would need re-verifying against it.
 
 Both platforms point `POS_EDGE_CONFIG` at a `config.toml` holding the bootstrap configuration
 (`bind`, `store_id`, optionally `advertised_ip` or `public_origin`, and — for a store connected to a
-cloud — `cloud_url`). Everything else is the cloud-owned configuration the edge syncs and hot-reloads
+cloud — `cloud_url`, plus `cloud_ca_file` when that cloud's certificate comes from a private CA). Everything else is the cloud-owned configuration the edge syncs and hot-reloads
 at runtime ([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
 
 **`public_origin` is for a store whose devices are not on the edge's LAN** — a hosted placement
@@ -522,6 +522,36 @@ is affected: the counter trades, config syncs, and the orders stay parked in the
 scope is granted. A box with no store key uses its device credential, which carries both; the event
 link always presents the device credential, so a key never needs `publish_events` for the edge's
 own sake.
+
+### A cloud on a private CA: `cloud_ca_file`
+
+The edge trusts the public roots it ships with (the Mozilla set), which covers a cloud on a public
+certificate, the default `TLS_MODE`s. A cloud deployed with a certificate from the company's own CA
+(`TLS_MODE=byo-cert`, [ADR-0090](../../docs/adr/0090-tls-postures.md)) is one none of them signed, so
+every handshake fails until the box is told to trust that CA:
+
+```toml
+cloud_url     = "https://pos.internal.example"
+cloud_ca_file = "/etc/pos-edge/cloud-ca.pem"   # PEM, one or more CERTIFICATE sections
+```
+
+The certificates in the file are trusted **as well as** the public roots, never instead of them, by
+every client that dials `cloud_url`: activation, config-pull, heartbeat, the order relay, event
+publish, archives and over-the-air updates. Name the CA's root, not the cloud's own certificate. A
+box that is claimed rather than installed takes the same file as `pos-edge claim --cloud <url>
+--cloud-ca-file <path>`, trusts it for the claim, and writes it into the `config.toml` it creates.
+NATS, when configured, dials with its own client and does not read this key.
+
+A file that cannot be used does not stop the box: it trades, trusts the public roots only, and says
+why. The claim, which has nothing to trade, refuses to start instead.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `INFO trusting the cloud's private CA as well as the public roots` (`cloud_ca_file`, `roots`) | The file loaded, with that many certificates. | Nothing. |
+| `ERROR cloud_ca_file is set but cannot be used, so only the public roots are trusted and a cloud on a private CA will fail its TLS handshake` (`cloud_ca_file`, `reason`) | The file is missing, unreadable, holds no certificate, or holds one that cannot be a root. The `reason` says which. | Fix the file and restart the service. |
+| `ERROR activation failed: this box does not trust the cloud's certificate; if the cloud uses a private CA, name its root in cloud_ca_file` (`error`) | `/setup` was refused at the TLS handshake. `/setup` shows the same reason. | Set `cloud_ca_file` as above. If it is set, check that it is the CA that issued the cloud's certificate, or whether something on the network intercepts HTTPS. |
+| `WARN activation failed: the cloud could not be reached` (`error`) | The cloud's name did not resolve, nothing accepted the connection, or it did not answer in time. | Check the box's internet connection and `cloud_url`. |
+| `WARN activation failed` (`error`) | The cloud answered and refused, or the credential could not be kept. `/setup` says which. | Follow what `/setup` says. |
 
 ### `sign_in_idle_timeout_minutes` is deprecated
 
