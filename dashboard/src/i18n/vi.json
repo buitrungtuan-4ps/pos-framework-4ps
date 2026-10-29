@@ -2280,6 +2280,8 @@
   "storeSettings.contact": "Dòng liên hệ",
   "storeSettings.country": "Quốc gia",
   "storeSettings.countryHint": "Cửa hàng này ở nước nào. Bắt buộc — vùng đặt máy của một cửa hàng hosted được so với giá trị này, và bảng điều khiển đội tàu không trả lời được “dữ liệu cửa hàng này đang ở đâu?” nếu thiếu.",
+  "storeSettings.countryFilled": "Đã điền từ gói quốc gia {country}: {fields}. Mọi trường vẫn có thể sửa.",
+  "storeSettings.countryKept": "Giữ nguyên giá trị cửa hàng đã có cho {fields}, khác với gói quốc gia {country}. Hãy sửa tay, hoặc dùng Điền theo một quốc gia để lấy toàn bộ gói.",
   "storeSettings.countryNone": "Chọn một quốc gia…",
   "storeSettings.countryOtherCell": "{country} không phải quốc gia chính của cell này ({cellCountry}): cửa hàng sẽ được cảnh báo trên trang tổng quan cho đến khi có người ghi lại lý do vì sao điều này là đúng. Không có gì bị từ chối.",
   "storeSettings.countryRequired": "Chọn quốc gia cửa hàng này kinh doanh trước khi phát hành.",

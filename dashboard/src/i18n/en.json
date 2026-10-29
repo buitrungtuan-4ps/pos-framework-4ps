@@ -2280,6 +2280,8 @@
   "storeSettings.contact": "Contact lines",
   "storeSettings.country": "Country",
   "storeSettings.countryHint": "Which country this store is in. Required — a hosted store's region is compared against it, and the fleet console cannot answer “where is this store's data?” without it.",
+  "storeSettings.countryFilled": "Filled in from {country}'s pack: {fields}. Every field stays editable.",
+  "storeSettings.countryKept": "Kept what this store already has for {fields}, which {country}'s pack would set differently. Change them by hand, or use Start from a country to take the whole pack.",
   "storeSettings.countryNone": "Choose a country…",
   "storeSettings.countryOtherCell": "{country} is not this cell's home country ({cellCountry}): the store will be warned about on its hub until someone records why it is correct. Nothing is refused.",
   "storeSettings.countryRequired": "Choose the country this store trades in before publishing.",

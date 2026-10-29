@@ -135,7 +135,7 @@
     "max-lines-per-function": 285
   },
   "src/screens/StoreSettings.tsx": {
-    "max-lines-per-function": 436
+    "max-lines-per-function": 431
   },
   "src/screens/Stores.tsx": {
     "max-lines-per-function": 696
