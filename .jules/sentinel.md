@@ -67,3 +67,8 @@
 **Vulnerability:** Webhook SSRF validation checked Unique-Local (`fc00::/7`) and Link-Local (`fe80::/10`) IPv6 ranges, but omitted Site-Local (`fec0::/10`, RFC 3513 / RFC 3879) IPv6 addresses, allowing intranet destinations like `fec0::1` to fall through `classify_v6` as public unicast addresses.
 **Learning:** Although deprecated by RFC 3879, IPv6 Site-Local addresses (`fec0::/10`) are strictly internal non-global addresses used in legacy intranet networks. Standard library helpers like `is_private()` in Rust std do not classify `fec0::/10`.
 **Prevention:** Include `first & 0xffc0 == 0xfec0` (`fec0::/10`) alongside `fc00::/7` when classifying IPv6 private network addresses in `classify_v6`.
+
+## 2026-10-05 - [SSRF IPv6 SRv6 Locator Block Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check RFC 9602 SRv6 SID block (`5f00::/16`), allowing Segment Routing locator addresses to fall through `classify_v6` as ordinary public unicast addresses.
+**Learning:** SRv6 Locators (`5f00::/16`) are special-purpose IPv6 unicast addresses used for Segment Routing network infrastructure, never as webhook receivers.
+**Prevention:** Explicitly check `first == 0x5f00` in `is_special_purpose_v6` within `classify_v6` to refuse addresses in the SRv6 locator block.
