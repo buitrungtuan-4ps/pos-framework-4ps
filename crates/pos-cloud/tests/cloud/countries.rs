@@ -77,3 +77,32 @@ async fn countries_and_locales_are_read_only_master_data() {
         .expect("route anon");
     assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn a_country_lists_the_settings_its_pack_gives_a_new_store() {
+    // ADR-0183 decision 4: Store settings offers a pack's setting defaults when the country is
+    // chosen, so the catalogue has to carry them — Vietnam's 20,000 ₫ over/short threshold.
+    let router = country_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let body = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/countries", &cookie))
+            .await
+            .expect("route countries"),
+    )
+    .await;
+    let list = body.as_array().expect("array");
+    let vietnam = list
+        .iter()
+        .find(|country| country["code"] == "VN")
+        .expect("the Vietnam pack is compiled in");
+    assert_eq!(
+        vietnam["setting_defaults"],
+        serde_json::json!([{ "setting_key": "shift.variance_reason_minor", "value": 20_000 }]),
+    );
+    assert!(
+        list.iter()
+            .all(|country| country["setting_defaults"].is_array()),
+        "a pack that gives none lists an empty array"
+    );
+}

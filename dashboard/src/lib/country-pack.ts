@@ -10,10 +10,18 @@
 // as set when it holds something and that something is not merely the framework's default on a
 // store that has never published its locale. Whatever is filled and whatever is kept is named, so
 // nothing changes silently. "Start from a country" stays the deliberate way to take all of it.
+//
+// A pack also gives a new store some *settings* in its own units (ADR-0183): Vietnam's 20,000 ₫
+// over/short past which a drawer close asks a reason. Those are written once the locale naming a
+// new country is published, by the same rule — a setting no scope sets is filled at the store's
+// own scope, one somebody set is kept, and the console says which.
 
-import type { Country } from "../api/schemas";
+import { api } from "../api/client";
+import type { Country, EffectiveSetting } from "../api/schemas";
+import type { Json } from "../api/types";
 import { toast } from "../components/Toast";
-import { type MessageKey, t } from "../i18n";
+import { type MessageKey, t, tFromServer } from "../i18n";
+import { apiMessage } from "./errors";
 
 /** The store-settings fields a country pack has a value for, as the form holds them. */
 export interface PackFields {
@@ -131,6 +139,63 @@ export function packFillMessages(country: string, fill: PackFill): string[] {
   return messages;
 }
 
+/** A setting a country pack gives a new store (ADR-0183), as `GET /admin/countries` lists it. */
+export type SettingDefault = Country["setting_defaults"][number];
+
+/** Which of a pack's settings to write, and which the store already has set to something else. */
+export interface SettingsFill {
+  readonly filled: readonly SettingDefault[];
+  readonly kept: readonly SettingDefault[];
+}
+
+/**
+ * A pack's settings against what the store runs. A setting no scope sets — the store runs the
+ * register's default — is filled; one the tenant, a brand, a group or the store sets to another
+ * value is kept, because a tenant-wide 50,000 is somebody's answer just as a typed field is.
+ */
+export function fillSettings(
+  defaults: readonly SettingDefault[],
+  effective: readonly EffectiveSetting[],
+): SettingsFill {
+  const filled: SettingDefault[] = [];
+  const kept: SettingDefault[] = [];
+  for (const seeded of defaults) {
+    const running = effective.find((setting) => setting.setting_key === seeded.setting_key);
+    if (running?.scope === undefined) {
+      filled.push(seeded);
+    } else if (running.value !== seeded.value) {
+      kept.push(seeded);
+    }
+  }
+  return { filled, kept };
+}
+
+/** A setting's title as Shared settings shows it, or its key when this console has none. */
+const settingName = (seeded: SettingDefault) =>
+  tFromServer(`settings.item.${seeded.setting_key}.title`, seeded.setting_key);
+
+/**
+ * Writes `country`'s settings into `store` by {@link fillSettings}, each at the store's own scope
+ * through the same call Shared settings makes, and says what it filled and kept.
+ */
+export async function applyPackSettings(tenant: string, store: string, country: Country) {
+  const fill = fillSettings(country.setting_defaults, await api.effectiveSettings(tenant, store));
+  for (const seeded of fill.filled) {
+    await api.putSetting(tenant, seeded.setting_key, "SETTING_SCOPE_STORE", store, seeded.value);
+  }
+  const names = (seeds: readonly SettingDefault[], withValue: boolean) =>
+    seeds
+      .map((seeded) => (withValue ? `${settingName(seeded)} = ${String(seeded.value)}` : settingName(seeded)))
+      .join(", ");
+  const name = country.display_name;
+  if (fill.filled.length > 0) {
+    toast.ok(t("storeSettings.countrySettingsFilled", { country: name, settings: names(fill.filled, true) }));
+  }
+  if (fill.kept.length > 0) {
+    toast.ok(t("storeSettings.countrySettingsKept", { country: name, settings: names(fill.kept, false) }));
+  }
+}
+
 /** One form field's signal pair. */
 type FieldSignal<T> = readonly [() => T, (value: T) => void];
 
@@ -143,12 +208,15 @@ export type PackSignals = { readonly [K in PackField]: FieldSignal<PackFields[K]
  * `choose` is the Country select: it records the country and fills the pack into the fields nobody
  * has set ([`fillFromPack`]), saying what it filled and kept. `applyAll` is "Start from a country":
  * the whole pack over what the form holds, except a registration label someone typed.
+ * `published` follows a locale publish: when it names a country other than the one the store
+ * had, the pack's settings are written ([`applyPackSettings`]) — so a store the new-store wizard
+ * created before it had a country gets them with its first locale.
  */
 export function useCountryPack(options: {
   readonly fields: PackSignals;
   readonly countries: () => readonly Country[];
-  /** Whether the store has a published locale node. */
-  readonly localePublished: () => boolean;
+  /** The store's published locale node as the screen read it, or `null` when it has none. */
+  readonly publishedLocale: () => Readonly<Record<string, Json>> | null;
   readonly setCountry: (code: string) => void;
 }) {
   const { fields } = options;
@@ -179,7 +247,7 @@ export function useCountryPack(options: {
     options.setCountry(code);
     const found = packOf(code);
     if (found) {
-      const fill = fillFromPack(read(), found.pack, options.localePublished());
+      const fill = fillFromPack(read(), found.pack, options.publishedLocale() !== null);
       write(fill.next);
       packFillMessages(found.country.display_name, fill).forEach((message) => toast.ok(message));
     }
@@ -196,5 +264,28 @@ export function useCountryPack(options: {
     toast.ok(t("storeSettings.filledFrom", { country: found.country.display_name }));
   };
 
-  return { choose, applyAll };
+  // What this screen last published, per store: the read it opened on goes stale after a publish.
+  let sent: { readonly store: string; readonly code: string } | null = null;
+  const published = async (tenant: string, store: string, country: string) => {
+    const code = country.trim().toUpperCase();
+    const read = options.publishedLocale()?.["country_code"];
+    const before = sent?.store === store ? sent.code : typeof read === "string" ? read : null;
+    sent = { store, code };
+    const found = code === before ? undefined : packOf(code);
+    if (!found || found.country.setting_defaults.length === 0) {
+      return;
+    }
+    try {
+      await applyPackSettings(tenant, store, found.country);
+    } catch (caught) {
+      toast.error(
+        t("storeSettings.countrySettingsFailed", {
+          country: found.country.display_name,
+          reason: apiMessage(caught),
+        }),
+      );
+    }
+  };
+
+  return { choose, applyAll, published };
 }

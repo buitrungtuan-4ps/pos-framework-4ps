@@ -60,9 +60,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
    settings** for the store, which gives the values again or publishes the store again.
    Some new-store values come from the store's **country pack** rather than the register — in
    Vietnam, asking a reason of a drawer that closes more than 20,000 ₫ over or short ([ADR-0183](../adr/0183-a-country-pack-seeds-a-new-stores-settings.md)).
-   The wizard runs before the store has a country, so once **Store settings** has published its
-   country, give the new-store values again from **Shared settings** for the store: only values the
-   store has not set are written, so this changes nothing anyone chose.
+   The wizard runs before the store has a country, so those arrive when **Store settings**
+   publishes the store's country: each one no scope sets is written at the store's own scope, one
+   the tenant, a brand, a group or the store already sets is kept, and the console says which.
 2. **API key** — **optional**, and **Skip the key** is the usual choice. A box activated with a code
    (Step 3) syncs, relays orders and publishes events with the credential activation gives it
    ([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so it
@@ -381,7 +381,7 @@ keeping the last-known-good if a version is rejected
 | **People** | the staff roster and what each role may do | **Yes** — nobody can sign in without it |
 | **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
 | **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
-| **Store settings** | country, currency, timezone, business-date cutoff; the till's cash rounding and quick-cash notes; the receipt's seller identity; and how many days the store PC keeps synced events (90 unless set, [ADR-0145](../adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). Choosing the **Country** fills its country pack (currency, display language, quoting posture, cash rounding, quick-cash notes, registration label) into every field nobody has set — blank, or still the framework default on a store that has published nothing — and says what it filled and what it kept; **Start from a country** takes the whole pack. Check rounding and notes before publishing: Vietnam's pack rounds cash to 1,000 ₫ | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)); the retention can stay at its default |
+| **Store settings** | country, currency, timezone, business-date cutoff; the till's cash rounding and quick-cash notes; the receipt's seller identity; and how many days the store PC keeps synced events (90 unless set, [ADR-0145](../adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). Choosing the **Country** fills its country pack (currency, display language, quoting posture, cash rounding, quick-cash notes, registration label) into every field nobody has set — blank, or still the framework default on a store that has published nothing — and says what it filled and what it kept; **Start from a country** takes the whole pack. Publishing a country the store did not have also writes the pack's settings that no scope sets, at the store's scope, and keeps any set otherwise, saying which — in Vietnam, 20,000 ₫ as the over/short past which a drawer close asks a reason ([ADR-0183](../adr/0183-a-country-pack-seeds-a-new-stores-settings.md)). Check rounding and notes before publishing: Vietnam's pack rounds cash to 1,000 ₫ | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)); the retention can stay at its default |
 | **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
 | **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
 | **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
