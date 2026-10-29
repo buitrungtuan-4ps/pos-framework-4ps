@@ -101,7 +101,7 @@
     "max-lines-per-function": 144
   },
   "src/screens/NewStore.tsx": {
-    "max-lines-per-function": 397
+    "max-lines-per-function": 273
   },
   "src/screens/Ota.tsx": {
     "max-lines-per-function": 559
@@ -138,7 +138,7 @@
     "max-lines-per-function": 436
   },
   "src/screens/Stores.tsx": {
-    "max-lines-per-function": 745
+    "max-lines-per-function": 696
   },
   "src/screens/Subjects.tsx": {
     "max-lines-per-function": 211

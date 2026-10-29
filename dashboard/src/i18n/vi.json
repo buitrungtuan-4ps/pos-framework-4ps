@@ -1127,6 +1127,7 @@
   "handoff.keyIssued": "Đã cấp key. Key đã được ghi vào các file bên dưới và sẽ không hiện lại.",
   "handoff.keyTitle": "Sync key của cửa hàng",
   "handoff.linuxHint": "Chạy bằng root kèm binary và unit file. Cùng một layout: update slot, hai file bên dưới, systemd unit, mở port trên ufw hoặc firewalld đang chạy, rồi service.",
+  "handoff.needsHttps": "Console này đang mở qua http thường, trong khi cửa hàng chỉ kết nối cloud qua https. Tệp tạo từ đây sẽ cài một cửa hàng từ chối cloud của nó và chạy không có nhân viên hay thực đơn, nên không có tệp nào được cung cấp. Hãy mở console bằng địa chỉ https để lấy các tệp của cửa hàng.",
   "handoff.open": "Chuyển sang máy khác",
   "handoff.recoveryLost": "Không lấy lại được",
   "handoff.recoveryRegenerated": "Tạo lại được",

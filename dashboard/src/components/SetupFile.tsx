@@ -36,6 +36,7 @@ import { createResource, createSignal, onMount, Show } from "solid-js";
 import { api } from "../api/client";
 import { t } from "../i18n";
 import { apiMessage } from "../lib/errors";
+import { consoleIsHttps } from "../lib/handoff";
 import { Banner, TextField } from "./ui";
 
 /** The Windows build the cloud serves a setup file from — the one the release workflow builds. */
@@ -54,7 +55,7 @@ export function SetupFile(props: {
   readonly hasKey: boolean;
 }) {
   const [release, setRelease] = createSignal("");
-  const secure = window.location.protocol === "https:";
+  const secure = consoleIsHttps();
 
   // The version this store's rollout targets is the one it would be updated to anyway, so the field
   // starts there — but never over something the operator has typed, and a store with no rollout
