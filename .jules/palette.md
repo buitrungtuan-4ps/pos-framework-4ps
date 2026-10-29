@@ -1,3 +1,8 @@
+## 2026-10-21 - Global CSS :focus-visible Rules Preempt Per-Component Classes
+
+**Learning:** `app.css` in both `ui` and `dashboard` already declares a global `:focus-visible` rule (`outline: 2px solid var(--color-accent); outline-offset: 2px;`). Adding explicit `focus-visible:outline-*` Tailwind utility classes to individual button components is redundant as the global CSS rule already applies the identical outline to all interactive elements focused via keyboard.
+**Action:** Check `app.css` for existing global pseudo-class rules before attempting to add per-component accessibility focus utilities.
+
 ## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
 
 **Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.
