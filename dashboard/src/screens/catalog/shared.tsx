@@ -6,8 +6,10 @@
 
 import type { JSX } from "solid-js";
 
+import { ApiError } from "../../api/client";
 import type { EntityStatus } from "../../api/types";
 import { t } from "../../i18n";
+import type { MessageKey } from "../../i18n";
 import { StatusBadge } from "../../components/ui";
 import { apiMessage, isStale } from "../../lib/errors";
 import { SALES_CHANNELS } from "../../lib/channels";
@@ -47,6 +49,33 @@ export const errorMessage = (caught: unknown): string => {
     return t("catalog.stale");
   }
   return apiMessage(caught);
+};
+
+/** Why a store cannot sell an item on a menu, by the token the cloud names it with. */
+const UNSELLABLE: Readonly<Record<string, MessageKey>> = {
+  CURRENCY_MISMATCH: "catalog.unsellable.currency",
+  TAX_RATE_NOT_CONFIGURED: "catalog.unsellable.taxRate",
+};
+
+/**
+ * A menu publish the store refused because it cannot sell some of the items, in the operator's
+ * words and naming each item; `null` for any other failure. The cloud names each item in a detail,
+ * `items.<menu_item_id>`, as a fee publish names each rule a store cannot apply.
+ */
+export const unsellableMessage = (
+  caught: unknown,
+  itemName: (id: string) => string,
+): string | null => {
+  if (!(caught instanceof ApiError) || caught.status !== 422) {
+    return null;
+  }
+  const lines = caught.details.flatMap((detail) => {
+    const key = UNSELLABLE[detail.reason];
+    return detail.field.startsWith("items.") && key !== undefined
+      ? [t("catalog.unsellable.line", { item: itemName(detail.field.slice(6)), reason: t(key) })]
+      : [];
+  });
+  return lines.length === 0 ? null : t("catalog.unsellable", { items: lines.join("; ") });
 };
 
 // `isStale` is re-exported, not redefined. It was *first* defined here, which is precisely why the

@@ -37,7 +37,7 @@ import {
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
-import { emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
+import { emptyPriceSheet, errorMessage, isStale, StatusCell, unsellableMessage } from "./shared";
 import { SALES_CHANNELS, channelLabel, isKnownChannel } from "../../lib/channels";
 import type { KnownSalesChannel } from "../../lib/channels";
 import type { ChannelPrice, Menu, MenuPlacement, MenuSection } from "../../api/schemas";
@@ -622,7 +622,7 @@ export function CatalogMenus() {
       // The bar reads the store's node dates, so it only stops saying "stale" once re-read.
       await published.refresh();
     } catch (caught) {
-      toast.error(errorMessage(caught));
+      toast.error(unsellableMessage(caught, itemName) ?? errorMessage(caught));
     } finally {
       setBusy(false);
     }

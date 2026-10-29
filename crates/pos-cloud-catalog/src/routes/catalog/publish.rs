@@ -11,7 +11,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use pos_cloud_api::console::{audit_action, require_permission};
-use pos_cloud_api::response::{api_error, parse_ulid_fields, service_unavailable};
+use pos_cloud_api::response::{
+    api_error, api_error_with_details, parse_ulid_fields, service_unavailable,
+};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::fees::PublishedFees;
@@ -28,9 +30,10 @@ use crate::catalog::{
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
-use crate::fees::FeeRuleStore;
+use crate::fees::{FeeRuleStore, StoreFault};
+use crate::menu_faults::{MenuFault, menu_faults};
 use crate::registry::RegistryStore;
-use crate::routes::fees::{FeePublishOutcome, FeePublishResult, TenantFeeRules};
+use crate::routes::fees::{FeePublishOutcome, FeePublishResult, TenantFeeRules, facts_on_tree};
 use crate::routes::publish_config_nodes_with;
 use crate::version::records;
 
@@ -235,8 +238,13 @@ struct PublishedMenu {
         (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 412, description = "Every attempt to write the store's configuration lost a race \
                                       with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
-        (status = 422, description = "The menu does not compile, naming why, or the store's \
-                                      configuration would not validate with it", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The menu does not compile, naming why; or the store's \
+                                      configuration would not validate with it; or the store cannot \
+                                      sell an item on it, one detail per item with `field` \
+                                      `items.<menu_item_id>` and `reason` `CURRENCY_MISMATCH` (its \
+                                      price is not in the currency the store bills in) or \
+                                      `TAX_RATE_NOT_CONFIGURED` (the store has no rate for its tax \
+                                      class on a channel it is sold on)", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The catalog store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "menus",
@@ -343,7 +351,7 @@ async fn record_menu_publish<Cat, F, Rg, Cfg, A, C>(
 #[expect(
     clippy::result_large_err,
     reason = "the composing closure's Err is an axum Response by design — the shape every node \
-              publish's closure carries — and this closure never takes the Err branch"
+              publish's closure carries — and it is the refusal of a menu the store cannot sell"
 )]
 async fn write_menu_with_fees<Cat, F, Rg, Cfg, A, C>(
     state: &CatalogPublishState<Cat, F, Rg, Cfg, A, C>,
@@ -373,6 +381,10 @@ where
         ConfigLevel::Store,
         |tree| {
             let mut writing = nodes.clone();
+            let faults = menu_faults(&facts_on_tree(tree, &writing));
+            if !faults.is_empty() {
+                return Err(unsellable(&faults));
+            }
             if let Some(fees) = &store_fees {
                 let on_tree = fees.on_tree(tree, &writing);
                 if let Some(node) = on_tree.node() {
@@ -389,4 +401,46 @@ where
         |on_tree| on_tree.result(store_id, Some(id)),
     );
     Ok((id, fees))
+}
+
+/// How many items a refusal names in its sentence before it counts the rest; the details carry
+/// every one.
+const ITEMS_NAMED: usize = 5;
+
+/// The `422` for a menu the store cannot sell: a sentence naming the items and what is wrong with
+/// each, and a detail per item and fault, `items.<menu_item_id>` with the fault's token, that the
+/// console words in the operator's language.
+fn unsellable(faults: &[MenuFault]) -> Response {
+    let mut sentences: Vec<String> = faults
+        .iter()
+        .take(ITEMS_NAMED)
+        .map(|fault| {
+            let why = match fault.fault {
+                StoreFault::CurrencyMismatch => {
+                    "its price is not in the currency the store bills in"
+                }
+                StoreFault::TaxClassNotRated => {
+                    "the store has no tax rate for its tax class on a channel it is sold on"
+                }
+            };
+            format!("{} ({why})", fault.name)
+        })
+        .collect();
+    if faults.len() > ITEMS_NAMED {
+        sentences.push(format!("and {} more", faults.len() - ITEMS_NAMED));
+    }
+    let fields: Vec<String> = faults
+        .iter()
+        .map(|fault| format!("items.{}", fault.menu_item_id))
+        .collect();
+    let details: Vec<(&str, &str)> = fields
+        .iter()
+        .zip(faults)
+        .map(|(field, fault)| (field.as_str(), fault.fault.as_wire()))
+        .collect();
+    api_error_with_details(
+        ErrorStatus::Unprocessable,
+        format!("the store cannot sell this menu: {}", sentences.join("; ")),
+        &details,
+    )
 }

@@ -325,6 +325,24 @@ pub fn fees_left_behind(outcome: FeePublishOutcome, faults: &[FeeFaultView]) -> 
     )
 }
 
+/// What a store will hold once a write setting `writing` on its Store layer lands on `tree`: its
+/// layers merged with the write in place, read as [`StoreFacts`]. A fee publish and a menu publish
+/// check against the same facts.
+pub(crate) fn facts_on_tree(
+    tree: Option<&ConfigTreeState>,
+    writing: &[(String, serde_json::Value)],
+) -> StoreFacts {
+    let store_layer = layer_with_nodes(tree, ConfigLevel::Store, writing);
+    let empty = serde_json::Value::Object(serde_json::Map::new());
+    let layer = |level| tree.map_or(&empty, |tree| tree.layer(level));
+    StoreFacts::from_document(&merge_layers(&[
+        layer(ConfigLevel::Tenant),
+        layer(ConfigLevel::Brand),
+        &store_layer,
+        layer(ConfigLevel::Device),
+    ]))
+}
+
 /// One store's fee rules as a write composes its `fees` node: the tenant's rules, where the store
 /// sits, and what each category holds. All three are read before the store's tree is, so composing
 /// the node needs nothing but the tree each attempt of the write reads.
@@ -344,20 +362,11 @@ impl StoreFeeRules<'_> {
         tree: Option<&ConfigTreeState>,
         writing: &[(String, serde_json::Value)],
     ) -> FeesOnTree {
-        let store_layer = layer_with_nodes(tree, ConfigLevel::Store, writing);
-        let empty = serde_json::Value::Object(serde_json::Map::new());
-        let layer = |level| tree.map_or(&empty, |tree| tree.layer(level));
-        let document = merge_layers(&[
-            layer(ConfigLevel::Tenant),
-            layer(ConfigLevel::Brand),
-            &store_layer,
-            layer(ConfigLevel::Device),
-        ]);
         let sent = crate::fees::for_store(
             self.rules,
             &self.placement,
             self.categories,
-            &StoreFacts::from_document(&document),
+            &facts_on_tree(tree, writing),
         );
         if !sent.faults.is_empty() {
             return FeesOnTree::Refused(

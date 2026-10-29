@@ -32,6 +32,7 @@ pub mod fees;
 pub mod images;
 pub mod import;
 pub mod media;
+pub mod menu_faults;
 mod persistence;
 pub mod routes;
 pub mod tax;

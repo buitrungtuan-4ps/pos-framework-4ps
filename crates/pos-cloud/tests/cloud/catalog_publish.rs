@@ -9,8 +9,13 @@ use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
 use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::fees::InMemoryFeeRules;
+use pos_cloud::tax::TaxRateEntry;
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
+use pos_proto::enums::SalesChannel;
+use pos_proto::ids::{TaxClassId, TenantId};
+use pos_proto::locale::TaxRate;
+use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
 
 use crate::{
@@ -58,7 +63,7 @@ fn catalog_publish_app_with(
             Arc::new(NoopAuditRecorder),
         ))
         .merge(http::config_tax_router(
-            FakeTaxRates::default(),
+            dine_in_rated(),
             config_trees.clone(),
             admin.clone(),
             clock(),
@@ -80,6 +85,22 @@ fn catalog_publish_app_with(
             clock(),
             audit,
         ))
+}
+
+/// The tenant's tax rates: the test items' class, rated on dine-in, the channel they are placed on.
+/// A menu whose items the store has no rate for is refused (pilot finding M1), so the table the
+/// prerequisites publish has to rate them.
+fn dine_in_rated() -> FakeTaxRates {
+    let rates = FakeTaxRates::default();
+    rates.rows.lock().expect("lock").push((
+        TenantId::new(Ulid::from_u128(1)),
+        TaxRateEntry::new(
+            TaxClassId::new(Ulid::from_u128(7)),
+            SalesChannel::DineIn,
+            TaxRate::from_basis_points(1_000),
+        ),
+    ));
+    rates
 }
 
 /// Publishes the `tax` and `locale` nodes a menu publish requires, in the order an operator has to.
@@ -666,5 +687,97 @@ async fn a_publish_refuses_no_session_a_role_that_may_not_publish_and_a_bad_id()
     assert_eq!(
         json_body(bad).await["error"]["details"][0]["field"],
         "store_id"
+    );
+}
+
+/// A placement priced in another currency than the store bills in publishes no menu (pilot finding
+/// M1): every sale of the item would fail at the till. The refusal names the item, and carries a
+/// detail the console words, `items.<menu_item_id>` with `CURRENCY_MISMATCH`.
+#[tokio::test]
+async fn a_menu_priced_in_another_currency_than_the_store_is_refused_naming_the_item() {
+    let config_trees = FakeConfigTrees::default();
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        config_trees.clone(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let (tenant, store) = (ulid_text(1), ulid_text(2));
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Margherita", "tax_class_id": ulid_text(7) }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    let item_id = json_body(item).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+    let placed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/catalog/menus/{menu_id}/placements"),
+            &serde_json::json!({
+                "menu_id": menu_id,
+                "menu_item_id": item_id,
+                "tenant_id": tenant,
+                "prices": [{ "sales_channel": "SALES_CHANNEL_DINE_IN", "unit_price": { "currency_code": "USD", "amount_minor": 1_500 } }],
+                "available": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route place item");
+    assert_eq!(placed.status(), StatusCode::CREATED);
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["details"],
+        serde_json::json!([{ "field": format!("items.{item_id}"), "reason": "CURRENCY_MISMATCH" }]),
+        "{body}"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Margherita")),
+        "{body}"
+    );
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    assert!(
+        json_body(effective).await["menu"].is_null(),
+        "nothing was written"
     );
 }

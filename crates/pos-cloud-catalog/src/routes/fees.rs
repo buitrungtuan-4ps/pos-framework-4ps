@@ -47,6 +47,7 @@ pub use delete::__path_admin_delete_fee;
 pub use preview::__path_admin_preview_fees;
 pub use publish::__path_admin_publish_fees;
 pub(super) use publish::FeePublishResult;
+pub(crate) use publish::facts_on_tree;
 pub use publish::{FeePublishOutcome, TenantFeeRules, fees_left_behind};
 pub use reads::{__path_admin_effective_fees, __path_admin_list_fees};
 pub use write::{__path_admin_create_fee, __path_admin_put_fee};

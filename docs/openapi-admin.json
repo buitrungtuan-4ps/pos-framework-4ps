@@ -6061,7 +6061,7 @@
             }
           },
           "422": {
-            "description": "The menu does not compile, naming why, or the store's configuration would not validate with it",
+            "description": "The menu does not compile, naming why; or the store's configuration would not validate with it; or the store cannot sell an item on it, one detail per item with `field` `items.<menu_item_id>` and `reason` `CURRENCY_MISMATCH` (its price is not in the currency the store bills in) or `TAX_RATE_NOT_CONFIGURED` (the store has no rate for its tax class on a channel it is sold on)",
             "content": {
               "application/json": {
                 "schema": {
