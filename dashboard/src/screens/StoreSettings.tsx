@@ -397,7 +397,7 @@ export function StoreSettings() {
       registrationLabel: [registrationLabel, setRegistrationLabel],
     },
     countries,
-    localePublished: () => node(read.value()?.effective ?? null, "locale") !== null,
+    publishedLocale: () => node(read.value()?.effective ?? null, "locale"),
     setCountry,
   });
 
@@ -455,7 +455,7 @@ export function StoreSettings() {
         cash_denominations: noteValues(),
       });
       toast.ok(t("storeSettings.published", { store: storeName() }));
-      await published.refresh();
+      await Promise.all([published.refresh(), pack.published(tenantId(), storeId(), country())]);
     } catch (caught) {
       fail(caught);
     } finally {

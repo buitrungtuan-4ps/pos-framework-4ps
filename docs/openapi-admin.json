@@ -10490,7 +10490,7 @@
         "operationId": "admin_list_countries",
         "responses": {
           "200": {
-            "description": "Every country module this build carries, as an array: `code`, `display_name`, `currency_code` and `currency_exponent`, `default_language`, the number format (`decimal_separator`, `group_separator`, `digits_per_group`), `default_retention_days`, and the till facts a store's settings start from: `prices_include_tax`, `cash_rounding_increment` and `cash_denominations`, in the currency's minor units (ADR-0105). Fixed when the server starts; the same for every tenant",
+            "description": "Every country module this build carries, as an array: `code`, `display_name`, `currency_code` and `currency_exponent`, `default_language`, the number format (`decimal_separator`, `group_separator`, `digits_per_group`), `default_retention_days`, and the till facts a store's settings start from: `prices_include_tax`, `cash_rounding_increment` and `cash_denominations`, in the currency's minor units (ADR-0105), and `setting_defaults`, the settings a new store in the country starts with (ADR-0183). Fixed when the server starts; the same for every tenant",
             "content": {
               "application/json": {
                 "schema": {
@@ -26764,6 +26764,22 @@
           }
         }
       },
+      "CountrySettingDefault": {
+        "type": "object",
+        "description": "One setting a country pack seeds: the register's key and the value, as the setting's node\ncarries it.",
+        "required": [
+          "setting_key",
+          "value"
+        ],
+        "properties": {
+          "setting_key": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/SettingValueSchema"
+          }
+        }
+      },
       "CountryView": {
         "type": "object",
         "description": "One compiled country module as the console reads it: the code, human name, currency, preferred\nlanguage, number format, the default retention period, and the till facts its coinage and its\nquoting habit fix. What the platform can serve — not a per-store setting, and not fiscalization.\n\nThe last three are what make a country **choosable** rather than merely listed\n([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)): a store-settings form reads them\nto fill its own fields in, so provisioning a Japanese shop does not depend on somebody remembering\nthat Japanese prices are tax-inclusive.",
@@ -26779,7 +26795,8 @@
           "default_retention_days",
           "prices_include_tax",
           "cash_rounding_increment",
-          "cash_denominations"
+          "cash_denominations",
+          "setting_defaults"
         ],
         "properties": {
           "cash_denominations": {
@@ -26832,6 +26849,13 @@
           },
           "prices_include_tax": {
             "type": "boolean"
+          },
+          "setting_defaults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CountrySettingDefault"
+            },
+            "description": "The settings a new store in the country starts with, in its units\n([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), which\nStore settings writes where no scope sets them when it publishes a locale naming the country.\nEmpty for a pack that gives none."
           }
         }
       },

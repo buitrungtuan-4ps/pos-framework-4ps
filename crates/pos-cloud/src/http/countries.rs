@@ -19,6 +19,8 @@ use pos_proto::determinism::ClockSource;
 
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
+use crate::http::settings::as_node_value;
+use crate::settings::SettingValueSchema;
 
 // --- Countries & locales (read-only master data, ADR-0074, Track M4) ------------------------------
 
@@ -49,6 +51,20 @@ struct CountryView {
     #[schema(required = true)]
     cash_rounding_increment: Option<i64>,
     cash_denominations: Vec<i64>,
+    /// The settings a new store in the country starts with, in its units
+    /// ([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), which
+    /// Store settings writes where no scope sets them when it publishes a locale naming the country.
+    /// Empty for a pack that gives none.
+    setting_defaults: Vec<CountrySettingDefault>,
+}
+
+/// One setting a country pack seeds: the register's key and the value, as the setting's node
+/// carries it.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct CountrySettingDefault {
+    setting_key: String,
+    #[schema(value_type = SettingValueSchema)]
+    value: serde_json::Value,
 }
 
 /// The state the country/locale reads share: the views computed once at start-up from the compiled
@@ -93,6 +109,14 @@ where
             prices_include_tax: pack.prices_include_tax,
             cash_rounding_increment: pack.cash_rounding_increment,
             cash_denominations: pack.cash_denominations.clone(),
+            setting_defaults: module
+                .setting_defaults()
+                .into_iter()
+                .map(|seeded| CountrySettingDefault {
+                    setting_key: seeded.setting_key.to_owned(),
+                    value: as_node_value(seeded.value),
+                })
+                .collect(),
         });
     }
     Router::new()
@@ -119,7 +143,9 @@ where
                                       `digits_per_group`), `default_retention_days`, and the till \
                                       facts a store's settings start from: `prices_include_tax`, \
                                       `cash_rounding_increment` and `cash_denominations`, in the \
-                                      currency's minor units (ADR-0105). Fixed when the server \
+                                      currency's minor units (ADR-0105), and `setting_defaults`, \
+                                      the settings a new store in the country starts with \
+                                      (ADR-0183). Fixed when the server \
                                       starts; the same for every tenant"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),

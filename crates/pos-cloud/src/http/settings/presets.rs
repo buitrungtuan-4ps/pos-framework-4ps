@@ -51,8 +51,9 @@ pub(super) fn country_setting_values(countries: &CountryRegistry) -> CountrySett
         .collect()
 }
 
-/// A pack's value as the JSON a setting's node carries, which is what the register checks.
-fn as_node_value(value: SettingDefaultValue) -> serde_json::Value {
+/// A pack's value as the JSON a setting's node carries, which is what the register checks. Also
+/// what `GET /admin/countries` lists, so the console offers the value the presets route writes.
+pub(crate) fn as_node_value(value: SettingDefaultValue) -> serde_json::Value {
     match value {
         SettingDefaultValue::Choice(token) => serde_json::Value::from(token),
         SettingDefaultValue::Int(number) => serde_json::Value::from(number),
